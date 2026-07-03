@@ -1,0 +1,72 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* Dark by default — Emberyx is a terminal-first app. */
+:root {
+  --radius: 0.625rem;
+  --background: oklch(0.16 0.004 285.82);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.2 0.006 285.88);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.2 0.006 285.88);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.72 0.16 48);
+  --primary-foreground: oklch(0.16 0.004 285.82);
+  --secondary: oklch(0.27 0.006 286.03);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.27 0.006 286.03);
+  --muted-foreground: oklch(0.705 0.015 286.07);
+  --accent: oklch(0.27 0.006 286.03);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.72 0.16 48);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: color-mix(in oklch, var(--ring) 50%, transparent);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: "Geist Variable", ui-sans-serif, system-ui, -apple-system,
+      sans-serif;
+    overflow: hidden;
+  }
+}

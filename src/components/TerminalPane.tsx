@@ -1,0 +1,146 @@
+import { useEffect, useRef } from "react";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import "@xterm/xterm/css/xterm.css";
+
+type PtyEvent =
+  | { type: "output"; data: string }
+  | { type: "exit"; data: number | null };
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+interface TerminalPaneProps {
+  /** Emberyx session id — reported by hooks so the UI can correlate events. */
+  sessionId: string;
+  /** Absolute path the shell starts in. */
+  cwd: string;
+  /** Command auto-run on open (e.g. "claude"). */
+  command?: string;
+  fontFamily: string;
+  fontSize: number;
+  scrollback: number;
+}
+
+export function TerminalPane({
+  sessionId,
+  cwd,
+  command,
+  fontFamily,
+  fontSize,
+  scrollback,
+}: TerminalPaneProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+
+  // Font/scrollback config captured once; live updates handled by a second
+  // effect so changing them never restarts the shell.
+  const initialConfig = useRef({ fontFamily, fontSize, scrollback });
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const term = new Terminal({
+      fontFamily: initialConfig.current.fontFamily,
+      fontSize: initialConfig.current.fontSize,
+      scrollback: initialConfig.current.scrollback,
+      cursorBlink: true,
+      theme: {
+        background: "#1a1a1e",
+        foreground: "#e4e4e7",
+        cursor: "#f59e0b",
+      },
+    });
+    termRef.current = term;
+
+    const fit = new FitAddon();
+    fitRef.current = fit;
+    term.loadAddon(fit);
+    term.loadAddon(new WebLinksAddon());
+    // Default (DOM) renderer — no canvas/webgl addon, maximum compatibility.
+    term.open(container);
+    try {
+      fit.fit();
+    } catch {
+      /* container not sized yet */
+    }
+
+    let ptyId: number | null = null;
+    let disposed = false;
+
+    const channel = new Channel<PtyEvent>();
+    channel.onmessage = (msg) => {
+      if (msg.type === "output") term.write(base64ToBytes(msg.data));
+      else term.write("\r\n\x1b[90m[process exited]\x1b[0m\r\n");
+    };
+
+    invoke<number>("pty_spawn", {
+      cwd,
+      command,
+      sessionId,
+      cols: term.cols,
+      rows: term.rows,
+      onEvent: channel,
+    })
+      .then((id) => {
+        if (disposed) {
+          void invoke("pty_kill", { id });
+          return;
+        }
+        ptyId = id;
+      })
+      .catch((e) => term.write(`\r\n\x1b[31mspawn failed: ${e}\x1b[0m\r\n`));
+
+    const dataSub = term.onData((data) => {
+      if (ptyId !== null) void invoke("pty_write", { id: ptyId, data });
+    });
+
+    const resizeSub = term.onResize(({ cols, rows }) => {
+      if (ptyId !== null) void invoke("pty_resize", { id: ptyId, cols, rows });
+    });
+
+    const ro = new ResizeObserver(() => {
+      try {
+        fit.fit();
+      } catch {
+        /* container detached */
+      }
+    });
+    ro.observe(container);
+
+    return () => {
+      disposed = true;
+      ro.disconnect();
+      dataSub.dispose();
+      resizeSub.dispose();
+      if (ptyId !== null) void invoke("pty_kill", { id: ptyId });
+      term.dispose();
+      termRef.current = null;
+      fitRef.current = null;
+    };
+  }, [sessionId, cwd, command]);
+
+  // Apply font / scrollback changes live to the running terminal.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.fontFamily = fontFamily;
+    term.options.fontSize = fontSize;
+    term.options.scrollback = scrollback;
+    try {
+      fitRef.current?.fit();
+    } catch {
+      /* container not sized */
+    }
+  }, [fontFamily, fontSize, scrollback]);
+
+  return <div ref={containerRef} className="h-full w-full overflow-hidden" />;
+}

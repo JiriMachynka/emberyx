@@ -1,0 +1,33 @@
+mod git;
+mod hooks;
+mod pty;
+mod workspace;
+
+use pty::PtyManager;
+use tauri::Manager;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .manage(PtyManager::new())
+        .setup(|app| {
+            let config = hooks::start(&app.handle())?;
+            app.manage(config);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            pty::pty_spawn,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_kill,
+            workspace::scan_workspace,
+            hooks::hook_config,
+            git::git_changes,
+            git::git_file_diff,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
