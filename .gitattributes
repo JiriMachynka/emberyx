@@ -1,0 +1,11 @@
+# Normalize line endings
+* text=auto eol=lf
+
+# Binary assets
+*.png binary
+*.ico binary
+*.icns binary
+
+# Generated / vendored — collapse in diffs
+bun.lock -diff linguist-generated
+docs/session-transcript.jsonl -diff linguist-generated
