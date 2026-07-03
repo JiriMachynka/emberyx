@@ -1,12 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
 import { FolderOpen, Settings, Flame, Bot, X, FileDiff, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TerminalPane } from "@/components/TerminalPane";
@@ -14,80 +8,37 @@ import { DevMenu } from "@/components/DevMenu";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { cn } from "@/lib/utils";
-import { STATUS_META, statusForEvent } from "@/lib/status";
+import { basename, dirname } from "@/lib/path";
+import { STATUS_META } from "@/lib/status";
 import { useSettings } from "@/lib/settings";
-import { parseChange, type Change } from "@/lib/changes";
 import { getRecents, addRecent } from "@/lib/recents";
-import type {
-  HookEvent,
-  PackageInfo,
-  Session,
-  SessionStatus,
-  WorkspaceInfo,
-} from "@/types";
-
-function basename(p: string): string {
-  return p.split("/").filter(Boolean).pop() ?? p;
-}
+import { useSessions } from "@/hooks/useSessions";
+import { useAgentEvents } from "@/hooks/useAgentEvents";
+import type { PackageInfo, SessionStatus, WorkspaceInfo } from "@/types";
 
 function App() {
   const [projectPath, setProjectPath] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
-  const [hookSettings, setHookSettings] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [changes, setChanges] = useState<Change[]>([]);
   const [changesOpen, setChangesOpen] = useState(false);
   const [recents, setRecents] = useState<string[]>(getRecents);
   const { settings, update: updateSettings } = useSettings();
-  const counter = useRef(0);
-  const nextId = () => `s${++counter.current}`;
 
-  // Keep latest sessions readable inside the (stable) hook-event listener.
-  const sessionsRef = useRef<Session[]>([]);
-  sessionsRef.current = sessions;
+  const {
+    sessions,
+    activeId,
+    setActiveId,
+    startAgent,
+    addDev,
+    closeSession,
+    stopAllDev,
+  } = useSessions();
 
-  // Startup: load the hook settings path, ask for notification permission,
-  // and subscribe to hook events for the lifetime of the app.
-  useEffect(() => {
-    invoke<string>("hook_config")
-      .then(setHookSettings)
-      .catch((e) => console.error("hook_config failed:", e));
-
-    (async () => {
-      if (!(await isPermissionGranted())) await requestPermission();
-    })();
-
-    const unlisten = listen<HookEvent>("hook-event", ({ payload }) => {
-      const change = parseChange(payload);
-      if (change) setChanges((prev) => [...prev, change]);
-
-      const status = statusForEvent(payload.event);
-      if (!status) return;
-      setStatuses((prev) => ({ ...prev, [payload.session]: status }));
-
-      if (status === "waiting" && !document.hasFocus()) {
-        const s = sessionsRef.current.find((x) => x.id === payload.session);
-        void isPermissionGranted().then((granted) => {
-          if (granted) {
-            sendNotification({
-              title: "Emberyx — agent needs you",
-              body: s ? basename(s.cwd) : "Claude is waiting for input",
-            });
-          }
-        });
-      }
-    });
-
-    return () => {
-      void unlisten.then((off) => off());
-    };
-  }, []);
+  const { statuses, changes, hookSettings, reset } = useAgentEvents((id) =>
+    sessions.find((s) => s.id === id)
+  );
 
   function openProjectAt(path: string) {
-    const agentId = nextId();
     const base = settings.agentCommand;
     const command =
       base.startsWith("claude") && hookSettings
@@ -95,13 +46,9 @@ function App() {
         : base;
     setProjectPath(path);
     setWorkspace(null);
-    setStatuses({});
-    setChanges([]);
     setRecents(addRecent(path));
-    setSessions([
-      { id: agentId, label: "agent", cwd: path, command, kind: "agent" },
-    ]);
-    setActiveId(agentId);
+    reset();
+    startAgent(path, command);
 
     invoke<WorkspaceInfo>("scan_workspace", { path })
       .then(setWorkspace)
@@ -125,13 +72,6 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  function addDev(label: string, cwd: string, command: string) {
-    const id = nextId();
-    // Start in the background — appears as a tab but doesn't steal the view
-    // from the agent. Click the tab to see its logs.
-    setSessions((s) => [...s, { id, label, cwd, command, kind: "dev" }]);
-  }
-
   function runPackage(pkg: PackageInfo) {
     addDev(pkg.name, pkg.path, pkg.devCommand);
   }
@@ -143,22 +83,6 @@ function App() {
     } else {
       workspace.packages.forEach((p) => addDev(p.name, p.path, p.devCommand));
     }
-  }
-
-  function closeSession(id: string) {
-    setSessions((prev) => {
-      const next = prev.filter((s) => s.id !== id);
-      setActiveId((cur) => (cur === id ? next[next.length - 1]?.id ?? null : cur));
-      return next;
-    });
-  }
-
-  function stopAllDev() {
-    setSessions((prev) => {
-      const next = prev.filter((s) => s.kind !== "dev");
-      setActiveId(next.find((s) => s.kind === "agent")?.id ?? null);
-      return next;
-    });
   }
 
   const showTabs = sessions.length > 1;
@@ -312,7 +236,7 @@ function App() {
                         >
                           <span className="truncate">{basename(p)}</span>
                           <span className="truncate text-xs text-muted-foreground">
-                            {p.replace(/\/[^/]+$/, "")}
+                            {dirname(p)}
                           </span>
                         </button>
                       </li>
@@ -349,9 +273,7 @@ function App() {
                 )}
               >
                 {s.kind === "agent" ? (
-                  <Bot
-                    className={cn("size-3.5", STATUS_META[st].text)}
-                  />
+                  <Bot className={cn("size-3.5", STATUS_META[st].text)} />
                 ) : (
                   <span className="size-1.5 rounded-full bg-emerald-500" />
                 )}

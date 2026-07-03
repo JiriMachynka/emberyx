@@ -3,12 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { diffLines } from "diff";
 import { X, FileDiff, RefreshCw, GitBranch, Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { basename } from "@/lib/path";
 import type { Change } from "@/lib/changes";
 import type { GitFile } from "@/types";
-
-function basename(p: string): string {
-  return p.split("/").filter(Boolean).pop() ?? p;
-}
 
 /** Colorize a raw unified diff by line prefix. */
 function UnifiedDiff({ text }: { text: string }) {
