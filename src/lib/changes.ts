@@ -2,6 +2,7 @@ import type { HookEvent } from "@/types";
 
 export interface Change {
   id: number;
+  session: string;
   file: string;
   tool: string;
   oldText: string;
@@ -54,5 +55,13 @@ export function parseChange(ev: HookEvent): Change | null {
     return null;
   }
 
-  return { id: ++changeCounter, file, tool, oldText, newText, time: Date.now() };
+  return {
+    id: ++changeCounter,
+    session: ev.session,
+    file,
+    tool,
+    oldText,
+    newText,
+    time: Date.now(),
+  };
 }

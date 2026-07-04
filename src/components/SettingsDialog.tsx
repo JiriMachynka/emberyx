@@ -58,6 +58,31 @@ export function SettingsDialog({
             />
           </Field>
 
+          {settings.agentCommand.startsWith("claude") && (
+            <label className="flex items-start gap-2.5">
+              <input
+                type="checkbox"
+                checked={settings.dangerouslySkipPermissions}
+                onChange={(e) =>
+                  onUpdate({ dangerouslySkipPermissions: e.target.checked })
+                }
+                className="mt-0.5 size-4 shrink-0 accent-primary"
+              />
+              <span className="grid gap-0.5">
+                <span className="text-sm font-medium">
+                  Skip permission prompts
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  Launch Claude with{" "}
+                  <code className="text-[11px]">
+                    --dangerously-skip-permissions
+                  </code>
+                  . The agent won't ask before running commands or edits.
+                </span>
+              </span>
+            </label>
+          )}
+
           <Field label="Terminal font family">
             <Input
               value={settings.fontFamily}

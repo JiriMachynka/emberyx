@@ -81,3 +81,42 @@ pub fn git_file_diff(path: String, file: String, untracked: bool) -> Result<Stri
     let fallback = run(&["-C", &path, "diff", "--no-color", "--", &file])?;
     Ok(String::from_utf8_lossy(&fallback.stdout).to_string())
 }
+
+/// Stage the selected files and commit only those paths with `message`.
+#[tauri::command]
+pub fn git_commit(path: String, files: Vec<String>, message: String) -> Result<String, String> {
+    if !is_repo(&path) {
+        return Err("Not a git repository.".into());
+    }
+    if files.is_empty() {
+        return Err("No files selected.".into());
+    }
+    if message.trim().is_empty() {
+        return Err("Commit message is empty.".into());
+    }
+
+    // Stage the selected files (picks up untracked ones too).
+    let mut add = vec!["-C", &path, "add", "--"];
+    add.extend(files.iter().map(|f| f.as_str()));
+    let out = Command::new("git")
+        .args(&add)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+
+    // Commit only the selected paths, even if other changes were pre-staged.
+    let mut commit = vec!["-C", &path, "commit", "-m", &message, "--"];
+    commit.extend(files.iter().map(|f| f.as_str()));
+    let out = Command::new("git")
+        .args(&commit)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        return Err(format!("{}{}", stdout, err).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}

@@ -1,5 +1,9 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::hash::{Hash, Hasher};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
@@ -7,6 +11,36 @@ use base64::Engine;
 use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use serde::Serialize;
 use tauri::ipc::Channel;
+use tauri::Manager;
+
+/// Cap on persisted / replayed scrollback per project (bytes).
+const SCROLLBACK_CAP: u64 = 1_000_000;
+
+/// Path of the scrollback log for a project cwd (created on demand).
+fn scrollback_file(app: &tauri::AppHandle, cwd: &str) -> Option<PathBuf> {
+    let dir = app.path().app_data_dir().ok()?.join("scrollback");
+    fs::create_dir_all(&dir).ok()?;
+    let mut hasher = DefaultHasher::new();
+    cwd.hash(&mut hasher);
+    Some(dir.join(format!("{:016x}.log", hasher.finish())))
+}
+
+/// Keep the log's tail within the cap so it can't grow without bound.
+fn trim_log(path: &PathBuf) {
+    let Ok(meta) = fs::metadata(path) else { return };
+    if meta.len() <= SCROLLBACK_CAP {
+        return;
+    }
+    if let Ok(mut f) = File::open(path) {
+        let start = meta.len() - SCROLLBACK_CAP;
+        if f.seek(SeekFrom::Start(start)).is_ok() {
+            let mut buf = Vec::new();
+            if f.read_to_end(&mut buf).is_ok() {
+                let _ = fs::write(path, &buf);
+            }
+        }
+    }
+}
 
 /// Events streamed from a PTY back to the frontend.
 #[derive(Clone, Serialize)]
@@ -48,6 +82,7 @@ impl PtyManager {
         cols: u16,
         rows: u16,
         on_event: Channel<PtyEvent>,
+        log_path: Option<PathBuf>,
     ) -> Result<u32, String> {
         let pty_system = NativePtySystem::default();
         let pair = pty_system
@@ -85,7 +120,15 @@ impl PtyManager {
 
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
-        // Reader thread: stream output as base64 chunks.
+        // Open the scrollback log (append) so output survives restarts.
+        if let Some(ref lp) = log_path {
+            trim_log(lp);
+        }
+        let mut log: Option<File> = log_path
+            .as_ref()
+            .and_then(|p| OpenOptions::new().create(true).append(true).open(p).ok());
+
+        // Reader thread: stream output as base64 chunks + persist raw bytes.
         let event_channel = on_event.clone();
         std::thread::spawn(move || {
             let engine = base64::engine::general_purpose::STANDARD;
@@ -97,6 +140,9 @@ impl PtyManager {
                         break;
                     }
                     Ok(n) => {
+                        if let Some(ref mut f) = log {
+                            let _ = f.write_all(&buf[..n]);
+                        }
                         let encoded = engine.encode(&buf[..n]);
                         if event_channel.send(PtyEvent::Output(encoded)).is_err() {
                             break;
@@ -154,6 +200,7 @@ impl PtyManager {
 
 #[tauri::command]
 pub fn pty_spawn(
+    app: tauri::AppHandle,
     manager: tauri::State<'_, PtyManager>,
     cwd: String,
     command: Option<String>,
@@ -162,7 +209,21 @@ pub fn pty_spawn(
     rows: u16,
     on_event: Channel<PtyEvent>,
 ) -> Result<u32, String> {
-    manager.spawn(cwd, command, session_id, cols, rows, on_event)
+    let log_path = scrollback_file(&app, &cwd);
+    manager.spawn(cwd, command, session_id, cols, rows, on_event, log_path)
+}
+
+/// Return the tail of a project's persisted scrollback, base64-encoded.
+#[tauri::command]
+pub fn read_scrollback(app: tauri::AppHandle, cwd: String) -> Result<String, String> {
+    let Some(path) = scrollback_file(&app, &cwd) else {
+        return Ok(String::new());
+    };
+    let Ok(data) = fs::read(&path) else {
+        return Ok(String::new());
+    };
+    let start = data.len().saturating_sub(SCROLLBACK_CAP as usize);
+    Ok(base64::engine::general_purpose::STANDARD.encode(&data[start..]))
 }
 
 #[tauri::command]

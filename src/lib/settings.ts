@@ -9,6 +9,8 @@ export interface Settings {
   fontSize: number;
   /** Terminal scrollback in lines. */
   scrollback: number;
+  /** Launch Claude with --dangerously-skip-permissions. */
+  dangerouslySkipPermissions: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -16,6 +18,7 @@ export const DEFAULT_SETTINGS: Settings = {
   fontFamily: '"Geist Mono Variable", ui-monospace, Menlo, monospace',
   fontSize: 13,
   scrollback: 1000,
+  dangerouslySkipPermissions: true,
 };
 
 const KEY = "emberyx.settings";

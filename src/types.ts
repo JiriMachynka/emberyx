@@ -15,10 +15,20 @@ export interface WorkspaceInfo {
 /** A terminal session shown as a tab. */
 export interface Session {
   id: string;
+  projectId: string;
   label: string;
   cwd: string;
   command?: string;
   kind: "agent" | "dev";
+}
+
+/** An open project. Each project owns its own agent + dev sessions. */
+export interface Project {
+  id: string;
+  path: string;
+  workspace: WorkspaceInfo | null;
+  /** Cached Claude Code threads, fetched on open + refreshed on demand. */
+  threads: Thread[];
 }
 
 /** Agent status derived from Claude Code hook events. */
@@ -36,4 +46,11 @@ export interface GitFile {
   path: string;
   status: string;
   untracked: boolean;
+}
+
+/** A Claude Code conversation thread (resumable via its id). */
+export interface Thread {
+  id: string;
+  title: string;
+  modified: number;
 }

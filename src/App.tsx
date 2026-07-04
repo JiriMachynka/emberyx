@@ -1,10 +1,19 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
-import { FolderOpen, Settings, Flame, Bot, X, FileDiff, Clock } from "lucide-react";
+import {
+  FolderOpen,
+  Settings,
+  Bot,
+  X,
+  FileDiff,
+  Clock,
+  Plus,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TerminalPane } from "@/components/TerminalPane";
 import { DevMenu } from "@/components/DevMenu";
+import { ThreadMenu } from "@/components/ThreadMenu";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { cn } from "@/lib/utils";
@@ -12,52 +21,111 @@ import { basename, dirname } from "@/lib/path";
 import { STATUS_META } from "@/lib/status";
 import { useSettings } from "@/lib/settings";
 import { getRecents, addRecent } from "@/lib/recents";
+import { costOf, totalTokens, formatTokens } from "@/lib/pricing";
 import { useSessions } from "@/hooks/useSessions";
+import { useProjects } from "@/hooks/useProjects";
 import { useAgentEvents } from "@/hooks/useAgentEvents";
-import type { PackageInfo, SessionStatus, WorkspaceInfo } from "@/types";
+import type { PackageInfo, SessionStatus, Thread, WorkspaceInfo } from "@/types";
 
 function App() {
-  const [projectPath, setProjectPath] = useState<string | null>(null);
-  const [workspace, setWorkspace] = useState<WorkspaceInfo | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [recents, setRecents] = useState<string[]>(getRecents);
   const { settings, update: updateSettings } = useSettings();
 
   const {
+    projects,
+    activeProjectId,
+    setActiveProjectId,
+    openProject,
+    setWorkspace,
+    setThreads,
+    closeProject,
+  } = useProjects();
+
+  const {
     sessions,
-    activeId,
-    setActiveId,
+    activeByProject,
+    setActive,
     startAgent,
     addDev,
     closeSession,
     stopAllDev,
+    closeProjectSessions,
+    sessionsFor,
   } = useSessions();
 
-  const { statuses, changes, hookSettings, reset } = useAgentEvents((id) =>
-    sessions.find((s) => s.id === id)
-  );
+  const {
+    statuses,
+    changes,
+    usages,
+    hookSettings,
+    pendingAttention,
+    clearSessions,
+  } = useAgentEvents((id) => sessions.find((s) => s.id === id));
+
+  const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
+  const projectSessions = activeProjectId ? sessionsFor(activeProjectId) : [];
+  const activeId = activeProjectId
+    ? activeByProject[activeProjectId] ?? null
+    : null;
+
+  /** Build the agent launch command, injecting hooks + any extra flags. */
+  function buildAgentCommand(extra?: string): string {
+    const base = settings.agentCommand;
+    const flags: string[] = [];
+    if (base.startsWith("claude")) {
+      if (hookSettings) flags.push(`--settings "${hookSettings}"`);
+      if (settings.dangerouslySkipPermissions) {
+        flags.push("--dangerously-skip-permissions");
+      }
+    }
+    if (extra) flags.push(extra);
+    return flags.length ? `${base} ${flags.join(" ")}` : base;
+  }
+
+  /** Fetch and cache the project's Claude Code threads (non-blocking). */
+  function refreshThreads(projectId: string, path: string) {
+    invoke<Thread[]>("list_threads", { cwd: path })
+      .then((t) => setThreads(projectId, t))
+      .catch((e) => console.error("list_threads failed:", e));
+  }
 
   function openProjectAt(path: string) {
-    const base = settings.agentCommand;
-    const command =
-      base.startsWith("claude") && hookSettings
-        ? `${base} --settings "${hookSettings}"`
-        : base;
-    setProjectPath(path);
-    setWorkspace(null);
+    const { id, isNew } = openProject(path);
     setRecents(addRecent(path));
-    reset();
-    startAgent(path, command);
+    if (isNew) {
+      startAgent(id, path, buildAgentCommand());
+      invoke<WorkspaceInfo>("scan_workspace", { path })
+        .then((w) => setWorkspace(id, w))
+        .catch((e) => console.error("scan_workspace failed:", e));
+    }
+    refreshThreads(id, path);
+  }
 
-    invoke<WorkspaceInfo>("scan_workspace", { path })
-      .then(setWorkspace)
-      .catch((e) => console.error("scan_workspace failed:", e));
+  /** Resume a Claude Code thread in a new agent tab. */
+  function resumeThread(thread: Thread) {
+    if (!activeProjectId || !activeProject) return;
+    const label =
+      thread.title.length > 24 ? `${thread.title.slice(0, 24)}…` : thread.title;
+    startAgent(
+      activeProjectId,
+      activeProject.path,
+      buildAgentCommand(`--resume ${thread.id}`),
+      label
+    );
   }
 
   async function pickProject() {
     const selected = await open({ directory: true, multiple: false });
     if (typeof selected === "string") openProjectAt(selected);
+  }
+
+  function handleCloseProject(id: string) {
+    const ids = sessionsFor(id).map((s) => s.id);
+    closeProjectSessions(id);
+    clearSessions(ids);
+    closeProject(id);
   }
 
   // ⌘O opens the folder picker.
@@ -72,52 +140,82 @@ function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
+  // When the window regains focus (e.g. clicking the desktop notification),
+  // jump to the session that raised it if it's still waiting.
+  useEffect(() => {
+    function onFocus() {
+      const sid = pendingAttention.current;
+      if (!sid) return;
+      pendingAttention.current = null;
+      const sess = sessions.find((s) => s.id === sid);
+      if (sess && statuses[sid] === "waiting") {
+        setActiveProjectId(sess.projectId);
+        setActive(sess.projectId, sid);
+      }
+    }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [sessions, statuses, setActiveProjectId, setActive, pendingAttention]);
+
   function runPackage(pkg: PackageInfo) {
-    addDev(pkg.name, pkg.path, pkg.devCommand);
+    if (!activeProjectId) return;
+    addDev(activeProjectId, pkg.name, pkg.path, pkg.devCommand);
   }
 
   function runAll() {
-    if (!workspace || !projectPath) return;
-    if (workspace.allCommand) {
-      addDev("all", projectPath, workspace.allCommand);
+    if (!activeProject || !activeProjectId) return;
+    const ws = activeProject.workspace;
+    if (!ws) return;
+    if (ws.allCommand) {
+      addDev(activeProjectId, "all", activeProject.path, ws.allCommand);
     } else {
-      workspace.packages.forEach((p) => addDev(p.name, p.path, p.devCommand));
+      ws.packages.forEach((p) =>
+        addDev(activeProjectId, p.name, p.path, p.devCommand)
+      );
     }
   }
 
-  const showTabs = sessions.length > 1;
-  const agent = sessions.find((s) => s.kind === "agent");
+  const showTabs = projectSessions.length > 1;
+  // Header reflects the active tab when it's an agent, else the first agent —
+  // so multiple resumed threads each drive the header when focused.
+  const firstAgent = projectSessions.find((s) => s.kind === "agent");
+  const activeSession = projectSessions.find((s) => s.id === activeId);
+  const agent =
+    activeSession?.kind === "agent" ? activeSession : firstAgent;
   const agentStatus: SessionStatus = agent
     ? statuses[agent.id] ?? "idle"
     : "idle";
+  const agentUsage = agent ? usages[agent.id] : undefined;
+  const projectChanges = changes.filter((c) =>
+    projectSessions.some((s) => s.id === c.session)
+  );
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
       {/* Top bar */}
       <header className="flex h-11 shrink-0 items-center justify-between border-b px-3">
         <div className="flex items-center gap-2">
-          <Flame className="size-4 text-primary" />
+          <img src="/emberyx.png" alt="Emberyx" className="size-5 rounded-[5px]" />
           <span className="text-sm font-semibold tracking-tight">Emberyx</span>
-          {projectPath && (
-            <>
-              <span className="text-muted-foreground">/</span>
-              <button
-                onClick={pickProject}
-                className="rounded px-1.5 py-0.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-                title={projectPath}
-              >
-                {basename(projectPath)}
-              </button>
-              {workspace && workspace.kind !== "single" && (
-                <span className="rounded bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">
-                  {workspace.kind}
-                </span>
-              )}
-            </>
+          {activeProject && activeProject.workspace && (
+            <span className="rounded bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">
+              {activeProject.workspace.kind}
+            </span>
           )}
         </div>
 
         <div className="flex items-center gap-2">
+          {agentUsage && agentUsage.messages > 0 && (
+            <span
+              className="flex items-center gap-1 text-xs text-muted-foreground"
+              title={`${agentUsage.input.toLocaleString()} in · ${agentUsage.output.toLocaleString()} out · ${agentUsage.cacheRead.toLocaleString()} cache read · ${agentUsage.cacheCreation.toLocaleString()} cache write${
+                agentUsage.model ? ` · ${agentUsage.model}` : ""
+              }`}
+            >
+              {formatTokens(totalTokens(agentUsage))} tok
+              <span className="opacity-40">·</span>${costOf(agentUsage).toFixed(2)}
+            </span>
+          )}
           {agent && (
             <span
               className={cn(
@@ -135,16 +233,23 @@ function App() {
               {STATUS_META[agentStatus].label}
             </span>
           )}
-          {projectPath && (
-            <DevMenu
-              workspace={workspace}
-              running={sessions.some((s) => s.kind === "dev")}
-              onRunPackage={runPackage}
-              onRunAll={runAll}
-              onStop={stopAllDev}
+          {activeProject && settings.agentCommand.startsWith("claude") && (
+            <ThreadMenu
+              threads={activeProject.threads}
+              onOpen={() => refreshThreads(activeProject.id, activeProject.path)}
+              onResume={resumeThread}
             />
           )}
-          {projectPath && (
+          {activeProject && (
+            <DevMenu
+              workspace={activeProject.workspace}
+              running={projectSessions.some((s) => s.kind === "dev")}
+              onRunPackage={runPackage}
+              onRunAll={runAll}
+              onStop={() => activeProjectId && stopAllDev(activeProjectId)}
+            />
+          )}
+          {activeProject && (
             <Button
               variant={changesOpen ? "secondary" : "ghost"}
               size="sm"
@@ -152,7 +257,7 @@ function App() {
               title="Agent changes"
             >
               <FileDiff className="size-3.5" />
-              {changes.length > 0 && changes.length}
+              {projectChanges.length > 0 && projectChanges.length}
             </Button>
           )}
           <Button
@@ -166,6 +271,59 @@ function App() {
         </div>
       </header>
 
+      {/* Project tab strip */}
+      {projects.length > 0 && (
+        <div className="flex h-9 shrink-0 items-center gap-1 border-b px-2">
+          {projects.map((p) => {
+            const pAgent = sessionsFor(p.id).find((s) => s.kind === "agent");
+            const st: SessionStatus = pAgent
+              ? statuses[pAgent.id] ?? "idle"
+              : "idle";
+            return (
+              <div
+                key={p.id}
+                onClick={() => setActiveProjectId(p.id)}
+                className={cn(
+                  "flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-xs",
+                  p.id === activeProjectId
+                    ? "bg-secondary text-foreground"
+                    : "text-muted-foreground hover:bg-secondary/50"
+                )}
+                title={p.path}
+              >
+                <span
+                  className={cn(
+                    "size-1.5 rounded-full",
+                    STATUS_META[st].dot,
+                    STATUS_META[st].pulse && "animate-pulse"
+                  )}
+                />
+                <span className="max-w-[12rem] truncate">
+                  {basename(p.path)}
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleCloseProject(p.id);
+                  }}
+                  className="rounded p-0.5 hover:bg-accent"
+                  title="Close project"
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            );
+          })}
+          <button
+            onClick={pickProject}
+            className="rounded p-1 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+            title="Open project (⌘O)"
+          >
+            <Plus className="size-3.5" />
+          </button>
+        </div>
+      )}
+
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
@@ -174,9 +332,9 @@ function App() {
       />
 
       {/* Needs-approval banner */}
-      {agent && agentStatus === "waiting" && (
+      {agent && agentStatus === "waiting" && activeProjectId && (
         <button
-          onClick={() => setActiveId(agent.id)}
+          onClick={() => setActive(activeProjectId, agent.id)}
           className="flex h-7 shrink-0 items-center justify-center gap-2 bg-amber-500/15 text-xs text-amber-300 hover:bg-amber-500/25"
         >
           <span className="size-1.5 animate-pulse rounded-full bg-amber-400" />
@@ -187,7 +345,7 @@ function App() {
       {/* Terminal viewport + changes panel */}
       <div className="flex min-h-0 flex-1">
         <main className="relative flex-1 bg-[#1a1a1e] p-1">
-          {projectPath ? (
+          {projects.length > 0 ? (
             sessions.map((s) => (
               <div
                 key={s.id}
@@ -203,12 +361,17 @@ function App() {
                   fontFamily={settings.fontFamily}
                   fontSize={settings.fontSize}
                   scrollback={settings.scrollback}
+                  active={s.id === activeId}
                 />
               </div>
             ))
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-5 text-center">
-              <Flame className="size-10 text-primary/60" />
+              <img
+                src="/emberyx.png"
+                alt="Emberyx"
+                className="size-16 rounded-2xl shadow-lg"
+              />
               <div>
                 <h1 className="text-lg font-semibold">Open a project</h1>
                 <p className="text-sm text-muted-foreground">
@@ -247,24 +410,24 @@ function App() {
             </div>
           )}
         </main>
-        {projectPath && changesOpen && (
+        {activeProject && changesOpen && (
           <ChangesPanel
-            projectPath={projectPath}
-            changes={changes}
+            projectPath={activeProject.path}
+            changes={projectChanges}
             onClose={() => setChangesOpen(false)}
           />
         )}
       </div>
 
-      {/* Bottom tab strip (agent + dev servers) */}
-      {showTabs && (
+      {/* Bottom tab strip (active project's agent + dev servers) */}
+      {showTabs && activeProjectId && (
         <footer className="flex h-9 shrink-0 items-center gap-1 border-t px-2">
-          {sessions.map((s) => {
+          {projectSessions.map((s) => {
             const st = statuses[s.id] ?? "idle";
             return (
               <div
                 key={s.id}
-                onClick={() => setActiveId(s.id)}
+                onClick={() => setActive(activeProjectId, s.id)}
                 className={cn(
                   "flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-xs",
                   s.id === activeId

@@ -1,50 +1,108 @@
 import { useRef, useState } from "react";
 import type { Session } from "@/types";
 
-/** Owns the terminal session list (agent + dev tabs) and the active tab. */
+/**
+ * Owns every terminal session across all open projects (agent + dev tabs),
+ * plus which session is active within each project. Session ids stay globally
+ * unique so the agent-status map can key on them directly.
+ */
 export function useSessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeByProject, setActiveByProject] = useState<Record<string, string>>(
+    {}
+  );
   const counter = useRef(0);
   const nextId = () => `s${++counter.current}`;
 
-  /** Reset to a single agent session for a freshly opened project. */
-  function startAgent(cwd: string, command: string): string {
+  function setActive(projectId: string, id: string) {
+    setActiveByProject((m) => ({ ...m, [projectId]: id }));
+  }
+
+  /** Start an agent session for a project and focus it. Returns its id. */
+  function startAgent(
+    projectId: string,
+    cwd: string,
+    command: string,
+    label = "agent"
+  ): string {
     const id = nextId();
-    setSessions([{ id, label: "agent", cwd, command, kind: "agent" }]);
-    setActiveId(id);
+    setSessions((s) => [
+      ...s,
+      { id, projectId, label, cwd, command, kind: "agent" },
+    ]);
+    setActive(projectId, id);
     return id;
   }
 
   /** Add a background dev-server session (does not steal focus). */
-  function addDev(label: string, cwd: string, command: string) {
+  function addDev(
+    projectId: string,
+    label: string,
+    cwd: string,
+    command: string
+  ) {
     const id = nextId();
-    setSessions((s) => [...s, { id, label, cwd, command, kind: "dev" }]);
+    setSessions((s) => [
+      ...s,
+      { id, projectId, label, cwd, command, kind: "dev" },
+    ]);
   }
 
   function closeSession(id: string) {
     setSessions((prev) => {
+      const target = prev.find((s) => s.id === id);
       const next = prev.filter((s) => s.id !== id);
-      setActiveId((cur) => (cur === id ? next[next.length - 1]?.id ?? null : cur));
+      if (target) {
+        setActiveByProject((m) => {
+          if (m[target.projectId] !== id) return m;
+          const siblings = next.filter((s) => s.projectId === target.projectId);
+          const fallback =
+            siblings.find((s) => s.kind === "agent")?.id ??
+            siblings[siblings.length - 1]?.id;
+          const copy = { ...m };
+          if (fallback) copy[target.projectId] = fallback;
+          else delete copy[target.projectId];
+          return copy;
+        });
+      }
       return next;
     });
   }
 
-  function stopAllDev() {
+  function stopAllDev(projectId: string) {
     setSessions((prev) => {
-      const next = prev.filter((s) => s.kind !== "dev");
-      setActiveId(next.find((s) => s.kind === "agent")?.id ?? null);
-      return next;
+      const agent = prev.find(
+        (s) => s.projectId === projectId && s.kind === "agent"
+      );
+      if (agent) setActive(projectId, agent.id);
+      return prev.filter(
+        (s) => !(s.projectId === projectId && s.kind === "dev")
+      );
     });
   }
+
+  /** Remove every session belonging to a closed project. */
+  function closeProjectSessions(projectId: string) {
+    setSessions((prev) => prev.filter((s) => s.projectId !== projectId));
+    setActiveByProject((m) => {
+      const copy = { ...m };
+      delete copy[projectId];
+      return copy;
+    });
+  }
+
+  const sessionsFor = (projectId: string) =>
+    sessions.filter((s) => s.projectId === projectId);
 
   return {
     sessions,
-    activeId,
-    setActiveId,
+    activeByProject,
+    setActive,
     startAgent,
     addDev,
     closeSession,
     stopAllDev,
+    closeProjectSessions,
+    sessionsFor,
   };
 }

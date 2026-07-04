@@ -1,6 +1,8 @@
 mod git;
 mod hooks;
 mod pty;
+mod threads;
+mod usage;
 mod workspace;
 
 use pty::PtyManager;
@@ -23,10 +25,14 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
+            pty::read_scrollback,
             workspace::scan_workspace,
             hooks::hook_config,
             git::git_changes,
             git::git_file_diff,
+            git::git_commit,
+            usage::read_usage,
+            threads::list_threads,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
