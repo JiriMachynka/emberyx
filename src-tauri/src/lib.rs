@@ -16,6 +16,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(PtyManager::new())
+        .manage(usage::UsageCache::default())
         .setup(|app| {
             let config = hooks::start(&app.handle())?;
             app.manage(config);

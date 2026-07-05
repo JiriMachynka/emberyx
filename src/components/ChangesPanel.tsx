@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { diffLines } from "diff";
 import { X, FileDiff, RefreshCw, GitBranch, Bot, Check } from "lucide-react";
@@ -24,8 +24,10 @@ function isDiffMeta(line: string): boolean {
   );
 }
 
-/** One syntax-highlighted diff line: marker gutter + highlighted code. */
-function DiffLine({
+/** One syntax-highlighted diff line: marker gutter + highlighted code.
+ *  Memoized so re-renders (e.g. streaming agent events) don't re-highlight
+ *  unchanged lines — highlightCode is the expensive per-line work. */
+const DiffLine = memo(function DiffLine({
   marker,
   code,
   lang,
@@ -42,7 +44,7 @@ function DiffLine({
       <span dangerouslySetInnerHTML={{ __html: highlightCode(code, lang) || " " }} />
     </div>
   );
-}
+});
 
 /** Raw unified diff with per-line syntax highlighting. */
 function UnifiedDiff({ text, lang }: { text: string; lang: string | null }) {

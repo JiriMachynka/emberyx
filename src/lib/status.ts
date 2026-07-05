@@ -15,6 +15,14 @@ export function statusForEvent(event: string): SessionStatus | null {
   }
 }
 
+/** Agent status for a session id, defaulting to idle when unknown. */
+export function statusOf(
+  statuses: Record<string, SessionStatus>,
+  id: string
+): SessionStatus {
+  return statuses[id] ?? "idle";
+}
+
 export const STATUS_META: Record<
   SessionStatus,
   { label: string; dot: string; text: string; pulse: boolean }

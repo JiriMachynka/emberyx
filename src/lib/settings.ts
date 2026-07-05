@@ -27,6 +27,11 @@ export const DEFAULT_SETTINGS: Settings = {
   dokployApiKey: "",
 };
 
+/** Whether an agent command drives Claude Code (enables thread/usage UI). */
+export function isClaudeAgent(cmd: string): boolean {
+  return cmd.startsWith("claude");
+}
+
 const KEY = "emberyx.settings";
 
 function load(): Settings {

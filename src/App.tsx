@@ -1,32 +1,23 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { open, ask } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { Toaster, toast } from "sonner";
-import {
-  FolderOpen,
-  Settings,
-  Bot,
-  X,
-  FileDiff,
-  Clock,
-  Plus,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { TerminalPane } from "@/components/TerminalPane";
-import { DevMenu } from "@/components/DevMenu";
-import { ThreadMenu } from "@/components/ThreadMenu";
-import { DokployMenu } from "@/components/DokployMenu";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { ChangesPanel } from "@/components/ChangesPanel";
+import { HeaderBar } from "@/components/HeaderBar";
+import { ProjectTabStrip } from "@/components/ProjectTabStrip";
+import { SessionTabStrip } from "@/components/SessionTabStrip";
+import { WelcomeScreen } from "@/components/WelcomeScreen";
+import { AttentionBanner } from "@/components/AttentionBanner";
 import { cn } from "@/lib/utils";
-import { basename, dirname } from "@/lib/path";
-import { STATUS_META } from "@/lib/status";
-import { useSettings } from "@/lib/settings";
+import { statusOf } from "@/lib/status";
+import { useSettings, isClaudeAgent } from "@/lib/settings";
 import { getRecents, addRecent } from "@/lib/recents";
-import { costOf, totalTokens, formatTokens } from "@/lib/pricing";
 import { useSessions } from "@/hooks/useSessions";
 import { useProjects } from "@/hooks/useProjects";
 import { useAgentEvents } from "@/hooks/useAgentEvents";
+import { useShortcuts } from "@/hooks/useShortcuts";
 import type {
   DokployMatch,
   PackageInfo,
@@ -65,9 +56,6 @@ function App() {
     sessionsFor,
   } = useSessions();
 
-  const [dragId, setDragId] = useState<string | null>(null);
-  const [dragOverId, setDragOverId] = useState<string | null>(null);
-
   const {
     statuses,
     changes,
@@ -78,7 +66,12 @@ function App() {
   } = useAgentEvents((id) => sessions.find((s) => s.id === id));
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
-  const projectSessions = activeProjectId ? sessionsFor(activeProjectId) : [];
+  const projectSessions = useMemo(
+    () => (activeProjectId ? sessionsFor(activeProjectId) : []),
+    // sessionsFor derives from `sessions`; recompute only when those change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessions, activeProjectId]
+  );
   const activeId = activeProjectId
     ? activeByProject[activeProjectId] ?? null
     : null;
@@ -87,7 +80,7 @@ function App() {
   function buildAgentCommand(extra?: string): string {
     const base = settings.agentCommand;
     const flags: string[] = [];
-    if (base.startsWith("claude")) {
+    if (isClaudeAgent(base)) {
       if (hookSettings) flags.push(`--settings "${hookSettings}"`);
       if (settings.dangerouslySkipPermissions) {
         flags.push("--dangerously-skip-permissions");
@@ -185,44 +178,6 @@ function App() {
     closeProject(id);
   }
 
-  // Global shortcuts: ⌘O open project, ⌘T new agent tab. Subscribed once;
-  // refs keep the handlers current without re-registering each render.
-  const pickRef = useRef(pickProject);
-  pickRef.current = pickProject;
-  const newAgentRef = useRef(newAgent);
-  newAgentRef.current = newAgent;
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey)) return;
-      if (e.key === "o") {
-        e.preventDefault();
-        void pickRef.current();
-      } else if (e.key === "t") {
-        e.preventDefault();
-        newAgentRef.current();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // When the window regains focus (e.g. clicking the desktop notification),
-  // jump to the session that raised it if it's still waiting.
-  useEffect(() => {
-    function onFocus() {
-      const sid = pendingAttention.current;
-      if (!sid) return;
-      pendingAttention.current = null;
-      const sess = sessions.find((s) => s.id === sid);
-      if (sess && statuses[sid] === "waiting") {
-        setActiveProjectId(sess.projectId);
-        setActive(sess.projectId, sid);
-      }
-    }
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [sessions, statuses, setActiveProjectId, setActive, pendingAttention]);
-
   function runPackage(pkg: PackageInfo) {
     if (!activeProjectId) return;
     addDev(activeProjectId, pkg.name, pkg.path, pkg.devCommand);
@@ -241,174 +196,76 @@ function App() {
     }
   }
 
+  useShortcuts({ onOpen: pickProject, onNewAgent: newAgent });
+
+  // When the window regains focus (e.g. clicking the desktop notification),
+  // jump to the session that raised it if it's still waiting.
+  useEffect(() => {
+    function onFocus() {
+      const sid = pendingAttention.current;
+      if (!sid) return;
+      pendingAttention.current = null;
+      const sess = sessions.find((s) => s.id === sid);
+      if (sess && statuses[sid] === "waiting") {
+        setActiveProjectId(sess.projectId);
+        setActive(sess.projectId, sid);
+      }
+    }
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [sessions, statuses, setActiveProjectId, setActive, pendingAttention]);
+
   const showTabs = projectSessions.length > 1;
   // Header reflects the active tab when it's an agent, else the first agent —
   // so multiple resumed threads each drive the header when focused.
   const firstAgent = projectSessions.find((s) => s.kind === "agent");
   const activeSession = projectSessions.find((s) => s.id === activeId);
-  const agent =
-    activeSession?.kind === "agent" ? activeSession : firstAgent;
-  const agentStatus: SessionStatus = agent
-    ? statuses[agent.id] ?? "idle"
-    : "idle";
+  const agent = activeSession?.kind === "agent" ? activeSession : firstAgent;
+  const agentStatus: SessionStatus = agent ? statusOf(statuses, agent.id) : "idle";
   const agentUsage = agent ? usages[agent.id] : undefined;
-  const projectChanges = changes.filter((c) =>
-    projectSessions.some((s) => s.id === c.session)
+  const projectChanges = useMemo(
+    () => changes.filter((c) => projectSessions.some((s) => s.id === c.session)),
+    [changes, projectSessions]
   );
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
-      {/* Top bar */}
-      <header className="flex h-11 shrink-0 items-center justify-between border-b px-3">
-        <div className="flex items-center gap-2">
-          <img src="/emberyx.png" alt="Emberyx" className="size-5 rounded-[5px]" />
-          <span className="text-sm font-semibold tracking-tight">Emberyx</span>
-          {activeProject && activeProject.workspace && (
-            <span className="rounded bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">
-              {activeProject.workspace.kind}
-            </span>
-          )}
-        </div>
+      <HeaderBar
+        activeProject={activeProject}
+        claudeAgent={isClaudeAgent(settings.agentCommand)}
+        agent={agent}
+        agentStatus={agentStatus}
+        agentUsage={agentUsage}
+        devRunning={projectSessions.some((s) => s.kind === "dev")}
+        changesCount={projectChanges.length}
+        changesOpen={changesOpen}
+        onRefreshThreads={() => {
+          if (activeProject) refreshThreads(activeProject.id, activeProject.path);
+        }}
+        onResumeThread={resumeThread}
+        onRefreshDokploy={() => {
+          if (activeProject) refreshDokploy(activeProject.id, activeProject.path);
+        }}
+        onRunPackage={runPackage}
+        onRunAll={runAll}
+        onStopDev={() => {
+          if (activeProjectId) stopAllDev(activeProjectId);
+        }}
+        onNewAgent={newAgent}
+        onToggleChanges={() => setChangesOpen((v) => !v)}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
 
-        <div className="flex items-center gap-2">
-          {agentUsage && agentUsage.messages > 0 && (
-            <span
-              className="flex items-center gap-1 text-xs text-muted-foreground"
-              title={`${agentUsage.input.toLocaleString()} in · ${agentUsage.output.toLocaleString()} out · ${agentUsage.cacheRead.toLocaleString()} cache read · ${agentUsage.cacheCreation.toLocaleString()} cache write${
-                agentUsage.model ? ` · ${agentUsage.model}` : ""
-              }`}
-            >
-              {formatTokens(totalTokens(agentUsage))} tok
-              <span className="opacity-40">·</span>${costOf(agentUsage).toFixed(2)}
-            </span>
-          )}
-          {agent && (
-            <span
-              className={cn(
-                "flex items-center gap-1.5 text-xs",
-                STATUS_META[agentStatus].text
-              )}
-            >
-              <span
-                className={cn(
-                  "size-1.5 rounded-full",
-                  STATUS_META[agentStatus].dot,
-                  STATUS_META[agentStatus].pulse && "animate-pulse"
-                )}
-              />
-              {STATUS_META[agentStatus].label}
-            </span>
-          )}
-          {activeProject && settings.agentCommand.startsWith("claude") && (
-            <ThreadMenu
-              threads={activeProject.threads}
-              onOpen={() => refreshThreads(activeProject.id, activeProject.path)}
-              onResume={resumeThread}
-            />
-          )}
-          {activeProject && activeProject.dokploy && (
-            <DokployMenu
-              match={activeProject.dokploy}
-              onOpen={() => refreshDokploy(activeProject.id, activeProject.path)}
-            />
-          )}
-          {activeProject && (
-            <DevMenu
-              workspace={activeProject.workspace}
-              running={projectSessions.some((s) => s.kind === "dev")}
-              onRunPackage={runPackage}
-              onRunAll={runAll}
-              onStop={() => activeProjectId && stopAllDev(activeProjectId)}
-            />
-          )}
-          {activeProject && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={newAgent}
-              title="New agent tab (⌘T)"
-            >
-              <Plus className="size-4" />
-            </Button>
-          )}
-          {activeProject && (
-            <Button
-              variant={changesOpen ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => setChangesOpen((v) => !v)}
-              title="Agent changes"
-            >
-              <FileDiff className="size-3.5" />
-              {projectChanges.length > 0 && projectChanges.length}
-            </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            title="Settings"
-            onClick={() => setSettingsOpen(true)}
-          >
-            <Settings className="size-4" />
-          </Button>
-        </div>
-      </header>
-
-      {/* Project tab strip */}
       {projects.length > 0 && (
-        <div className="flex h-9 shrink-0 items-center gap-1 border-b px-2">
-          {projects.map((p) => {
-            const pAgent = sessionsFor(p.id).find((s) => s.kind === "agent");
-            const st: SessionStatus = pAgent
-              ? statuses[pAgent.id] ?? "idle"
-              : "idle";
-            return (
-              <div
-                key={p.id}
-                onClick={() => setActiveProjectId(p.id)}
-                className={cn(
-                  "group flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors",
-                  p.id === activeProjectId
-                    ? "border-border bg-secondary text-foreground shadow-sm"
-                    : "border-transparent text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
-                )}
-                title={p.path}
-              >
-                <span
-                  className={cn(
-                    "size-1.5 rounded-full",
-                    STATUS_META[st].dot,
-                    STATUS_META[st].pulse && "animate-pulse"
-                  )}
-                />
-                <span className="max-w-[12rem] truncate">
-                  {basename(p.path)}
-                </span>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleCloseProject(p.id);
-                  }}
-                  className={cn(
-                    "rounded p-0.5 transition-opacity hover:bg-accent",
-                    p.id === activeProjectId
-                      ? "opacity-100"
-                      : "opacity-0 group-hover:opacity-100"
-                  )}
-                  title="Close project"
-                >
-                  <X className="size-3" />
-                </button>
-              </div>
-            );
-          })}
-          <button
-            onClick={pickProject}
-            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
-            title="Open project (⌘O)"
-          >
-            <Plus className="size-3.5" />
-          </button>
-        </div>
+        <ProjectTabStrip
+          projects={projects}
+          activeProjectId={activeProjectId}
+          statuses={statuses}
+          sessionsFor={sessionsFor}
+          onSelect={setActiveProjectId}
+          onClose={handleCloseProject}
+          onPick={pickProject}
+        />
       )}
 
       <SettingsDialog
@@ -420,16 +277,8 @@ function App() {
 
       <Toaster theme="dark" position="bottom-right" richColors closeButton />
 
-
-      {/* Needs-approval banner */}
       {agent && agentStatus === "waiting" && activeProjectId && (
-        <button
-          onClick={() => setActive(activeProjectId, agent.id)}
-          className="flex h-7 shrink-0 items-center justify-center gap-2 bg-amber-500/15 text-xs text-amber-300 hover:bg-amber-500/25"
-        >
-          <span className="size-1.5 animate-pulse rounded-full bg-amber-400" />
-          Claude needs your input — click to jump to the agent
-        </button>
+        <AttentionBanner onJump={() => setActive(activeProjectId, agent.id)} />
       )}
 
       {/* Terminal viewport + changes panel */}
@@ -457,48 +306,11 @@ function App() {
               </div>
             ))
           ) : (
-            <div className="flex h-full flex-col items-center justify-center gap-5 text-center">
-              <img
-                src="/emberyx.png"
-                alt="Emberyx"
-                className="size-16 rounded-2xl shadow-lg"
-              />
-              <div>
-                <h1 className="text-lg font-semibold">Open a project</h1>
-                <p className="text-sm text-muted-foreground">
-                  Emberyx launches your agent in an integrated terminal.
-                </p>
-              </div>
-              <Button onClick={pickProject}>
-                <FolderOpen className="size-4" />
-                Open project…
-                <span className="ml-1 text-xs opacity-60">⌘O</span>
-              </Button>
-              {recents.length > 0 && (
-                <div className="w-72 text-left">
-                  <div className="mb-1 flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
-                    <Clock className="size-3" />
-                    Recent
-                  </div>
-                  <ul className="rounded-md border">
-                    {recents.map((p) => (
-                      <li key={p}>
-                        <button
-                          onClick={() => openProjectAt(p)}
-                          className="flex w-full items-center justify-between gap-2 px-2.5 py-1.5 text-sm hover:bg-accent"
-                          title={p}
-                        >
-                          <span className="truncate">{basename(p)}</span>
-                          <span className="truncate text-xs text-muted-foreground">
-                            {dirname(p)}
-                          </span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
+            <WelcomeScreen
+              recents={recents}
+              onPick={pickProject}
+              onOpenRecent={openProjectAt}
+            />
           )}
         </main>
         {activeProject && changesOpen && (
@@ -510,76 +322,16 @@ function App() {
         )}
       </div>
 
-      {/* Bottom tab strip (active project's agent + dev servers) */}
       {showTabs && activeProjectId && (
-        <footer className="flex h-9 shrink-0 items-center gap-1 border-t px-2">
-          {projectSessions.map((s) => {
-            const st = statuses[s.id] ?? "idle";
-            return (
-              <div
-                key={s.id}
-                draggable
-                onClick={() => setActive(activeProjectId, s.id)}
-                onDragStart={() => setDragId(s.id)}
-                onDragEnd={() => {
-                  setDragId(null);
-                  setDragOverId(null);
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  if (dragId && dragId !== s.id) setDragOverId(s.id);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (dragId) moveSession(activeProjectId, dragId, s.id);
-                  setDragId(null);
-                  setDragOverId(null);
-                }}
-                className={cn(
-                  "group flex cursor-grab items-center gap-1.5 rounded px-2 py-1 text-xs active:cursor-grabbing",
-                  s.id === activeId
-                    ? "bg-secondary text-foreground"
-                    : "text-muted-foreground hover:bg-secondary/50",
-                  dragId === s.id && "opacity-40",
-                  dragOverId === s.id && "ring-1 ring-primary"
-                )}
-              >
-                {s.kind === "agent" ? (
-                  <Bot className={cn("size-3.5", STATUS_META[st].text)} />
-                ) : (
-                  <span className="size-1.5 rounded-full bg-emerald-500" />
-                )}
-                <span className="max-w-[10rem] truncate">
-                  {s.kind === "dev" ? `dev:${s.label}` : s.label}
-                </span>
-                {s.kind === "agent" && st !== "idle" && (
-                  <span
-                    className={cn(
-                      "size-1.5 rounded-full",
-                      STATUS_META[st].dot,
-                      STATUS_META[st].pulse && "animate-pulse"
-                    )}
-                  />
-                )}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    closeSession(s.id);
-                  }}
-                  className={cn(
-                    "rounded p-0.5 transition-opacity hover:bg-accent",
-                    s.id === activeId
-                      ? "opacity-100"
-                      : "opacity-0 group-hover:opacity-100"
-                  )}
-                  title={s.kind === "dev" ? "Stop" : "Close"}
-                >
-                  <X className="size-3" />
-                </button>
-              </div>
-            );
-          })}
-        </footer>
+        <SessionTabStrip
+          sessions={projectSessions}
+          activeId={activeId}
+          activeProjectId={activeProjectId}
+          statuses={statuses}
+          onSelect={(id) => setActive(activeProjectId, id)}
+          onClose={closeSession}
+          onMove={moveSession}
+        />
       )}
     </div>
   );
