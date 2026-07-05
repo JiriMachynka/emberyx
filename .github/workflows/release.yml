@@ -10,7 +10,7 @@ on:
 
 jobs:
   release:
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-latest
     permissions:
       contents: write
     steps:
