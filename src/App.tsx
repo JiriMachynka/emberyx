@@ -58,10 +58,14 @@ function App() {
     startAgent,
     addDev,
     closeSession,
+    moveSession,
     stopAllDev,
     closeProjectSessions,
     sessionsFor,
   } = useSessions();
+
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   const {
     statuses,
@@ -454,12 +458,30 @@ function App() {
             return (
               <div
                 key={s.id}
+                draggable
                 onClick={() => setActive(activeProjectId, s.id)}
+                onDragStart={() => setDragId(s.id)}
+                onDragEnd={() => {
+                  setDragId(null);
+                  setDragOverId(null);
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (dragId && dragId !== s.id) setDragOverId(s.id);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (dragId) moveSession(activeProjectId, dragId, s.id);
+                  setDragId(null);
+                  setDragOverId(null);
+                }}
                 className={cn(
-                  "flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-xs",
+                  "flex cursor-grab items-center gap-1.5 rounded px-2 py-1 text-xs active:cursor-grabbing",
                   s.id === activeId
                     ? "bg-secondary text-foreground"
-                    : "text-muted-foreground hover:bg-secondary/50"
+                    : "text-muted-foreground hover:bg-secondary/50",
+                  dragId === s.id && "opacity-40",
+                  dragOverId === s.id && "ring-1 ring-primary"
                 )}
               >
                 {s.kind === "agent" ? (
@@ -479,18 +501,16 @@ function App() {
                     )}
                   />
                 )}
-                {s.kind === "dev" && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      closeSession(s.id);
-                    }}
-                    className="rounded p-0.5 hover:bg-accent"
-                    title="Stop"
-                  >
-                    <X className="size-3" />
-                  </button>
-                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeSession(s.id);
+                  }}
+                  className="rounded p-0.5 hover:bg-accent"
+                  title={s.kind === "dev" ? "Stop" : "Close"}
+                >
+                  <X className="size-3" />
+                </button>
               </div>
             );
           })}

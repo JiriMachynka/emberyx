@@ -69,6 +69,25 @@ export function useSessions() {
     });
   }
 
+  /** Reorder a session within its project, dropping it at another tab's slot. */
+  function moveSession(projectId: string, draggedId: string, targetId: string) {
+    if (draggedId === targetId) return;
+    setSessions((prev) => {
+      const ids = prev
+        .filter((s) => s.projectId === projectId)
+        .map((s) => s.id);
+      const from = ids.indexOf(draggedId);
+      const to = ids.indexOf(targetId);
+      if (from < 0 || to < 0 || from === to) return prev;
+      ids.splice(to, 0, ids.splice(from, 1)[0]);
+      const byId = new Map(prev.map((s) => [s.id, s]));
+      let i = 0;
+      return prev.map((s) =>
+        s.projectId === projectId ? (byId.get(ids[i++]) as Session) : s
+      );
+    });
+  }
+
   function stopAllDev(projectId: string) {
     setSessions((prev) => {
       const agent = prev.find(
@@ -101,6 +120,7 @@ export function useSessions() {
     startAgent,
     addDev,
     closeSession,
+    moveSession,
     stopAllDev,
     closeProjectSessions,
     sessionsFor,
