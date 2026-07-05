@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { statusOf } from "@/lib/status";
 import { useSettings, isClaudeAgent } from "@/lib/settings";
 import { getRecents, addRecent } from "@/lib/recents";
+import { checkForUpdates } from "@/lib/update";
 import { useSessions } from "@/hooks/useSessions";
 import { useProjects } from "@/hooks/useProjects";
 import { useAgentEvents } from "@/hooks/useAgentEvents";
@@ -197,6 +198,11 @@ function App() {
   }
 
   useShortcuts({ onOpen: pickProject, onNewAgent: newAgent });
+
+  // Check for a newer signed release on launch (quiet on failure).
+  useEffect(() => {
+    void checkForUpdates({ silent: true });
+  }, []);
 
   // When the window regains focus (e.g. clicking the desktop notification),
   // jump to the session that raised it if it's still waiting.
