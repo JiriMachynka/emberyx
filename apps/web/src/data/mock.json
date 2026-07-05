@@ -1,0 +1,32 @@
+{
+  "badge": "single",
+  "runStatus": "idle",
+  "tabs": [{ "label": "novacart", "active": true }],
+  "feed": [
+    { "id": "04812", "time": "2:31 PM", "icon": "🔵", "text": "Checkout flow uses optimistic cart updates — server reconciles on the /confirm step" },
+    { "id": "04813", "time": "2:33 PM", "icon": "🔵", "text": "Stripe webhook retries are idempotent via the event id stored in payments table" },
+    { "id": "04815", "time": "2:35 PM", "icon": "⚖️", "text": "Decision: cache product listings at the edge for 60s, revalidate on inventory change" },
+    { "path": "server/api/checkout/confirm.post.ts" },
+    { "id": "04816", "time": "2:36 PM", "icon": "🔵", "text": "confirm.post.ts validates the cart total against live prices before charging" },
+    { "id": "04818", "time": "2:38 PM", "icon": "🔵", "text": "Coupon stacking is disabled — only the highest-value discount applies per order" },
+    { "id": "04820", "time": "2:40 PM", "icon": "🟣", "text": "Added guest checkout: session cart promotes to an order without an account" },
+    { "id": "04822", "time": "2:42 PM", "icon": "🔴", "text": "Fixed: race condition double-charged when the pay button was double-clicked" },
+    { "id": "04823", "time": "2:43 PM", "icon": "🔄", "text": "Extracted pricing math into lib/pricing.ts — shared by cart, checkout, and admin" },
+    { "id": "04824", "time": "2:44 PM", "icon": "🔵", "text": "Tax is computed server-side per region; the client only ever displays the result" },
+    { "id": "04826", "time": "2:46 PM", "icon": "✅", "text": "Checkout hardening committed and pushed to main (a3f19c2)" },
+    { "path": "…/novacart/memory/DECISIONS.md" },
+    { "id": "04827", "time": "2:47 PM", "icon": "✅", "text": "DECISIONS.md updated with the pricing, coupon, and guest-checkout rules" }
+  ],
+  "notes": [
+    "Access 92k tokens of past research & decisions for just 14,320t. Use the claude-mem skill to access memories by ID.",
+    "View Observations Live @ http://localhost:37777"
+  ],
+  "statusbar": {
+    "model": "Opus 4.8 (1M context)",
+    "cost": "$0.00 session / $12.40 today / $1.18 block (2h 44m left)",
+    "rate": "$0.62/hr",
+    "mode": "Normal",
+    "agents": "0 (0%)",
+    "permission": "bypass permissions on (shift+tab to cycle)"
+  }
+}

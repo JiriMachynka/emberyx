@@ -1,0 +1,130 @@
+---
+// Data-driven replica of the Emberyx cockpit. Edit src/data/mock.json to change
+// the content — no markup changes needed. Pass a `data` prop to override.
+import defaultData from "../data/mock.json";
+
+interface FeedObs { id: string; time: string; icon: string; text: string }
+interface FeedPath { path: string }
+type FeedLine = FeedObs | FeedPath;
+
+interface MockData {
+  badge: string;
+  runStatus: string;
+  tabs: { label: string; active?: boolean }[];
+  feed: FeedLine[];
+  notes: string[];
+  statusbar: {
+    model: string; cost: string; rate: string;
+    mode: string; agents: string; permission: string;
+  };
+}
+
+const { data = defaultData as MockData } = Astro.props;
+const isPath = (l: FeedLine): l is FeedPath => "path" in l;
+---
+
+<div
+  class="mockup relative overflow-hidden rounded-xl border border-line bg-ink-soft font-mono text-[12px] shadow-2xl shadow-black/50"
+>
+  <!-- macOS title bar -->
+  <div class="relative flex items-center justify-center border-b border-line-soft bg-ink-card px-4 py-2.5">
+    <div class="absolute left-4 flex gap-2">
+      <span class="h-3 w-3 rounded-full bg-[#ff5f57]"></span>
+      <span class="h-3 w-3 rounded-full bg-[#febc2e]"></span>
+      <span class="h-3 w-3 rounded-full bg-[#28c840]"></span>
+    </div>
+    <span class="text-[11px] font-sans text-ash">Emberyx</span>
+  </div>
+
+  <!-- Header bar -->
+  <div class="flex items-center justify-between border-b border-line-soft px-4 py-2.5 font-sans">
+    <div class="flex items-center gap-2">
+      <img src="/emberyx.png" alt="" width="16" height="16" class="rounded-sm" />
+      <span class="text-[13px] font-semibold">Emberyx</span>
+      <span class="rounded border border-line px-1.5 py-0.5 text-[10px] text-ash">{data.badge}</span>
+    </div>
+
+    <div class="flex items-center gap-2.5 text-[12px] text-ash">
+      <span class="flex items-center gap-1.5">
+        <span class="h-1.5 w-1.5 rounded-full bg-ash-dim"></span>{data.runStatus}
+      </span>
+      <span class="flex items-center gap-1 rounded-md border border-line px-2 py-1">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+        Threads
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </span>
+      <span class="flex items-center gap-1.5 rounded-md border border-line bg-ink px-2 py-1 text-white">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="#28c840" stroke="none"><path d="M6 4l14 8-14 8z"/></svg>
+        Dev
+      </span>
+      <span class="flex h-6 w-6 items-center justify-center rounded-md border border-line">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </span>
+      <span class="flex h-6 w-6 items-center justify-center rounded-md border border-line">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>
+      </span>
+      <span class="flex h-6 w-6 items-center justify-center rounded-md border border-line">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 15H2.9a2 2 0 1 1 0-4H3a1.6 1.6 0 0 0 1.1-2.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 9 4.6V4a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 17 4.6a1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.6 1.6 0 0 0 21 9v.1a2 2 0 1 1 0 4z"/></svg>
+      </span>
+    </div>
+  </div>
+
+  <!-- Tab strip -->
+  <div class="flex items-center gap-1 border-b border-line-soft px-3 py-1.5 font-sans">
+    {data.tabs.map((t) => (
+      <span class:list={["flex items-center gap-2 rounded-md px-2.5 py-1 text-[12px]", t.active ? "border border-line bg-ink text-white" : "text-ash"]}>
+        {t.label}
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </span>
+    ))}
+    <span class="flex h-6 w-6 items-center justify-center rounded-md text-ash">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </span>
+  </div>
+
+  <!-- Observation feed -->
+  <div class="relative h-[340px] overflow-hidden bg-ink px-4 py-3 leading-[1.7]">
+    <div class="feed-fade pointer-events-none absolute inset-x-0 top-0 h-6"></div>
+    {data.feed.map((l) => (
+      isPath(l)
+        ? <p class="text-ash-dim">{l.path}</p>
+        : <p class="text-[#c6cbc6]">
+            <span class="text-ash-dim">#&nbsp;{l.id}</span>
+            <span class="ml-3 text-ash-dim">{l.time}</span>
+            <span class="mx-2">{l.icon}</span>
+            {l.text}
+          </p>
+    ))}
+    <div class="mt-4 space-y-1">
+      {data.notes.map((n) => <p class="text-ash-dim">{n}</p>)}
+    </div>
+  </div>
+
+  <!-- Prompt input -->
+  <div class="flex items-center gap-2 border-t border-line-soft bg-ink px-4 py-2 text-ash">
+    <span class="text-ash-dim">❯</span>
+    <span class="inline-block h-3.5 w-[7px] bg-ash-dim/70"></span>
+  </div>
+
+  <!-- Status bar -->
+  <div class="border-t border-line-soft bg-ink-card px-4 py-2 text-[11px] text-ash">
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span>🍎 {data.statusbar.model}</span>
+      <span class="text-ash-dim">|</span>
+      <span>💰 {data.statusbar.cost}</span>
+      <span class="text-ash-dim">|</span>
+      <span>🔥 {data.statusbar.rate}</span>
+      <span class="text-ash-dim">|</span>
+      <span>🟢 ({data.statusbar.mode})</span>
+      <span class="text-ash-dim">|</span>
+      <span>🤖 {data.statusbar.agents}</span>
+    </div>
+    <div class="mt-1 text-ember">⏵⏵ {data.statusbar.permission}</div>
+  </div>
+</div>
+
+<style>
+  .feed-fade {
+    background: linear-gradient(to bottom, var(--color-ink), transparent);
+  }
+</style>

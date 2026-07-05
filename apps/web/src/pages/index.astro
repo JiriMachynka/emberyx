@@ -1,0 +1,187 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Nav from "../components/Nav.astro";
+import Footer from "../components/Footer.astro";
+import AppMockup from "../components/AppMockup.astro";
+
+const repo = "https://github.com/JiriMachynka/emberyx";
+const releases = `${repo}/releases/latest`;
+---
+
+<Layout>
+  <Nav />
+
+  <main>
+    <!-- HERO -->
+    <section class="relative overflow-hidden border-b border-line-soft">
+      <div class="grid-bg pointer-events-none absolute inset-0"></div>
+      <div class="relative mx-auto max-w-5xl px-5 py-20 lg:py-24">
+        <div class="mx-auto max-w-2xl text-center">
+          <h1 class="text-4xl font-semibold leading-[1.08] tracking-tight sm:text-5xl">
+            One window for every<br class="hidden sm:block" />
+            Claude Code session.
+          </h1>
+
+          <p class="mx-auto mt-5 max-w-md text-lg leading-relaxed text-ash">
+            Emberyx is a native cockpit for AI coding agents. Integrated
+            terminals, thread resume, inline git, and a live token &amp; cost
+            meter — across all your projects at once.
+          </p>
+
+          <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
+            <a
+              href={releases}
+              class="rounded-md bg-ember px-5 py-2.5 text-sm font-medium text-ink transition-colors hover:bg-ember-soft"
+            >
+              Download for macOS
+            </a>
+          </div>
+        </div>
+
+        <div class="mt-16">
+          <AppMockup />
+        </div>
+      </div>
+    </section>
+
+    <!-- FEATURES -->
+    <section id="features" class="mx-auto max-w-5xl px-5 py-20">
+      <div class="flex items-baseline justify-between border-b border-line pb-5">
+        <h2 class="text-2xl font-semibold tracking-tight">What's inside</h2>
+      </div>
+
+      <div class="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
+        <!-- Multi-project cockpit (wide, mini terminal) -->
+        <div class="rounded-xl border border-line bg-ink-card p-6 transition-colors hover:border-ash/25 sm:col-span-2 lg:col-span-4">
+          <h3 class="font-medium text-white">Multi-project cockpit</h3>
+          <p class="mt-1.5 max-w-md text-sm leading-relaxed text-ash">
+            Tab through every project. Each gets its own integrated PTY
+            terminals — no window juggling.
+          </p>
+          <div class="mt-5 rounded-lg border border-line-soft bg-ink p-3 font-mono text-[11px] leading-relaxed">
+            <div class="mb-2 flex gap-1">
+              <span class="rounded bg-ember/15 px-1.5 py-0.5 text-[10px] text-ember-soft">novacart</span>
+              <span class="px-1.5 py-0.5 text-[10px] text-ash-dim">api-service</span>
+              <span class="px-1.5 py-0.5 text-[10px] text-ash-dim">landing</span>
+            </div>
+            <p class="text-ash"><span class="text-ember-soft">❯</span> claude</p>
+            <p class="text-emerald-300">● session ready — 3 projects attached</p>
+          </div>
+        </div>
+
+        <!-- Token & cost meter -->
+        <div class="rounded-xl border border-line bg-ink-card p-6 transition-colors hover:border-ash/25 sm:col-span-1 lg:col-span-2">
+          <h3 class="font-medium text-white">Token &amp; cost meter</h3>
+          <p class="mt-1.5 text-sm leading-relaxed text-ash">
+            Live tokens and dollar cost per session.
+          </p>
+          <p class="mt-5 font-mono text-2xl font-semibold text-white">
+            $0.62<span class="text-sm font-normal text-ash-dim">/hr</span>
+          </p>
+          <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-line">
+            <div class="h-full w-2/3 rounded-full bg-ember"></div>
+          </div>
+          <p class="mt-2 font-mono text-[11px] text-ash-dim">128k tokens · $12.40 today</p>
+        </div>
+
+        <!-- Thread resume -->
+        <div class="rounded-xl border border-line bg-ink-card p-6 transition-colors hover:border-ash/25 sm:col-span-1 lg:col-span-2">
+          <h3 class="font-medium text-white">Thread resume</h3>
+          <p class="mt-1.5 text-sm leading-relaxed text-ash">
+            Reopen any past thread instantly — prefetched and cached, so there's
+            no wait.
+          </p>
+          <p class="mt-5 font-mono text-[11px] text-ash-dim">
+            <span class="text-ember-soft">❯</span> claude --resume
+          </p>
+        </div>
+
+        <!-- Inline git (wide, mini diff) -->
+        <div class="rounded-xl border border-line bg-ink-card p-6 transition-colors hover:border-ash/25 sm:col-span-2 lg:col-span-4">
+          <h3 class="font-medium text-white">Inline git</h3>
+          <p class="mt-1.5 max-w-md text-sm leading-relaxed text-ash">
+            Read diffs with syntax highlighting and commit — without ever leaving
+            the window.
+          </p>
+          <div class="mt-5 overflow-hidden rounded-lg border border-line-soft bg-ink font-mono text-[11px] leading-relaxed">
+            <div class="border-b border-line-soft px-3 py-1.5 text-ash-dim">lib/pricing.ts</div>
+            <div class="px-3 py-2">
+              <p class="text-emerald-400">+&nbsp;&nbsp;const total = net + tax(region)</p>
+              <p class="text-[#ff6a6a]">−&nbsp;&nbsp;const total = net</p>
+              <p class="text-ash">&nbsp;&nbsp;&nbsp;return round(total)</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Session tabs -->
+        <div class="rounded-xl border border-line bg-ink-card p-6 transition-colors hover:border-ash/25 sm:col-span-1 lg:col-span-2">
+          <h3 class="font-medium text-white">Session tabs</h3>
+          <p class="mt-1.5 text-sm leading-relaxed text-ash">
+            Several agent sessions side by side; a banner flags the one that
+            needs you.
+          </p>
+          <div class="mt-5 flex flex-wrap gap-x-3 gap-y-1.5 font-mono text-[11px] text-ash-dim">
+            <span class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-ember"></span>main</span>
+            <span class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>tests</span>
+            <span class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-ash/40"></span>refactor</span>
+          </div>
+        </div>
+
+        <!-- Dokploy status -->
+        <div class="rounded-xl border border-line bg-ink-card p-6 transition-colors hover:border-ash/25 sm:col-span-1 lg:col-span-2">
+          <h3 class="font-medium text-white">Dokploy status</h3>
+          <p class="mt-1.5 text-sm leading-relaxed text-ash">
+            Deployment health for the current project, matched by git remote.
+          </p>
+          <div class="mt-5 inline-flex items-center gap-1.5 rounded-md border border-line-soft px-2.5 py-1 font-mono text-[11px] text-ash">
+            <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span> Dokploy · running
+          </div>
+        </div>
+
+        <!-- Signed updates -->
+        <div class="rounded-xl border border-line bg-ink-card p-6 transition-colors hover:border-ash/25 sm:col-span-2 lg:col-span-2">
+          <h3 class="font-medium text-white">Signed auto-updates</h3>
+          <p class="mt-1.5 text-sm leading-relaxed text-ash">
+            Updates land in-app over a signed channel. Install once — you never
+            reinstall.
+          </p>
+          <p class="mt-5 font-mono text-[11px] text-ash-dim">
+            v0.1.1 <span class="text-ember-soft">→</span> v0.1.2 · verified
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- DOWNLOAD -->
+    <section id="download" class="border-t border-line-soft">
+      <div
+        class="mx-auto flex max-w-5xl flex-col items-start justify-between gap-8 px-5 py-16 sm:flex-row sm:items-center"
+      >
+        <div>
+          <h2 class="text-2xl font-semibold tracking-tight">
+            Light the cockpit.
+          </h2>
+          <p class="mt-2 max-w-sm text-ash">
+            Grab the latest signed build. It keeps itself current from there.
+          </p>
+        </div>
+        <div class="flex shrink-0 flex-wrap gap-3">
+          <a
+            href={releases}
+            class="rounded-md bg-ember px-5 py-2.5 text-sm font-medium text-ink transition-colors hover:bg-ember-soft"
+          >
+            Download for macOS
+          </a>
+          <a
+            href="/docs"
+            class="rounded-md border border-line px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-ink-card"
+          >
+            Docs
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <Footer />
+</Layout>

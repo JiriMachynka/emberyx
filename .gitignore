@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Turborepo / Astro
+.turbo
+.astro
+
 # Environment / secrets
 .env
 .env.*

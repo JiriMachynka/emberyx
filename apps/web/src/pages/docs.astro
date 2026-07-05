@@ -1,0 +1,189 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Nav from "../components/Nav.astro";
+import Footer from "../components/Footer.astro";
+
+const nav = [
+  ["requirements", "Requirements"],
+  ["start", "Getting started"],
+  ["features", "Features"],
+  ["settings", "Settings"],
+  ["shortcuts", "Shortcuts"],
+];
+
+const requirements = [
+  ["macOS", "Ships as a universal <code>.dmg</code>. First launch needs right-click → Open — builds aren't notarized yet."],
+  ["Claude Code CLI", "On your PATH for the default experience. Other agents work via Settings, but threads, the cost meter, live status, and the agent edit-feed are Claude-Code-specific."],
+  ["Git", "Powers the Changes panel and Dokploy remote matching. Non-git folders degrade gracefully."],
+  ["Dokploy", "Optional — a reachable server URL and API key to light up the deployment panel."],
+];
+
+const steps = [
+  ["Install the app", "Download the latest <code>.dmg</code> from Releases, drag Emberyx to Applications, then right-click → Open on first run."],
+  ["Install Claude Code", "Emberyx runs the <code>claude</code> CLI as a subprocess. Make sure it's installed and on your PATH. Prefer another agent? Set it under Settings → Agent command."],
+  ["Open a project", "Hit <kbd>⌘O</kbd> and pick any folder. Emberyx launches the agent in an embedded terminal there and loads the project's past conversations. Recent projects live on the welcome screen."],
+  ["Work", "Type into the terminal like a normal Claude Code session. Add more projects with the <kbd>+</kbd> tab — each stays open at once."],
+];
+
+const features = [
+  ["Multi-project tabs", "Every open folder is a tab in the top strip with a status dot — idle, working, or needs-you. Click to switch, hover for ✕. Closing a busy agent asks first."],
+  ["Agent terminal", "A real terminal (xterm.js) runs the agent. The primary terminal's scrollback survives app restarts, keyed by project path."],
+  ["Session tabs", "A project holds several sessions — agent tabs and dev-server tabs. The bottom strip switches, drag-reorders, and closes them. <kbd>⌘T</kbd> spawns a fresh agent tab."],
+  ["Resume threads", "The Threads dropdown lists past Claude Code conversations for the project. Pick one to open a tab resuming it via <code>claude --resume</code>. Reads from <code>~/.claude/projects</code>."],
+  ["Dev launcher", "Detects turbo / pnpm / npm / bun workspaces on open. The Dev button runs the dev script; monorepos get a dropdown to run All or one package. Becomes Stop while running."],
+  ["Changes panel", "Two tabs — Git (working-tree diffs, stage files, commit inline) and Agent (a live feed of every file the agent edits, rendered as diffs)."],
+  ["Token & cost meter", "Running tokens and estimated USD for the active agent, updated each turn. Hover for the input / output / cache breakdown."],
+  ["Status & notifications", "Live agent status via injected hooks. When the agent waits and the app is unfocused, a desktop notification fires — click it to jump to the waiting session."],
+  ["Dokploy status", "With a Dokploy URL and API key set, matches the project to its Dokploy project by git remote and lists every service's deploy status. Read-only."],
+  ["Auto-updates", "On launch Emberyx checks GitHub releases for a newer signed build. If found, a toast offers Install & restart."],
+];
+
+const settings = [
+  ["Agent command", "claude", "Command run when a project opens. Claude-specific UI appears only when it starts with <code>claude</code>."],
+  ["Skip permission prompts", "on", "Runs Claude with <code>--dangerously-skip-permissions</code> — no confirmation before commands or edits. Claude only."],
+  ["Terminal font family", "Geist Mono", "Font stack for all terminals. Applies live."],
+  ["Font size", "13", "Terminal font size in px (8–32)."],
+  ["Scrollback", "1000", "Terminal scrollback in lines (100–100000)."],
+  ["Dokploy · Server URL", "—", "Base URL of your Dokploy server. Enables the deployment panel."],
+  ["Dokploy · API key", "—", "Sent as the <code>x-api-key</code> header. Both Dokploy fields are required."],
+];
+
+const shortcuts = [
+  ["⌘O", "Open project"],
+  ["⌘T", "New agent tab"],
+];
+---
+
+<Layout
+  title="Docs — Emberyx"
+  description="How to install and use Emberyx, the desktop cockpit for AI coding agents."
+>
+  <Nav />
+
+  <main class="mx-auto max-w-5xl px-5 py-16">
+    <div class="lg:grid lg:grid-cols-[180px_1fr] lg:gap-14">
+      <!-- sidebar -->
+      <aside class="hidden lg:block">
+        <nav class="sticky top-20 space-y-1 border-l border-line-soft">
+          {nav.map(([id, label]) => (
+            <a
+              href={`#${id}`}
+              class="-ml-px block border-l border-transparent py-1.5 pl-4 text-sm text-ash transition-colors hover:border-ember hover:text-white"
+            >
+              {label}
+            </a>
+          ))}
+        </nav>
+      </aside>
+
+      <!-- content -->
+      <div class="min-w-0 max-w-2xl">
+        <header>
+          <p class="eyebrow">Documentation</p>
+          <h1 class="mt-3 text-4xl font-semibold leading-[1.08] tracking-tight sm:text-[2.75rem]">
+            Using Emberyx
+          </h1>
+          <p class="mt-4 text-lg leading-relaxed text-ash">
+            A native cockpit for driving AI coding agents across several projects at once —
+            one embedded terminal per project, plus diffs, cost tracking, and resumable threads.
+          </p>
+        </header>
+
+        <!-- requirements -->
+        <section id="requirements" class="mt-16 scroll-mt-20">
+          <h2 class="border-b border-line pb-3 text-lg font-semibold tracking-tight">Requirements</h2>
+          <dl class="mt-5 space-y-4">
+            {requirements.map(([term, desc]) => (
+              <div class="grid gap-1 sm:grid-cols-[9rem_1fr] sm:gap-5">
+                <dt class="font-medium text-white">{term}</dt>
+                <dd class="text-sm leading-relaxed text-ash" set:html={desc} />
+              </div>
+            ))}
+          </dl>
+        </section>
+
+        <!-- getting started -->
+        <section id="start" class="mt-16 scroll-mt-20">
+          <h2 class="border-b border-line pb-3 text-lg font-semibold tracking-tight">Getting started</h2>
+          <ol class="mt-6 space-y-7">
+            {steps.map(([title, body], i) => (
+              <li class="relative pl-11">
+                <span class="absolute left-0 top-0 flex h-7 w-7 items-center justify-center rounded-full border border-line bg-ink-card font-mono text-xs text-ember">
+                  {i + 1}
+                </span>
+                <h3 class="font-medium text-white">{title}</h3>
+                <p class="mt-1 text-sm leading-relaxed text-ash" set:html={body} />
+              </li>
+            ))}
+          </ol>
+        </section>
+
+        <!-- features -->
+        <section id="features" class="mt-16 scroll-mt-20">
+          <h2 class="border-b border-line pb-3 text-lg font-semibold tracking-tight">Features</h2>
+          <dl class="mt-2 divide-y divide-line-soft">
+            {features.map(([term, desc]) => (
+              <div class="grid gap-1 py-4 sm:grid-cols-[11rem_1fr] sm:gap-5">
+                <dt class="font-medium text-white">{term}</dt>
+                <dd class="text-sm leading-relaxed text-ash" set:html={desc} />
+              </div>
+            ))}
+          </dl>
+        </section>
+
+        <!-- settings -->
+        <section id="settings" class="mt-16 scroll-mt-20">
+          <h2 class="border-b border-line pb-3 text-lg font-semibold tracking-tight">Settings</h2>
+          <p class="mt-4 text-sm leading-relaxed text-ash">
+            Open the gear icon. Changes apply to terminals you open next; font changes apply live.
+          </p>
+          <dl class="mt-4 divide-y divide-line-soft border-t border-line-soft">
+            {settings.map(([name, def, desc]) => (
+              <div class="py-4">
+                <div class="flex items-baseline justify-between gap-4">
+                  <dt class="font-medium text-white">{name}</dt>
+                  <code class="shrink-0 font-mono text-xs text-ash-dim">{def}</code>
+                </div>
+                <dd class="mt-1 text-sm leading-relaxed text-ash" set:html={desc} />
+              </div>
+            ))}
+          </dl>
+        </section>
+
+        <!-- shortcuts -->
+        <section id="shortcuts" class="mt-16 scroll-mt-20">
+          <h2 class="border-b border-line pb-3 text-lg font-semibold tracking-tight">Shortcuts</h2>
+          <div class="mt-5 flex flex-wrap gap-2.5">
+            {shortcuts.map(([key, label]) => (
+              <div class="flex items-center gap-2.5 rounded-lg border border-line-soft bg-ink-card px-3.5 py-2">
+                <kbd class="font-mono text-xs text-white">{key}</kbd>
+                <span class="text-sm text-ash">{label}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <Footer />
+</Layout>
+
+<style is:global>
+  /* Inline code inside docs prose. */
+  #requirements code,
+  #start code,
+  #features code,
+  #settings code,
+  #start kbd,
+  #features kbd {
+    font-family: var(--font-mono);
+    font-size: 0.8em;
+    color: #cfcfd6;
+    background-color: var(--color-line-soft);
+    border: 1px solid var(--color-line);
+    border-radius: 0.3rem;
+    padding: 0.05rem 0.35rem;
+    white-space: nowrap;
+  }
+</style>
