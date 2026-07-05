@@ -11,6 +11,10 @@ export interface Settings {
   scrollback: number;
   /** Launch Claude with --dangerously-skip-permissions. */
   dangerouslySkipPermissions: boolean;
+  /** Dokploy server base URL, e.g. https://dokploy.example.com. */
+  dokployUrl: string;
+  /** Dokploy API key (sent as x-api-key). */
+  dokployApiKey: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -19,6 +23,8 @@ export const DEFAULT_SETTINGS: Settings = {
   fontSize: 13,
   scrollback: 1000,
   dangerouslySkipPermissions: true,
+  dokployUrl: "",
+  dokployApiKey: "",
 };
 
 const KEY = "emberyx.settings";

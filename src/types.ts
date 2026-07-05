@@ -29,6 +29,8 @@ export interface Project {
   workspace: WorkspaceInfo | null;
   /** Cached Claude Code threads, fetched on open + refreshed on demand. */
   threads: Thread[];
+  /** Matched Dokploy deployment, or null if not deployed / not configured. */
+  dokploy: DokployMatch | null;
 }
 
 /** Agent status derived from Claude Code hook events. */
@@ -53,4 +55,21 @@ export interface Thread {
   id: string;
   title: string;
   modified: number;
+}
+
+/** One service in a Dokploy project (app, compose, or a database). */
+export interface DokployService {
+  name: string;
+  /** application | compose | postgres | mysql | mariadb | mongo | redis */
+  kind: string;
+  /** Deploy status (idle | running | done | error), if reported. */
+  status: string | null;
+}
+
+/** The Dokploy project deploying this repo, matched by git remote. */
+export interface DokployMatch {
+  projectName: string;
+  /** The service whose git repo matched the project's remote. */
+  matchedService: string;
+  services: DokployService[];
 }

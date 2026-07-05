@@ -1,3 +1,4 @@
+mod dokploy;
 mod git;
 mod hooks;
 mod pty;
@@ -33,6 +34,7 @@ pub fn run() {
             git::git_commit,
             usage::read_usage,
             threads::list_threads,
+            dokploy::dokploy_services,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -117,6 +117,31 @@ export function SettingsDialog({
               />
             </Field>
           </div>
+
+          <div className="border-t pt-4">
+            <div className="mb-3 text-sm font-semibold">Dokploy</div>
+            <div className="grid gap-4">
+              <Field
+                label="Server URL"
+                hint="Projects are matched to Dokploy services by git remote."
+              >
+                <Input
+                  value={settings.dokployUrl}
+                  onChange={(e) => onUpdate({ dokployUrl: e.target.value })}
+                  placeholder="https://dokploy.example.com"
+                  spellCheck={false}
+                />
+              </Field>
+              <Field label="API key" hint="Sent as the x-api-key header.">
+                <Input
+                  type="password"
+                  value={settings.dokployApiKey}
+                  onChange={(e) => onUpdate({ dokployApiKey: e.target.value })}
+                  spellCheck={false}
+                />
+              </Field>
+            </div>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { Project, Thread, WorkspaceInfo } from "@/types";
+import type { DokployMatch, Project, Thread, WorkspaceInfo } from "@/types";
 
 /** Owns the list of open projects and which one is active. */
 export function useProjects() {
@@ -18,7 +18,10 @@ export function useProjects() {
       return { id: existing.id, isNew: false };
     }
     const id = `p${++counter.current}`;
-    setProjects((prev) => [...prev, { id, path, workspace: null, threads: [] }]);
+    setProjects((prev) => [
+      ...prev,
+      { id, path, workspace: null, threads: [], dokploy: null },
+    ]);
     setActiveProjectId(id);
     return { id, isNew: true };
   }
@@ -32,6 +35,12 @@ export function useProjects() {
   function setThreads(id: string, threads: Thread[]) {
     setProjects((prev) =>
       prev.map((p) => (p.id === id ? { ...p, threads } : p))
+    );
+  }
+
+  function setDokploy(id: string, dokploy: DokployMatch | null) {
+    setProjects((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, dokploy } : p))
     );
   }
 
@@ -52,6 +61,7 @@ export function useProjects() {
     openProject,
     setWorkspace,
     setThreads,
+    setDokploy,
     closeProject,
   };
 }

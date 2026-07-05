@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { TerminalPane } from "@/components/TerminalPane";
 import { DevMenu } from "@/components/DevMenu";
 import { ThreadMenu } from "@/components/ThreadMenu";
+import { DokployMenu } from "@/components/DokployMenu";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { cn } from "@/lib/utils";
@@ -25,7 +26,13 @@ import { costOf, totalTokens, formatTokens } from "@/lib/pricing";
 import { useSessions } from "@/hooks/useSessions";
 import { useProjects } from "@/hooks/useProjects";
 import { useAgentEvents } from "@/hooks/useAgentEvents";
-import type { PackageInfo, SessionStatus, Thread, WorkspaceInfo } from "@/types";
+import type {
+  DokployMatch,
+  PackageInfo,
+  SessionStatus,
+  Thread,
+  WorkspaceInfo,
+} from "@/types";
 
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -40,6 +47,7 @@ function App() {
     openProject,
     setWorkspace,
     setThreads,
+    setDokploy,
     closeProject,
   } = useProjects();
 
@@ -91,6 +99,18 @@ function App() {
       .catch((e) => console.error("list_threads failed:", e));
   }
 
+  /** Match the project against Dokploy by git remote, caching the result. */
+  function refreshDokploy(projectId: string, path: string) {
+    if (!settings.dokployUrl || !settings.dokployApiKey) return;
+    invoke<DokployMatch | null>("dokploy_services", {
+      url: settings.dokployUrl,
+      apiKey: settings.dokployApiKey,
+      cwd: path,
+    })
+      .then((m) => setDokploy(projectId, m))
+      .catch((e) => console.error("dokploy_services failed:", e));
+  }
+
   function openProjectAt(path: string) {
     const { id, isNew } = openProject(path);
     setRecents(addRecent(path));
@@ -101,6 +121,7 @@ function App() {
         .catch((e) => console.error("scan_workspace failed:", e));
     }
     refreshThreads(id, path);
+    refreshDokploy(id, path);
   }
 
   /** Resume a Claude Code thread in a new agent tab. */
@@ -238,6 +259,12 @@ function App() {
               threads={activeProject.threads}
               onOpen={() => refreshThreads(activeProject.id, activeProject.path)}
               onResume={resumeThread}
+            />
+          )}
+          {activeProject && activeProject.dokploy && (
+            <DokployMenu
+              match={activeProject.dokploy}
+              onOpen={() => refreshDokploy(activeProject.id, activeProject.path)}
             />
           )}
           {activeProject && (
