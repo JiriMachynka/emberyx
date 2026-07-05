@@ -1,0 +1,13 @@
+**/node_modules
+**/dist
+**/.turbo
+**/.astro
+.git
+.github
+.vscode
+docs
+codedb.snapshot
+app-icon.png
+*.log
+.DS_Store
+apps/desktop/src-tauri/target
