@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use base64::Engine;
 use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
@@ -16,12 +16,12 @@ use tauri::Manager;
 /// Cap on persisted / replayed scrollback per project (bytes).
 const SCROLLBACK_CAP: u64 = 1_000_000;
 
-/// Path of the scrollback log for a project cwd (created on demand).
-fn scrollback_file(app: &tauri::AppHandle, cwd: &str) -> Option<PathBuf> {
+/// Path of the scrollback log for a persistence key (created on demand).
+fn scrollback_file(app: &tauri::AppHandle, key: &str) -> Option<PathBuf> {
     let dir = app.path().app_data_dir().ok()?.join("scrollback");
     fs::create_dir_all(&dir).ok()?;
     let mut hasher = DefaultHasher::new();
-    cwd.hash(&mut hasher);
+    key.hash(&mut hasher);
     Some(dir.join(format!("{:016x}.log", hasher.finish())))
 }
 
@@ -59,7 +59,7 @@ struct PtySession {
 
 #[derive(Default)]
 pub struct PtyManager {
-    sessions: Mutex<HashMap<u32, PtySession>>,
+    sessions: Arc<Mutex<HashMap<u32, PtySession>>>,
     next_id: AtomicU32,
 }
 
@@ -102,7 +102,7 @@ impl PtyManager {
         // Lets Claude Code hooks report which session fired them.
         cmd.env("EMBERYX_SESSION_ID", &session_id);
 
-        let _child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+        let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
         drop(pair.slave);
 
         let mut reader = pair
@@ -128,17 +128,27 @@ impl PtyManager {
             .as_ref()
             .and_then(|p| OpenOptions::new().create(true).append(true).open(p).ok());
 
-        // Reader thread: stream output as base64 chunks + persist raw bytes.
+        // Register before the reader thread starts so a fast-exiting process
+        // can't be removed from the map before it was ever inserted.
+        self.sessions.lock().unwrap().insert(
+            id,
+            PtySession {
+                master: pair.master,
+                writer,
+            },
+        );
+
+        // Reader thread: stream output + persist raw bytes. On exit it reaps the
+        // child and drops the session, so neither the OS process nor the handle
+        // leaks when a process ends on its own (crash, `exit`, agent quit).
         let event_channel = on_event.clone();
+        let sessions = Arc::clone(&self.sessions);
         std::thread::spawn(move || {
             let engine = base64::engine::general_purpose::STANDARD;
             let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
-                    Ok(0) => {
-                        let _ = event_channel.send(PtyEvent::Exit(None));
-                        break;
-                    }
+                    Ok(0) => break,
                     Ok(n) => {
                         if let Some(ref mut f) = log {
                             let _ = f.write_all(&buf[..n]);
@@ -148,21 +158,13 @@ impl PtyManager {
                             break;
                         }
                     }
-                    Err(_) => {
-                        let _ = event_channel.send(PtyEvent::Exit(None));
-                        break;
-                    }
+                    Err(_) => break,
                 }
             }
+            let code = child.wait().ok().map(|s| s.exit_code() as i32);
+            sessions.lock().unwrap().remove(&id);
+            let _ = event_channel.send(PtyEvent::Exit(code));
         });
-
-        self.sessions.lock().unwrap().insert(
-            id,
-            PtySession {
-                master: pair.master,
-                writer,
-            },
-        );
 
         Ok(id)
     }
@@ -205,18 +207,21 @@ pub fn pty_spawn(
     cwd: String,
     command: Option<String>,
     session_id: String,
+    persist_key: Option<String>,
     cols: u16,
     rows: u16,
     on_event: Channel<PtyEvent>,
 ) -> Result<u32, String> {
-    let log_path = scrollback_file(&app, &cwd);
+    let log_path = persist_key
+        .as_deref()
+        .and_then(|k| scrollback_file(&app, k));
     manager.spawn(cwd, command, session_id, cols, rows, on_event, log_path)
 }
 
 /// Return the tail of a project's persisted scrollback, base64-encoded.
 #[tauri::command]
-pub fn read_scrollback(app: tauri::AppHandle, cwd: String) -> Result<String, String> {
-    let Some(path) = scrollback_file(&app, &cwd) else {
+pub fn read_scrollback(app: tauri::AppHandle, persist_key: String) -> Result<String, String> {
+    let Some(path) = scrollback_file(&app, &persist_key) else {
         return Ok(String::new());
     };
     let Ok(data) = fs::read(&path) else {

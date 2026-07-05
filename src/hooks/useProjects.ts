@@ -45,13 +45,11 @@ export function useProjects() {
   }
 
   function closeProject(id: string) {
-    setProjects((prev) => {
-      const next = prev.filter((p) => p.id !== id);
-      setActiveProjectId((cur) =>
-        cur === id ? next[next.length - 1]?.id ?? null : cur
-      );
-      return next;
-    });
+    const next = projects.filter((p) => p.id !== id);
+    setProjects(next);
+    setActiveProjectId((cur) =>
+      cur === id ? next[next.length - 1]?.id ?? null : cur
+    );
   }
 
   return {

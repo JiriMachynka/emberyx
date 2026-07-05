@@ -23,6 +23,9 @@ interface TerminalPaneProps {
   cwd: string;
   /** Command auto-run on open (e.g. "claude"). */
   command?: string;
+  /** Stable key for scrollback persistence; when set, this pane's output is
+   *  saved and replayed on restart. Omitted for secondary/dev panes. */
+  persistKey?: string;
   fontFamily: string;
   fontSize: number;
   scrollback: number;
@@ -34,6 +37,7 @@ export function TerminalPane({
   sessionId,
   cwd,
   command,
+  persistKey,
   fontFamily,
   fontSize,
   scrollback,
@@ -88,15 +92,17 @@ export function TerminalPane({
     // Replay any persisted scrollback first, then start the live session so
     // restored output always precedes new output.
     void (async () => {
-      try {
-        const b64 = await invoke<string>("read_scrollback", { cwd });
-        if (disposed) return;
-        if (b64) {
-          term.write(base64ToBytes(b64));
-          term.write("\r\n\x1b[90m[previous session restored]\x1b[0m\r\n");
+      if (persistKey) {
+        try {
+          const b64 = await invoke<string>("read_scrollback", { persistKey });
+          if (disposed) return;
+          if (b64) {
+            term.write(base64ToBytes(b64));
+            term.write("\r\n\x1b[90m[previous session restored]\x1b[0m\r\n");
+          }
+        } catch {
+          /* no prior scrollback */
         }
-      } catch {
-        /* no prior scrollback */
       }
       if (disposed) return;
       try {
@@ -104,6 +110,7 @@ export function TerminalPane({
           cwd,
           command,
           sessionId,
+          persistKey: persistKey ?? null,
           cols: term.cols,
           rows: term.rows,
           onEvent: channel,
@@ -145,7 +152,7 @@ export function TerminalPane({
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [sessionId, cwd, command]);
+  }, [sessionId, cwd, command, persistKey]);
 
   // Focus the terminal when this tab becomes active so keystrokes (incl. CC's
   // arrow-key resume picker) go to it, not the UI that opened it. Deferred a

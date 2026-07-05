@@ -20,6 +20,9 @@ export interface Session {
   cwd: string;
   command?: string;
   kind: "agent" | "dev";
+  /** Stable key for cross-restart scrollback restore; only the project's
+   *  primary agent sets it, so secondary/dev panes never share its log. */
+  persistKey?: string;
 }
 
 /** An open project. Each project owns its own agent + dev sessions. */

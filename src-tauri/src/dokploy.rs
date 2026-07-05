@@ -1,4 +1,5 @@
 use std::process::Command;
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -140,7 +141,12 @@ pub fn dokploy_services(
     if base.is_empty() {
         return Err("Dokploy URL not set".into());
     }
-    let resp = ureq::get(&format!("{base}/api/project.all"))
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(10))
+        .build();
+    let resp = agent
+        .get(&format!("{base}/api/project.all"))
         .set("x-api-key", api_key.trim())
         .set("accept", "application/json")
         .call()

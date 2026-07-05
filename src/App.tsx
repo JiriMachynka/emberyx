@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { useEffect, useRef, useState } from "react";
+import { open, ask } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { Toaster, toast } from "sonner";
 import {
   FolderOpen,
   Settings,
@@ -100,7 +101,10 @@ function App() {
   function refreshThreads(projectId: string, path: string) {
     invoke<Thread[]>("list_threads", { cwd: path })
       .then((t) => setThreads(projectId, t))
-      .catch((e) => console.error("list_threads failed:", e));
+      .catch((e) => {
+        console.error("list_threads failed:", e);
+        toast.error("Couldn't load threads", { description: String(e) });
+      });
   }
 
   /** Match the project against Dokploy by git remote, caching the result. */
@@ -112,17 +116,27 @@ function App() {
       cwd: path,
     })
       .then((m) => setDokploy(projectId, m))
-      .catch((e) => console.error("dokploy_services failed:", e));
+      .catch((e) => {
+        console.error("dokploy_services failed:", e);
+        toast.error("Couldn't reach Dokploy", { description: String(e) });
+      });
   }
 
   function openProjectAt(path: string) {
     const { id, isNew } = openProject(path);
     setRecents(addRecent(path));
     if (isNew) {
-      startAgent(id, path, buildAgentCommand());
+      // Primary agent: persist its scrollback under the project path.
+      startAgent(id, path, buildAgentCommand(), "agent", path);
       invoke<WorkspaceInfo>("scan_workspace", { path })
         .then((w) => setWorkspace(id, w))
-        .catch((e) => console.error("scan_workspace failed:", e));
+        .catch((e) => {
+          console.error("scan_workspace failed:", e);
+          toast.error("Couldn't scan workspace", { description: String(e) });
+        });
+    } else if (!sessionsFor(id).some((s) => s.kind === "agent")) {
+      // Reopened, but its agent tab had been closed — relaunch one.
+      startAgent(id, path, buildAgentCommand(), "agent", path);
     }
     refreshThreads(id, path);
     refreshDokploy(id, path);
@@ -146,24 +160,51 @@ function App() {
     if (typeof selected === "string") openProjectAt(selected);
   }
 
-  function handleCloseProject(id: string) {
+  /** Spawn a fresh (secondary) agent tab in the active project. */
+  function newAgent() {
+    if (!activeProjectId || !activeProject) return;
+    startAgent(activeProjectId, activeProject.path, buildAgentCommand());
+  }
+
+  async function handleCloseProject(id: string) {
+    const busy = sessionsFor(id).some(
+      (s) =>
+        s.kind === "agent" &&
+        (statuses[s.id] === "working" || statuses[s.id] === "waiting")
+    );
+    if (busy) {
+      const ok = await ask(
+        "A running agent is active in this project. Close it anyway?",
+        { title: "Close project", kind: "warning" }
+      );
+      if (!ok) return;
+    }
     const ids = sessionsFor(id).map((s) => s.id);
     closeProjectSessions(id);
     clearSessions(ids);
     closeProject(id);
   }
 
-  // ⌘O opens the folder picker.
+  // Global shortcuts: ⌘O open project, ⌘T new agent tab. Subscribed once;
+  // refs keep the handlers current without re-registering each render.
+  const pickRef = useRef(pickProject);
+  pickRef.current = pickProject;
+  const newAgentRef = useRef(newAgent);
+  newAgentRef.current = newAgent;
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === "o") {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key === "o") {
         e.preventDefault();
-        void pickProject();
+        void pickRef.current();
+      } else if (e.key === "t") {
+        e.preventDefault();
+        newAgentRef.current();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  });
+  }, []);
 
   // When the window regains focus (e.g. clicking the desktop notification),
   // jump to the session that raised it if it's still waiting.
@@ -282,6 +323,16 @@ function App() {
           )}
           {activeProject && (
             <Button
+              variant="ghost"
+              size="icon"
+              onClick={newAgent}
+              title="New agent tab (⌘T)"
+            >
+              <Plus className="size-4" />
+            </Button>
+          )}
+          {activeProject && (
+            <Button
               variant={changesOpen ? "secondary" : "ghost"}
               size="sm"
               onClick={() => setChangesOpen((v) => !v)}
@@ -367,6 +418,9 @@ function App() {
         onUpdate={updateSettings}
       />
 
+      <Toaster theme="dark" position="bottom-right" richColors closeButton />
+
+
       {/* Needs-approval banner */}
       {agent && agentStatus === "waiting" && activeProjectId && (
         <button
@@ -394,6 +448,7 @@ function App() {
                   sessionId={s.id}
                   cwd={s.cwd}
                   command={s.command}
+                  persistKey={s.persistKey}
                   fontFamily={settings.fontFamily}
                   fontSize={settings.fontSize}
                   scrollback={settings.scrollback}
@@ -481,7 +536,7 @@ function App() {
                   setDragOverId(null);
                 }}
                 className={cn(
-                  "flex cursor-grab items-center gap-1.5 rounded px-2 py-1 text-xs active:cursor-grabbing",
+                  "group flex cursor-grab items-center gap-1.5 rounded px-2 py-1 text-xs active:cursor-grabbing",
                   s.id === activeId
                     ? "bg-secondary text-foreground"
                     : "text-muted-foreground hover:bg-secondary/50",
@@ -511,7 +566,12 @@ function App() {
                     e.stopPropagation();
                     closeSession(s.id);
                   }}
-                  className="rounded p-0.5 hover:bg-accent"
+                  className={cn(
+                    "rounded p-0.5 transition-opacity hover:bg-accent",
+                    s.id === activeId
+                      ? "opacity-100"
+                      : "opacity-0 group-hover:opacity-100"
+                  )}
                   title={s.kind === "dev" ? "Stop" : "Close"}
                 >
                   <X className="size-3" />

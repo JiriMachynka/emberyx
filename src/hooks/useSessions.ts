@@ -23,12 +23,13 @@ export function useSessions() {
     projectId: string,
     cwd: string,
     command: string,
-    label = "agent"
+    label = "agent",
+    persistKey?: string
   ): string {
     const id = nextId();
     setSessions((s) => [
       ...s,
-      { id, projectId, label, cwd, command, kind: "agent" },
+      { id, projectId, label, cwd, command, kind: "agent", persistKey },
     ]);
     setActive(projectId, id);
     return id;
@@ -49,23 +50,20 @@ export function useSessions() {
   }
 
   function closeSession(id: string) {
-    setSessions((prev) => {
-      const target = prev.find((s) => s.id === id);
-      const next = prev.filter((s) => s.id !== id);
-      if (target) {
-        setActiveByProject((m) => {
-          if (m[target.projectId] !== id) return m;
-          const siblings = next.filter((s) => s.projectId === target.projectId);
-          const fallback =
-            siblings.find((s) => s.kind === "agent")?.id ??
-            siblings[siblings.length - 1]?.id;
-          const copy = { ...m };
-          if (fallback) copy[target.projectId] = fallback;
-          else delete copy[target.projectId];
-          return copy;
-        });
-      }
-      return next;
+    const target = sessions.find((s) => s.id === id);
+    const next = sessions.filter((s) => s.id !== id);
+    setSessions(next);
+    if (!target) return;
+    setActiveByProject((m) => {
+      if (m[target.projectId] !== id) return m;
+      const siblings = next.filter((s) => s.projectId === target.projectId);
+      const fallback =
+        siblings.find((s) => s.kind === "agent")?.id ??
+        siblings[siblings.length - 1]?.id;
+      const copy = { ...m };
+      if (fallback) copy[target.projectId] = fallback;
+      else delete copy[target.projectId];
+      return copy;
     });
   }
 
@@ -79,7 +77,10 @@ export function useSessions() {
       const from = ids.indexOf(draggedId);
       const to = ids.indexOf(targetId);
       if (from < 0 || to < 0 || from === to) return prev;
-      ids.splice(to, 0, ids.splice(from, 1)[0]);
+      // Drop the dragged tab into the target's slot. After removing it, a
+      // rightward move shifts the target left by one, so adjust the insert.
+      const [moved] = ids.splice(from, 1);
+      ids.splice(from < to ? to - 1 : to, 0, moved);
       const byId = new Map(prev.map((s) => [s.id, s]));
       let i = 0;
       return prev.map((s) =>
@@ -89,15 +90,13 @@ export function useSessions() {
   }
 
   function stopAllDev(projectId: string) {
-    setSessions((prev) => {
-      const agent = prev.find(
-        (s) => s.projectId === projectId && s.kind === "agent"
-      );
-      if (agent) setActive(projectId, agent.id);
-      return prev.filter(
-        (s) => !(s.projectId === projectId && s.kind === "dev")
-      );
-    });
+    const agent = sessions.find(
+      (s) => s.projectId === projectId && s.kind === "agent"
+    );
+    if (agent) setActive(projectId, agent.id);
+    setSessions((prev) =>
+      prev.filter((s) => !(s.projectId === projectId && s.kind === "dev"))
+    );
   }
 
   /** Remove every session belonging to a closed project. */
