@@ -1,8 +1,8 @@
 [package]
 name = "emberyx"
 version = "0.1.1"
-description = "A Tauri App"
-authors = ["you"]
+description = "Desktop cockpit for AI coding agents — run Claude Code across projects in integrated terminals."
+authors = ["Jiri Machynka <machynka.j@gmail.com>"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
