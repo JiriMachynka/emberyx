@@ -315,10 +315,10 @@ function App() {
                 key={p.id}
                 onClick={() => setActiveProjectId(p.id)}
                 className={cn(
-                  "flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-xs",
+                  "group flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors",
                   p.id === activeProjectId
-                    ? "bg-secondary text-foreground"
-                    : "text-muted-foreground hover:bg-secondary/50"
+                    ? "border-border bg-secondary text-foreground shadow-sm"
+                    : "border-transparent text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
                 )}
                 title={p.path}
               >
@@ -337,7 +337,12 @@ function App() {
                     e.stopPropagation();
                     handleCloseProject(p.id);
                   }}
-                  className="rounded p-0.5 hover:bg-accent"
+                  className={cn(
+                    "rounded p-0.5 transition-opacity hover:bg-accent",
+                    p.id === activeProjectId
+                      ? "opacity-100"
+                      : "opacity-0 group-hover:opacity-100"
+                  )}
                   title="Close project"
                 >
                   <X className="size-3" />
@@ -347,7 +352,7 @@ function App() {
           })}
           <button
             onClick={pickProject}
-            className="rounded p-1 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
             title="Open project (⌘O)"
           >
             <Plus className="size-3.5" />
