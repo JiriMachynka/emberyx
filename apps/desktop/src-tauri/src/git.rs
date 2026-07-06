@@ -69,6 +69,27 @@ fn is_repo(path: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Run a git command, returning trimmed stdout on success or the combined
+/// stdout+stderr on failure so the UI can show git's own error message.
+fn run_git(path: &str, args: &[&str]) -> Result<String, String> {
+    if !is_repo(path) {
+        return Err("Not a git repository.".into());
+    }
+    let mut full = vec!["-C", path];
+    full.extend_from_slice(args);
+    let out = Command::new("git")
+        .args(&full)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        Err(format!("{}{}", stdout, stderr).trim().to_string())
+    }
+}
+
 /// List working-tree changes (staged, unstaged, untracked).
 #[tauri::command]
 pub fn git_changes(path: String) -> Result<Vec<GitFile>, String> {
@@ -171,4 +192,139 @@ pub fn git_commit(path: String, files: Vec<String>, message: String) -> Result<S
         return Err(format!("{}{}", stdout, err).trim().to_string());
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranch {
+    /// Current branch name, or "HEAD" when detached.
+    pub branch: String,
+    /// Tracking branch (e.g. "origin/main"), or null when none is configured.
+    pub upstream: Option<String>,
+    /// Commits the local branch is ahead of its upstream.
+    pub ahead: u32,
+    /// Commits the local branch is behind its upstream.
+    pub behind: u32,
+}
+
+/// Current branch plus upstream tracking / ahead-behind counts.
+#[tauri::command]
+pub fn git_branch(path: String) -> Result<GitBranch, String> {
+    let branch = run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+
+    // Upstream lookup fails (non-zero) when no tracking branch is set.
+    let upstream = run_git(
+        &path,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .ok()
+    .filter(|s| !s.is_empty());
+
+    let (ahead, behind) = if upstream.is_some() {
+        // "<behind>\t<ahead>" between upstream and HEAD.
+        let counts = run_git(
+            &path,
+            &["rev-list", "--left-right", "--count", "@{u}...HEAD"],
+        )
+        .unwrap_or_default();
+        let mut it = counts.split_whitespace();
+        let behind = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let ahead = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        (ahead, behind)
+    } else {
+        (0, 0)
+    };
+
+    Ok(GitBranch {
+        branch,
+        upstream,
+        ahead,
+        behind,
+    })
+}
+
+/// Local branch names.
+#[tauri::command]
+pub fn git_branches(path: String) -> Result<Vec<String>, String> {
+    let out = run_git(&path, &["branch", "--format=%(refname:short)"])?;
+    Ok(out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+}
+
+/// Fetch and merge from the tracked remote.
+#[tauri::command]
+pub fn git_pull(path: String) -> Result<String, String> {
+    run_git(&path, &["pull"])
+}
+
+/// Push the current branch to its configured upstream.
+#[tauri::command]
+pub fn git_push(path: String) -> Result<String, String> {
+    run_git(&path, &["push"])
+}
+
+/// Push `branch` to `remote` and set it as the upstream.
+#[tauri::command]
+pub fn git_push_to(path: String, remote: String, branch: String) -> Result<String, String> {
+    run_git(&path, &["push", "-u", &remote, &branch])
+}
+
+/// Switch to `branch`, creating it (`-b`) when `create` is set.
+#[tauri::command]
+pub fn git_checkout(path: String, branch: String, create: bool) -> Result<String, String> {
+    if branch.trim().is_empty() {
+        return Err("Branch name is empty.".into());
+    }
+    if create {
+        run_git(&path, &["checkout", "-b", &branch])
+    } else {
+        run_git(&path, &["checkout", &branch])
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStash {
+    /// Stash position (0 = most recent), used as `stash@{index}`.
+    pub index: u32,
+    /// Full description line from `git stash list`.
+    pub label: String,
+}
+
+/// Stash all working-tree changes, with an optional message.
+#[tauri::command]
+pub fn git_stash_push(path: String, message: String) -> Result<String, String> {
+    if message.trim().is_empty() {
+        run_git(&path, &["stash", "push"])
+    } else {
+        run_git(&path, &["stash", "push", "-m", message.trim()])
+    }
+}
+
+/// List saved stashes, newest first.
+#[tauri::command]
+pub fn git_stash_list(path: String) -> Result<Vec<GitStash>, String> {
+    let out = run_git(&path, &["stash", "list"])?;
+    Ok(out
+        .lines()
+        .enumerate()
+        .map(|(i, line)| GitStash {
+            index: i as u32,
+            label: line.to_string(),
+        })
+        .collect())
+}
+
+/// Apply the stash at `index`, dropping it too when `pop` is set.
+#[tauri::command]
+pub fn git_stash_apply(path: String, index: u32, pop: bool) -> Result<String, String> {
+    let stash = format!("stash@{{{}}}", index);
+    let action = if pop { "pop" } else { "apply" };
+    run_git(&path, &["stash", action, &stash])
+}
+
+/// Discard the stash at `index` without applying it.
+#[tauri::command]
+pub fn git_stash_drop(path: String, index: u32) -> Result<String, String> {
+    let stash = format!("stash@{{{}}}", index);
+    run_git(&path, &["stash", "drop", &stash])
 }

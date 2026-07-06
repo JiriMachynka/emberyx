@@ -8,6 +8,7 @@ import { basename } from "@/lib/path";
 import { highlightCode, langFromPath } from "@/lib/highlight";
 import type { Change } from "@/lib/changes";
 import type { GitFile } from "@/types";
+import { GitActions } from "@/components/GitActions";
 
 /** True for unified-diff header lines that aren't source code. */
 function isDiffMeta(line: string): boolean {
@@ -137,6 +138,8 @@ export function ChangesPanel({
   const [gitFiles, setGitFiles] = useState<GitFile[]>([]);
   const [gitSel, setGitSel] = useState<string | null>(null);
   const [gitDiff, setGitDiff] = useState("");
+  // Bumped on every reload so GitActions re-fetches branch/ahead-behind too.
+  const [gitVersion, setGitVersion] = useState(0);
 
   // Commit state.
   const [staged, setStaged] = useState<Set<string>>(new Set());
@@ -156,6 +159,7 @@ export function ChangesPanel({
         // Drop staged entries whose files no longer have changes.
         const present = new Set(files.map((f) => f.path));
         setStaged((prev) => new Set([...prev].filter((p) => present.has(p))));
+        setGitVersion((v) => v + 1);
       })
       .catch((e) => console.error("git_changes failed:", e));
   }, [projectPath]);
@@ -246,6 +250,11 @@ export function ChangesPanel({
 
       {tab === "git" ? (
         <div className="flex min-h-0 flex-1 flex-col">
+          <GitActions
+            projectPath={projectPath}
+            reloadKey={gitVersion}
+            onRefresh={loadGit}
+          />
           {gitFiles.length === 0 ? (
             <Empty icon={<GitBranch className="size-5" />}>
               No working-tree changes (or not a git repo).

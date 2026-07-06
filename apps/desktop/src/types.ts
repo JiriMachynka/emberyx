@@ -53,6 +53,20 @@ export interface GitFile {
   untracked: boolean;
 }
 
+/** Current branch plus upstream tracking / ahead-behind counts. */
+export interface GitBranch {
+  branch: string;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+}
+
+/** A saved stash entry from `git stash list`. */
+export interface GitStash {
+  index: number;
+  label: string;
+}
+
 /** A Claude Code conversation thread (resumable via its id). */
 export interface Thread {
   id: string;
