@@ -35,3 +35,12 @@ ureq = { version = "2", features = ["json"] }
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
 tauri-plugin-updater = "2"
 
+# Optimize release builds: full LTO + single codegen unit for faster hot paths
+# (PTY read loop, JSONL usage parsing) and a smaller, stripped binary.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+

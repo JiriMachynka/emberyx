@@ -12,6 +12,9 @@ import { basename } from "@/lib/path";
 import type { Usage } from "@/lib/pricing";
 import type { HookEvent, Session, SessionStatus } from "@/types";
 
+/** Max entries kept in the live file-edit feed (most recent wins). */
+const MAX_CHANGES = 500;
+
 /**
  * Subscribes to Claude Code hook events (via the Rust listener) and derives
  * per-session status + the agent's file-edit feed. Also loads the settings
@@ -49,7 +52,13 @@ export function useAgentEvents(
 
     const unlisten = listen<HookEvent>("hook-event", ({ payload }) => {
       const change = parseChange(payload);
-      if (change) setChanges((prev) => [...prev, change]);
+      if (change)
+        setChanges((prev) => {
+          const next = [...prev, change];
+          // Cap the live edit feed so a long agent session can't grow it
+          // without bound (each event copies + re-filters this array).
+          return next.length > MAX_CHANGES ? next.slice(-MAX_CHANGES) : next;
+        });
 
       // Remember the transcript path so we can compute token usage. Present on
       // every hook payload, so capture it before any status early-return.

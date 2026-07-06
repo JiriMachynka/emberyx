@@ -138,14 +138,23 @@ impl PtyManager {
             },
         );
 
-        // Reader thread: stream output + persist raw bytes. On exit it reaps the
-        // child and drops the session, so neither the OS process nor the handle
-        // leaks when a process ends on its own (crash, `exit`, agent quit).
-        let event_channel = on_event.clone();
-        let sessions = Arc::clone(&self.sessions);
+        // Output pipeline: a reader thread pulls raw bytes off the PTY and a
+        // forwarder thread coalesces everything already queued into a single
+        // base64 IPC event. Batching collapses high-volume output (build logs,
+        // verbose agent streams) from thousands of tiny events into a few large
+        // ones. A lone keystroke still forwards with no added latency — the
+        // forwarder only drains what's already waiting, it never blocks for more.
+        // On exit the forwarder reaps the session so neither the OS process nor
+        // the handle leaks when a process ends on its own (crash, `exit`, quit).
+        enum Chunk {
+            Data(Vec<u8>),
+            Done(Option<i32>),
+        }
+        let (tx, rx) = std::sync::mpsc::channel::<Chunk>();
+
+        // Reader thread: PTY -> raw bytes -> log + internal channel.
         std::thread::spawn(move || {
-            let engine = base64::engine::general_purpose::STANDARD;
-            let mut buf = [0u8; 8192];
+            let mut buf = [0u8; 65536];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
@@ -153,17 +162,54 @@ impl PtyManager {
                         if let Some(ref mut f) = log {
                             let _ = f.write_all(&buf[..n]);
                         }
-                        let encoded = engine.encode(&buf[..n]);
-                        if event_channel.send(PtyEvent::Output(encoded)).is_err() {
-                            break;
+                        if tx.send(Chunk::Data(buf[..n].to_vec())).is_err() {
+                            return;
                         }
                     }
                     Err(_) => break,
                 }
             }
             let code = child.wait().ok().map(|s| s.exit_code() as i32);
-            sessions.lock().unwrap().remove(&id);
-            let _ = event_channel.send(PtyEvent::Exit(code));
+            let _ = tx.send(Chunk::Done(code));
+        });
+
+        // Forwarder thread: coalesce queued chunks -> one base64 event.
+        let event_channel = on_event.clone();
+        let sessions = Arc::clone(&self.sessions);
+        std::thread::spawn(move || {
+            let engine = base64::engine::general_purpose::STANDARD;
+            const MAX_BATCH: usize = 256 * 1024;
+            while let Ok(first) = rx.recv() {
+                let mut batch = match first {
+                    Chunk::Data(bytes) => bytes,
+                    Chunk::Done(code) => {
+                        sessions.lock().unwrap().remove(&id);
+                        let _ = event_channel.send(PtyEvent::Exit(code));
+                        return;
+                    }
+                };
+                // Drain whatever else is already queued (no waiting).
+                let mut done: Option<Option<i32>> = None;
+                while batch.len() < MAX_BATCH {
+                    match rx.try_recv() {
+                        Ok(Chunk::Data(more)) => batch.extend_from_slice(&more),
+                        Ok(Chunk::Done(code)) => {
+                            done = Some(code);
+                            break;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let encoded = engine.encode(&batch);
+                if event_channel.send(PtyEvent::Output(encoded)).is_err() {
+                    return;
+                }
+                if let Some(code) = done {
+                    sessions.lock().unwrap().remove(&id);
+                    let _ = event_channel.send(PtyEvent::Exit(code));
+                    return;
+                }
+            }
         });
 
         Ok(id)

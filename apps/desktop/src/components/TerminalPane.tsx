@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import "@xterm/xterm/css/xterm.css";
 
@@ -33,7 +34,7 @@ interface TerminalPaneProps {
   active: boolean;
 }
 
-export function TerminalPane({
+function TerminalPaneImpl({
   sessionId,
   cwd,
   command,
@@ -72,8 +73,16 @@ export function TerminalPane({
     fitRef.current = fit;
     term.loadAddon(fit);
     term.loadAddon(new WebLinksAddon());
-    // Default (DOM) renderer — no canvas/webgl addon, maximum compatibility.
     term.open(container);
+    // GPU-accelerated renderer for high-throughput output; falls back to the
+    // DOM renderer automatically if WebGL is unavailable or the context is lost.
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
+    } catch {
+      /* WebGL unavailable — DOM renderer remains */
+    }
     try {
       fit.fit();
     } catch {
@@ -133,18 +142,27 @@ export function TerminalPane({
       if (ptyId !== null) void invoke("pty_resize", { id: ptyId, cols, rows });
     });
 
+    // Coalesce refits: toggling the sidebar animates the layout width for
+    // ~200ms, firing the observer every frame. Refitting mid-animation resizes
+    // the WebGL canvas repeatedly, which reads as a blink — so wait for the
+    // layout to settle and refit once.
+    let fitTimer: number | undefined;
     const ro = new ResizeObserver(() => {
-      try {
-        fit.fit();
-      } catch {
-        /* container detached */
-      }
+      if (fitTimer !== undefined) clearTimeout(fitTimer);
+      fitTimer = window.setTimeout(() => {
+        try {
+          fit.fit();
+        } catch {
+          /* container detached */
+        }
+      }, 60);
     });
     ro.observe(container);
 
     return () => {
       disposed = true;
       ro.disconnect();
+      if (fitTimer !== undefined) clearTimeout(fitTimer);
       dataSub.dispose();
       resizeSub.dispose();
       if (ptyId !== null) void invoke("pty_kill", { id: ptyId });
@@ -179,3 +197,8 @@ export function TerminalPane({
 
   return <div ref={containerRef} className="h-full w-full overflow-hidden" />;
 }
+
+// All props are primitives (ids, paths, font settings, active flag), so the
+// default shallow compare skips re-renders on unrelated App state ticks
+// (agent status / file-edit / usage events) across every mounted session.
+export const TerminalPane = memo(TerminalPaneImpl);
