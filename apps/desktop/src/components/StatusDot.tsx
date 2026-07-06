@@ -11,12 +11,14 @@ export function StatusDot({
   className?: string;
 }) {
   const meta = STATUS_META[status];
+  // Color the dot and its glow from a single currentColor (meta.text), so the
+  // ember-pulse box-shadow matches the dot exactly.
   return (
     <span
       className={cn(
-        "size-1.5 rounded-full",
-        meta.dot,
-        meta.pulse && "animate-pulse",
+        "size-1.5 shrink-0 rounded-full bg-current",
+        meta.text,
+        meta.pulse && "animate-ember-pulse",
         className
       )}
     />

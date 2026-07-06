@@ -1,0 +1,317 @@
+import { useState } from "react";
+import { Plus, PanelLeftClose, PanelLeftOpen, Settings, Bot, FolderOpen } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { basename } from "@/lib/path";
+import { statusOf } from "@/lib/status";
+import { StatusDot } from "@/components/StatusDot";
+import { TabCloseButton } from "@/components/TabCloseButton";
+import { DokployMenu } from "@/components/DokployMenu";
+import type { Project, Session, SessionStatus } from "@/types";
+
+interface SidebarProps {
+  projects: Project[];
+  activeProjectId: string | null;
+  activeByProject: Record<string, string>;
+  statuses: Record<string, SessionStatus>;
+  sessionsFor: (id: string) => Session[];
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  onSelectProject: (id: string) => void;
+  onCloseProject: (id: string) => void;
+  onPickProject: () => void;
+  onSelectSession: (projectId: string, id: string) => void;
+  onCloseSession: (id: string) => void;
+  onMoveSession: (projectId: string, from: string, to: string) => void;
+  onNewAgent: () => void;
+  onRefreshDokploy: () => void;
+  onOpenSettings: () => void;
+}
+
+/** Left navigation: projects as rows, the active one expanded to its sessions
+ *  plus a project-scoped action row. Collapses to an icon rail (status dots
+ *  survive) via the header toggle / ⌘B. */
+export function Sidebar(props: SidebarProps) {
+  const { collapsed } = props;
+  return (
+    <aside
+      className={cn(
+        "flex shrink-0 flex-col border-r bg-sidebar transition-[width] duration-200",
+        collapsed ? "w-14" : "w-64"
+      )}
+    >
+      <SidebarHeader {...props} />
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1.5">
+        {collapsed ? <Rail {...props} /> : <Tree {...props} />}
+      </div>
+      <SidebarFooter {...props} />
+    </aside>
+  );
+}
+
+function SidebarHeader({ collapsed, onToggleCollapse }: SidebarProps) {
+  return (
+    <header
+      className={cn(
+        "flex h-11 shrink-0 items-center border-b",
+        collapsed ? "justify-center" : "justify-between px-2.5"
+      )}
+    >
+      {!collapsed && (
+        <div className="flex items-center gap-2">
+          <img src="/emberyx.png" alt="" className="size-5 rounded-[5px] shadow" />
+          <span className="ember-text text-sm font-semibold tracking-tight">
+            Emberyx
+          </span>
+        </div>
+      )}
+      <button
+        onClick={onToggleCollapse}
+        className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
+      >
+        {collapsed ? (
+          <PanelLeftOpen className="size-4" />
+        ) : (
+          <PanelLeftClose className="size-4" />
+        )}
+      </button>
+    </header>
+  );
+}
+
+/** Expanded project → session tree. */
+function Tree(props: SidebarProps) {
+  const {
+    projects,
+    activeProjectId,
+    activeByProject,
+    statuses,
+    sessionsFor,
+    onSelectProject,
+    onCloseProject,
+    onPickProject,
+  } = props;
+
+  return (
+    <div className="px-1.5">
+      {projects.map((p) => {
+        const active = p.id === activeProjectId;
+        const pSessions = sessionsFor(p.id);
+        const pAgent = pSessions.find((s) => s.kind === "agent");
+        return (
+          <div key={p.id} className="mb-0.5">
+            <div
+              onClick={() => onSelectProject(p.id)}
+              className={cn(
+                "group flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors",
+                active
+                  ? "surface-raised bg-secondary text-foreground"
+                  : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+              )}
+              title={p.path}
+            >
+              <StatusDot
+                status={pAgent ? statusOf(statuses, pAgent.id) : "idle"}
+              />
+              <span className="flex-1 truncate font-medium">
+                {basename(p.path)}
+              </span>
+              {active && p.workspace && (
+                <span className="rounded bg-background/60 px-1 py-px text-[10px] text-muted-foreground">
+                  {p.workspace.kind}
+                </span>
+              )}
+              <TabCloseButton
+                active={active}
+                title="Close project"
+                onClose={() => onCloseProject(p.id)}
+              />
+            </div>
+
+            {active && (
+              <SessionList
+                {...props}
+                sessions={pSessions}
+                activeId={activeByProject[p.id] ?? null}
+                projectId={p.id}
+              />
+            )}
+            {active && <ActionRow {...props} project={p} />}
+          </div>
+        );
+      })}
+
+      <button
+        onClick={onPickProject}
+        className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
+        title="Open project (⌘O)"
+      >
+        <Plus className="size-3.5" />
+        Open project
+      </button>
+    </div>
+  );
+}
+
+/** The active project's sessions, indented and drag-reorderable. */
+function SessionList({
+  sessions,
+  activeId,
+  projectId,
+  statuses,
+  onSelectSession,
+  onCloseSession,
+  onMoveSession,
+}: SidebarProps & {
+  sessions: Session[];
+  activeId: string | null;
+  projectId: string;
+}) {
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
+
+  return (
+    <ul className="ml-3 mt-0.5 border-l pl-1.5">
+      {sessions.map((s) => {
+        const st = statusOf(statuses, s.id);
+        const active = s.id === activeId;
+        return (
+          <li
+            key={s.id}
+            draggable
+            onClick={() => onSelectSession(projectId, s.id)}
+            onDragStart={() => setDragId(s.id)}
+            onDragEnd={() => {
+              setDragId(null);
+              setOverId(null);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (dragId && dragId !== s.id) setOverId(s.id);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (dragId) onMoveSession(projectId, dragId, s.id);
+              setDragId(null);
+              setOverId(null);
+            }}
+            className={cn(
+              "group flex cursor-grab items-center gap-1.5 rounded px-1.5 py-1 text-xs active:cursor-grabbing",
+              active
+                ? "bg-accent text-foreground"
+                : "text-muted-foreground hover:bg-secondary/50",
+              dragId === s.id && "opacity-40",
+              overId === s.id && "ring-1 ring-primary/60"
+            )}
+          >
+            {s.kind === "agent" ? (
+              <Bot className="size-3.5 shrink-0 opacity-70" />
+            ) : (
+              <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
+            )}
+            <span className="flex-1 truncate">
+              {s.kind === "dev" ? `dev:${s.label}` : s.label}
+            </span>
+            {s.kind === "agent" && st !== "idle" && <StatusDot status={st} />}
+            <TabCloseButton
+              active={active}
+              title={s.kind === "dev" ? "Stop" : "Close"}
+              onClose={() => onCloseSession(s.id)}
+            />
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Project-scoped actions for the active project. */
+function ActionRow({
+  project,
+  onNewAgent,
+  onRefreshDokploy,
+}: SidebarProps & { project: Project }) {
+  return (
+    <div className="ml-3 mt-1 flex flex-wrap items-center gap-1 pl-1.5">
+      {project.dokploy && (
+        <DokployMenu match={project.dokploy} onOpen={onRefreshDokploy} />
+      )}
+      <button
+        onClick={onNewAgent}
+        className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        title="New agent tab (⌘T)"
+      >
+        <Plus className="size-3.5" />
+        Agent
+      </button>
+    </div>
+  );
+}
+
+/** Icon rail: one avatar per project, status dot preserved. */
+function Rail({
+  projects,
+  activeProjectId,
+  statuses,
+  sessionsFor,
+  onSelectProject,
+  onPickProject,
+}: SidebarProps) {
+  return (
+    <div className="flex flex-col items-center gap-1.5">
+      {projects.map((p) => {
+        const active = p.id === activeProjectId;
+        const pAgent = sessionsFor(p.id).find((s) => s.kind === "agent");
+        const st = pAgent ? statusOf(statuses, pAgent.id) : "idle";
+        return (
+          <button
+            key={p.id}
+            onClick={() => onSelectProject(p.id)}
+            title={basename(p.path)}
+            className={cn(
+              "relative flex size-9 items-center justify-center rounded-lg text-xs font-semibold uppercase transition-colors",
+              active
+                ? "surface-raised bg-secondary text-foreground ember-glow"
+                : "bg-secondary/40 text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+            )}
+          >
+            {basename(p.path).slice(0, 2)}
+            {st !== "idle" && (
+              <StatusDot
+                status={st}
+                className="absolute -right-0.5 -top-0.5 ring-2 ring-sidebar"
+              />
+            )}
+          </button>
+        );
+      })}
+      <button
+        onClick={onPickProject}
+        title="Open project (⌘O)"
+        className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary/70 hover:text-foreground"
+      >
+        <FolderOpen className="size-4" />
+      </button>
+    </div>
+  );
+}
+
+function SidebarFooter({ collapsed, onOpenSettings }: SidebarProps) {
+  return (
+    <footer
+      className={cn(
+        "flex h-10 shrink-0 items-center border-t",
+        collapsed ? "justify-center" : "px-2.5"
+      )}
+    >
+      <button
+        onClick={onOpenSettings}
+        className="flex items-center gap-2 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        title="Settings"
+      >
+        <Settings className="size-4" />
+        {!collapsed && <span className="text-xs">Settings</span>}
+      </button>
+    </footer>
+  );
+}

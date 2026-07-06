@@ -11,6 +11,10 @@ export interface Settings {
   scrollback: number;
   /** Launch Claude with --dangerously-skip-permissions. */
   dangerouslySkipPermissions: boolean;
+  /** On project open, resume the most recent thread instead of a fresh agent. */
+  resumeLatestThread: boolean;
+  /** Launch Claude compact (collapsed tool output). Off = full (--verbose). */
+  compactSession: boolean;
   /** Dokploy server base URL, e.g. https://dokploy.example.com. */
   dokployUrl: string;
   /** Dokploy API key (sent as x-api-key). */
@@ -23,6 +27,8 @@ export const DEFAULT_SETTINGS: Settings = {
   fontSize: 13,
   scrollback: 1000,
   dangerouslySkipPermissions: true,
+  resumeLatestThread: false,
+  compactSession: false,
   dokployUrl: "",
   dokployApiKey: "",
 };

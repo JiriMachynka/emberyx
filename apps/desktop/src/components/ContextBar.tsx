@@ -1,0 +1,122 @@
+import { FileDiff, ChevronRight } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { StatusDot } from "@/components/StatusDot";
+import { DevMenu } from "@/components/DevMenu";
+import { ThreadMenu } from "@/components/ThreadMenu";
+import { cn } from "@/lib/utils";
+import { STATUS_META } from "@/lib/status";
+import { basename } from "@/lib/path";
+import { costOf, totalTokens, formatTokens } from "@/lib/pricing";
+import type { Usage } from "@/lib/pricing";
+import type { PackageInfo, Project, Session, SessionStatus, Thread } from "@/types";
+
+interface ContextBarProps {
+  activeProject: Project | null;
+  agent: Session | undefined;
+  agentStatus: SessionStatus;
+  agentUsage: Usage | undefined;
+  claudeAgent: boolean;
+  devRunning: boolean;
+  changesCount: number;
+  changesOpen: boolean;
+  onRunPackage: (pkg: PackageInfo) => void;
+  onRunAll: () => void;
+  onStopDev: () => void;
+  onRefreshThreads: () => void;
+  onResumeThread: (thread: Thread) => void;
+  onToggleChanges: () => void;
+}
+
+/** Slim bar above the terminal: the active project / agent, its status and
+ *  usage, and the project's Dev / Threads / diff controls. */
+export function ContextBar({
+  activeProject,
+  agent,
+  agentStatus,
+  agentUsage,
+  claudeAgent,
+  devRunning,
+  changesCount,
+  changesOpen,
+  onRunPackage,
+  onRunAll,
+  onStopDev,
+  onRefreshThreads,
+  onResumeThread,
+  onToggleChanges,
+}: ContextBarProps) {
+  return (
+    <header className="flex h-10 shrink-0 items-center justify-between border-b px-3">
+      <div className="flex min-w-0 items-center gap-2 text-xs">
+        {activeProject && (
+          <span className="truncate font-medium text-muted-foreground">
+            {basename(activeProject.path)}
+          </span>
+        )}
+        {activeProject && agent && (
+          <ChevronRight className="size-3 shrink-0 text-muted-foreground/50" />
+        )}
+        {agent && (
+          <>
+            <span className="truncate text-foreground">{agent.label}</span>
+            <span
+              className={cn(
+                "flex shrink-0 items-center gap-1.5",
+                STATUS_META[agentStatus].text
+              )}
+            >
+              <StatusDot status={agentStatus} />
+              {STATUS_META[agentStatus].label}
+            </span>
+          </>
+        )}
+      </div>
+
+      <div className="flex shrink-0 items-center gap-2">
+        {agentUsage && agentUsage.messages > 0 && (
+          <span
+            className="flex items-center gap-1 text-xs text-muted-foreground"
+            title={`${agentUsage.input.toLocaleString()} in · ${agentUsage.output.toLocaleString()} out · ${agentUsage.cacheRead.toLocaleString()} cache read · ${agentUsage.cacheCreation.toLocaleString()} cache write${
+              agentUsage.model ? ` · ${agentUsage.model}` : ""
+            }`}
+          >
+            {formatTokens(totalTokens(agentUsage))} tok
+            <span className="opacity-40">·</span>${costOf(agentUsage).toFixed(2)}
+          </span>
+        )}
+        {activeProject && (
+          <DevMenu
+            workspace={activeProject.workspace}
+            running={devRunning}
+            onRunPackage={onRunPackage}
+            onRunAll={onRunAll}
+            onStop={onStopDev}
+          />
+        )}
+        {activeProject && claudeAgent && (
+          <ThreadMenu
+            threads={activeProject.threads}
+            onOpen={onRefreshThreads}
+            onResume={onResumeThread}
+          />
+        )}
+        {activeProject && (
+          <Button
+            variant={changesOpen ? "secondary" : "ghost"}
+            size="sm"
+            onClick={onToggleChanges}
+            title="Changes"
+          >
+            <FileDiff className="size-3.5" />
+            Changes
+            {changesCount > 0 && (
+              <span className="rounded bg-primary/20 px-1 text-[10px] text-primary">
+                {changesCount}
+              </span>
+            )}
+          </Button>
+        )}
+      </div>
+    </header>
+  );
+}

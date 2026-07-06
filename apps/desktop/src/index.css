@@ -23,33 +23,41 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-canvas: var(--canvas);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* Dark by default — Emberyx is a terminal-first app. */
+/* Dark only — Emberyx is a terminal-first app. Greys are warm-tinted (hue ~60,
+   low chroma) so the whole surface reads "ember" rather than neutral slate. */
 :root {
   --radius: 0.625rem;
-  --background: oklch(0.16 0.004 285.82);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.2 0.006 285.88);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.2 0.006 285.88);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.72 0.16 48);
-  --primary-foreground: oklch(0.16 0.004 285.82);
-  --secondary: oklch(0.27 0.006 286.03);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.27 0.006 286.03);
-  --muted-foreground: oklch(0.705 0.015 286.07);
-  --accent: oklch(0.27 0.006 286.03);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.72 0.16 48);
+  --background: oklch(0.15 0.006 60);
+  --foreground: oklch(0.97 0.004 70);
+  --card: oklch(0.186 0.008 58);
+  --card-foreground: oklch(0.97 0.004 70);
+  --popover: oklch(0.198 0.009 56);
+  --popover-foreground: oklch(0.97 0.004 70);
+  --primary: oklch(0.73 0.163 52);
+  --primary-foreground: oklch(0.16 0.012 55);
+  --secondary: oklch(0.255 0.01 58);
+  --secondary-foreground: oklch(0.97 0.004 70);
+  --muted: oklch(0.255 0.01 58);
+  --muted-foreground: oklch(0.705 0.019 68);
+  --accent: oklch(0.3 0.014 55);
+  --accent-foreground: oklch(0.98 0.004 70);
+  --destructive: oklch(0.62 0.2 25);
+  --border: oklch(0.83 0.04 65 / 9%);
+  --input: oklch(0.85 0.04 65 / 14%);
+  --ring: oklch(0.73 0.163 52);
+  /* Sidebar sits a touch below the canvas; terminal canvas is the darkest. */
+  --sidebar: oklch(0.134 0.006 60);
+  --canvas: oklch(0.122 0.005 55);
+  /* Ember accent glow, reused by .ember-glow and status dots. */
+  --glow: oklch(0.73 0.163 52 / 0.5);
 }
 
 @layer base {
@@ -70,4 +78,66 @@
       sans-serif;
     overflow: hidden;
   }
+}
+
+@layer components {
+  /* Elevated panel: faint top-lit gradient, hairline highlight on the top
+     edge, soft drop shadow. The core "premium, not flat" treatment. */
+  .surface-raised {
+    background-image: linear-gradient(
+      to bottom,
+      oklch(1 0 0 / 3.5%),
+      transparent 42%
+    );
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 6%),
+      0 1px 2px 0 oklch(0 0 0 / 35%);
+  }
+
+  /* Ember halo for the active tab / primary CTA / a working status dot. */
+  .ember-glow {
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 8%),
+      0 0 0 1px oklch(0.73 0.163 52 / 0.28),
+      0 0 14px -3px var(--glow);
+  }
+
+  /* Ember gradient clipped to text — brand wordmark, accents. */
+  .ember-text {
+    background-image: linear-gradient(
+      118deg,
+      oklch(0.83 0.14 68),
+      oklch(0.7 0.19 38)
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Terminal canvas: darkest surface with a subtle top-center warm lift. */
+  .canvas-lit {
+    background-color: var(--canvas);
+    background-image: radial-gradient(
+      120% 80% at 50% -10%,
+      oklch(0.73 0.163 52 / 6%),
+      transparent 60%
+    );
+  }
+}
+
+/* Soft ember pulse for active status dots — gentler than Tailwind's opacity
+   blink, and it glows. */
+@keyframes ember-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, currentColor 55%, transparent);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 8px 1px color-mix(in oklch, currentColor 45%, transparent);
+    opacity: 0.75;
+  }
+}
+.animate-ember-pulse {
+  animation: ember-pulse 1.8s ease-in-out infinite;
 }

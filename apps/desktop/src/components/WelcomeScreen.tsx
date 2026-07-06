@@ -19,12 +19,14 @@ export function WelcomeScreen({
       <img
         src="/emberyx.png"
         alt="Emberyx"
-        className="size-16 rounded-2xl shadow-lg"
+        className="ember-glow size-16 rounded-2xl"
       />
       <div>
-        <h1 className="text-lg font-semibold">Open a project</h1>
+        <h1 className="ember-text text-xl font-semibold tracking-tight">
+          Emberyx
+        </h1>
         <p className="text-sm text-muted-foreground">
-          Emberyx launches your agent in an integrated terminal.
+          Launches your agent in an integrated terminal.
         </p>
       </div>
       <Button onClick={onPick}>
@@ -38,7 +40,7 @@ export function WelcomeScreen({
             <Clock className="size-3" />
             Recent
           </div>
-          <ul className="rounded-md border">
+          <ul className="surface-raised overflow-hidden rounded-md border">
             {recents.map((p) => (
               <li key={p}>
                 <button

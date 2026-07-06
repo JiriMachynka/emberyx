@@ -83,6 +83,49 @@ export function SettingsDialog({
             </label>
           )}
 
+          {settings.agentCommand.startsWith("claude") && (
+            <label className="flex items-start gap-2.5">
+              <input
+                type="checkbox"
+                checked={settings.resumeLatestThread}
+                onChange={(e) =>
+                  onUpdate({ resumeLatestThread: e.target.checked })
+                }
+                className="mt-0.5 size-4 shrink-0 accent-primary"
+              />
+              <span className="grid gap-0.5">
+                <span className="text-sm font-medium">
+                  Resume latest thread on open
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  Opening a project reopens the most recently worked-on thread.
+                  Off launches a brand-new agent each time.
+                </span>
+              </span>
+            </label>
+          )}
+
+          {settings.agentCommand.startsWith("claude") && (
+            <label className="flex items-start gap-2.5">
+              <input
+                type="checkbox"
+                checked={settings.compactSession}
+                onChange={(e) =>
+                  onUpdate({ compactSession: e.target.checked })
+                }
+                className="mt-0.5 size-4 shrink-0 accent-primary"
+              />
+              <span className="grid gap-0.5">
+                <span className="text-sm font-medium">Compact session</span>
+                <span className="text-xs text-muted-foreground">
+                  Keep tool output collapsed. Off (default) runs a full session
+                  with <code className="text-[11px]">--verbose</code>, expanding
+                  tool output inline.
+                </span>
+              </span>
+            </label>
+          )}
+
           <Field label="Terminal font family">
             <Input
               value={settings.fontFamily}

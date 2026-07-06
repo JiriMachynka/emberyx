@@ -5,15 +5,15 @@ import { Toaster, toast } from "sonner";
 import { TerminalPane } from "@/components/TerminalPane";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { ChangesPanel } from "@/components/ChangesPanel";
-import { HeaderBar } from "@/components/HeaderBar";
-import { ProjectTabStrip } from "@/components/ProjectTabStrip";
-import { SessionTabStrip } from "@/components/SessionTabStrip";
+import { ContextBar } from "@/components/ContextBar";
+import { Sidebar } from "@/components/Sidebar";
 import { WelcomeScreen } from "@/components/WelcomeScreen";
 import { AttentionBanner } from "@/components/AttentionBanner";
 import { cn } from "@/lib/utils";
 import { statusOf } from "@/lib/status";
 import { useSettings, isClaudeAgent } from "@/lib/settings";
 import { getRecents, addRecent } from "@/lib/recents";
+import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
 import { checkForUpdates } from "@/lib/update";
 import { useSessions } from "@/hooks/useSessions";
 import { useProjects } from "@/hooks/useProjects";
@@ -30,7 +30,15 @@ import type {
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
+  const [sidebarCollapsed, setCollapsed] = useState<boolean>(getSidebarCollapsed);
   const [recents, setRecents] = useState<string[]>(getRecents);
+
+  function toggleSidebar() {
+    setCollapsed((c) => {
+      setSidebarCollapsed(!c);
+      return !c;
+    });
+  }
   const { settings, update: updateSettings } = useSettings();
 
   const {
@@ -86,6 +94,8 @@ function App() {
       if (settings.dangerouslySkipPermissions) {
         flags.push("--dangerously-skip-permissions");
       }
+      // Full session (default) expands tool output; compact leaves it collapsed.
+      if (!settings.compactSession) flags.push("--verbose");
     }
     if (extra) flags.push(extra);
     return flags.length ? `${base} ${flags.join(" ")}` : base;
@@ -116,21 +126,51 @@ function App() {
       });
   }
 
-  function openProjectAt(path: string) {
+  /** Launch a project's primary agent: resume its most recent thread when the
+   *  setting is on (falling back to a fresh agent if none / on error), else a
+   *  brand-new agent. Scrollback persists under the project path either way. */
+  async function startPrimaryAgent(id: string, path: string) {
+    if (settings.resumeLatestThread && isClaudeAgent(settings.agentCommand)) {
+      try {
+        const threads = await invoke<Thread[]>("list_threads", { cwd: path });
+        setThreads(id, threads);
+        const latest = [...threads].sort((a, b) => b.modified - a.modified)[0];
+        if (latest) {
+          const label =
+            latest.title.length > 24
+              ? `${latest.title.slice(0, 24)}…`
+              : latest.title;
+          startAgent(
+            id,
+            path,
+            buildAgentCommand(`--resume ${latest.id}`),
+            label,
+            path
+          );
+          return;
+        }
+      } catch (e) {
+        console.error("list_threads failed:", e);
+        // Fall through to a fresh agent.
+      }
+    }
+    startAgent(id, path, buildAgentCommand(), "agent", path);
+  }
+
+  async function openProjectAt(path: string) {
     const { id, isNew } = openProject(path);
     setRecents(addRecent(path));
+    // Fresh project, or a reopened one whose agent tab had been closed.
+    if (isNew || !sessionsFor(id).some((s) => s.kind === "agent")) {
+      await startPrimaryAgent(id, path);
+    }
     if (isNew) {
-      // Primary agent: persist its scrollback under the project path.
-      startAgent(id, path, buildAgentCommand(), "agent", path);
       invoke<WorkspaceInfo>("scan_workspace", { path })
         .then((w) => setWorkspace(id, w))
         .catch((e) => {
           console.error("scan_workspace failed:", e);
           toast.error("Couldn't scan workspace", { description: String(e) });
         });
-    } else if (!sessionsFor(id).some((s) => s.kind === "agent")) {
-      // Reopened, but its agent tab had been closed — relaunch one.
-      startAgent(id, path, buildAgentCommand(), "agent", path);
     }
     refreshThreads(id, path);
     refreshDokploy(id, path);
@@ -197,7 +237,11 @@ function App() {
     }
   }
 
-  useShortcuts({ onOpen: pickProject, onNewAgent: newAgent });
+  useShortcuts({
+    onOpen: pickProject,
+    onNewAgent: newAgent,
+    onToggleSidebar: toggleSidebar,
+  });
 
   // Check for a newer signed release on launch (quiet on failure).
   useEffect(() => {
@@ -221,9 +265,8 @@ function App() {
     return () => window.removeEventListener("focus", onFocus);
   }, [sessions, statuses, setActiveProjectId, setActive, pendingAttention]);
 
-  const showTabs = projectSessions.length > 1;
-  // Header reflects the active tab when it's an agent, else the first agent —
-  // so multiple resumed threads each drive the header when focused.
+  // The context bar reflects the active tab when it's an agent, else the first
+  // agent — so multiple resumed threads each drive it when focused.
   const firstAgent = projectSessions.find((s) => s.kind === "agent");
   const activeSession = projectSessions.find((s) => s.id === activeId);
   const agent = activeSession?.kind === "agent" ? activeSession : firstAgent;
@@ -235,44 +278,97 @@ function App() {
   );
 
   return (
-    <div className="flex h-full flex-col bg-background text-foreground">
-      <HeaderBar
-        activeProject={activeProject}
-        claudeAgent={isClaudeAgent(settings.agentCommand)}
-        agent={agent}
-        agentStatus={agentStatus}
-        agentUsage={agentUsage}
-        devRunning={projectSessions.some((s) => s.kind === "dev")}
-        changesCount={projectChanges.length}
-        changesOpen={changesOpen}
-        onRefreshThreads={() => {
-          if (activeProject) refreshThreads(activeProject.id, activeProject.path);
-        }}
-        onResumeThread={resumeThread}
-        onRefreshDokploy={() => {
-          if (activeProject) refreshDokploy(activeProject.id, activeProject.path);
-        }}
-        onRunPackage={runPackage}
-        onRunAll={runAll}
-        onStopDev={() => {
-          if (activeProjectId) stopAllDev(activeProjectId);
-        }}
-        onNewAgent={newAgent}
-        onToggleChanges={() => setChangesOpen((v) => !v)}
-        onOpenSettings={() => setSettingsOpen(true)}
-      />
-
+    <div className="flex h-full bg-background text-foreground">
       {projects.length > 0 && (
-        <ProjectTabStrip
+        <Sidebar
           projects={projects}
           activeProjectId={activeProjectId}
+          activeByProject={activeByProject}
           statuses={statuses}
           sessionsFor={sessionsFor}
-          onSelect={setActiveProjectId}
-          onClose={handleCloseProject}
-          onPick={pickProject}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={toggleSidebar}
+          onSelectProject={setActiveProjectId}
+          onCloseProject={handleCloseProject}
+          onPickProject={pickProject}
+          onSelectSession={setActive}
+          onCloseSession={closeSession}
+          onMoveSession={moveSession}
+          onNewAgent={newAgent}
+          onRefreshDokploy={() => {
+            if (activeProject) refreshDokploy(activeProject.id, activeProject.path);
+          }}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
       )}
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <ContextBar
+          activeProject={activeProject}
+          agent={agent}
+          agentStatus={agentStatus}
+          agentUsage={agentUsage}
+          claudeAgent={isClaudeAgent(settings.agentCommand)}
+          devRunning={projectSessions.some((s) => s.kind === "dev")}
+          changesCount={projectChanges.length}
+          changesOpen={changesOpen}
+          onRunPackage={runPackage}
+          onRunAll={runAll}
+          onStopDev={() => {
+            if (activeProjectId) stopAllDev(activeProjectId);
+          }}
+          onRefreshThreads={() => {
+            if (activeProject) refreshThreads(activeProject.id, activeProject.path);
+          }}
+          onResumeThread={resumeThread}
+          onToggleChanges={() => setChangesOpen((v) => !v)}
+        />
+
+        {agent && agentStatus === "waiting" && activeProjectId && (
+          <AttentionBanner onJump={() => setActive(activeProjectId, agent.id)} />
+        )}
+
+        {/* Terminal viewport + changes panel */}
+        <div className="flex min-h-0 flex-1">
+          <main className="canvas-lit relative flex-1 p-1">
+            {projects.length > 0 ? (
+              sessions.map((s) => (
+                <div
+                  key={s.id}
+                  className={cn(
+                    "absolute inset-1",
+                    s.id === activeId ? "" : "hidden"
+                  )}
+                >
+                  <TerminalPane
+                    sessionId={s.id}
+                    cwd={s.cwd}
+                    command={s.command}
+                    persistKey={s.persistKey}
+                    fontFamily={settings.fontFamily}
+                    fontSize={settings.fontSize}
+                    scrollback={settings.scrollback}
+                    active={s.id === activeId}
+                  />
+                </div>
+              ))
+            ) : (
+              <WelcomeScreen
+                recents={recents}
+                onPick={pickProject}
+                onOpenRecent={openProjectAt}
+              />
+            )}
+          </main>
+          {activeProject && changesOpen && (
+            <ChangesPanel
+              projectPath={activeProject.path}
+              changes={projectChanges}
+              onClose={() => setChangesOpen(false)}
+            />
+          )}
+        </div>
+      </div>
 
       <SettingsDialog
         open={settingsOpen}
@@ -282,63 +378,6 @@ function App() {
       />
 
       <Toaster theme="dark" position="bottom-right" richColors closeButton />
-
-      {agent && agentStatus === "waiting" && activeProjectId && (
-        <AttentionBanner onJump={() => setActive(activeProjectId, agent.id)} />
-      )}
-
-      {/* Terminal viewport + changes panel */}
-      <div className="flex min-h-0 flex-1">
-        <main className="relative flex-1 bg-[#1a1a1e] p-1">
-          {projects.length > 0 ? (
-            sessions.map((s) => (
-              <div
-                key={s.id}
-                className={cn(
-                  "absolute inset-1",
-                  s.id === activeId ? "" : "hidden"
-                )}
-              >
-                <TerminalPane
-                  sessionId={s.id}
-                  cwd={s.cwd}
-                  command={s.command}
-                  persistKey={s.persistKey}
-                  fontFamily={settings.fontFamily}
-                  fontSize={settings.fontSize}
-                  scrollback={settings.scrollback}
-                  active={s.id === activeId}
-                />
-              </div>
-            ))
-          ) : (
-            <WelcomeScreen
-              recents={recents}
-              onPick={pickProject}
-              onOpenRecent={openProjectAt}
-            />
-          )}
-        </main>
-        {activeProject && changesOpen && (
-          <ChangesPanel
-            projectPath={activeProject.path}
-            changes={projectChanges}
-            onClose={() => setChangesOpen(false)}
-          />
-        )}
-      </div>
-
-      {showTabs && activeProjectId && (
-        <SessionTabStrip
-          sessions={projectSessions}
-          activeId={activeId}
-          activeProjectId={activeProjectId}
-          statuses={statuses}
-          onSelect={(id) => setActive(activeProjectId, id)}
-          onClose={closeSession}
-          onMove={moveSession}
-        />
-      )}
     </div>
   );
 }
