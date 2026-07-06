@@ -364,6 +364,8 @@ function App() {
             <ChangesPanel
               projectPath={activeProject.path}
               changes={projectChanges}
+              openRouterApiKey={settings.openRouterApiKey}
+              openRouterModel={settings.openRouterModel}
               onClose={() => setChangesOpen(false)}
             />
           )}

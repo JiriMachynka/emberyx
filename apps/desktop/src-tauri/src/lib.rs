@@ -1,6 +1,7 @@
 mod dokploy;
 mod git;
 mod hooks;
+mod openrouter;
 mod pty;
 mod threads;
 mod usage;
@@ -55,6 +56,8 @@ pub fn run() {
             usage::read_usage,
             threads::list_threads,
             dokploy::dokploy_services,
+            openrouter::generate_commit_message,
+            openrouter::openrouter_models,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

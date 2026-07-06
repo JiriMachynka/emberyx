@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { diffLines } from "diff";
-import { X, FileDiff, RefreshCw, GitBranch, Bot, Check } from "lucide-react";
+import { X, FileDiff, RefreshCw, GitBranch, Bot, Check, Plus, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { basename } from "@/lib/path";
@@ -124,12 +124,16 @@ function EditDiff({ change }: { change: Change }) {
 interface ChangesPanelProps {
   projectPath: string;
   changes: Change[];
+  openRouterApiKey: string;
+  openRouterModel: string;
   onClose: () => void;
 }
 
 export function ChangesPanel({
   projectPath,
   changes,
+  openRouterApiKey,
+  openRouterModel,
   onClose,
 }: ChangesPanelProps) {
   const [tab, setTab] = useState<"git" | "agent">("git");
@@ -146,6 +150,7 @@ export function ChangesPanel({
   const [commitMsg, setCommitMsg] = useState("");
   const [committing, setCommitting] = useState(false);
   const [commitErr, setCommitErr] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
 
   // Agent tab state.
   const [agentSelId, setAgentSelId] = useState<number | null>(null);
@@ -187,6 +192,32 @@ export function ChangesPanel({
       else next.add(path);
       return next;
     });
+  }
+
+  const stagedFiles = gitFiles.filter((f) => staged.has(f.path));
+  const unstagedFiles = gitFiles.filter((f) => !staged.has(f.path));
+
+  const stageAll = () => setStaged(new Set(gitFiles.map((f) => f.path)));
+  const unstageAll = () => setStaged(new Set());
+
+  async function generateMessage() {
+    const files = [...staged];
+    if (!files.length || generating) return;
+    setGenerating(true);
+    setCommitErr(null);
+    try {
+      const msg = await invoke<string>("generate_commit_message", {
+        path: projectPath,
+        files,
+        apiKey: openRouterApiKey,
+        model: openRouterModel,
+      });
+      setCommitMsg(msg);
+    } catch (e) {
+      setCommitErr(String(e));
+    } finally {
+      setGenerating(false);
+    }
   }
 
   async function doCommit() {
@@ -261,41 +292,54 @@ export function ChangesPanel({
             </Empty>
           ) : (
             <>
-              <ul className="max-h-40 shrink-0 overflow-auto border-b">
-                {gitFiles.map((f) => (
-                  <li
-                    key={f.path}
-                    className={cn(
-                      "flex items-center gap-2 pr-2",
-                      gitSel === f.path && "bg-secondary"
-                    )}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={staged.has(f.path)}
-                      onChange={() => toggleStage(f.path)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="ml-3 size-3.5 shrink-0 accent-primary"
-                      title="Stage for commit"
+              <div className="max-h-52 shrink-0 overflow-auto border-b">
+                {stagedFiles.length > 0 && (
+                  <>
+                    <SectionHeader
+                      label="Staged Changes"
+                      count={stagedFiles.length}
+                      actionIcon={<Minus className="size-3" />}
+                      actionTitle="Unstage all"
+                      onAction={unstageAll}
                     />
-                    <button
-                      onClick={() => selectGit(f)}
-                      className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left text-xs hover:text-foreground"
-                      title={f.path}
-                    >
-                      <span
-                        className={cn(
-                          "w-5 shrink-0 text-center font-mono text-[10px]",
-                          f.untracked ? "text-emerald-400" : "text-amber-400"
-                        )}
-                      >
-                        {f.untracked ? "U" : f.status.trim() || "M"}
-                      </span>
-                      <span className="flex-1 truncate">{f.path}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+                    <ul>
+                      {stagedFiles.map((f) => (
+                        <GitFileRow
+                          key={f.path}
+                          file={f}
+                          staged
+                          selected={gitSel === f.path}
+                          onSelect={() => selectGit(f)}
+                          onToggle={() => toggleStage(f.path)}
+                        />
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {unstagedFiles.length > 0 && (
+                  <>
+                    <SectionHeader
+                      label="Changes"
+                      count={unstagedFiles.length}
+                      actionIcon={<Plus className="size-3" />}
+                      actionTitle="Stage all changes"
+                      onAction={stageAll}
+                    />
+                    <ul>
+                      {unstagedFiles.map((f) => (
+                        <GitFileRow
+                          key={f.path}
+                          file={f}
+                          staged={false}
+                          selected={gitSel === f.path}
+                          onSelect={() => selectGit(f)}
+                          onToggle={() => toggleStage(f.path)}
+                        />
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </div>
               {staged.size > 0 && (
                 <div className="shrink-0 space-y-1.5 border-b p-2">
                   <Input
@@ -315,6 +359,21 @@ export function ChangesPanel({
                     </p>
                   )}
                   <div className="flex justify-end gap-2">
+                    {openRouterApiKey.trim() && (
+                      <button
+                        onClick={() => void generateMessage()}
+                        disabled={generating}
+                        title="Draft a commit message from the staged diff"
+                        className="mr-auto flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
+                      >
+                        {generating ? (
+                          <RefreshCw className="size-3.5 animate-spin" />
+                        ) : (
+                          <Bot className="size-3.5" />
+                        )}
+                        Generate
+                      </button>
+                    )}
                     <button
                       onClick={() => setStaged(new Set())}
                       className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -381,6 +440,85 @@ export function ChangesPanel({
         </div>
       )}
     </aside>
+  );
+}
+
+/** VS Code-style group header ("Staged Changes" / "Changes") with a count and
+ *  a bulk stage/unstage action button on the right. */
+function SectionHeader({
+  label,
+  count,
+  actionIcon,
+  actionTitle,
+  onAction,
+}: {
+  label: string;
+  count: number;
+  actionIcon: React.ReactNode;
+  actionTitle: string;
+  onAction: () => void;
+}) {
+  return (
+    <div className="group sticky top-0 flex items-center justify-between bg-card px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <span>{label}</span>
+      <div className="flex items-center gap-1.5">
+        <button
+          onClick={onAction}
+          title={actionTitle}
+          className="rounded p-0.5 hover:bg-accent hover:text-foreground"
+        >
+          {actionIcon}
+        </button>
+        <span className="tabular-nums">{count}</span>
+      </div>
+    </div>
+  );
+}
+
+/** One file row: click to view its diff, hover-reveal a stage/unstage button. */
+function GitFileRow({
+  file,
+  staged,
+  selected,
+  onSelect,
+  onToggle,
+}: {
+  file: GitFile;
+  staged: boolean;
+  selected: boolean;
+  onSelect: () => void;
+  onToggle: () => void;
+}) {
+  return (
+    <li
+      className={cn(
+        "group flex items-center gap-1 pr-1",
+        selected && "bg-secondary"
+      )}
+    >
+      <button
+        onClick={onSelect}
+        className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-3 text-left text-xs hover:text-foreground"
+        title={file.path}
+      >
+        <span
+          className={cn(
+            "w-4 shrink-0 text-center font-mono text-[10px]",
+            file.untracked ? "text-emerald-400" : "text-amber-400"
+          )}
+        >
+          {file.untracked ? "U" : file.status.trim() || "M"}
+        </span>
+        <span className="flex-1 truncate">{file.path}</span>
+      </button>
+      <button
+        onClick={onToggle}
+        title={staged ? "Unstage" : "Stage"}
+        className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        {staged ? <Minus className="size-3.5" /> : <Plus className="size-3.5" />}
+      </button>
+    </li>
   );
 }
 

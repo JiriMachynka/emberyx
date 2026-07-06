@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Dialog,
   DialogContent,
@@ -6,7 +8,13 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import type { Settings } from "@/lib/settings";
+
+interface OpenRouterModel {
+  id: string;
+  name: string;
+}
 
 interface SettingsDialogProps {
   open: boolean;
@@ -14,6 +22,14 @@ interface SettingsDialogProps {
   settings: Settings;
   onUpdate: (patch: Partial<Settings>) => void;
 }
+
+type Tab = "general" | "terminal" | "integrations";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "general", label: "General" },
+  { id: "terminal", label: "Terminal" },
+  { id: "integrations", label: "Integrations" },
+];
 
 function Field({
   label,
@@ -33,12 +49,51 @@ function Field({
   );
 }
 
+function Toggle({
+  checked,
+  onChange,
+  title,
+  children,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="flex items-start gap-2.5">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 size-4 shrink-0 accent-primary"
+      />
+      <span className="grid gap-0.5">
+        <span className="text-sm font-medium">{title}</span>
+        <span className="text-xs text-muted-foreground">{children}</span>
+      </span>
+    </label>
+  );
+}
+
 export function SettingsDialog({
   open,
   onOpenChange,
   settings,
   onUpdate,
 }: SettingsDialogProps) {
+  const [tab, setTab] = useState<Tab>("general");
+  const [models, setModels] = useState<OpenRouterModel[]>([]);
+  const isClaude = settings.agentCommand.startsWith("claude");
+
+  // Fetch the model list once, the first time the dialog opens.
+  useEffect(() => {
+    if (!open || models.length) return;
+    invoke<OpenRouterModel[]>("openrouter_models")
+      .then(setModels)
+      .catch((e) => console.error("openrouter_models failed:", e));
+  }, [open, models.length]);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -49,142 +104,186 @@ export function SettingsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-4">
-          <Field label="Agent command" hint="Run on project open, e.g. claude or codex">
-            <Input
-              value={settings.agentCommand}
-              onChange={(e) => onUpdate({ agentCommand: e.target.value })}
-              spellCheck={false}
-            />
-          </Field>
+        <div className="flex gap-1 border-b">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={cn(
+                "-mb-px border-b-2 px-2.5 py-1.5 text-sm font-medium transition-colors",
+                tab === t.id
+                  ? "border-primary text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
 
-          {settings.agentCommand.startsWith("claude") && (
-            <label className="flex items-start gap-2.5">
-              <input
-                type="checkbox"
-                checked={settings.dangerouslySkipPermissions}
-                onChange={(e) =>
-                  onUpdate({ dangerouslySkipPermissions: e.target.checked })
-                }
-                className="mt-0.5 size-4 shrink-0 accent-primary"
-              />
-              <span className="grid gap-0.5">
-                <span className="text-sm font-medium">
-                  Skip permission prompts
-                </span>
-                <span className="text-xs text-muted-foreground">
+        <div className="grid min-h-80 content-start gap-4">
+          {tab === "general" && (
+            <>
+              <Field
+                label="Agent command"
+                hint="Run on project open, e.g. claude or codex"
+              >
+                <Input
+                  value={settings.agentCommand}
+                  onChange={(e) => onUpdate({ agentCommand: e.target.value })}
+                  spellCheck={false}
+                />
+              </Field>
+
+              {isClaude && (
+                <Toggle
+                  checked={settings.dangerouslySkipPermissions}
+                  onChange={(v) => onUpdate({ dangerouslySkipPermissions: v })}
+                  title="Skip permission prompts"
+                >
                   Launch Claude with{" "}
                   <code className="text-[11px]">
                     --dangerously-skip-permissions
                   </code>
                   . The agent won't ask before running commands or edits.
-                </span>
-              </span>
-            </label>
-          )}
+                </Toggle>
+              )}
 
-          {settings.agentCommand.startsWith("claude") && (
-            <label className="flex items-start gap-2.5">
-              <input
-                type="checkbox"
-                checked={settings.resumeLatestThread}
-                onChange={(e) =>
-                  onUpdate({ resumeLatestThread: e.target.checked })
-                }
-                className="mt-0.5 size-4 shrink-0 accent-primary"
-              />
-              <span className="grid gap-0.5">
-                <span className="text-sm font-medium">
-                  Resume latest thread on open
-                </span>
-                <span className="text-xs text-muted-foreground">
+              {isClaude && (
+                <Toggle
+                  checked={settings.resumeLatestThread}
+                  onChange={(v) => onUpdate({ resumeLatestThread: v })}
+                  title="Resume latest thread on open"
+                >
                   Opening a project reopens the most recently worked-on thread.
                   Off launches a brand-new agent each time.
-                </span>
-              </span>
-            </label>
-          )}
+                </Toggle>
+              )}
 
-          {settings.agentCommand.startsWith("claude") && (
-            <label className="flex items-start gap-2.5">
-              <input
-                type="checkbox"
-                checked={settings.compactSession}
-                onChange={(e) =>
-                  onUpdate({ compactSession: e.target.checked })
-                }
-                className="mt-0.5 size-4 shrink-0 accent-primary"
-              />
-              <span className="grid gap-0.5">
-                <span className="text-sm font-medium">Compact session</span>
-                <span className="text-xs text-muted-foreground">
+              {isClaude && (
+                <Toggle
+                  checked={settings.compactSession}
+                  onChange={(v) => onUpdate({ compactSession: v })}
+                  title="Compact session"
+                >
                   Keep tool output collapsed. Off (default) runs a full session
                   with <code className="text-[11px]">--verbose</code>, expanding
                   tool output inline.
-                </span>
-              </span>
-            </label>
+                </Toggle>
+              )}
+            </>
           )}
 
-          <Field label="Terminal font family">
-            <Input
-              value={settings.fontFamily}
-              onChange={(e) => onUpdate({ fontFamily: e.target.value })}
-              spellCheck={false}
-            />
-          </Field>
-
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Font size">
-              <Input
-                type="number"
-                min={8}
-                max={32}
-                value={settings.fontSize}
-                onChange={(e) =>
-                  onUpdate({ fontSize: Number(e.target.value) || 13 })
-                }
-              />
-            </Field>
-
-            <Field label="Scrollback">
-              <Input
-                type="number"
-                min={100}
-                max={100000}
-                step={100}
-                value={settings.scrollback}
-                onChange={(e) =>
-                  onUpdate({ scrollback: Number(e.target.value) || 1000 })
-                }
-              />
-            </Field>
-          </div>
-
-          <div className="border-t pt-4">
-            <div className="mb-3 text-sm font-semibold">Dokploy</div>
-            <div className="grid gap-4">
-              <Field
-                label="Server URL"
-                hint="Projects are matched to Dokploy services by git remote."
-              >
+          {tab === "terminal" && (
+            <>
+              <Field label="Terminal font family">
                 <Input
-                  value={settings.dokployUrl}
-                  onChange={(e) => onUpdate({ dokployUrl: e.target.value })}
-                  placeholder="https://dokploy.example.com"
+                  value={settings.fontFamily}
+                  onChange={(e) => onUpdate({ fontFamily: e.target.value })}
                   spellCheck={false}
                 />
               </Field>
-              <Field label="API key" hint="Sent as the x-api-key header.">
-                <Input
-                  type="password"
-                  value={settings.dokployApiKey}
-                  onChange={(e) => onUpdate({ dokployApiKey: e.target.value })}
-                  spellCheck={false}
-                />
-              </Field>
-            </div>
-          </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Font size">
+                  <Input
+                    type="number"
+                    min={8}
+                    max={32}
+                    value={settings.fontSize}
+                    onChange={(e) =>
+                      onUpdate({ fontSize: Number(e.target.value) || 13 })
+                    }
+                  />
+                </Field>
+
+                <Field label="Scrollback">
+                  <Input
+                    type="number"
+                    min={100}
+                    max={100000}
+                    step={100}
+                    value={settings.scrollback}
+                    onChange={(e) =>
+                      onUpdate({ scrollback: Number(e.target.value) || 1000 })
+                    }
+                  />
+                </Field>
+              </div>
+            </>
+          )}
+
+          {tab === "integrations" && (
+            <>
+              <div>
+                <div className="mb-3 text-sm font-semibold">Dokploy</div>
+                <div className="grid gap-4">
+                  <Field
+                    label="Server URL"
+                    hint="Projects are matched to Dokploy services by git remote."
+                  >
+                    <Input
+                      value={settings.dokployUrl}
+                      onChange={(e) => onUpdate({ dokployUrl: e.target.value })}
+                      placeholder="https://dokploy.example.com"
+                      spellCheck={false}
+                    />
+                  </Field>
+                  <Field label="API key" hint="Sent as the x-api-key header.">
+                    <Input
+                      type="password"
+                      value={settings.dokployApiKey}
+                      onChange={(e) =>
+                        onUpdate({ dokployApiKey: e.target.value })
+                      }
+                      spellCheck={false}
+                    />
+                  </Field>
+                </div>
+              </div>
+
+              <div className="border-t pt-4">
+                <div className="mb-3 text-sm font-semibold">OpenRouter</div>
+                <div className="grid gap-4">
+                  <Field
+                    label="API key"
+                    hint="Enables the Generate button on the commit box to draft messages from your diff."
+                  >
+                    <Input
+                      type="password"
+                      value={settings.openRouterApiKey}
+                      onChange={(e) =>
+                        onUpdate({ openRouterApiKey: e.target.value })
+                      }
+                      placeholder="sk-or-…"
+                      spellCheck={false}
+                    />
+                  </Field>
+                  <Field
+                    label="Model"
+                    hint="OpenRouter model slug. Defaults to google/gemini-3.5-flash."
+                  >
+                    <Input
+                      list="openrouter-models"
+                      value={settings.openRouterModel}
+                      onChange={(e) =>
+                        onUpdate({ openRouterModel: e.target.value })
+                      }
+                      placeholder="google/gemini-3.5-flash"
+                      spellCheck={false}
+                    />
+                    <datalist id="openrouter-models">
+                      {models.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name}
+                        </option>
+                      ))}
+                    </datalist>
+                  </Field>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </DialogContent>
     </Dialog>

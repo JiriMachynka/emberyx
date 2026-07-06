@@ -19,6 +19,10 @@ export interface Settings {
   dokployUrl: string;
   /** Dokploy API key (sent as x-api-key). */
   dokployApiKey: string;
+  /** OpenRouter API key for generating commit messages. */
+  openRouterApiKey: string;
+  /** OpenRouter model slug, e.g. anthropic/claude-3.5-haiku. */
+  openRouterModel: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -31,6 +35,8 @@ export const DEFAULT_SETTINGS: Settings = {
   compactSession: false,
   dokployUrl: "",
   dokployApiKey: "",
+  openRouterApiKey: "",
+  openRouterModel: "",
 };
 
 /** Whether an agent command drives Claude Code (enables thread/usage UI). */
