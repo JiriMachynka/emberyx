@@ -113,13 +113,15 @@ function App() {
     return flags.length ? `${base} ${flags.join(" ")}` : base;
   }
 
-  /** Fetch and cache the project's Claude Code threads (non-blocking). */
-  function refreshThreads(projectId: string, path: string) {
+  /** Fetch and cache the project's Claude Code threads (non-blocking). When
+   *  silent (pre-warm), failures stay in the console — no toast for a project
+   *  the user hasn't opened yet. */
+  function refreshThreads(projectId: string, path: string, silent = false) {
     invoke<Thread[]>("list_threads", { cwd: path })
       .then((t) => setThreads(projectId, t))
       .catch((e) => {
         console.error("list_threads failed:", e);
-        toast.error("Couldn't load threads", { description: String(e) });
+        if (!silent) toast.error("Couldn't load threads", { description: String(e) });
       });
   }
 
@@ -169,8 +171,8 @@ function App() {
     startAgent(id, path, buildAgentCommand(), "agent", path);
   }
 
-  /** Tear down a pre-warmed project the user never opened. */
-  function discardPrewarm(id: string) {
+  /** Remove a project and all its sessions (kills their PTYs). */
+  function teardownProject(id: string) {
     const ids = sessionsFor(id).map((s) => s.id);
     closeProjectSessions(id);
     clearSessions(ids);
@@ -179,19 +181,30 @@ function App() {
 
   async function openProjectAt(path: string, opts?: { prewarm?: boolean }) {
     const prewarm = opts?.prewarm ?? false;
+    // Revealing the project the pre-warm already owns: its startPrimaryAgent may
+    // still be in flight (awaiting list_threads), so the agent session isn't in
+    // state yet — don't start a second one.
+    let matchedPrewarm = false;
     if (!prewarm) {
       // A real open reveals the workspace; drop any pre-warmed project that
       // isn't the one being opened.
       const pw = prewarmRef.current;
       prewarmRef.current = null;
       setRevealed(true);
-      if (pw && pw.path !== path) discardPrewarm(pw.id);
+      if (pw) {
+        if (pw.path === path) matchedPrewarm = true;
+        else teardownProject(pw.id);
+      }
     }
     const { id, isNew } = openProject(path);
     if (prewarm) prewarmRef.current = { id, path };
     else setRecents(addRecent(path));
-    // Fresh project, or a reopened one whose agent tab had been closed.
-    if (isNew || !sessionsFor(id).some((s) => s.kind === "agent")) {
+    // Fresh project, or a reopened one whose agent tab had been closed. Skip
+    // when the in-flight pre-warm will start the agent itself.
+    if (
+      !matchedPrewarm &&
+      (isNew || !sessionsFor(id).some((s) => s.kind === "agent"))
+    ) {
       await startPrimaryAgent(id, path);
     }
     if (isNew) {
@@ -199,14 +212,17 @@ function App() {
         .then((w) => setWorkspace(id, w))
         .catch((e) => {
           console.error("scan_workspace failed:", e);
-          toast.error("Couldn't scan workspace", { description: String(e) });
+          if (!prewarm)
+            toast.error("Couldn't scan workspace", { description: String(e) });
         });
       invoke<string | null>("project_icon", { path })
         .then((icon) => setIcon(id, icon))
         .catch((e) => console.error("project_icon failed:", e));
     }
-    refreshThreads(id, path);
-    refreshDokploy(id, path);
+    refreshThreads(id, path, prewarm);
+    // Skip the Dokploy network probe for a hidden pre-warmed project; it runs
+    // when the user actually reveals it.
+    if (!prewarm) refreshDokploy(id, path);
   }
 
   /** Resume a Claude Code thread in a new agent tab. */
@@ -246,10 +262,7 @@ function App() {
       );
       if (!ok) return;
     }
-    const ids = sessionsFor(id).map((s) => s.id);
-    closeProjectSessions(id);
-    clearSessions(ids);
-    closeProject(id);
+    teardownProject(id);
     // Back to the WelcomeScreen once the last project is gone.
     if (projects.filter((p) => p.id !== id).length === 0) setRevealed(false);
   }

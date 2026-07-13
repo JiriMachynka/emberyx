@@ -21,6 +21,9 @@ const SCROLLBACK_CAP: u64 = 1_000_000;
 fn capture_shell_env() -> Option<Vec<(String, String)>> {
     let output = std::process::Command::new(PtyManager::user_shell())
         .args(["-lic", "env"])
+        // Detach stdin so an rc that reads it (a `read`, fzf/keychain prompt)
+        // can't block this capture forever and pin the fast path off.
+        .stdin(std::process::Stdio::null())
         .output()
         .ok()?;
     if !output.status.success() {
@@ -147,18 +150,31 @@ impl PtyManager {
             })
             .map_err(|e| e.to_string())?;
 
-        let mut cmd = CommandBuilder::new(Self::user_shell());
+        let shell = Self::user_shell();
+        let mut cmd = CommandBuilder::new(&shell);
         // Fast path: once the resolved shell env is captured, spawn without the
-        // interactive rc (`-f`) so p10k / oh-my-zsh plugins / nvm don't re-run
-        // on every open (~0.6s each). Until then, fall back to a login shell so
-        // PATH / nvm / bun still resolve like the user's terminal.
-        if let Some(env) = self.shell_env.get() {
-            cmd.arg("-f");
-            for (k, v) in env {
-                cmd.env(k, v);
-            }
+        // interactive rc so the startup files (p10k / oh-my-zsh / nvm — but also
+        // the user's prompt / aliases / functions) don't re-run on every open
+        // (~0.6s each). The no-rc flag is shell-specific: `-f` for zsh,
+        // `--norc` for bash. Unknown shells (or before the capture finishes)
+        // fall back to a login shell so PATH / nvm / bun still resolve.
+        let norc = if shell.ends_with("zsh") {
+            Some("-f")
+        } else if shell.ends_with("bash") {
+            Some("--norc")
         } else {
-            cmd.arg("-l");
+            None
+        };
+        match (self.shell_env.get(), norc) {
+            (Some(env), Some(flag)) => {
+                cmd.arg(flag);
+                for (k, v) in env {
+                    cmd.env(k, v);
+                }
+            }
+            _ => {
+                cmd.arg("-l");
+            }
         }
         cmd.cwd(&cwd);
         cmd.env("TERM", "xterm-256color");
