@@ -7,8 +7,11 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { getVersion } from "@tauri-apps/api/app";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { checkForUpdates } from "@/lib/update";
 import type { Settings } from "@/lib/settings";
 
 interface OpenRouterModel {
@@ -84,6 +87,8 @@ export function SettingsDialog({
 }: SettingsDialogProps) {
   const [tab, setTab] = useState<Tab>("general");
   const [models, setModels] = useState<OpenRouterModel[]>([]);
+  const [version, setVersion] = useState("");
+  const [checking, setChecking] = useState(false);
   const isClaude = settings.agentCommand.startsWith("claude");
 
   // Fetch the model list once, the first time the dialog opens.
@@ -93,6 +98,20 @@ export function SettingsDialog({
       .then(setModels)
       .catch((e) => console.error("openrouter_models failed:", e));
   }, [open, models.length]);
+
+  // Resolve the running app version once.
+  useEffect(() => {
+    getVersion().then(setVersion).catch(() => {});
+  }, []);
+
+  async function onCheckUpdates() {
+    setChecking(true);
+    try {
+      await checkForUpdates({ silent: false });
+    } finally {
+      setChecking(false);
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -171,6 +190,23 @@ export function SettingsDialog({
                   tool output inline.
                 </Toggle>
               )}
+
+              <div className="flex items-center justify-between border-t pt-4">
+                <div className="text-sm">
+                  <div className="font-medium">Updates</div>
+                  <div className="text-xs text-muted-foreground">
+                    {version ? `Emberyx v${version}` : "Emberyx"}
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onCheckUpdates}
+                  disabled={checking}
+                >
+                  {checking ? "Checking…" : "Check for updates"}
+                </Button>
+              </div>
             </>
           )}
 

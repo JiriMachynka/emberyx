@@ -41,3 +41,36 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: --target universal-apple-darwin
+
+      # The updater runs anonymously, so its files must live on a PUBLIC repo
+      # (this source repo is private → anonymous downloads 404). Mirror the
+      # signed update payload + a URL-rewritten latest.json to emberyx-releases.
+      # Needs a PAT with contents:write on the mirror repo (GITHUB_TOKEN is
+      # scoped to this repo only).
+      - name: Mirror updater artifacts to public releases repo
+        env:
+          TAG: ${{ github.ref_name }}
+          SRC_REPO: ${{ github.repository }}
+          MIRROR_REPO: JiriMachynka/emberyx-releases
+          SRC_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MIRROR_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p mirror
+          # Grab what tauri-action just published to the private release.
+          GH_TOKEN="$SRC_TOKEN" gh release download "$TAG" --repo "$SRC_REPO" \
+            --pattern "Emberyx_universal.app.tar.gz*" \
+            --pattern "latest.json" --dir mirror
+          # Repoint the update payload URLs at the public mirror.
+          sed -i.bak "s#/emberyx/releases/download/#/emberyx-releases/releases/download/#g" mirror/latest.json
+          rm -f mirror/latest.json.bak
+          # Publish to the public mirror (create the release once, then upload).
+          export GH_TOKEN="$MIRROR_TOKEN"
+          gh release view "$TAG" --repo "$MIRROR_REPO" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "$MIRROR_REPO" \
+              --title "Emberyx $TAG" \
+              --notes "Auto-update channel for Emberyx. Install the app from the private repo's release."
+          gh release upload "$TAG" --repo "$MIRROR_REPO" --clobber \
+            mirror/Emberyx_universal.app.tar.gz \
+            mirror/Emberyx_universal.app.tar.gz.sig \
+            mirror/latest.json
