@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { open, ask } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { Toaster, toast } from "sonner";
@@ -75,15 +75,24 @@ function App() {
     clearSessions,
   } = useAgentEvents((id) => sessions.find((s) => s.id === id));
 
-  const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
+  // The most-recent project is pre-warmed (its agent booted) hidden behind the
+  // WelcomeScreen at launch, so opening it is instant. Until the user reveals a
+  // project, the UI treats nothing as active — the pre-warm pane stays mounted
+  // (so it boots) but hidden.
+  const [revealed, setRevealed] = useState(false);
+  const prewarmRef = useRef<{ id: string; path: string } | null>(null);
+  const uiActiveProjectId = revealed ? activeProjectId : null;
+
+  const activeProject =
+    projects.find((p) => p.id === uiActiveProjectId) ?? null;
   const projectSessions = useMemo(
-    () => (activeProjectId ? sessionsFor(activeProjectId) : []),
+    () => (uiActiveProjectId ? sessionsFor(uiActiveProjectId) : []),
     // sessionsFor derives from `sessions`; recompute only when those change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessions, activeProjectId]
+    [sessions, uiActiveProjectId]
   );
-  const activeId = activeProjectId
-    ? activeByProject[activeProjectId] ?? null
+  const activeId = uiActiveProjectId
+    ? activeByProject[uiActiveProjectId] ?? null
     : null;
 
   /** Build the agent launch command, injecting hooks + any extra flags. */
@@ -158,9 +167,27 @@ function App() {
     startAgent(id, path, buildAgentCommand(), "agent", path);
   }
 
-  async function openProjectAt(path: string) {
+  /** Tear down a pre-warmed project the user never opened. */
+  function discardPrewarm(id: string) {
+    const ids = sessionsFor(id).map((s) => s.id);
+    closeProjectSessions(id);
+    clearSessions(ids);
+    closeProject(id);
+  }
+
+  async function openProjectAt(path: string, opts?: { prewarm?: boolean }) {
+    const prewarm = opts?.prewarm ?? false;
+    if (!prewarm) {
+      // A real open reveals the workspace; drop any pre-warmed project that
+      // isn't the one being opened.
+      const pw = prewarmRef.current;
+      prewarmRef.current = null;
+      setRevealed(true);
+      if (pw && pw.path !== path) discardPrewarm(pw.id);
+    }
     const { id, isNew } = openProject(path);
-    setRecents(addRecent(path));
+    if (prewarm) prewarmRef.current = { id, path };
+    else setRecents(addRecent(path));
     // Fresh project, or a reopened one whose agent tab had been closed.
     if (isNew || !sessionsFor(id).some((s) => s.kind === "agent")) {
       await startPrimaryAgent(id, path);
@@ -221,6 +248,8 @@ function App() {
     closeProjectSessions(id);
     clearSessions(ids);
     closeProject(id);
+    // Back to the WelcomeScreen once the last project is gone.
+    if (projects.filter((p) => p.id !== id).length === 0) setRevealed(false);
   }
 
   function runPackage(pkg: PackageInfo) {
@@ -250,6 +279,21 @@ function App() {
   // Check for a newer signed release on launch (quiet on failure).
   useEffect(() => {
     void checkForUpdates({ silent: true });
+  }, []);
+
+  // Pre-warm the most-recent project once at launch: its agent boots hidden
+  // behind the WelcomeScreen so opening it is instant. Discarded if the user
+  // opens a different project.
+  const didPrewarm = useRef(false);
+  useEffect(() => {
+    if (didPrewarm.current) return;
+    didPrewarm.current = true;
+    const recent = recents[0];
+    if (recent && isClaudeAgent(settings.agentCommand)) {
+      void openProjectAt(recent, { prewarm: true });
+    }
+    // Launch-only; openProjectAt/settings are stable enough for a one-shot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // When the window regains focus (e.g. clicking the desktop notification),
@@ -283,7 +327,7 @@ function App() {
 
   return (
     <div className="flex h-full bg-background text-foreground">
-      {projects.length > 0 && (
+      {revealed && projects.length > 0 && (
         <Sidebar
           projects={projects}
           activeProjectId={activeProjectId}
@@ -335,33 +379,37 @@ function App() {
         {/* Terminal viewport + changes panel */}
         <div className="flex min-h-0 flex-1">
           <main className="canvas-lit relative flex-1 p-1">
-            {projects.length > 0 ? (
-              sessions.map((s) => (
-                <div
-                  key={s.id}
-                  className={cn(
-                    "absolute inset-1",
-                    s.id === activeId ? "" : "hidden"
-                  )}
-                >
-                  <TerminalPane
-                    sessionId={s.id}
-                    cwd={s.cwd}
-                    command={s.command}
-                    persistKey={s.persistKey}
-                    fontFamily={settings.fontFamily}
-                    fontSize={settings.fontSize}
-                    scrollback={settings.scrollback}
-                    active={s.id === activeId}
-                  />
-                </div>
-              ))
-            ) : (
-              <WelcomeScreen
-                recents={recents}
-                onPick={pickProject}
-                onOpenRecent={openProjectAt}
-              />
+            {/* Panes stay mounted once a session exists, so a pre-warmed
+                project boots in the background. Hidden unless it's the active,
+                revealed tab. */}
+            {sessions.map((s) => (
+              <div
+                key={s.id}
+                className={cn(
+                  "absolute inset-1",
+                  s.id === activeId ? "" : "hidden"
+                )}
+              >
+                <TerminalPane
+                  sessionId={s.id}
+                  cwd={s.cwd}
+                  command={s.command}
+                  persistKey={s.persistKey}
+                  fontFamily={settings.fontFamily}
+                  fontSize={settings.fontSize}
+                  scrollback={settings.scrollback}
+                  active={s.id === activeId}
+                />
+              </div>
+            ))}
+            {!revealed && (
+              <div className="canvas-lit absolute inset-0">
+                <WelcomeScreen
+                  recents={recents}
+                  onPick={pickProject}
+                  onOpenRecent={openProjectAt}
+                />
+              </div>
             )}
           </main>
           {activeProject && changesOpen && (
