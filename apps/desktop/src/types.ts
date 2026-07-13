@@ -30,6 +30,8 @@ export interface Project {
   id: string;
   path: string;
   workspace: WorkspaceInfo | null;
+  /** Favicon/logo pulled from the project dir, as a data URL. Null if none. */
+  icon: string | null;
   /** Cached Claude Code threads, fetched on open + refreshed on demand. */
   threads: Thread[];
   /** Matched Dokploy deployment, or null if not deployed / not configured. */

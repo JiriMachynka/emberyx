@@ -1,6 +1,7 @@
 mod dokploy;
 mod git;
 mod hooks;
+mod icon;
 mod openrouter;
 mod pty;
 mod threads;
@@ -39,6 +40,7 @@ pub fn run() {
             pty::pty_kill,
             pty::read_scrollback,
             workspace::scan_workspace,
+            icon::project_icon,
             hooks::hook_config,
             git::git_changes,
             git::git_file_diff,

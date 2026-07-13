@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use base64::Engine;
 use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
@@ -15,6 +15,31 @@ use tauri::Manager;
 
 /// Cap on persisted / replayed scrollback per project (bytes).
 const SCROLLBACK_CAP: u64 = 1_000_000;
+
+/// Run the user's interactive login shell once and snapshot its environment.
+/// Returns the parsed `KEY=VALUE` pairs, minus shell-managed positional vars.
+fn capture_shell_env() -> Option<Vec<(String, String)>> {
+    let output = std::process::Command::new(PtyManager::user_shell())
+        .args(["-lic", "env"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    const SKIP: [&str; 4] = ["PWD", "OLDPWD", "SHLVL", "_"];
+    let text = String::from_utf8_lossy(&output.stdout);
+    let vars: Vec<(String, String)> = text
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .filter(|(k, _)| {
+            !k.is_empty()
+                && k.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                && !SKIP.contains(k)
+        })
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    (!vars.is_empty()).then_some(vars)
+}
 
 /// Path of the scrollback log for a persistence key (created on demand).
 fn scrollback_file(app: &tauri::AppHandle, key: &str) -> Option<PathBuf> {
@@ -57,10 +82,26 @@ struct PtySession {
     writer: Box<dyn Write + Send>,
 }
 
-#[derive(Default)]
 pub struct PtyManager {
     sessions: Arc<Mutex<HashMap<u32, PtySession>>>,
     next_id: AtomicU32,
+    /// The user's fully-resolved shell environment, captured once in the
+    /// background at startup. Present = we can spawn panes with a fast non-rc
+    /// shell (see `spawn`); absent = capture hasn't finished, fall back to a
+    /// login shell.
+    shell_env: Arc<OnceLock<Vec<(String, String)>>>,
+}
+
+impl Default for PtyManager {
+    fn default() -> Self {
+        let mgr = Self {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            next_id: AtomicU32::new(0),
+            shell_env: Arc::new(OnceLock::new()),
+        };
+        mgr.warm_shell_env();
+        mgr
+    }
 }
 
 impl PtyManager {
@@ -72,7 +113,19 @@ impl PtyManager {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
     }
 
-    /// Spawn a login shell in `cwd`, optionally auto-running `command`.
+    /// Capture the resolved shell env once, off-thread, so it's ready before
+    /// the user opens a project. Interactive login shell (`-lic`) so PATH picks
+    /// up nvm/bun/etc. exactly as the user's real terminal would.
+    fn warm_shell_env(&self) {
+        let cell = self.shell_env.clone();
+        std::thread::spawn(move || {
+            if let Some(env) = capture_shell_env() {
+                let _ = cell.set(env);
+            }
+        });
+    }
+
+    /// Spawn the user's shell in `cwd`, optionally auto-running `command`.
     /// Streams output over `on_event`; returns the session id.
     pub fn spawn(
         &self,
@@ -94,13 +147,28 @@ impl PtyManager {
             })
             .map_err(|e| e.to_string())?;
 
-        // Login shell so PATH / nvm / bun resolve like the user's terminal.
         let mut cmd = CommandBuilder::new(Self::user_shell());
-        cmd.arg("-l");
+        // Fast path: once the resolved shell env is captured, spawn without the
+        // interactive rc (`-f`) so p10k / oh-my-zsh plugins / nvm don't re-run
+        // on every open (~0.6s each). Until then, fall back to a login shell so
+        // PATH / nvm / bun still resolve like the user's terminal.
+        if let Some(env) = self.shell_env.get() {
+            cmd.arg("-f");
+            for (k, v) in env {
+                cmd.env(k, v);
+            }
+        } else {
+            cmd.arg("-l");
+        }
         cmd.cwd(&cwd);
         cmd.env("TERM", "xterm-256color");
         // Lets Claude Code hooks report which session fired them.
         cmd.env("EMBERYX_SESSION_ID", &session_id);
+        // Suppress Claude Code's "resume from summary vs. full session" prompt on
+        // large/old sessions — push both thresholds out of reach so `--resume`
+        // always loads the full session as-is.
+        cmd.env("CLAUDE_CODE_RESUME_THRESHOLD_MINUTES", "999999999");
+        cmd.env("CLAUDE_CODE_RESUME_TOKEN_THRESHOLD", "999999999999");
 
         let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
         drop(pair.slave);

@@ -47,6 +47,7 @@ function App() {
     setActiveProjectId,
     openProject,
     setWorkspace,
+    setIcon,
     setThreads,
     setDokploy,
     closeProject,
@@ -171,6 +172,9 @@ function App() {
           console.error("scan_workspace failed:", e);
           toast.error("Couldn't scan workspace", { description: String(e) });
         });
+      invoke<string | null>("project_icon", { path })
+        .then((icon) => setIcon(id, icon))
+        .catch((e) => console.error("project_icon failed:", e));
     }
     refreshThreads(id, path);
     refreshDokploy(id, path);

@@ -20,7 +20,7 @@ export function useProjects() {
     const id = `p${++counter.current}`;
     setProjects((prev) => [
       ...prev,
-      { id, path, workspace: null, threads: [], dokploy: null },
+      { id, path, workspace: null, icon: null, threads: [], dokploy: null },
     ]);
     setActiveProjectId(id);
     return { id, isNew: true };
@@ -29,6 +29,12 @@ export function useProjects() {
   function setWorkspace(id: string, workspace: WorkspaceInfo) {
     setProjects((prev) =>
       prev.map((p) => (p.id === id ? { ...p, workspace } : p))
+    );
+  }
+
+  function setIcon(id: string, icon: string | null) {
+    setProjects((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, icon } : p))
     );
   }
 
@@ -58,6 +64,7 @@ export function useProjects() {
     setActiveProjectId,
     openProject,
     setWorkspace,
+    setIcon,
     setThreads,
     setDokploy,
     closeProject,

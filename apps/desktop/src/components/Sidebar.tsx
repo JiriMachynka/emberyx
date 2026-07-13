@@ -113,6 +113,13 @@ function Tree(props: SidebarProps) {
               <StatusDot
                 status={pAgent ? statusOf(statuses, pAgent.id) : "idle"}
               />
+              {p.icon && (
+                <img
+                  src={p.icon}
+                  alt=""
+                  className="size-4 shrink-0 rounded-[3px]"
+                />
+              )}
               <span className="flex-1 truncate font-medium">
                 {basename(p.path)}
               </span>
