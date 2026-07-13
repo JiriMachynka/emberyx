@@ -282,7 +282,15 @@ function Rail({
                 : "bg-secondary/40 text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
             )}
           >
-            {basename(p.path).slice(0, 2)}
+            {p.icon ? (
+              <img
+                src={p.icon}
+                alt=""
+                className="size-7 rounded object-contain"
+              />
+            ) : (
+              basename(p.path).slice(0, 2)
+            )}
             {st !== "idle" && (
               <StatusDot
                 status={st}
