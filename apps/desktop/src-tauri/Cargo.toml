@@ -39,8 +39,11 @@ tauri-plugin-updater = "2"
 # (PTY read loop, JSONL usage parsing) and a smaller, stripped binary.
 [profile.release]
 opt-level = 3
-lto = true
-codegen-units = 1
+# Thin LTO + parallel codegen: most of fat-LTO's wins at a fraction of the CI
+# link time. The Rust side is I/O-bound (PTY, git, HTTP), so max codegen tuning
+# buys ~nothing at runtime.
+lto = "thin"
+codegen-units = 16
 strip = true
 panic = "abort"
 
