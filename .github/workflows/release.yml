@@ -57,9 +57,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p mirror
-          # Grab what tauri-action just published to the private release.
+          # Grab what tauri-action just published to the private release: the
+          # updater payload (+sig), latest.json, and the .dmg so the public repo
+          # can also serve fresh installs.
           GH_TOKEN="$SRC_TOKEN" gh release download "$TAG" --repo "$SRC_REPO" \
             --pattern "Emberyx_universal.app.tar.gz*" \
+            --pattern "*.dmg" \
             --pattern "latest.json" --dir mirror
           # Repoint the update payload URLs at the public mirror.
           sed -i.bak "s#/emberyx/releases/download/#/emberyx-releases/releases/download/#g" mirror/latest.json
@@ -73,4 +76,5 @@ jobs:
           gh release upload "$TAG" --repo "$MIRROR_REPO" --clobber \
             mirror/Emberyx_universal.app.tar.gz \
             mirror/Emberyx_universal.app.tar.gz.sig \
-            mirror/latest.json
+            mirror/latest.json \
+            mirror/*.dmg
