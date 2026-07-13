@@ -19,6 +19,9 @@ interface ContextBarProps {
   devRunning: boolean;
   changesCount: number;
   changesOpen: boolean;
+  customDevCommand: string;
+  onSetCustomDevCommand: (command: string) => void;
+  onRunCustomDev: () => void;
   onRunPackage: (pkg: PackageInfo) => void;
   onRunAll: () => void;
   onStopDev: () => void;
@@ -38,6 +41,9 @@ export function ContextBar({
   devRunning,
   changesCount,
   changesOpen,
+  customDevCommand,
+  onSetCustomDevCommand,
+  onRunCustomDev,
   onRunPackage,
   onRunAll,
   onStopDev,
@@ -88,6 +94,9 @@ export function ContextBar({
           <DevMenu
             workspace={activeProject.workspace}
             running={devRunning}
+            customCommand={customDevCommand}
+            onSetCustom={onSetCustomDevCommand}
+            onRunCustom={onRunCustomDev}
             onRunPackage={onRunPackage}
             onRunAll={onRunAll}
             onStop={onStopDev}

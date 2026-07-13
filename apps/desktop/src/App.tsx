@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { statusOf } from "@/lib/status";
 import { useSettings, isClaudeAgent } from "@/lib/settings";
 import { getRecents, addRecent } from "@/lib/recents";
+import { getProjectConfigs, setProjectDevCommand } from "@/lib/projectConfig";
 import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
 import { checkForUpdates } from "@/lib/update";
 import { useSessions } from "@/hooks/useSessions";
@@ -32,6 +33,7 @@ function App() {
   const [changesOpen, setChangesOpen] = useState(false);
   const [sidebarCollapsed, setCollapsed] = useState<boolean>(getSidebarCollapsed);
   const [recents, setRecents] = useState<string[]>(getRecents);
+  const [projectConfigs, setProjectConfigs] = useState(getProjectConfigs);
 
   function toggleSidebar() {
     setCollapsed((c) => {
@@ -252,6 +254,21 @@ function App() {
     if (projects.filter((p) => p.id !== id).length === 0) setRevealed(false);
   }
 
+  // Per-project custom dev command; overrides workspace detection when set.
+  const customDevCommand = activeProject
+    ? projectConfigs[activeProject.path]?.devCommand ?? ""
+    : "";
+
+  function setCustomDevCommand(command: string) {
+    if (!activeProject) return;
+    setProjectConfigs(setProjectDevCommand(activeProject.path, command));
+  }
+
+  function runCustomDev() {
+    if (!activeProject || !activeProjectId || !customDevCommand) return;
+    addDev(activeProjectId, "dev", activeProject.path, customDevCommand);
+  }
+
   function runPackage(pkg: PackageInfo) {
     if (!activeProjectId) return;
     addDev(activeProjectId, pkg.name, pkg.path, pkg.devCommand);
@@ -360,6 +377,9 @@ function App() {
           devRunning={projectSessions.some((s) => s.kind === "dev")}
           changesCount={projectChanges.length}
           changesOpen={changesOpen}
+          customDevCommand={customDevCommand}
+          onSetCustomDevCommand={setCustomDevCommand}
+          onRunCustomDev={runCustomDev}
           onRunPackage={runPackage}
           onRunAll={runAll}
           onStopDev={() => {
