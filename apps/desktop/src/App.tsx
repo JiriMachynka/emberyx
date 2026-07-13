@@ -263,7 +263,6 @@ function App() {
       if (!ok) return;
     }
     teardownProject(id);
-    // Back to the WelcomeScreen once the last project is gone.
     if (projects.filter((p) => p.id !== id).length === 0) setRevealed(false);
   }
 

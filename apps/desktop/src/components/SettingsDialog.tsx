@@ -99,7 +99,6 @@ export function SettingsDialog({
       .catch((e) => console.error("openrouter_models failed:", e));
   }, [open, models.length]);
 
-  // Resolve the running app version once.
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
   }, []);

@@ -48,7 +48,6 @@ export function DevMenu({
   const isMonorepo = packages.length > 1;
   const hasCustom = customCommand.trim().length > 0;
 
-  // A dev server is running: offer to stop it instead of starting more.
   if (running) {
     return (
       <Button variant="destructive" size="sm" onClick={onStop}>
