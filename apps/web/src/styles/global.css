@@ -1,13 +1,13 @@
 @import "tailwindcss";
 
 @theme {
-  --color-ink: #0b0b0d;
-  --color-ink-soft: #101013;
-  --color-ink-card: #141417;
-  --color-line: #232329;
-  --color-line-soft: #1a1a1e;
-  --color-ash: #8f8f98;
-  --color-ash-dim: #6a6a72;
+  --color-ink: #140b06;
+  --color-ink-soft: #1a0f08;
+  --color-ink-card: #21140b;
+  --color-line: #3a2617;
+  --color-line-soft: #281a10;
+  --color-ash: #a2938a;
+  --color-ash-dim: #7a6a5f;
   --color-ember: #ff6a2b;
   --color-ember-soft: #ff9d5c;
 
@@ -32,10 +32,38 @@ body {
 /* Faint blueprint grid — technical texture, not a glow blob. */
 .grid-bg {
   background-image:
-    linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size: 64px 64px;
+    radial-gradient(70% 55% at 50% 0%, rgba(255, 106, 43, 0.14), transparent 70%),
+    linear-gradient(to right, rgba(255, 157, 92, 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 157, 92, 0.035) 1px, transparent 1px);
+  background-size: 100% 100%, 64px 64px, 64px 64px;
   mask-image: linear-gradient(to bottom, black, transparent 90%);
+}
+
+/* Sticky nav detaches into a warm frosted pill once you leave the hero. */
+#site-nav {
+  transition: padding-top 300ms ease;
+}
+#site-nav > nav {
+  transition:
+    max-width 300ms ease,
+    height 300ms ease,
+    border-radius 300ms ease,
+    border-color 300ms ease,
+    background-color 300ms ease,
+    box-shadow 300ms ease;
+}
+#site-nav.is-scrolled {
+  padding-top: 0.65rem;
+}
+#site-nav.is-scrolled > nav {
+  max-width: 42rem;
+  height: 3rem;
+  border-radius: 9999px;
+  border-color: var(--color-line-soft);
+  background-color: rgba(20, 11, 6, 0.72);
+  backdrop-filter: saturate(140%) blur(12px);
+  -webkit-backdrop-filter: saturate(140%) blur(12px);
+  box-shadow: 0 1px 0 0 rgba(255, 106, 43, 0.06), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
 }
 
 .eyebrow {

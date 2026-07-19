@@ -1,16 +1,13 @@
 ---
 const repo = "https://github.com/JiriMachynka/emberyx";
 const releases = `${repo}/releases/latest`;
-const version = "v0.1.1";
 ---
 
-<header class="border-b border-line-soft">
-  <nav class="mx-auto flex h-14 max-w-5xl items-center justify-between px-5">
-    <a href="/" class="flex items-center gap-2.5 text-sm font-medium">
-      <img src="/emberyx.png" alt="Emberyx" width="22" height="22" class="rounded" />
-      <span>Emberyx</span>
-      <span class="font-mono text-xs text-ash-dim">{version}</span>
-    </a>
+<header id="site-nav" class="sticky top-0 z-50 px-4">
+  <nav
+    class="mx-auto flex h-14 max-w-5xl items-center justify-between rounded-none border border-transparent px-5"
+  >
+    <a href="/" class="text-sm font-medium">Emberyx</a>
 
     <div class="flex items-center gap-7 text-sm text-ash">
       <a href="#features" class="hidden transition-colors hover:text-white sm:inline">Features</a>
@@ -22,3 +19,10 @@ const version = "v0.1.1";
     </div>
   </nav>
 </header>
+
+<script>
+  const nav = document.getElementById("site-nav");
+  const onScroll = () => nav?.classList.toggle("is-scrolled", window.scrollY > 8);
+  onScroll();
+  window.addEventListener("scroll", onScroll, { passive: true });
+</script>
