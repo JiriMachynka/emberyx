@@ -134,6 +134,22 @@ function TerminalPaneImpl({
       }
     })();
 
+    // Shift+Enter should insert a newline in the agent prompt, not submit it.
+    // xterm sends a bare CR for both Enter and Shift+Enter, so intercept the
+    // latter and emit LF, which Claude Code's prompt inserts as a newline (CR
+    // submits, LF does not — verified against the CC TUI).
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type === "keydown" && e.key === "Enter" && e.shiftKey) {
+        // preventDefault stops the follow-up keypress event, which xterm would
+        // otherwise turn into a CR — that CR reaches CC alongside our LF and
+        // submits the prompt, cancelling the newline.
+        e.preventDefault();
+        if (ptyId !== null) void invoke("pty_write", { id: ptyId, data: "\n" });
+        return false;
+      }
+      return true;
+    });
+
     const dataSub = term.onData((data) => {
       if (ptyId !== null) void invoke("pty_write", { id: ptyId, data });
     });
