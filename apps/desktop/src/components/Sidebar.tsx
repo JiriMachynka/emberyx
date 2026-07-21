@@ -6,6 +6,7 @@ import { statusOf } from "@/lib/status";
 import { StatusDot } from "@/components/StatusDot";
 import { TabCloseButton } from "@/components/TabCloseButton";
 import { DokployMenu } from "@/components/DokployMenu";
+import { useAgentStore } from "@/lib/agentStore";
 import type { Project, Session, SessionStatus } from "@/types";
 
 interface SidebarProps {
@@ -30,8 +31,12 @@ interface SidebarProps {
 /** Left navigation: projects as rows, the active one expanded to its sessions
  *  plus a project-scoped action row. Collapses to an icon rail (status dots
  *  survive) via the header toggle / ⌘B. */
-export function Sidebar(props: SidebarProps) {
+export function Sidebar(props: Omit<SidebarProps, "statuses">) {
   const { collapsed } = props;
+  // Live status comes from the store so status-dot updates re-render the
+  // sidebar (which must reflect them) without re-rendering App.
+  const statuses = useAgentStore((s) => s.statuses);
+  const full: SidebarProps = { ...props, statuses };
   return (
     <aside
       className={cn(
@@ -39,11 +44,11 @@ export function Sidebar(props: SidebarProps) {
         collapsed ? "w-14" : "w-64"
       )}
     >
-      <SidebarHeader {...props} />
+      <SidebarHeader {...full} />
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1.5">
-        {collapsed ? <Rail {...props} /> : <Tree {...props} />}
+        {collapsed ? <Rail {...full} /> : <Tree {...full} />}
       </div>
-      <SidebarFooter {...props} />
+      <SidebarFooter {...full} />
     </aside>
   );
 }

@@ -4,21 +4,20 @@ import { StatusDot } from "@/components/StatusDot";
 import { DevMenu } from "@/components/DevMenu";
 import { ThreadMenu } from "@/components/ThreadMenu";
 import { cn } from "@/lib/utils";
-import { STATUS_META } from "@/lib/status";
+import { STATUS_META, statusOf } from "@/lib/status";
 import { basename } from "@/lib/path";
 import { costOf, totalTokens, formatTokens } from "@/lib/pricing";
 import { useGitBranch } from "@/lib/queries";
-import type { Usage } from "@/lib/pricing";
-import type { PackageInfo, Project, Session, SessionStatus, Thread } from "@/types";
+import { useAgentStore } from "@/lib/agentStore";
+import type { PackageInfo, Project, Session, Thread } from "@/types";
 
 interface ContextBarProps {
   activeProject: Project | null;
   agent: Session | undefined;
-  agentStatus: SessionStatus;
-  agentUsage: Usage | undefined;
   claudeAgent: boolean;
   devRunning: boolean;
-  changesCount: number;
+  /** Session ids in the active project — for the working-tree change count. */
+  sessionIds: string[];
   changesOpen: boolean;
   customDevCommand: string;
   onSetCustomDevCommand: (command: string) => void;
@@ -36,11 +35,9 @@ interface ContextBarProps {
 export function ContextBar({
   activeProject,
   agent,
-  agentStatus,
-  agentUsage,
   claudeAgent,
   devRunning,
-  changesCount,
+  sessionIds,
   changesOpen,
   customDevCommand,
   onSetCustomDevCommand,
@@ -54,6 +51,18 @@ export function ContextBar({
 }: ContextBarProps) {
   const branchQuery = useGitBranch(activeProject?.path ?? "");
   const branch = branchQuery.data?.branch;
+
+  // Live agent status/usage + this project's change count come from the store,
+  // so they re-render the bar (which shows them) without re-rendering App.
+  const agentStatus = useAgentStore((s) =>
+    agent ? statusOf(s.statuses, agent.id) : "idle"
+  );
+  const agentUsage = useAgentStore((s) =>
+    agent ? s.usages[agent.id] : undefined
+  );
+  const changesCount = useAgentStore(
+    (s) => s.changes.filter((c) => sessionIds.includes(c.session)).length
+  );
 
   return (
     <header className="flex h-10 shrink-0 items-center justify-between border-b px-3">

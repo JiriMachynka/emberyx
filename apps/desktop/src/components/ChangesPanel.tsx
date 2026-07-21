@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { basename } from "@/lib/path";
 import { highlightCode, langFromPath } from "@/lib/highlight";
 import { useGitChanges, useGitFileDiff, useInvalidateGit } from "@/lib/queries";
+import { useAgentStore } from "@/lib/agentStore";
 import type { Change } from "@/lib/changes";
 import type { GitFile } from "@/types";
 import { GitActions } from "@/components/GitActions";
@@ -141,7 +142,8 @@ function EditDiff({ change }: { change: Change }) {
 
 interface ChangesPanelProps {
   projectPath: string;
-  changes: Change[];
+  /** Session ids in this project — selects its slice of the agent edit feed. */
+  sessionIds: string[];
   openRouterApiKey: string;
   openRouterModel: string;
   onClose: () => void;
@@ -149,13 +151,22 @@ interface ChangesPanelProps {
 
 export function ChangesPanel({
   projectPath,
-  changes,
+  sessionIds,
   openRouterApiKey,
   openRouterModel,
   onClose,
 }: ChangesPanelProps) {
   const [tab, setTab] = useState<"git" | "agent">("git");
   const [fileListHeight, setFileListHeight] = useState(208);
+
+  // This project's slice of the live agent edit feed. Select the whole feed
+  // (its ref only changes when edits arrive) then filter, so status/usage
+  // updates don't re-render the panel.
+  const allChanges = useAgentStore((s) => s.changes);
+  const changes = useMemo(
+    () => allChanges.filter((c) => sessionIds.includes(c.session)),
+    [allChanges, sessionIds]
+  );
 
   // Git tab state.
   const gitQuery = useGitChanges(projectPath);

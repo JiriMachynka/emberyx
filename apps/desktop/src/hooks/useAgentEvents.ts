@@ -7,27 +7,23 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import { statusForEvent } from "@/lib/status";
-import { parseChange, type Change } from "@/lib/changes";
+import { parseChange } from "@/lib/changes";
 import { basename } from "@/lib/path";
+import { useAgentStore } from "@/lib/agentStore";
 import type { Usage } from "@/lib/pricing";
-import type { HookEvent, Session, SessionStatus } from "@/types";
-
-/** Max entries kept in the live file-edit feed (most recent wins). */
-const MAX_CHANGES = 500;
+import type { HookEvent, Session } from "@/types";
 
 /**
- * Subscribes to Claude Code hook events (via the Rust listener) and derives
- * per-session status + the agent's file-edit feed. Also loads the settings
- * path used to inject hooks into the agent.
+ * Subscribes to Claude Code hook events (via the Rust listener) and pushes the
+ * derived per-session status + file-edit feed into the agent store, so live
+ * updates re-render only the components that select them. Also loads the
+ * settings path used to inject hooks into the agent.
  *
  * @param resolveSession looks up a session by id for notification context.
  */
 export function useAgentEvents(
   resolveSession: (id: string) => Session | undefined
 ) {
-  const [statuses, setStatuses] = useState<Record<string, SessionStatus>>({});
-  const [changes, setChanges] = useState<Change[]>([]);
-  const [usages, setUsages] = useState<Record<string, Usage>>({});
   const [hookSettings, setHookSettings] = useState<string | null>(null);
 
   // Keep the resolver current inside the stable listener.
@@ -50,15 +46,11 @@ export function useAgentEvents(
       if (!(await isPermissionGranted())) await requestPermission();
     })();
 
+    const store = useAgentStore.getState();
+
     const unlisten = listen<HookEvent>("hook-event", ({ payload }) => {
       const change = parseChange(payload);
-      if (change)
-        setChanges((prev) => {
-          const next = [...prev, change];
-          // Cap the live edit feed so a long agent session can't grow it
-          // without bound (each event copies + re-filters this array).
-          return next.length > MAX_CHANGES ? next.slice(-MAX_CHANGES) : next;
-        });
+      if (change) store.addChange(change);
 
       // Remember the transcript path so we can compute token usage. Present on
       // every hook payload, so capture it before any status early-return.
@@ -76,14 +68,14 @@ export function useAgentEvents(
         const tp = transcripts.current[payload.session];
         if (tp) {
           void invoke<Usage>("read_usage", { transcriptPath: tp })
-            .then((u) => setUsages((prev) => ({ ...prev, [payload.session]: u })))
+            .then((u) => store.setUsage(payload.session, u))
             .catch(() => {});
         }
       }
 
       const status = statusForEvent(payload.event);
       if (!status) return;
-      setStatuses((prev) => ({ ...prev, [payload.session]: status }));
+      store.setStatus(payload.session, status);
 
       if (status === "waiting" && !document.hasFocus()) {
         const s = resolveRef.current(payload.session);
@@ -104,25 +96,5 @@ export function useAgentEvents(
     };
   }, []);
 
-  /** Drop status + change state for a set of sessions (closed project). */
-  function clearSessions(ids: string[]) {
-    const set = new Set(ids);
-    setStatuses((prev) =>
-      Object.fromEntries(Object.entries(prev).filter(([id]) => !set.has(id)))
-    );
-    setChanges((prev) => prev.filter((c) => !set.has(c.session)));
-    setUsages((prev) =>
-      Object.fromEntries(Object.entries(prev).filter(([id]) => !set.has(id)))
-    );
-    ids.forEach((id) => delete transcripts.current[id]);
-  }
-
-  return {
-    statuses,
-    changes,
-    usages,
-    hookSettings,
-    pendingAttention,
-    clearSessions,
-  };
+  return { hookSettings, pendingAttention };
 }

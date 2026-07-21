@@ -12,8 +12,8 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { WelcomeScreen } from "@/components/WelcomeScreen";
 import { AttentionBanner } from "@/components/AttentionBanner";
 import { cn } from "@/lib/utils";
-import { statusOf } from "@/lib/status";
 import { useSettings, isClaudeAgent } from "@/lib/settings";
+import { useAgentStore } from "@/lib/agentStore";
 import { getRecents, addRecent } from "@/lib/recents";
 import { getProjectConfigs, setProjectDevCommand } from "@/lib/projectConfig";
 import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
@@ -25,7 +25,6 @@ import { useShortcuts } from "@/hooks/useShortcuts";
 import type {
   DokployMatch,
   PackageInfo,
-  SessionStatus,
   Thread,
   WorkspaceInfo,
 } from "@/types";
@@ -93,14 +92,9 @@ function App() {
     sessionsFor,
   } = useSessions();
 
-  const {
-    statuses,
-    changes,
-    usages,
-    hookSettings,
-    pendingAttention,
-    clearSessions,
-  } = useAgentEvents((id) => sessions.find((s) => s.id === id));
+  const { hookSettings, pendingAttention } = useAgentEvents((id) =>
+    sessions.find((s) => s.id === id)
+  );
 
   // The most-recent project is pre-warmed (its agent booted) hidden behind the
   // WelcomeScreen at launch, so opening it is instant. Until the user reveals a
@@ -212,7 +206,7 @@ function App() {
   function teardownProject(id: string) {
     const ids = sessionsFor(id).map((s) => s.id);
     closeProjectSessions(id);
-    clearSessions(ids);
+    useAgentStore.getState().clearSessions(ids);
     closeProject(id);
   }
 
@@ -305,6 +299,7 @@ function App() {
   }
 
   async function handleCloseProject(id: string) {
+    const statuses = useAgentStore.getState().statuses;
     const busy = sessionsFor(id).some(
       (s) =>
         s.kind === "agent" &&
@@ -389,25 +384,23 @@ function App() {
       if (!sid) return;
       pendingAttention.current = null;
       const sess = sessions.find((s) => s.id === sid);
-      if (sess && statuses[sid] === "waiting") {
+      if (sess && useAgentStore.getState().statuses[sid] === "waiting") {
         setActiveProjectId(sess.projectId);
         setActive(sess.projectId, sid);
       }
     }
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [sessions, statuses, setActiveProjectId, setActive, pendingAttention]);
+  }, [sessions, setActiveProjectId, setActive, pendingAttention]);
 
   // The context bar reflects the active tab when it's an agent, else the first
   // agent — so multiple resumed threads each drive it when focused.
   const firstAgent = projectSessions.find((s) => s.kind === "agent");
   const activeSession = projectSessions.find((s) => s.id === activeId);
   const agent = activeSession?.kind === "agent" ? activeSession : firstAgent;
-  const agentStatus: SessionStatus = agent ? statusOf(statuses, agent.id) : "idle";
-  const agentUsage = agent ? usages[agent.id] : undefined;
-  const projectChanges = useMemo(
-    () => changes.filter((c) => projectSessions.some((s) => s.id === c.session)),
-    [changes, projectSessions]
+  const projectSessionIds = useMemo(
+    () => projectSessions.map((s) => s.id),
+    [projectSessions]
   );
 
   return (
@@ -417,7 +410,6 @@ function App() {
           projects={projects}
           activeProjectId={activeProjectId}
           activeByProject={activeByProject}
-          statuses={statuses}
           sessionsFor={sessionsFor}
           collapsed={sidebarCollapsed}
           onToggleCollapse={toggleSidebar}
@@ -439,11 +431,9 @@ function App() {
         <ContextBar
           activeProject={activeProject}
           agent={agent}
-          agentStatus={agentStatus}
-          agentUsage={agentUsage}
           claudeAgent={isClaudeAgent(settings.agentCommand)}
           devRunning={projectSessions.some((s) => s.kind === "dev")}
-          changesCount={projectChanges.length}
+          sessionIds={projectSessionIds}
           changesOpen={changesOpen}
           customDevCommand={customDevCommand}
           onSetCustomDevCommand={setCustomDevCommand}
@@ -460,8 +450,11 @@ function App() {
           onToggleChanges={toggleChanges}
         />
 
-        {agent && agentStatus === "waiting" && activeProjectId && (
-          <AttentionBanner onJump={() => setActive(activeProjectId, agent.id)} />
+        {agent && activeProjectId && (
+          <AttentionBanner
+            agentId={agent.id}
+            onJump={() => setActive(activeProjectId, agent.id)}
+          />
         )}
 
         {/* Terminal viewport + changes panel */}
@@ -525,7 +518,7 @@ function App() {
             >
               <ChangesPanel
                 projectPath={activeProject.path}
-                changes={projectChanges}
+                sessionIds={projectSessionIds}
                 openRouterApiKey={settings.openRouterApiKey}
                 openRouterModel={settings.openRouterModel}
                 onClose={closeChanges}

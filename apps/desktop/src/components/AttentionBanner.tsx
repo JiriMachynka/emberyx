@@ -1,5 +1,17 @@
-/** Amber bar prompting the user to jump to an agent awaiting input. */
-export function AttentionBanner({ onJump }: { onJump: () => void }) {
+import { useAgentStore } from "@/lib/agentStore";
+
+/** Amber bar prompting the user to jump to an agent awaiting input. Renders
+ *  only while that agent is waiting; reads status from the store so it (not
+ *  App) re-renders on status changes. */
+export function AttentionBanner({
+  agentId,
+  onJump,
+}: {
+  agentId: string;
+  onJump: () => void;
+}) {
+  const status = useAgentStore((s) => s.statuses[agentId]);
+  if (status !== "waiting") return null;
   return (
     <button
       onClick={onJump}
