@@ -8,6 +8,7 @@ import { SettingsDialog } from "@/components/SettingsDialog";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { ContextBar } from "@/components/ContextBar";
 import { Sidebar } from "@/components/Sidebar";
+import { CommandPalette } from "@/components/CommandPalette";
 import { WelcomeScreen } from "@/components/WelcomeScreen";
 import { AttentionBanner } from "@/components/AttentionBanner";
 import { cn } from "@/lib/utils";
@@ -31,6 +32,7 @@ import type {
 
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   // Keep the Changes panel mounted while its exit animation plays (~200ms).
   const [changesClosing, setChangesClosing] = useState(false);
@@ -252,21 +254,31 @@ function App() {
     if (!prewarm) refreshDokploy(id, path);
   }
 
-  /** Resume a Claude Code thread in a new agent tab, using the default surface. */
-  function resumeThread(thread: Thread) {
-    if (!activeProjectId || !activeProject) return;
+  /** Reveal a project and focus one of its sessions (used by the palette). */
+  function activateSession(projectId: string, sessionId: string) {
+    setRevealed(true);
+    setActiveProjectId(projectId);
+    setActive(projectId, sessionId);
+  }
+
+  /** Resume a Claude Code thread in a new tab of the given project, revealing
+   *  and focusing it. Uses the default surface (chat / terminal). */
+  function resumeThreadIn(projectId: string, path: string, thread: Thread) {
+    setRevealed(true);
+    setActiveProjectId(projectId);
     const label =
       thread.title.length > 24 ? `${thread.title.slice(0, 24)}…` : thread.title;
     if (settings.agentUi === "chat") {
-      startChat(activeProjectId, activeProject.path, thread.id, label);
+      startChat(projectId, path, thread.id, label);
       return;
     }
-    startAgent(
-      activeProjectId,
-      activeProject.path,
-      buildAgentCommand(`--resume ${thread.id}`),
-      label
-    );
+    startAgent(projectId, path, buildAgentCommand(`--resume ${thread.id}`), label);
+  }
+
+  /** Resume a thread in the active project (ContextBar / Threads menu). */
+  function resumeThread(thread: Thread) {
+    if (!activeProjectId || !activeProject) return;
+    resumeThreadIn(activeProjectId, activeProject.path, thread);
   }
 
   async function pickProject() {
@@ -338,6 +350,7 @@ function App() {
     onOpen: pickProject,
     onNewAgent: newAgent,
     onToggleSidebar: toggleSidebar,
+    onCommandPalette: () => setPaletteOpen((v) => !v),
   });
 
   // Check for a newer signed release on launch (quiet on failure).
@@ -513,6 +526,20 @@ function App() {
           )}
         </div>
       </div>
+
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        sessions={sessions}
+        projects={projects}
+        chatUi={settings.agentUi === "chat"}
+        onSelectSession={activateSession}
+        onResumeThread={resumeThreadIn}
+        onNewAgent={newAgent}
+        onPickProject={pickProject}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onToggleChanges={toggleChanges}
+      />
 
       <SettingsDialog
         open={settingsOpen}
