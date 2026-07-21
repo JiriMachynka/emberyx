@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronRight, Loader2, Square, Wrench } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  ChevronRight,
+  Coins,
+  Copy,
+  Loader2,
+  Sparkles,
+  Square,
+  Wrench,
+} from "lucide-react";
 import {
   useAgentChat,
   type ChatMessage,
@@ -18,6 +29,18 @@ interface ChatPaneProps {
   fontSize: number;
   onTitled?: (title: string) => void;
 }
+
+/** "claude-opus-4-8" → "Opus 4.8"; strips date/bracket suffixes. */
+const prettyModel = (id: string): string => {
+  const family = ["opus", "sonnet", "haiku", "fable"].find((f) =>
+    id.includes(f)
+  );
+  if (!family) return id;
+  const nums = id.replace(/\[.*?\]/g, "").replace(/\d{8}/g, "").match(/\d+/g);
+  const version = (nums ?? []).slice(0, 2).join(".");
+  const name = family[0].toUpperCase() + family.slice(1);
+  return version ? `${name} ${version}` : name;
+};
 
 const STATUS_LABEL: Record<ChatStatus, string> = {
   idle: "",
@@ -104,7 +127,7 @@ export function ChatPane({
               Session ended — open a new chat to continue.
             </div>
           )}
-          <div className="relative">
+          <div className="overflow-hidden rounded-xl border border-input bg-card shadow-sm transition-colors focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40">
             <Textarea
               ref={inputRef}
               value={input}
@@ -124,33 +147,62 @@ export function ChatPane({
               }
               disabled={!ready || busy || status === "exited"}
               rows={2}
-              className="resize-none pr-11"
+              className="max-h-40 resize-none border-0 bg-transparent px-3.5 pb-1 pt-3 shadow-none focus-visible:ring-0"
             />
-            {busy ? (
-              <button
-                type="button"
-                onClick={stop}
-                title="Stop"
-                className="absolute bottom-2 right-2 grid size-7 place-items-center rounded-md bg-card text-foreground transition-colors hover:bg-muted"
-              >
-                <Square className="size-3.5 fill-current" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={submit}
-                disabled={!input.trim() || !ready || status === "exited"}
-                className="absolute bottom-2 right-2 grid size-7 place-items-center rounded-md bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
-              >
-                <ArrowUp className="size-4" />
-              </button>
-            )}
-          </div>
-          {usage.costUsd != null && (
-            <div className="mt-1.5 text-right font-mono text-[0.7rem] text-muted-foreground">
-              ${usage.costUsd.toFixed(4)} · {usage.outputTokens ?? 0} out
+            <div className="flex items-center justify-between gap-2 px-2.5 pb-2 pt-1">
+              <div className="flex min-w-0 items-center gap-2.5 text-xs text-muted-foreground">
+                {usage.model && (
+                  <span className="flex items-center gap-1.5 font-medium text-foreground">
+                    <Sparkles className="size-3.5 shrink-0 text-primary" />
+                    <span className="truncate">{prettyModel(usage.model)}</span>
+                  </span>
+                )}
+                {(usage.inputTokens != null ||
+                  usage.outputTokens != null ||
+                  usage.costUsd != null) && (
+                  <span className="flex items-center gap-2 font-mono tabular-nums">
+                    {usage.inputTokens != null && (
+                      <span className="flex items-center gap-0.5">
+                        <ArrowDown className="size-3 opacity-60" />
+                        {usage.inputTokens.toLocaleString("en-US")}
+                      </span>
+                    )}
+                    {usage.outputTokens != null && (
+                      <span className="flex items-center gap-0.5">
+                        <ArrowUp className="size-3 opacity-60" />
+                        {usage.outputTokens.toLocaleString("en-US")}
+                      </span>
+                    )}
+                    {usage.costUsd != null && (
+                      <span className="flex items-center gap-0.5 text-primary">
+                        <Coins className="size-3 opacity-70" />
+                        ${usage.costUsd.toFixed(4)}
+                      </span>
+                    )}
+                  </span>
+                )}
+              </div>
+              {busy ? (
+                <button
+                  type="button"
+                  onClick={stop}
+                  title="Stop"
+                  className="grid size-8 shrink-0 place-items-center rounded-lg bg-card text-foreground transition-colors hover:bg-muted"
+                >
+                  <Square className="size-3.5 fill-current" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={submit}
+                  disabled={!input.trim() || !ready || status === "exited"}
+                  className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
+                >
+                  <ArrowUp className="size-4" />
+                </button>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
     </div>
@@ -168,7 +220,7 @@ function MessageRow({ message, fontSize }: { message: ChatMessage; fontSize: num
     );
   }
   return (
-    <div className="flex flex-col gap-2">
+    <div className="group relative flex flex-col gap-2">
       {message.thinking && <ThinkingBlock text={message.thinking} />}
       {message.tools.map((t) => (
         <ToolCard key={t.id} tool={t} />
@@ -181,7 +233,29 @@ function MessageRow({ message, fontSize }: { message: ChatMessage; fontSize: num
         ) : (
           <Markdown text={message.text} fontSize={fontSize} />
         ))}
+      {message.text && !message.streaming && <CopyButton text={message.text} />}
     </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title="Copy message"
+      className="absolute left-0 top-full flex w-fit items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+    >
+      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+      {copied ? "Copied" : "Copy"}
+    </button>
   );
 }
 

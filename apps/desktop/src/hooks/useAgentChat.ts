@@ -38,6 +38,7 @@ export interface ChatUsage {
   costUsd?: number;
   inputTokens?: number;
   outputTokens?: number;
+  model?: string;
 }
 
 interface Options {
@@ -122,6 +123,34 @@ export function parseTranscript(text: string): ChatMessage[] {
     }
   }
   return out;
+}
+
+/** Sum token usage and capture the model from a transcript. The transcript
+ *  stores per-turn `message.usage` + `message.model` but no cost, so a resumed
+ *  thread shows model + tokens; cost fills in after the next live turn. */
+export function parseTranscriptUsage(text: string): ChatUsage {
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let model: string | undefined;
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let o: Record<string, unknown>;
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (o.isSidechain === true || o.type !== "assistant") continue;
+    const m = o.message as Record<string, unknown> | undefined;
+    if (!m) continue;
+    if (typeof m.model === "string") model = m.model;
+    const u = m.usage as Record<string, number> | undefined;
+    if (u) {
+      inputTokens += u.input_tokens ?? 0;
+      outputTokens += u.output_tokens ?? 0;
+    }
+  }
+  return { model, inputTokens, outputTokens };
 }
 
 /** CC injects wrapped meta text as "user" turns (slash-command expansions,
@@ -249,6 +278,9 @@ export function useAgentChat({
             streaming: true,
           };
           blockToolRef.current = {};
+          const model = (ev.message as Record<string, unknown> | undefined)
+            ?.model as string | undefined;
+          if (model) setUsage((u) => ({ ...u, model }));
           setStatus("thinking");
         } else if (evType === "content_block_start") {
           const index = ev.index as number;
@@ -325,11 +357,12 @@ export function useAgentChat({
       }
 
       if (type === "result") {
-        setUsage({
+        setUsage((u) => ({
+          ...u,
           costUsd: msg.total_cost_usd as number | undefined,
           inputTokens: (msg.usage as Record<string, number>)?.input_tokens,
           outputTokens: (msg.usage as Record<string, number>)?.output_tokens,
-        });
+        }));
         setStatus(msg.subtype === "error" ? "error" : "idle");
         return;
       }
@@ -352,6 +385,12 @@ export function useAgentChat({
         if (cancelled) return;
         const hist = parseTranscript(text);
         if (hist.length) setMessages((prev) => (prev.length ? prev : hist));
+        const hu = parseTranscriptUsage(text);
+        setUsage((prev) =>
+          prev.model || prev.costUsd != null || prev.outputTokens != null
+            ? prev
+            : hu
+        );
       } catch (e) {
         console.error("[emberyx] read_thread failed", e);
       }
