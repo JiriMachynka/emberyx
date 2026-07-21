@@ -66,6 +66,8 @@ pub fn run() {
             threads::list_threads,
             threads::read_thread,
             dokploy::dokploy_services,
+            dokploy::dokploy_redeploy,
+            dokploy::dokploy_logs,
             openrouter::generate_commit_message,
             openrouter::openrouter_models,
         ])

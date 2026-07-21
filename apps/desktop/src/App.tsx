@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Toaster, toast } from "sonner";
 import { TerminalPane } from "@/components/TerminalPane";
 import { ChatPane } from "@/components/ChatPane";
+import { DokployLogsPane } from "@/components/DokployLogsPane";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { ContextBar } from "@/components/ContextBar";
@@ -24,7 +25,9 @@ import { useAgentEvents } from "@/hooks/useAgentEvents";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import type {
   DokployMatch,
+  DokployService,
   PackageInfo,
+  Project,
   Thread,
   WorkspaceInfo,
 } from "@/types";
@@ -83,6 +86,7 @@ function App() {
     setActive,
     startAgent,
     startChat,
+    startDokployLogs,
     renameSession,
     addDev,
     closeSession,
@@ -158,6 +162,31 @@ function App() {
         toast.error("Couldn't reach Dokploy", { description: String(e) });
       });
   }
+
+  /** Trigger a redeploy of a Dokploy application/compose service. */
+  const handleRedeployDokploy = (service: DokployService) => {
+    if (!settings.dokployUrl || !settings.dokployApiKey || !service.id) return;
+    invoke("dokploy_redeploy", {
+      url: settings.dokployUrl,
+      apiKey: settings.dokployApiKey,
+      kind: service.kind,
+      id: service.id,
+    })
+      .then(() => toast.success(`Redeploying ${service.name}…`))
+      .catch((e) => toast.error("Redeploy failed", { description: String(e) }));
+  };
+
+  /** Open a live logs pane for a Dokploy application service. */
+  const handleViewDokployLogs = (project: Project, service: DokployService) => {
+    if (!settings.dokployUrl || !settings.dokployApiKey || !service.id) return;
+    setRevealed(true);
+    setActiveProjectId(project.id);
+    startDokployLogs(project.id, project.path, {
+      kind: service.kind,
+      id: service.id,
+      name: service.name,
+    });
+  };
 
   /** Launch a project's primary agent: resume its most recent thread when the
    *  setting is on (falling back to a fresh agent if none / on error), else a
@@ -420,9 +449,6 @@ function App() {
           onCloseSession={closeSession}
           onMoveSession={moveSession}
           onNewAgent={newAgent}
-          onRefreshDokploy={() => {
-            if (activeProject) refreshDokploy(activeProject.id, activeProject.path);
-          }}
           onOpenSettings={() => setSettingsOpen(true)}
         />
       )}
@@ -448,6 +474,13 @@ function App() {
           }}
           onResumeThread={resumeThread}
           onToggleChanges={toggleChanges}
+          onRefreshDokploy={() => {
+            if (activeProject) refreshDokploy(activeProject.id, activeProject.path);
+          }}
+          onRedeployDokploy={handleRedeployDokploy}
+          onViewDokployLogs={(service) => {
+            if (activeProject) handleViewDokployLogs(activeProject, service);
+          }}
         />
 
         {agent && activeProjectId && (
@@ -483,6 +516,16 @@ function App() {
                       renameSession(s.id, title);
                       refreshThreads(s.projectId, s.cwd, true);
                     }}
+                  />
+                ) : s.kind === "dokploy-logs" ? (
+                  <DokployLogsPane
+                    sessionId={s.id}
+                    url={settings.dokployUrl}
+                    apiKey={settings.dokployApiKey}
+                    service={s.dokployLog!}
+                    active={s.id === activeId}
+                    fontFamily={settings.fontFamily}
+                    fontSize={settings.fontSize}
                   />
                 ) : (
                   <TerminalPane

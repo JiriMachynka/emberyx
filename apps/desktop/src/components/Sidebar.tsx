@@ -5,7 +5,6 @@ import { basename } from "@/lib/path";
 import { statusOf } from "@/lib/status";
 import { StatusDot } from "@/components/StatusDot";
 import { TabCloseButton } from "@/components/TabCloseButton";
-import { DokployMenu } from "@/components/DokployMenu";
 import { useAgentStore } from "@/lib/agentStore";
 import type { Project, Session, SessionStatus } from "@/types";
 
@@ -24,7 +23,6 @@ interface SidebarProps {
   onCloseSession: (id: string) => void;
   onMoveSession: (projectId: string, from: string, to: string) => void;
   onNewAgent: () => void;
-  onRefreshDokploy: () => void;
   onOpenSettings: () => void;
 }
 
@@ -115,16 +113,19 @@ function Tree(props: SidebarProps) {
               )}
               title={p.path}
             >
-              <StatusDot
-                status={pAgent ? statusOf(statuses, pAgent.id) : "idle"}
-              />
-              {p.icon && (
-                <img
-                  src={p.icon}
-                  alt=""
-                  className="size-4 shrink-0 rounded-[3px]"
+              <div className="relative shrink-0">
+                {p.icon ? (
+                  <img src={p.icon} alt="" className="size-6 rounded-md" />
+                ) : (
+                  <div className="flex size-6 items-center justify-center rounded-md bg-secondary text-[10px] font-semibold uppercase text-muted-foreground">
+                    {basename(p.path).charAt(0)}
+                  </div>
+                )}
+                <StatusDot
+                  status={pAgent ? statusOf(statuses, pAgent.id) : "idle"}
+                  className="absolute -bottom-0.5 -right-0.5 ring-2 ring-background"
                 />
-              )}
+              </div>
               <span className="flex-1 truncate font-medium">
                 {basename(p.path)}
               </span>
@@ -239,15 +240,10 @@ function SessionList({
 
 /** Project-scoped actions for the active project. */
 function ActionRow({
-  project,
   onNewAgent,
-  onRefreshDokploy,
 }: SidebarProps & { project: Project }) {
   return (
     <div className="ml-3 mt-1 flex flex-wrap items-center gap-1 pl-1.5">
-      {project.dokploy && (
-        <DokployMenu match={project.dokploy} onOpen={onRefreshDokploy} />
-      )}
       <button
         onClick={onNewAgent}
         className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"

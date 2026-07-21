@@ -12,6 +12,8 @@ pub struct DokployService {
     pub kind: String,
     /// Deploy status reported by Dokploy (idle | running | done | error), if any.
     pub status: Option<String>,
+    /// Dokploy service id used for actions (applicationId/composeId); None for databases.
+    pub id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -94,20 +96,20 @@ fn status_of(svc: &Value) -> Option<String> {
     None
 }
 
-/// Collect the services in a project/environment container, flagging the one
-/// whose git repo matches `local`.
-fn collect(container: &Value, out: &mut Vec<DokployService>, matched: &mut Option<String>, local: &str) {
-    for (key, kind) in [("applications", "application"), ("compose", "compose")] {
+/// Collect the services (apps, compose, databases) in a project/environment
+/// container, capturing name/kind/status/id from the slim `project.all` shape.
+fn collect(container: &Value, out: &mut Vec<DokployService>) {
+    for (key, kind, id_field) in [
+        ("applications", "application", "applicationId"),
+        ("compose", "compose", "composeId"),
+    ] {
         if let Some(arr) = container.get(key).and_then(Value::as_array) {
             for svc in arr {
-                let name = svc.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-                if matched.is_none() && service_slug(svc).as_deref() == Some(local) {
-                    *matched = Some(name.clone());
-                }
                 out.push(DokployService {
-                    name,
+                    name: svc.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
                     kind: kind.to_string(),
                     status: status_of(svc),
+                    id: svc.get(id_field).and_then(Value::as_str).map(str::to_string),
                 });
             }
         }
@@ -119,10 +121,46 @@ fn collect(container: &Value, out: &mut Vec<DokployService>, matched: &mut Optio
                     name: svc.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
                     kind: kind.to_string(),
                     status: status_of(svc),
+                    id: None,
                 });
             }
         }
     }
+}
+
+/// A git-backed service whose repo slug must be resolved via a detail fetch.
+struct Candidate {
+    project_index: usize,
+    kind: &'static str,
+    id: String,
+    name: String,
+}
+
+/// The environment containers of a project (or the project itself as fallback).
+fn containers_of(project: &Value) -> Vec<&Value> {
+    match project.get("environments").and_then(Value::as_array) {
+        Some(envs) => envs.iter().collect(),
+        None => vec![project],
+    }
+}
+
+/// Fetch a service's full detail and derive its git slug. `project.all` omits
+/// git fields, so matching requires this per-service `*.one` call.
+fn detail_slug(agent: &ureq::Agent, base: &str, api_key: &str, kind: &str, id: &str) -> Option<String> {
+    let (path, param) = match kind {
+        "application" => ("application.one", "applicationId"),
+        "compose" => ("compose.one", "composeId"),
+        _ => return None,
+    };
+    let detail: Value = agent
+        .get(&format!("{base}/api/{path}?{param}={id}"))
+        .set("x-api-key", api_key)
+        .set("accept", "application/json")
+        .call()
+        .ok()?
+        .into_json()
+        .ok()?;
+    service_slug(&detail)
 }
 
 /// Find the Dokploy project deploying the repo at `cwd` (matched by git remote)
@@ -142,38 +180,139 @@ pub async fn dokploy_services(
         if base.is_empty() {
             return Err("Dokploy URL not set".into());
         }
+        let api_key = api_key.trim();
         let agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(10))
             .timeout_read(Duration::from_secs(10))
             .build();
         let resp = agent
             .get(&format!("{base}/api/project.all"))
-            .set("x-api-key", api_key.trim())
+            .set("x-api-key", api_key)
             .set("accept", "application/json")
             .call()
             .map_err(|e| format!("Dokploy request failed: {e}"))?;
         let json: Value = resp.into_json().map_err(|e| e.to_string())?;
         let projects = json.as_array().ok_or("Unexpected Dokploy response")?;
 
-        for project in projects {
+        // Services per project (slim), plus the git-backed candidates to resolve.
+        let mut per_project: Vec<(String, Vec<DokployService>)> = Vec::with_capacity(projects.len());
+        let mut candidates: Vec<Candidate> = vec![];
+        for (project_index, project) in projects.iter().enumerate() {
             let mut services = vec![];
-            let mut matched = None;
-            if let Some(envs) = project.get("environments").and_then(Value::as_array) {
-                for env in envs {
-                    collect(env, &mut services, &mut matched, &local);
+            for container in containers_of(project) {
+                collect(container, &mut services);
+                for (key, kind, id_field) in [
+                    ("applications", "application", "applicationId"),
+                    ("compose", "compose", "composeId"),
+                ] {
+                    if let Some(arr) = container.get(key).and_then(Value::as_array) {
+                        for svc in arr {
+                            if let Some(id) = svc.get(id_field).and_then(Value::as_str) {
+                                candidates.push(Candidate {
+                                    project_index,
+                                    kind,
+                                    id: id.to_string(),
+                                    name: svc.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                                });
+                            }
+                        }
+                    }
                 }
-            } else {
-                collect(project, &mut services, &mut matched, &local);
             }
-            if let Some(matched_service) = matched {
-                return Ok(Some(DokployMatch {
-                    project_name: project.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
-                    matched_service,
-                    services,
-                }));
-            }
+            let name = project.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+            per_project.push((name, services));
+        }
+
+        // Resolve slugs concurrently (git fields require a detail call each) and
+        // take the first candidate matching the local repo.
+        let workers = candidates.len().clamp(1, 12);
+        let chunk_size = candidates.len().div_ceil(workers).max(1);
+        let matched: Option<(usize, String)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = candidates
+                .chunks(chunk_size)
+                .map(|chunk| {
+                    scope.spawn(|| {
+                        chunk
+                            .iter()
+                            .filter(|c| {
+                                detail_slug(&agent, base, api_key, c.kind, &c.id).as_deref()
+                                    == Some(local.as_str())
+                            })
+                            .map(|c| (c.project_index, c.name.clone()))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).next()
+        });
+
+        if let Some((project_index, matched_service)) = matched {
+            let (project_name, services) = &mut per_project[project_index];
+            return Ok(Some(DokployMatch {
+                project_name: std::mem::take(project_name),
+                matched_service,
+                services: std::mem::take(services),
+            }));
         }
         Ok(None)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Trigger a redeploy of a Dokploy application or compose service.
+#[tauri::command]
+pub async fn dokploy_redeploy(url: String, api_key: String, kind: String, id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let base = url.trim().trim_end_matches('/');
+        if base.is_empty() {
+            return Err("Dokploy URL not set".into());
+        }
+        let (path, body) = match kind.as_str() {
+            "application" => ("application.redeploy", serde_json::json!({ "applicationId": id })),
+            "compose" => ("compose.redeploy", serde_json::json!({ "composeId": id })),
+            other => return Err(format!("Cannot redeploy {other}")),
+        };
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(10))
+            .timeout_read(Duration::from_secs(10))
+            .build();
+        agent
+            .post(&format!("{base}/api/{path}"))
+            .set("x-api-key", api_key.trim())
+            .set("content-type", "application/json")
+            .send_json(body)
+            .map_err(|e| format!("Dokploy redeploy failed: {e}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Read recent logs for a Dokploy application. Only `application` is supported.
+#[tauri::command]
+pub async fn dokploy_logs(url: String, api_key: String, kind: String, id: String, tail: u32) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if kind != "application" {
+            return Err(format!("Logs not supported for {kind}"));
+        }
+        let base = url.trim().trim_end_matches('/');
+        if base.is_empty() {
+            return Err("Dokploy URL not set".into());
+        }
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(10))
+            .timeout_read(Duration::from_secs(10))
+            .build();
+        let resp = agent
+            .get(&format!("{base}/api/application.readLogs?applicationId={id}&tail={tail}&since=all"))
+            .set("x-api-key", api_key.trim())
+            .set("accept", "application/json")
+            .call()
+            .map_err(|e| format!("Dokploy logs failed: {e}"))?;
+        let body = resp.into_string().map_err(|e| format!("Dokploy logs failed: {e}"))?;
+        // Endpoint may return a raw string or a JSON-encoded (quoted) string.
+        Ok(serde_json::from_str::<String>(&body).unwrap_or(body))
     })
     .await
     .map_err(|e| e.to_string())?

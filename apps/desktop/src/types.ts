@@ -19,12 +19,14 @@ export interface Session {
   label: string;
   cwd: string;
   command?: string;
-  kind: "agent" | "dev" | "chat";
+  kind: "agent" | "dev" | "chat" | "dokploy-logs";
   /** Stable key for cross-restart scrollback restore; only the project's
    *  primary agent sets it, so secondary/dev panes never share its log. */
   persistKey?: string;
   /** Claude session id to resume (chat kind only). */
   resume?: string;
+  /** Service to stream logs for (dokploy-logs kind only). */
+  dokployLog?: { kind: string; id: string; name: string };
 }
 
 /** An open project. Each project owns its own agent + dev sessions. */
@@ -89,6 +91,8 @@ export interface DokployService {
   name: string;
   /** application | compose | postgres | mysql | mariadb | mongo | redis */
   kind: string;
+  /** The app/compose service id; null for databases (no redeploy/logs). */
+  id: string | null;
   /** Deploy status (idle | running | done | error), if reported. */
   status: string | null;
 }

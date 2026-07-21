@@ -3,13 +3,14 @@ import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/StatusDot";
 import { DevMenu } from "@/components/DevMenu";
 import { ThreadMenu } from "@/components/ThreadMenu";
+import { DokployMenu } from "@/components/DokployMenu";
 import { cn } from "@/lib/utils";
 import { STATUS_META, statusOf } from "@/lib/status";
 import { basename } from "@/lib/path";
 import { costOf, totalTokens, formatTokens } from "@/lib/pricing";
 import { useGitBranch } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
-import type { PackageInfo, Project, Session, Thread } from "@/types";
+import type { DokployService, PackageInfo, Project, Session, Thread } from "@/types";
 
 interface ContextBarProps {
   activeProject: Project | null;
@@ -28,6 +29,9 @@ interface ContextBarProps {
   onRefreshThreads: () => void;
   onResumeThread: (thread: Thread) => void;
   onToggleChanges: () => void;
+  onRefreshDokploy: () => void;
+  onRedeployDokploy: (service: DokployService) => void;
+  onViewDokployLogs: (service: DokployService) => void;
 }
 
 /** Slim bar above the terminal: the active project / agent, its status and
@@ -48,6 +52,9 @@ export function ContextBar({
   onRefreshThreads,
   onResumeThread,
   onToggleChanges,
+  onRefreshDokploy,
+  onRedeployDokploy,
+  onViewDokployLogs,
 }: ContextBarProps) {
   const branchQuery = useGitBranch(activeProject?.path ?? "");
   const branch = branchQuery.data?.branch;
@@ -101,6 +108,14 @@ export function ContextBar({
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
+        {activeProject?.dokploy && (
+          <DokployMenu
+            match={activeProject.dokploy}
+            onOpen={onRefreshDokploy}
+            onRedeploy={onRedeployDokploy}
+            onViewLogs={onViewDokployLogs}
+          />
+        )}
         {agentUsage && agentUsage.messages > 0 && (
           <span
             className="flex items-center gap-1 text-xs text-muted-foreground"
