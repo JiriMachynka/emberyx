@@ -3,6 +3,7 @@ import { open, ask } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { Toaster, toast } from "sonner";
 import { TerminalPane } from "@/components/TerminalPane";
+import { ChatPane } from "@/components/ChatPane";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { ContextBar } from "@/components/ContextBar";
@@ -31,6 +32,21 @@ import type {
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
+  // Keep the Changes panel mounted while its exit animation plays (~200ms).
+  const [changesClosing, setChangesClosing] = useState(false);
+
+  const closeChanges = () => {
+    setChangesClosing(true);
+    window.setTimeout(() => {
+      setChangesOpen(false);
+      setChangesClosing(false);
+    }, 200);
+  };
+
+  const toggleChanges = () => {
+    if (changesOpen) closeChanges();
+    else setChangesOpen(true);
+  };
   const [sidebarCollapsed, setCollapsed] = useState<boolean>(getSidebarCollapsed);
   const [recents, setRecents] = useState<string[]>(getRecents);
   const [projectConfigs, setProjectConfigs] = useState(getProjectConfigs);
@@ -60,6 +76,8 @@ function App() {
     activeByProject,
     setActive,
     startAgent,
+    startChat,
+    renameSession,
     addDev,
     closeSession,
     moveSession,
@@ -144,6 +162,7 @@ function App() {
    *  setting is on (falling back to a fresh agent if none / on error), else a
    *  brand-new agent. Scrollback persists under the project path either way. */
   async function startPrimaryAgent(id: string, path: string) {
+    const chat = settings.agentUi === "chat";
     if (settings.resumeLatestThread && isClaudeAgent(settings.agentCommand)) {
       try {
         const threads = await invoke<Thread[]>("list_threads", { cwd: path });
@@ -154,6 +173,10 @@ function App() {
             latest.title.length > 24
               ? `${latest.title.slice(0, 24)}…`
               : latest.title;
+          if (chat) {
+            startChat(id, path, latest.id, label);
+            return;
+          }
           startAgent(
             id,
             path,
@@ -167,6 +190,10 @@ function App() {
         console.error("list_threads failed:", e);
         // Fall through to a fresh agent.
       }
+    }
+    if (chat) {
+      startChat(id, path);
+      return;
     }
     startAgent(id, path, buildAgentCommand(), "agent", path);
   }
@@ -225,11 +252,15 @@ function App() {
     if (!prewarm) refreshDokploy(id, path);
   }
 
-  /** Resume a Claude Code thread in a new agent tab. */
+  /** Resume a Claude Code thread in a new agent tab, using the default surface. */
   function resumeThread(thread: Thread) {
     if (!activeProjectId || !activeProject) return;
     const label =
       thread.title.length > 24 ? `${thread.title.slice(0, 24)}…` : thread.title;
+    if (settings.agentUi === "chat") {
+      startChat(activeProjectId, activeProject.path, thread.id, label);
+      return;
+    }
     startAgent(
       activeProjectId,
       activeProject.path,
@@ -243,9 +274,13 @@ function App() {
     if (typeof selected === "string") openProjectAt(selected);
   }
 
-  /** Spawn a fresh (secondary) agent tab in the active project. */
+  /** Spawn a fresh agent tab in the active project, using the default surface. */
   function newAgent() {
     if (!activeProjectId || !activeProject) return;
+    if (settings.agentUi === "chat") {
+      startChat(activeProjectId, activeProject.path);
+      return;
+    }
     startAgent(activeProjectId, activeProject.path, buildAgentCommand());
   }
 
@@ -401,7 +436,7 @@ function App() {
             if (activeProject) refreshThreads(activeProject.id, activeProject.path);
           }}
           onResumeThread={resumeThread}
-          onToggleChanges={() => setChangesOpen((v) => !v)}
+          onToggleChanges={toggleChanges}
         />
 
         {agent && agentStatus === "waiting" && activeProjectId && (
@@ -422,16 +457,30 @@ function App() {
                   s.id === activeId ? "" : "hidden"
                 )}
               >
-                <TerminalPane
-                  sessionId={s.id}
-                  cwd={s.cwd}
-                  command={s.command}
-                  persistKey={s.persistKey}
-                  fontFamily={settings.fontFamily}
-                  fontSize={settings.fontSize}
-                  scrollback={settings.scrollback}
-                  active={s.id === activeId}
-                />
+                {s.kind === "chat" ? (
+                  <ChatPane
+                    sessionId={s.id}
+                    cwd={s.cwd}
+                    resume={s.resume}
+                    active={s.id === activeId}
+                    fontSize={settings.fontSize}
+                    onTitled={(title) => {
+                      renameSession(s.id, title);
+                      refreshThreads(s.projectId, s.cwd, true);
+                    }}
+                  />
+                ) : (
+                  <TerminalPane
+                    sessionId={s.id}
+                    cwd={s.cwd}
+                    command={s.command}
+                    persistKey={s.persistKey}
+                    fontFamily={settings.fontFamily}
+                    fontSize={settings.fontSize}
+                    scrollback={settings.scrollback}
+                    active={s.id === activeId}
+                  />
+                )}
               </div>
             ))}
             {!revealed && (
@@ -444,14 +493,23 @@ function App() {
               </div>
             )}
           </main>
-          {activeProject && changesOpen && (
-            <ChangesPanel
-              projectPath={activeProject.path}
-              changes={projectChanges}
-              openRouterApiKey={settings.openRouterApiKey}
-              openRouterModel={settings.openRouterModel}
-              onClose={() => setChangesOpen(false)}
-            />
+          {activeProject && (changesOpen || changesClosing) && (
+            <div
+              className={cn(
+                "flex shrink-0 duration-200",
+                changesClosing
+                  ? "animate-out fade-out slide-out-to-right-4"
+                  : "animate-in fade-in slide-in-from-right-4"
+              )}
+            >
+              <ChangesPanel
+                projectPath={activeProject.path}
+                changes={projectChanges}
+                openRouterApiKey={settings.openRouterApiKey}
+                openRouterModel={settings.openRouterModel}
+                onClose={closeChanges}
+              />
+            </div>
           )}
         </div>
       </div>

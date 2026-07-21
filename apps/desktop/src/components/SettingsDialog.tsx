@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import {
   Dialog,
   DialogContent,
@@ -12,12 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { checkForUpdates } from "@/lib/update";
+import { useOpenRouterModels } from "@/lib/queries";
 import type { Settings } from "@/lib/settings";
-
-interface OpenRouterModel {
-  id: string;
-  name: string;
-}
 
 interface SettingsDialogProps {
   open: boolean;
@@ -86,18 +81,10 @@ export function SettingsDialog({
   onUpdate,
 }: SettingsDialogProps) {
   const [tab, setTab] = useState<Tab>("general");
-  const [models, setModels] = useState<OpenRouterModel[]>([]);
   const [version, setVersion] = useState("");
   const [checking, setChecking] = useState(false);
   const isClaude = settings.agentCommand.startsWith("claude");
-
-  // Fetch the model list once, the first time the dialog opens.
-  useEffect(() => {
-    if (!open || models.length) return;
-    invoke<OpenRouterModel[]>("openrouter_models")
-      .then(setModels)
-      .catch((e) => console.error("openrouter_models failed:", e));
-  }, [open, models.length]);
+  const models = useOpenRouterModels(open).data ?? [];
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
@@ -142,6 +129,24 @@ export function SettingsDialog({
         <div className="grid min-h-80 content-start gap-4">
           {tab === "general" && (
             <>
+              <Field
+                label="Agent interface"
+                hint="Chat shows a rich message UI; Terminal runs the raw Claude Code TUI."
+              >
+                <select
+                  value={settings.agentUi}
+                  onChange={(e) =>
+                    onUpdate({
+                      agentUi: e.target.value as "chat" | "terminal",
+                    })
+                  }
+                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <option value="chat">Chat UI</option>
+                  <option value="terminal">Terminal</option>
+                </select>
+              </Field>
+
               <Field
                 label="Agent command"
                 hint="Run on project open, e.g. claude or codex"

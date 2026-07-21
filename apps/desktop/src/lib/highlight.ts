@@ -65,6 +65,13 @@ export function langFromPath(file: string): string | null {
   return EXT_LANG[ext] ?? null;
 }
 
+/** Resolve a fenced-code-block language token (e.g. "ts", "bash") to a
+ *  registered highlight.js language, or null. */
+export function langFromName(name: string): string | null {
+  const key = name.toLowerCase();
+  return EXT_LANG[key] ?? (hljs.getLanguage(key) ? key : null);
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")

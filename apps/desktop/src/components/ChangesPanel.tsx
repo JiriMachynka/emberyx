@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { diffLines } from "diff";
 import { X, FileDiff, RefreshCw, GitBranch, Bot, Check, Plus, Minus } from "lucide-react";
@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { basename } from "@/lib/path";
 import { highlightCode, langFromPath } from "@/lib/highlight";
+import { useGitChanges, useGitFileDiff, useInvalidateGit } from "@/lib/queries";
 import type { Change } from "@/lib/changes";
 import type { GitFile } from "@/types";
 import { GitActions } from "@/components/GitActions";
@@ -40,8 +41,10 @@ const DiffLine = memo(function DiffLine({
   tint: string;
 }) {
   return (
-    <div className={cn("px-1", tint)}>
-      <span className="select-none opacity-40">{marker} </span>
+    <div className={cn("border-l-2 border-transparent pr-2", tint)}>
+      <span className="inline-block w-5 shrink-0 select-none text-center opacity-40">
+        {marker}
+      </span>
       <span dangerouslySetInnerHTML={{ __html: highlightCode(code, lang) || " " }} />
     </div>
   );
@@ -55,35 +58,48 @@ function UnifiedDiff({ text, lang }: { text: string; lang: string | null }) {
     );
   }
   return (
-    <pre className="overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-xs leading-relaxed">
-      {text.split("\n").map((line, i) => {
-        if (line === "") return <div key={i} className="px-1">{" "}</div>;
-        if (isDiffMeta(line)) {
+    <pre className="overflow-x-auto whitespace-pre py-1 font-mono text-xs leading-relaxed">
+      <div className="w-max min-w-full">
+        {text.split("\n").map((line, i) => {
+          if (line === "")
+            return (
+              <div key={i} className="border-l-2 border-transparent pl-5">
+                {" "}
+              </div>
+            );
+          if (isDiffMeta(line)) {
+            return (
+              <div
+                key={i}
+                className={cn(
+                  "border-l-2 pl-5 pr-2",
+                  line.startsWith("@@")
+                    ? "border-sky-500/40 bg-sky-500/10 text-sky-400"
+                    : "border-transparent text-muted-foreground"
+                )}
+              >
+                {line}
+              </div>
+            );
+          }
+          const c = line[0];
+          const tint =
+            c === "+"
+              ? "border-emerald-500/50 bg-emerald-500/15"
+              : c === "-"
+                ? "border-red-500/50 bg-red-500/15"
+                : "";
           return (
-            <div
+            <DiffLine
               key={i}
-              className={cn(
-                "px-1",
-                line.startsWith("@@") ? "text-sky-400" : "text-muted-foreground"
-              )}
-            >
-              {line}
-            </div>
+              marker={c === "+" || c === "-" ? c : " "}
+              code={line.slice(1)}
+              lang={lang}
+              tint={tint}
+            />
           );
-        }
-        const c = line[0];
-        const tint =
-          c === "+" ? "bg-emerald-500/15" : c === "-" ? "bg-red-500/15" : "";
-        return (
-          <DiffLine
-            key={i}
-            marker={c === "+" || c === "-" ? c : " "}
-            code={line.slice(1)}
-            lang={lang}
-            tint={tint}
-          />
-        );
-      })}
+        })}
+      </div>
     </pre>
   );
 }
@@ -96,27 +112,29 @@ function EditDiff({ change }: { change: Change }) {
     [change.oldText, change.newText]
   );
   return (
-    <pre className="overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-xs leading-relaxed">
-      {parts.map((part, i) =>
-        part.value
-          .replace(/\n$/, "")
-          .split("\n")
-          .map((line, j) => (
-            <DiffLine
-              key={`${i}-${j}`}
-              marker={part.added ? "+" : part.removed ? "-" : " "}
-              code={line}
-              lang={lang}
-              tint={
-                part.added
-                  ? "bg-emerald-500/15"
-                  : part.removed
-                    ? "bg-red-500/15"
-                    : ""
-              }
-            />
-          ))
-      )}
+    <pre className="overflow-x-auto whitespace-pre py-1 font-mono text-xs leading-relaxed">
+      <div className="w-max min-w-full">
+        {parts.map((part, i) =>
+          part.value
+            .replace(/\n$/, "")
+            .split("\n")
+            .map((line, j) => (
+              <DiffLine
+                key={`${i}-${j}`}
+                marker={part.added ? "+" : part.removed ? "-" : " "}
+                code={line}
+                lang={lang}
+                tint={
+                  part.added
+                    ? "border-emerald-500/50 bg-emerald-500/15"
+                    : part.removed
+                      ? "border-red-500/50 bg-red-500/15"
+                      : ""
+                }
+              />
+            ))
+        )}
+      </div>
     </pre>
   );
 }
@@ -137,13 +155,16 @@ export function ChangesPanel({
   onClose,
 }: ChangesPanelProps) {
   const [tab, setTab] = useState<"git" | "agent">("git");
+  const [fileListHeight, setFileListHeight] = useState(208);
 
   // Git tab state.
-  const [gitFiles, setGitFiles] = useState<GitFile[]>([]);
+  const gitQuery = useGitChanges(projectPath);
+  const gitFiles = gitQuery.data ?? [];
   const [gitSel, setGitSel] = useState<string | null>(null);
-  const [gitDiff, setGitDiff] = useState("");
-  // Bumped on every reload so GitActions re-fetches branch/ahead-behind too.
-  const [gitVersion, setGitVersion] = useState(0);
+  const selFile = gitFiles.find((f) => f.path === gitSel);
+  const diffQuery = useGitFileDiff(projectPath, gitSel, selFile?.untracked ?? false);
+  const gitDiff = diffQuery.data ?? "";
+  const invalidateGit = useInvalidateGit();
 
   // Commit state.
   const [staged, setStaged] = useState<Set<string>>(new Set());
@@ -157,32 +178,15 @@ export function ChangesPanel({
   const agentSel =
     changes.find((c) => c.id === agentSelId) ?? changes[changes.length - 1];
 
-  const loadGit = useCallback(() => {
-    invoke<GitFile[]>("git_changes", { path: projectPath })
-      .then((files) => {
-        setGitFiles(files);
-        // Drop staged entries whose files no longer have changes.
-        const present = new Set(files.map((f) => f.path));
-        setStaged((prev) => new Set([...prev].filter((p) => present.has(p))));
-        setGitVersion((v) => v + 1);
-      })
-      .catch((e) => console.error("git_changes failed:", e));
-  }, [projectPath]);
-
+  // Drop staged entries whose files no longer have changes.
   useEffect(() => {
-    loadGit();
-  }, [loadGit]);
+    if (!gitQuery.data) return;
+    const present = new Set(gitQuery.data.map((f) => f.path));
+    setStaged((prev) => new Set([...prev].filter((p) => present.has(p))));
+  }, [gitQuery.data]);
 
   function selectGit(f: GitFile) {
     setGitSel(f.path);
-    setGitDiff("");
-    invoke<string>("git_file_diff", {
-      path: projectPath,
-      file: f.path,
-      untracked: f.untracked,
-    })
-      .then(setGitDiff)
-      .catch((e) => console.error("git_file_diff failed:", e));
   }
 
   function toggleStage(path: string) {
@@ -199,6 +203,23 @@ export function ChangesPanel({
 
   const stageAll = () => setStaged(new Set(gitFiles.map((f) => f.path)));
   const unstageAll = () => setStaged(new Set());
+
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = fileListHeight;
+    const onMove = (ev: MouseEvent) => {
+      const max = Math.round(window.innerHeight * 0.6);
+      const next = Math.min(max, Math.max(80, startH + ev.clientY - startY));
+      setFileListHeight(next);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   async function generateMessage() {
     const files = [...staged];
@@ -234,8 +255,7 @@ export function ChangesPanel({
       setStaged(new Set());
       setCommitMsg("");
       setGitSel(null);
-      setGitDiff("");
-      loadGit();
+      invalidateGit(projectPath);
     } catch (e) {
       setCommitErr(String(e));
     } finally {
@@ -245,25 +265,25 @@ export function ChangesPanel({
 
   return (
     <aside className="flex w-96 shrink-0 flex-col border-l bg-card">
-      <header className="flex h-9 shrink-0 items-center justify-between border-b pl-1 pr-2">
+      <header className="flex h-11 shrink-0 items-center justify-between border-b pl-1 pr-2">
         <div className="flex items-center">
           <TabButton
             active={tab === "git"}
             onClick={() => setTab("git")}
-            icon={<GitBranch className="size-3.5" />}
+            icon={<GitBranch className="size-4" />}
             label={`Git${gitFiles.length ? ` (${gitFiles.length})` : ""}`}
           />
           <TabButton
             active={tab === "agent"}
             onClick={() => setTab("agent")}
-            icon={<Bot className="size-3.5" />}
+            icon={<Bot className="size-4" />}
             label={`Agent${changes.length ? ` (${changes.length})` : ""}`}
           />
         </div>
         <div className="flex items-center gap-1">
           {tab === "git" && (
             <button
-              onClick={loadGit}
+              onClick={() => invalidateGit(projectPath)}
               className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
               title="Refresh"
             >
@@ -281,18 +301,17 @@ export function ChangesPanel({
 
       {tab === "git" ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          <GitActions
-            projectPath={projectPath}
-            reloadKey={gitVersion}
-            onRefresh={loadGit}
-          />
+          <GitActions projectPath={projectPath} />
           {gitFiles.length === 0 ? (
             <Empty icon={<GitBranch className="size-5" />}>
               No working-tree changes (or not a git repo).
             </Empty>
           ) : (
             <>
-              <div className="max-h-52 shrink-0 overflow-auto border-b">
+              <div
+                className="shrink-0 overflow-auto border-b"
+                style={{ height: fileListHeight }}
+              >
                 {stagedFiles.length > 0 && (
                   <>
                     <SectionHeader
@@ -340,6 +359,11 @@ export function ChangesPanel({
                   </>
                 )}
               </div>
+              <div
+                onMouseDown={startResize}
+                title="Drag to resize"
+                className="h-1 shrink-0 cursor-row-resize bg-transparent transition-colors hover:bg-primary/40"
+              />
               {staged.size > 0 && (
                 <div className="shrink-0 space-y-1.5 border-b p-2">
                   <Input
@@ -537,7 +561,7 @@ function TabButton({
     <button
       onClick={onClick}
       className={cn(
-        "flex items-center gap-1.5 rounded px-2 py-1 text-xs",
+        "flex items-center gap-1.5 rounded px-3 py-1.5 text-sm",
         active
           ? "bg-secondary text-foreground"
           : "text-muted-foreground hover:text-foreground"

@@ -1,6 +1,8 @@
 import { useState } from "react";
 
 export interface Settings {
+  /** Which agent surface opens with a project: rich chat UI or the raw terminal. */
+  agentUi: "chat" | "terminal";
   /** Base agent command run on project open. */
   agentCommand: string;
   /** Terminal font-family stack. */
@@ -26,6 +28,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  agentUi: "chat",
   agentCommand: "claude",
   fontFamily: '"Geist Mono Variable", ui-monospace, Menlo, monospace',
   fontSize: 13,

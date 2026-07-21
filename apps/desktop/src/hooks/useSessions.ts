@@ -35,6 +35,22 @@ export function useSessions() {
     return id;
   }
 
+  /** Start a headless chat-mode agent session for a project and focus it. */
+  function startChat(
+    projectId: string,
+    cwd: string,
+    resume?: string,
+    label = "chat"
+  ): string {
+    const id = nextId();
+    setSessions((s) => [
+      ...s,
+      { id, projectId, label, cwd, kind: "chat", resume },
+    ]);
+    setActive(projectId, id);
+    return id;
+  }
+
   /** Add a background dev-server session (does not steal focus). */
   function addDev(
     projectId: string,
@@ -47,6 +63,11 @@ export function useSessions() {
       ...s,
       { id, projectId, label, cwd, command, kind: "dev" },
     ]);
+  }
+
+  /** Rename a session's sidebar label (e.g. after a chat is auto-titled). */
+  function renameSession(id: string, label: string) {
+    setSessions((s) => s.map((x) => (x.id === id ? { ...x, label } : x)));
   }
 
   function closeSession(id: string) {
@@ -117,6 +138,8 @@ export function useSessions() {
     activeByProject,
     setActive,
     startAgent,
+    startChat,
+    renameSession,
     addDev,
     closeSession,
     moveSession,

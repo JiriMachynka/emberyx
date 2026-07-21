@@ -18,7 +18,7 @@ const SCROLLBACK_CAP: u64 = 1_000_000;
 
 /// Run the user's interactive login shell once and snapshot its environment.
 /// Returns the parsed `KEY=VALUE` pairs, minus shell-managed positional vars.
-fn capture_shell_env() -> Option<Vec<(String, String)>> {
+pub(crate) fn capture_shell_env() -> Option<Vec<(String, String)>> {
     let output = std::process::Command::new(PtyManager::user_shell())
         .args(["-lic", "env"])
         // Detach stdin so an rc that reads it (a `read`, fzf/keychain prompt)

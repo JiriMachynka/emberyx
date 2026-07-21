@@ -19,10 +19,12 @@ export interface Session {
   label: string;
   cwd: string;
   command?: string;
-  kind: "agent" | "dev";
+  kind: "agent" | "dev" | "chat";
   /** Stable key for cross-restart scrollback restore; only the project's
    *  primary agent sets it, so secondary/dev panes never share its log. */
   persistKey?: string;
+  /** Claude session id to resume (chat kind only). */
+  resume?: string;
 }
 
 /** An open project. Each project owns its own agent + dev sessions. */
@@ -67,6 +69,12 @@ export interface GitBranch {
 export interface GitStash {
   index: number;
   label: string;
+}
+
+/** An OpenRouter model option (slug + human label). */
+export interface OpenRouterModel {
+  id: string;
+  name: string;
 }
 
 /** A Claude Code conversation thread (resumable via its id). */

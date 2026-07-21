@@ -1,3 +1,4 @@
+mod agent;
 mod dokploy;
 mod git;
 mod hooks;
@@ -8,6 +9,7 @@ mod threads;
 mod usage;
 mod workspace;
 
+use agent::AgentManager;
 use pty::PtyManager;
 use tauri::Manager;
 
@@ -27,6 +29,7 @@ pub fn run() {
 
     builder
         .manage(PtyManager::new())
+        .manage(AgentManager::new())
         .manage(usage::UsageCache::default())
         .setup(|app| {
             let config = hooks::start(&app.handle())?;
@@ -39,6 +42,10 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_kill,
             pty::read_scrollback,
+            agent::agent_spawn,
+            agent::agent_send,
+            agent::agent_kill,
+            agent::title_thread,
             workspace::scan_workspace,
             icon::project_icon,
             hooks::hook_config,
@@ -57,6 +64,7 @@ pub fn run() {
             git::git_stash_drop,
             usage::read_usage,
             threads::list_threads,
+            threads::read_thread,
             dokploy::dokploy_services,
             openrouter::generate_commit_message,
             openrouter::openrouter_models,

@@ -21,14 +21,14 @@ pub struct Thread {
 /// lines are rewritten every turn, so they live near the end of the file.
 const TAIL_BYTES: u64 = 262_144;
 
-fn projects_dir() -> Option<PathBuf> {
+pub(crate) fn projects_dir() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
     Some(PathBuf::from(home).join(".claude").join("projects"))
 }
 
 /// Claude Code names a project's dir by replacing every non-alphanumeric
 /// character of its absolute path with '-'.
-fn encode_cwd(cwd: &str) -> String {
+pub(crate) fn encode_cwd(cwd: &str) -> String {
     cwd.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect()
@@ -68,6 +68,16 @@ fn scan(text: &str) -> (String, String) {
         }
     }
     (title, last_prompt)
+}
+
+/// Read a thread's full transcript (the raw JSONL) so the chat UI can replay
+/// prior turns on resume — headless `--resume` loads context but never re-emits
+/// past messages to stdout.
+#[tauri::command]
+pub fn read_thread(cwd: String, session_id: String) -> Result<String, String> {
+    let base = projects_dir().ok_or("no home dir")?;
+    let path = base.join(encode_cwd(&cwd)).join(format!("{session_id}.jsonl"));
+    fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
 /// List the Claude Code threads recorded for `cwd`, newest first.

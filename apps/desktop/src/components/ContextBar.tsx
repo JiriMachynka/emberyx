@@ -1,4 +1,4 @@
-import { FileDiff, ChevronRight } from "lucide-react";
+import { FileDiff, ChevronRight, GitBranch as GitBranchIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/StatusDot";
 import { DevMenu } from "@/components/DevMenu";
@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { STATUS_META } from "@/lib/status";
 import { basename } from "@/lib/path";
 import { costOf, totalTokens, formatTokens } from "@/lib/pricing";
+import { useGitBranch } from "@/lib/queries";
 import type { Usage } from "@/lib/pricing";
 import type { PackageInfo, Project, Session, SessionStatus, Thread } from "@/types";
 
@@ -51,12 +52,24 @@ export function ContextBar({
   onResumeThread,
   onToggleChanges,
 }: ContextBarProps) {
+  const branchQuery = useGitBranch(activeProject?.path ?? "");
+  const branch = branchQuery.data?.branch;
+
   return (
     <header className="flex h-10 shrink-0 items-center justify-between border-b px-3">
       <div className="flex min-w-0 items-center gap-2 text-xs">
         {activeProject && (
           <span className="truncate font-medium text-muted-foreground">
             {basename(activeProject.path)}
+          </span>
+        )}
+        {branch && (
+          <span
+            className="flex shrink-0 items-center gap-1 text-muted-foreground"
+            title={`On branch ${branch}`}
+          >
+            <GitBranchIcon className="size-3" />
+            {branch}
           </span>
         )}
         {activeProject && agent && (

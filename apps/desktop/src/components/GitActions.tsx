@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import {
@@ -22,14 +22,10 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import type { GitBranch, GitStash } from "@/types";
+import { useGitBranch, useGitBranches, useGitStashes, useInvalidateGit } from "@/lib/queries";
 
 interface GitActionsProps {
   projectPath: string;
-  /** Bumped by the parent whenever the working tree is reloaded. */
-  reloadKey: number;
-  /** Re-fetch the working-tree change list after an operation. */
-  onRefresh: () => void;
 }
 
 /** Inline prompt to gather one text value (new branch name / remote name). */
@@ -39,22 +35,16 @@ type Prompt =
   | null;
 
 /** Branch bar + pull/push/checkout/stash actions for the current repo. */
-export function GitActions({ projectPath, reloadKey, onRefresh }: GitActionsProps) {
-  const [branch, setBranch] = useState<GitBranch | null>(null);
-  const [branches, setBranches] = useState<string[]>([]);
-  const [stashes, setStashes] = useState<GitStash[]>([]);
+export function GitActions({ projectPath }: GitActionsProps) {
+  const [branchesOpen, setBranchesOpen] = useState(false);
+  const [stashesOpen, setStashesOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [prompt, setPrompt] = useState<Prompt>(null);
 
-  const reloadBranch = useCallback(() => {
-    invoke<GitBranch>("git_branch", { path: projectPath })
-      .then(setBranch)
-      .catch(() => setBranch(null)); // Not a repo / no commits yet.
-  }, [projectPath]);
-
-  useEffect(() => {
-    reloadBranch();
-  }, [reloadBranch, reloadKey]);
+  const branchQuery = useGitBranch(projectPath);
+  const branchesQuery = useGitBranches(projectPath, branchesOpen);
+  const stashesQuery = useGitStashes(projectPath, stashesOpen);
+  const invalidateGit = useInvalidateGit();
 
   /** Run a git op, toast the outcome, then refresh branch + change list. */
   async function run(label: string, op: () => Promise<string>) {
@@ -63,8 +53,7 @@ export function GitActions({ projectPath, reloadKey, onRefresh }: GitActionsProp
     try {
       const out = await op();
       toast.success(label, out ? { description: out } : undefined);
-      reloadBranch();
-      onRefresh();
+      invalidateGit(projectPath);
     } catch (e) {
       toast.error(`${label} failed`, { description: String(e) });
     } finally {
@@ -72,8 +61,9 @@ export function GitActions({ projectPath, reloadKey, onRefresh }: GitActionsProp
     }
   }
 
-  if (!branch) return null;
+  if (!branchQuery.data) return null;
 
+  const branch = branchQuery.data;
   const { upstream, ahead, behind } = branch;
 
   function submitPrompt() {
@@ -156,7 +146,7 @@ export function GitActions({ projectPath, reloadKey, onRefresh }: GitActionsProp
           />
         )}
 
-        <DropdownMenu onOpenChange={(open) => open && loadBranches(projectPath, setBranches)}>
+        <DropdownMenu onOpenChange={setBranchesOpen}>
           <DropdownMenuTrigger asChild>
             <span>
               <ActionButton
@@ -184,7 +174,7 @@ export function GitActions({ projectPath, reloadKey, onRefresh }: GitActionsProp
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuLabel>Checkout</DropdownMenuLabel>
-            {branches.map((b) => (
+            {(branchesQuery.data ?? []).map((b) => (
               <DropdownMenuItem
                 key={b}
                 disabled={b === branch.branch}
@@ -201,7 +191,7 @@ export function GitActions({ projectPath, reloadKey, onRefresh }: GitActionsProp
           </DropdownMenuContent>
         </DropdownMenu>
 
-        <DropdownMenu onOpenChange={(open) => open && loadStashes(projectPath, setStashes)}>
+        <DropdownMenu onOpenChange={setStashesOpen}>
           <DropdownMenuTrigger asChild>
             <span>
               <ActionButton
@@ -224,8 +214,8 @@ export function GitActions({ projectPath, reloadKey, onRefresh }: GitActionsProp
               <Archive className="size-4" />
               Stash changes
             </DropdownMenuItem>
-            {stashes.length > 0 && <DropdownMenuSeparator />}
-            {stashes.map((s) => (
+            {(stashesQuery.data ?? []).length > 0 && <DropdownMenuSeparator />}
+            {(stashesQuery.data ?? []).map((s) => (
               <div key={s.index} className="px-2 py-1.5">
                 <div className="truncate text-xs text-muted-foreground" title={s.label}>
                   {s.label}
@@ -300,14 +290,6 @@ export function GitActions({ projectPath, reloadKey, onRefresh }: GitActionsProp
       )}
     </div>
   );
-}
-
-function loadBranches(path: string, set: (b: string[]) => void) {
-  invoke<string[]>("git_branches", { path }).then(set).catch(() => set([]));
-}
-
-function loadStashes(path: string, set: (s: GitStash[]) => void) {
-  invoke<GitStash[]>("git_stash_list", { path }).then(set).catch(() => set([]));
 }
 
 function ActionButton({
