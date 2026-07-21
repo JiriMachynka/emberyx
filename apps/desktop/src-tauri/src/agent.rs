@@ -167,12 +167,32 @@ impl AgentManager {
             .map_err(|e| e.to_string())
     }
 
-    /// Terminate the process and drop the session.
+    /// Terminate the process and reap it. The stdout reader normally reaps on
+    /// EOF, but can't once we've removed the session here — so wait() ourselves
+    /// (after releasing the lock) to avoid leaving a zombie.
     pub fn kill(&self, id: u32) -> Result<(), String> {
-        if let Some(mut session) = self.sessions.lock().unwrap().remove(&id) {
+        let session = self.sessions.lock().unwrap().remove(&id);
+        if let Some(mut session) = session {
             let _ = session.child.kill();
+            let _ = session.child.wait();
         }
         Ok(())
+    }
+
+    /// Kill and reap every live child. Called on app exit so headless `claude`
+    /// processes aren't orphaned — std's Child does not kill on drop.
+    pub fn kill_all(&self) {
+        let sessions: Vec<AgentSession> = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain()
+            .map(|(_, s)| s)
+            .collect();
+        for mut session in sessions {
+            let _ = session.child.kill();
+            let _ = session.child.wait();
+        }
     }
 
     /// Generate a short title for a fresh chat thread with a cheap headless

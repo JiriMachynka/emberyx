@@ -27,7 +27,7 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
 
-    builder
+    let app = builder
         .manage(PtyManager::new())
         .manage(AgentManager::new())
         .manage(usage::UsageCache::default())
@@ -69,6 +69,15 @@ pub fn run() {
             openrouter::generate_commit_message,
             openrouter::openrouter_models,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // Managed state isn't dropped on exit, so kill + reap spawned children here
+    // or orphaned headless `claude` processes and PTY shells keep running.
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
+            app_handle.state::<AgentManager>().kill_all();
+            app_handle.state::<PtyManager>().kill_all();
+        }
+    });
 }

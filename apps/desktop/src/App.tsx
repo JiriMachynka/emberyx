@@ -73,6 +73,11 @@ function App() {
     closeProject,
   } = useProjects();
 
+  // Latest projects list for async guards: a superseded pre-warm must not
+  // resurrect a torn-down project's session after its list_threads resolves.
+  const projectsRef = useRef(projects);
+  projectsRef.current = projects;
+
   const {
     sessions,
     activeByProject,
@@ -168,6 +173,9 @@ function App() {
     if (settings.resumeLatestThread && isClaudeAgent(settings.agentCommand)) {
       try {
         const threads = await invoke<Thread[]>("list_threads", { cwd: path });
+        // A superseded pre-warm may have been torn down while we awaited; don't
+        // resurrect its session (which would orphan a PTY).
+        if (!projectsRef.current.some((p) => p.id === id)) return;
         setThreads(id, threads);
         const latest = [...threads].sort((a, b) => b.modified - a.modified)[0];
         if (latest) {

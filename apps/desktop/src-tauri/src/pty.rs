@@ -328,6 +328,15 @@ impl PtyManager {
         self.sessions.lock().unwrap().remove(&id);
         Ok(())
     }
+
+    /// Tear down every PTY on app exit: clearing the map drops each master,
+    /// hanging up the PTY (SIGHUP) so the child shells exit.
+    pub fn kill_all(&self) {
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
 }
 
 #[tauri::command]

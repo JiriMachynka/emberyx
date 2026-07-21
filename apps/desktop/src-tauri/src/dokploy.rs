@@ -128,51 +128,55 @@ fn collect(container: &Value, out: &mut Vec<DokployService>, matched: &mut Optio
 /// Find the Dokploy project deploying the repo at `cwd` (matched by git remote)
 /// and return its services. `Ok(None)` if there's no remote or no match.
 #[tauri::command]
-pub fn dokploy_services(
+pub async fn dokploy_services(
     url: String,
     api_key: String,
     cwd: String,
 ) -> Result<Option<DokployMatch>, String> {
-    let local = match remote_url(&cwd).as_deref().and_then(git_slug) {
-        Some(s) => s,
-        None => return Ok(None),
-    };
-    let base = url.trim().trim_end_matches('/');
-    if base.is_empty() {
-        return Err("Dokploy URL not set".into());
-    }
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout_read(Duration::from_secs(10))
-        .build();
-    let resp = agent
-        .get(&format!("{base}/api/project.all"))
-        .set("x-api-key", api_key.trim())
-        .set("accept", "application/json")
-        .call()
-        .map_err(|e| format!("Dokploy request failed: {e}"))?;
-    let json: Value = resp.into_json().map_err(|e| e.to_string())?;
-    let projects = json.as_array().ok_or("Unexpected Dokploy response")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let local = match remote_url(&cwd).as_deref().and_then(git_slug) {
+            Some(s) => s,
+            None => return Ok(None),
+        };
+        let base = url.trim().trim_end_matches('/');
+        if base.is_empty() {
+            return Err("Dokploy URL not set".into());
+        }
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(10))
+            .timeout_read(Duration::from_secs(10))
+            .build();
+        let resp = agent
+            .get(&format!("{base}/api/project.all"))
+            .set("x-api-key", api_key.trim())
+            .set("accept", "application/json")
+            .call()
+            .map_err(|e| format!("Dokploy request failed: {e}"))?;
+        let json: Value = resp.into_json().map_err(|e| e.to_string())?;
+        let projects = json.as_array().ok_or("Unexpected Dokploy response")?;
 
-    for project in projects {
-        let mut services = vec![];
-        let mut matched = None;
-        if let Some(envs) = project.get("environments").and_then(Value::as_array) {
-            for env in envs {
-                collect(env, &mut services, &mut matched, &local);
+        for project in projects {
+            let mut services = vec![];
+            let mut matched = None;
+            if let Some(envs) = project.get("environments").and_then(Value::as_array) {
+                for env in envs {
+                    collect(env, &mut services, &mut matched, &local);
+                }
+            } else {
+                collect(project, &mut services, &mut matched, &local);
             }
-        } else {
-            collect(project, &mut services, &mut matched, &local);
+            if let Some(matched_service) = matched {
+                return Ok(Some(DokployMatch {
+                    project_name: project.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                    matched_service,
+                    services,
+                }));
+            }
         }
-        if let Some(matched_service) = matched {
-            return Ok(Some(DokployMatch {
-                project_name: project.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
-                matched_service,
-                services,
-            }));
-        }
-    }
-    Ok(None)
+        Ok(None)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]

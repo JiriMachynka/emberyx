@@ -66,92 +66,100 @@ pub struct OpenRouterModel {
 
 /// List available OpenRouter models (public endpoint, no key required).
 #[tauri::command]
-pub fn openrouter_models() -> Result<Vec<OpenRouterModel>, String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout_read(Duration::from_secs(20))
-        .build();
-    let resp = agent
-        .get("https://openrouter.ai/api/v1/models")
-        .set("accept", "application/json")
-        .call()
-        .map_err(|e| format!("OpenRouter request failed: {e}"))?;
-    let json: Value = resp.into_json().map_err(|e| e.to_string())?;
-    let data = json
-        .get("data")
-        .and_then(Value::as_array)
-        .ok_or("Unexpected OpenRouter response")?;
-    Ok(data
-        .iter()
-        .filter_map(|m| {
-            let id = m.get("id").and_then(Value::as_str)?;
-            if id.is_empty() {
-                return None;
-            }
-            let name = m.get("name").and_then(Value::as_str).unwrap_or(id);
-            Some(OpenRouterModel {
-                id: id.to_string(),
-                name: name.to_string(),
+pub async fn openrouter_models() -> Result<Vec<OpenRouterModel>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(10))
+            .timeout_read(Duration::from_secs(20))
+            .build();
+        let resp = agent
+            .get("https://openrouter.ai/api/v1/models")
+            .set("accept", "application/json")
+            .call()
+            .map_err(|e| format!("OpenRouter request failed: {e}"))?;
+        let json: Value = resp.into_json().map_err(|e| e.to_string())?;
+        let data = json
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or("Unexpected OpenRouter response")?;
+        Ok(data
+            .iter()
+            .filter_map(|m| {
+                let id = m.get("id").and_then(Value::as_str)?;
+                if id.is_empty() {
+                    return None;
+                }
+                let name = m.get("name").and_then(Value::as_str).unwrap_or(id);
+                Some(OpenRouterModel {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                })
             })
-        })
-        .collect())
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Generate a commit message for the selected files via the OpenRouter API.
 #[tauri::command]
-pub fn generate_commit_message(
+pub async fn generate_commit_message(
     path: String,
     files: Vec<String>,
     api_key: String,
     model: String,
 ) -> Result<String, String> {
-    let api_key = api_key.trim();
-    if api_key.is_empty() {
-        return Err("OpenRouter API key not set.".into());
-    }
-    if files.is_empty() {
-        return Err("No files selected.".into());
-    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let api_key = api_key.trim();
+        if api_key.is_empty() {
+            return Err("OpenRouter API key not set.".into());
+        }
+        if files.is_empty() {
+            return Err("No files selected.".into());
+        }
 
-    let diff = build_diff(&path, &files);
-    if diff.trim().is_empty() {
-        return Err("No diff to summarize.".into());
-    }
+        let diff = build_diff(&path, &files);
+        if diff.trim().is_empty() {
+            return Err("No diff to summarize.".into());
+        }
 
-    let model = {
-        let m = model.trim();
-        if m.is_empty() { DEFAULT_MODEL } else { m }
-    };
+        let model = {
+            let m = model.trim();
+            if m.is_empty() { DEFAULT_MODEL } else { m }
+        };
 
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout_read(Duration::from_secs(60))
-        .build();
-    let resp = agent
-        .post("https://openrouter.ai/api/v1/chat/completions")
-        .set("Authorization", &format!("Bearer {api_key}"))
-        .set("Content-Type", "application/json")
-        .send_json(ureq::json!({
-            "model": model,
-            "messages": [
-                { "role": "system", "content": SYSTEM_PROMPT },
-                { "role": "user", "content": format!("Diff:\n\n{diff}") },
-            ],
-        }))
-        .map_err(|e| match e {
-            ureq::Error::Status(code, resp) => {
-                let body = resp.into_string().unwrap_or_default();
-                format!("OpenRouter error {code}: {}", body.trim())
-            }
-            other => format!("OpenRouter request failed: {other}"),
-        })?;
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(10))
+            .timeout_read(Duration::from_secs(60))
+            .build();
+        let resp = agent
+            .post("https://openrouter.ai/api/v1/chat/completions")
+            .set("Authorization", &format!("Bearer {api_key}"))
+            .set("Content-Type", "application/json")
+            .send_json(ureq::json!({
+                "model": model,
+                "messages": [
+                    { "role": "system", "content": SYSTEM_PROMPT },
+                    { "role": "user", "content": format!("Diff:\n\n{diff}") },
+                ],
+            }))
+            .map_err(|e| match e {
+                ureq::Error::Status(code, resp) => {
+                    let body = resp.into_string().unwrap_or_default();
+                    format!("OpenRouter error {code}: {}", body.trim())
+                }
+                other => format!("OpenRouter request failed: {other}"),
+            })?;
 
-    let json: Value = resp.into_json().map_err(|e| e.to_string())?;
-    let msg = json
-        .pointer("/choices/0/message/content")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or("OpenRouter returned no message.")?;
-    Ok(msg.to_string())
+        let json: Value = resp.into_json().map_err(|e| e.to_string())?;
+        let msg = json
+            .pointer("/choices/0/message/content")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or("OpenRouter returned no message.")?;
+        Ok(msg.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
