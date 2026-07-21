@@ -216,7 +216,7 @@ export function SettingsDialog({
 
           {tab === "terminal" && (
             <>
-              <Field label="Terminal font family">
+              <Field label="Font family">
                 <Input
                   value={settings.fontFamily}
                   onChange={(e) => onUpdate({ fontFamily: e.target.value })}

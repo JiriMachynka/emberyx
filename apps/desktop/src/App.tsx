@@ -477,6 +477,7 @@ function App() {
                     cwd={s.cwd}
                     resume={s.resume}
                     active={s.id === activeId}
+                    fontFamily={settings.fontFamily}
                     fontSize={settings.fontSize}
                     onTitled={(title) => {
                       renameSession(s.id, title);

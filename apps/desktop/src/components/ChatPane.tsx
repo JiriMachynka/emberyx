@@ -26,6 +26,7 @@ interface ChatPaneProps {
   cwd: string;
   resume?: string;
   active: boolean;
+  fontFamily: string;
   fontSize: number;
   onTitled?: (title: string) => void;
 }
@@ -56,6 +57,7 @@ export function ChatPane({
   cwd,
   resume,
   active,
+  fontFamily,
   fontSize,
   onTitled,
 }: ChatPaneProps) {
@@ -100,7 +102,7 @@ export function ChatPane({
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto"
-        style={{ fontSize: `${fontSize}px` }}
+        style={{ fontFamily, fontSize: `${fontSize}px` }}
       >
         <div className="mx-auto flex max-w-3xl flex-col gap-6 px-5 py-6">
           {messages.length === 0 && (
