@@ -58,6 +58,7 @@ pub fn run() {
             git::git_push,
             git::git_push_to,
             git::git_checkout,
+            git::git_branch_delete,
             git::git_stash_push,
             git::git_stash_list,
             git::git_stash_apply,

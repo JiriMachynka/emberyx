@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import {
   GitBranch as GitBranchIcon,
@@ -10,6 +11,7 @@ import {
   GitBranchPlus,
   Archive,
   Check,
+  Trash2,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -26,6 +28,15 @@ import { useGitBranch, useGitBranches, useGitStashes, useInvalidateGit } from "@
 
 interface GitActionsProps {
   projectPath: string;
+}
+
+/** `stash@{0}: On main: message` / `stash@{0}: WIP on main: abc123 subject`
+ *  → the branch and the message, for a readable stash row. */
+function parseStash(label: string): { branch: string; message: string } {
+  const m = /^stash@\{\d+\}:\s*(?:WIP on|On)\s+([^:]+):\s*(.*)$/i.exec(label);
+  return m
+    ? { branch: m[1].trim(), message: m[2].trim() }
+    : { branch: "", message: label };
 }
 
 /** Inline prompt to gather one text value (new branch name / remote name). */
@@ -65,6 +76,32 @@ export function GitActions({ projectPath }: GitActionsProps) {
 
   const branch = branchQuery.data;
   const { upstream, ahead, behind } = branch;
+
+  /** Deleting a branch can discard unmerged work — confirm before doing it.
+   *  Git itself still refuses (`-d`) if the branch isn't merged. */
+  async function confirmDeleteBranch(name: string) {
+    const ok = await ask(
+      `Delete the branch "${name}"?\n\nOnly merged branches can be deleted this way.`,
+      { title: "Delete branch", kind: "warning" }
+    );
+    if (!ok) return;
+    run("Deleted branch", () =>
+      invoke<string>("git_branch_delete", { path: projectPath, branch: name })
+    );
+  }
+
+  /** Dropping a stash is unrecoverable — confirm before discarding it. */
+  async function confirmDropStash(index: number, branch: string, message: string) {
+    const label = branch ? `${branch} • ${message}` : message;
+    const ok = await ask(
+      `Delete this stash? Its changes are discarded permanently.\n\n${label}`,
+      { title: "Delete stash", kind: "warning" }
+    );
+    if (!ok) return;
+    run("Dropped stash", () =>
+      invoke<string>("git_stash_drop", { path: projectPath, index })
+    );
+  }
 
   function submitPrompt() {
     if (!prompt) return;
@@ -158,7 +195,7 @@ export function GitActions({ projectPath }: GitActionsProps) {
               />
             </span>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="max-h-80 w-56 overflow-auto">
+          <DropdownMenuContent align="start" className="max-h-80 w-72 overflow-auto">
             <DropdownMenuItem
               onSelect={() =>
                 setPrompt({
@@ -174,20 +211,38 @@ export function GitActions({ projectPath }: GitActionsProps) {
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuLabel>Checkout</DropdownMenuLabel>
-            {(branchesQuery.data ?? []).map((b) => (
-              <DropdownMenuItem
-                key={b}
-                disabled={b === branch.branch}
-                onSelect={() =>
-                  run("Checked out", () =>
-                    invoke<string>("git_checkout", { path: projectPath, branch: b, create: false })
-                  )
-                }
-              >
-                {b === branch.branch && <Check className="size-4" />}
-                <span className={cn("truncate", b === branch.branch && "font-medium")}>{b}</span>
-              </DropdownMenuItem>
-            ))}
+            {(branchesQuery.data ?? []).map((b) => {
+              const isCurrent = b === branch.branch;
+              return (
+                <div key={b} className="flex items-center px-1">
+                  <button
+                    disabled={isCurrent}
+                    onClick={() =>
+                      run("Checked out", () =>
+                        invoke<string>("git_checkout", { path: projectPath, branch: b, create: false })
+                      )
+                    }
+                    className={cn(
+                      "flex min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors",
+                      isCurrent
+                        ? "font-medium disabled:pointer-events-none"
+                        : "hover:bg-accent"
+                    )}
+                  >
+                    {isCurrent && <Check className="size-4 shrink-0" />}
+                    <span className="truncate">{b}</span>
+                  </button>
+                  {!isCurrent && (
+                    <button
+                      onClick={() => confirmDeleteBranch(b)}
+                      className="ml-1 grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-red-400"
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -203,7 +258,7 @@ export function GitActions({ projectPath }: GitActionsProps) {
               />
             </span>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="max-h-80 w-72 overflow-auto">
+          <DropdownMenuContent align="start" className="max-h-80 w-96 overflow-auto">
             <DropdownMenuItem
               onSelect={() =>
                 run("Stashed", () =>
@@ -215,45 +270,42 @@ export function GitActions({ projectPath }: GitActionsProps) {
               Stash changes
             </DropdownMenuItem>
             {(stashesQuery.data ?? []).length > 0 && <DropdownMenuSeparator />}
-            {(stashesQuery.data ?? []).map((s) => (
-              <div key={s.index} className="px-2 py-1.5">
-                <div className="truncate text-xs text-muted-foreground" title={s.label}>
-                  {s.label}
-                </div>
-                <div className="mt-1 flex gap-2 text-[11px]">
-                  <button
-                    className="text-emerald-400 hover:underline"
-                    onClick={() =>
-                      run("Popped stash", () =>
-                        invoke<string>("git_stash_apply", { path: projectPath, index: s.index, pop: true })
-                      )
-                    }
-                  >
-                    Pop
-                  </button>
-                  <button
-                    className="text-sky-400 hover:underline"
-                    onClick={() =>
-                      run("Applied stash", () =>
-                        invoke<string>("git_stash_apply", { path: projectPath, index: s.index, pop: false })
-                      )
-                    }
-                  >
-                    Apply
-                  </button>
-                  <button
-                    className="text-red-400 hover:underline"
-                    onClick={() =>
-                      run("Dropped stash", () =>
-                        invoke<string>("git_stash_drop", { path: projectPath, index: s.index })
-                      )
-                    }
-                  >
-                    Drop
-                  </button>
-                </div>
+            {(stashesQuery.data ?? []).map((s) => {
+              const { branch, message } = parseStash(s.label);
+              return (
+              <div key={s.index} className="flex items-center gap-1.5 px-2 py-1.5">
+                <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                {branch && (
+                  <>
+                    <span className="shrink-0 text-xs font-medium">{branch}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">•</span>
+                  </>
+                )}
+                <span
+                  className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+                  title={message}
+                >
+                  {message}
+                </span>
+                <button
+                  className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-emerald-400"
+                  onClick={() =>
+                    run("Popped stash", () =>
+                      invoke<string>("git_stash_apply", { path: projectPath, index: s.index, pop: true })
+                    )
+                  }
+                >
+                  <ArrowUpFromLine className="size-4" />
+                </button>
+                <button
+                  className="ml-1 grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-red-400"
+                  onClick={() => confirmDropStash(s.index, branch, message)}
+                >
+                  <Trash2 className="size-4" />
+                </button>
               </div>
-            ))}
+              );
+            })}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

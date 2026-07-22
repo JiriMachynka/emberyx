@@ -281,6 +281,17 @@ pub fn git_checkout(path: String, branch: String, create: bool) -> Result<String
     }
 }
 
+/// Delete a local branch. Uses `-d`, so git refuses to discard a branch whose
+/// commits aren't merged — the error is surfaced to the caller rather than
+/// forced away.
+#[tauri::command]
+pub fn git_branch_delete(path: String, branch: String) -> Result<String, String> {
+    if branch.trim().is_empty() {
+        return Err("Branch name is empty.".into());
+    }
+    run_git(&path, &["branch", "-d", &branch])
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitStash {
