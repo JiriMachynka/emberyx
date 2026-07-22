@@ -69,7 +69,7 @@ function SidebarHeader({ collapsed, onToggleCollapse }: SidebarProps) {
       )}
       <button
         onClick={onToggleCollapse}
-        className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
       >
         {collapsed ? (
@@ -106,7 +106,7 @@ function Tree(props: SidebarProps) {
             <div
               onClick={() => onSelectProject(p.id)}
               className={cn(
-                "group flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors",
+                "group flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm transition-colors",
                 active
                   ? "surface-raised bg-secondary text-foreground"
                   : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
@@ -115,9 +115,9 @@ function Tree(props: SidebarProps) {
             >
               <div className="relative shrink-0">
                 {p.icon ? (
-                  <img src={p.icon} alt="" className="size-6 rounded-md" />
+                  <img src={p.icon} alt="" className="size-7 rounded-md" />
                 ) : (
-                  <div className="flex size-6 items-center justify-center rounded-md bg-secondary text-[10px] font-semibold uppercase text-muted-foreground">
+                  <div className="flex size-7 items-center justify-center rounded-md bg-secondary text-xs font-semibold uppercase text-muted-foreground">
                     {basename(p.path).charAt(0)}
                   </div>
                 )}
@@ -130,7 +130,7 @@ function Tree(props: SidebarProps) {
                 {basename(p.path)}
               </span>
               {active && p.workspace && (
-                <span className="rounded bg-background/60 px-1 py-px text-[10px] text-muted-foreground">
+                <span className="rounded bg-background/60 px-1 py-px text-xs text-muted-foreground">
                   {p.workspace.kind}
                 </span>
               )}
@@ -156,10 +156,10 @@ function Tree(props: SidebarProps) {
 
       <button
         onClick={onPickProject}
-        className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
+        className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-2 text-sm text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
         title="Open project (⌘O)"
       >
-        <Plus className="size-3.5" />
+        <Plus className="size-4" />
         Open project
       </button>
     </div>
@@ -209,7 +209,7 @@ function SessionList({
               setOverId(null);
             }}
             className={cn(
-              "group flex cursor-grab items-center gap-1.5 rounded px-1.5 py-1 text-xs active:cursor-grabbing",
+              "group flex cursor-grab items-center gap-2 rounded px-2 py-1.5 text-sm active:cursor-grabbing",
               active
                 ? "bg-accent text-foreground"
                 : "text-muted-foreground hover:bg-secondary/50",
@@ -218,7 +218,7 @@ function SessionList({
             )}
           >
             {s.kind === "agent" ? (
-              <Bot className="size-3.5 shrink-0 opacity-70" />
+              <Bot className="size-4 shrink-0 opacity-70" />
             ) : (
               <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
             )}
@@ -246,10 +246,10 @@ function ActionRow({
     <div className="ml-3 mt-1 flex flex-wrap items-center gap-1 pl-1.5">
       <button
         onClick={onNewAgent}
-        className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         title="New agent tab (⌘T)"
       >
-        <Plus className="size-3.5" />
+        <Plus className="size-4" />
         Agent
       </button>
     </div>
@@ -277,7 +277,7 @@ function Rail({
             onClick={() => onSelectProject(p.id)}
             title={basename(p.path)}
             className={cn(
-              "relative flex size-9 items-center justify-center rounded-lg text-xs font-semibold uppercase transition-colors",
+              "relative flex size-10 items-center justify-center rounded-lg text-sm font-semibold uppercase transition-colors",
               active
                 ? "surface-raised bg-secondary text-foreground ember-glow"
                 : "bg-secondary/40 text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
@@ -287,7 +287,7 @@ function Rail({
               <img
                 src={p.icon}
                 alt=""
-                className="size-7 rounded object-contain"
+                className="size-8 rounded object-contain"
               />
             ) : (
               basename(p.path).slice(0, 2)
@@ -304,9 +304,9 @@ function Rail({
       <button
         onClick={onPickProject}
         title="Open project (⌘O)"
-        className="flex size-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary/70 hover:text-foreground"
+        className="flex size-10 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary/70 hover:text-foreground"
       >
-        <FolderOpen className="size-4" />
+        <FolderOpen className="size-5" />
       </button>
     </div>
   );
@@ -322,11 +322,11 @@ function SidebarFooter({ collapsed, onOpenSettings }: SidebarProps) {
     >
       <button
         onClick={onOpenSettings}
-        className="flex items-center gap-2 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="flex items-center gap-2 rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         title="Settings"
       >
-        <Settings className="size-4" />
-        {!collapsed && <span className="text-xs">Settings</span>}
+        <Settings className="size-5" />
+        {!collapsed && <span className="text-sm">Settings</span>}
       </button>
     </footer>
   );
