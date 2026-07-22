@@ -24,6 +24,16 @@ export interface ChatMessage {
   thinking: string;
   tools: ToolCall[];
   streaming: boolean;
+  /** Images the user attached to this turn (user messages only). */
+  images?: ChatImage[];
+}
+
+/** A pasted image, base64-encoded for a stream-json image content block. */
+export interface ChatImage {
+  id: string;
+  mediaType: string;
+  /** base64 payload without the data: URL prefix. */
+  data: string;
 }
 
 export type ChatStatus =
@@ -31,8 +41,21 @@ export type ChatStatus =
   | "thinking"
   | "streaming"
   | "tool"
+  | "awaiting_permission"
   | "error"
   | "exited";
+
+export type PermissionDecision = "allow_once" | "allow_always" | "deny";
+
+/** A pending `can_use_tool` prompt from the CLI awaiting the user's choice. */
+export interface PendingPermission {
+  requestId: string;
+  toolName: string;
+  input: unknown;
+  /** CLI-computed permission_suggestions, echoed back for "allow always". */
+  suggestions: unknown[];
+  toolUseId: string;
+}
 
 export interface ChatUsage {
   costUsd?: number;
@@ -198,6 +221,14 @@ export function useAgentChat({
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
   const [ready, setReady] = useState(false);
+  const [pendingPermission, setPendingPermission] =
+    useState<PendingPermission | null>(null);
+  // Mirror of pendingPermission for reads inside callbacks without stale closures.
+  const pendingRef = useRef<PendingPermission | null>(null);
+  const setPending = useCallback((p: PendingPermission | null) => {
+    pendingRef.current = p;
+    setPendingPermission(p);
+  }, []);
 
   const idRef = useRef<number | null>(null);
   const sessionRef = useRef<string | undefined>(resume);
@@ -262,6 +293,27 @@ export function useAgentChat({
       if (type === "system" && msg.subtype === "init") {
         const sid = msg.session_id as string | undefined;
         if (sid) sessionRef.current = sid;
+        return;
+      }
+
+      if (type === "control_request") {
+        const req = msg.request as Record<string, unknown> | undefined;
+        if (req?.subtype === "can_use_tool") {
+          setPending({
+            requestId: msg.request_id as string,
+            toolName: req.tool_name as string,
+            input: req.input,
+            suggestions: (req.permission_suggestions as unknown[]) ?? [],
+            toolUseId: req.tool_use_id as string,
+          });
+          setStatus("awaiting_permission");
+        }
+        return;
+      }
+
+      if (type === "control_cancel_request") {
+        const rid = msg.request_id as string;
+        if (pendingRef.current?.requestId === rid) setPending(null);
         return;
       }
 
@@ -445,20 +497,62 @@ export function useAgentChat({
     };
   }, [cwd, resume, permissionMode, emberyxSessionId, handleLine]);
 
-  // Stop the current run. In modes-only v1 this ends the process (the session
-  // stays on disk and can be resumed); true mid-turn interrupt needs the
-  // control protocol, which v1 deliberately skips.
+  // Stop the current turn via a real `interrupt` control_request — aborts the
+  // turn but keeps the process/session alive so the user can continue.
   const stop = useCallback(() => {
     const id = idRef.current;
     if (id === null) return;
-    void invoke("agent_kill", { id });
-    idRef.current = null;
-    setStatus("exited");
-  }, []);
+    const line = JSON.stringify({
+      type: "control_request",
+      request_id: crypto.randomUUID(),
+      request: { subtype: "interrupt" },
+    });
+    void invoke("agent_send", { id, message: line });
+    setPending(null);
+    setStatus("idle");
+  }, [setPending]);
 
-  const send = useCallback((text: string) => {
+  // Answer a pending can_use_tool prompt: allow (once/always) or deny.
+  const respond = useCallback(
+    (decision: PermissionDecision) => {
+      const id = idRef.current;
+      const pending = pendingRef.current;
+      if (id === null || pending === null) return;
+      const inner =
+        decision === "deny"
+          ? {
+              behavior: "deny",
+              message: "User declined.",
+              interrupt: true,
+              toolUseID: pending.toolUseId,
+            }
+          : {
+              behavior: "allow",
+              updatedInput: pending.input,
+              toolUseID: pending.toolUseId,
+              ...(decision === "allow_always"
+                ? { updatedPermissions: pending.suggestions }
+                : {}),
+            };
+      const line = JSON.stringify({
+        type: "control_response",
+        response: {
+          subtype: "success",
+          request_id: pending.requestId,
+          response: inner,
+        },
+      });
+      void invoke("agent_send", { id, message: line });
+      setPending(null);
+      setStatus(decision === "deny" ? "idle" : "thinking");
+    },
+    [setPending]
+  );
+
+  const send = useCallback((text: string, images?: ChatImage[]) => {
     const id = idRef.current;
-    if (id === null || !text.trim()) return;
+    const hasImages = !!images && images.length > 0;
+    if (id === null || (!text.trim() && !hasImages)) return;
     setMessages((prev) => [
       ...prev,
       {
@@ -468,13 +562,23 @@ export function useAgentChat({
         thinking: "",
         tools: [],
         streaming: false,
+        images: hasImages ? images : undefined,
       },
     ]);
-    if (!firstMsgRef.current) firstMsgRef.current = text;
+    if (!firstMsgRef.current && text.trim()) firstMsgRef.current = text;
     setStatus("thinking");
+    const content = hasImages
+      ? [
+          ...(text.trim() ? [{ type: "text", text }] : []),
+          ...images.map((img) => ({
+            type: "image",
+            source: { type: "base64", media_type: img.mediaType, data: img.data },
+          })),
+        ]
+      : text;
     const line = JSON.stringify({
       type: "user",
-      message: { role: "user", content: text },
+      message: { role: "user", content },
     });
     void invoke("agent_send", { id, message: line });
   }, []);
@@ -498,7 +602,16 @@ export function useAgentChat({
       .catch((e) => console.error("[emberyx] title_thread failed", e));
   }, [status, resume, cwd]);
 
-  return { messages, status, usage, ready, send, stop };
+  return {
+    messages,
+    status,
+    usage,
+    ready,
+    send,
+    stop,
+    pendingPermission,
+    respond,
+  };
 }
 
 function attachToolResult(

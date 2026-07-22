@@ -81,7 +81,12 @@ impl AgentManager {
             .arg("--include-partial-messages")
             .arg("--verbose")
             .arg("--permission-mode")
-            .arg(&permission_mode);
+            .arg(&permission_mode)
+            // Opt into the permission control protocol: `stdio` makes the CLI
+            // emit `can_use_tool` control_requests for tools the mode doesn't
+            // already resolve, instead of silently applying the mode.
+            .arg("--permission-prompt-tool")
+            .arg("stdio");
 
         match &resume {
             Some(id) => {
@@ -121,6 +126,14 @@ impl AgentManager {
             .lock()
             .unwrap()
             .insert(id, AgentSession { child, stdin });
+
+        // Declare the client to the control protocol (matches the Agent SDK
+        // handshake). Best-effort — the load-bearing part is the launch flag;
+        // the CLI's success reply is ignored by the frontend.
+        let _ = self.send(
+            id,
+            r#"{"type":"control_request","request_id":"init","request":{"subtype":"initialize","hooks":null,"sdkMcpServers":[],"jsonSchema":null,"systemPrompt":null,"appendSystemPrompt":null,"agents":null}}"#,
+        );
 
         // stderr: forward as diagnostics.
         let err_channel = on_event.clone();

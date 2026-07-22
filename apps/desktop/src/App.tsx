@@ -188,12 +188,16 @@ function App() {
     });
   };
 
-  /** Launch a project's primary agent: resume its most recent thread when the
-   *  setting is on (falling back to a fresh agent if none / on error), else a
-   *  brand-new agent. Scrollback persists under the project path either way. */
+  /** Launch a project's primary agent: the chat UI always resumes the most
+   *  recent thread; the terminal does so only when the setting is on. Both fall
+   *  back to a fresh agent if there is none / on error. Scrollback persists
+   *  under the project path either way. */
   async function startPrimaryAgent(id: string, path: string) {
     const chat = settings.agentUi === "chat";
-    if (settings.resumeLatestThread && isClaudeAgent(settings.agentCommand)) {
+    // Chat is always Claude, so agentCommand only gates the terminal path.
+    const resumeLatest =
+      chat || (settings.resumeLatestThread && isClaudeAgent(settings.agentCommand));
+    if (resumeLatest) {
       try {
         const threads = await invoke<Thread[]>("list_threads", { cwd: path });
         // A superseded pre-warm may have been torn down while we awaited; don't
