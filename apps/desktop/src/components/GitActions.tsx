@@ -39,10 +39,11 @@ function parseStash(label: string): { branch: string; message: string } {
     : { branch: "", message: label };
 }
 
-/** Inline prompt to gather one text value (new branch name / remote name). */
+/** Inline prompt to gather one text value (new branch / remote / stash name). */
 type Prompt =
   | { kind: "new-branch"; label: string; placeholder: string; value: string }
   | { kind: "push-to"; label: string; placeholder: string; value: string }
+  | { kind: "stash"; label: string; placeholder: string; value: string }
   | null;
 
 /** Branch bar + pull/push/checkout/stash actions for the current repo. */
@@ -110,6 +111,10 @@ export function GitActions({ projectPath }: GitActionsProps) {
     if (prompt.kind === "new-branch") {
       run("Created branch", () =>
         invoke<string>("git_checkout", { path: projectPath, branch: value, create: true })
+      );
+    } else if (prompt.kind === "stash") {
+      run("Stashed", () =>
+        invoke<string>("git_stash_push", { path: projectPath, message: value })
       );
     } else {
       // Push current branch to the named remote and set it as upstream.
@@ -261,13 +266,16 @@ export function GitActions({ projectPath }: GitActionsProps) {
           <DropdownMenuContent align="start" className="max-h-80 w-96 overflow-auto">
             <DropdownMenuItem
               onSelect={() =>
-                run("Stashed", () =>
-                  invoke<string>("git_stash_push", { path: projectPath, message: "" })
-                )
+                setPrompt({
+                  kind: "stash",
+                  label: "Stash name",
+                  placeholder: "Stash name…",
+                  value: "",
+                })
               }
             >
               <Archive className="size-4" />
-              Stash changes
+              Stash changes…
             </DropdownMenuItem>
             {(stashesQuery.data ?? []).length > 0 && <DropdownMenuSeparator />}
             {(stashesQuery.data ?? []).map((s) => {

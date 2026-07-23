@@ -25,7 +25,7 @@ type Tab = "general" | "terminal" | "integrations";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "general", label: "General" },
-  { id: "terminal", label: "Terminal" },
+  { id: "terminal", label: "Appearance" },
   { id: "integrations", label: "Integrations" },
 ];
 
@@ -224,8 +224,8 @@ export function SettingsDialog({
                 />
               </Field>
 
-              <div className="grid grid-cols-2 gap-4">
-                <Field label="Font size">
+              <div className="grid grid-cols-3 gap-4">
+                <Field label="Terminal font">
                   <Input
                     type="number"
                     min={8}
@@ -233,6 +233,18 @@ export function SettingsDialog({
                     value={settings.fontSize}
                     onChange={(e) =>
                       onUpdate({ fontSize: Number(e.target.value) || 13 })
+                    }
+                  />
+                </Field>
+
+                <Field label="Editor font">
+                  <Input
+                    type="number"
+                    min={8}
+                    max={32}
+                    value={settings.editorFontSize}
+                    onChange={(e) =>
+                      onUpdate({ editorFontSize: Number(e.target.value) || 13 })
                     }
                   />
                 </Field>

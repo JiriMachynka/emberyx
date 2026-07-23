@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use serde::Serialize;
 use tauri::ipc::Channel;
 
+use crate::error::Result;
+
 /// Events streamed from a headless Claude Code process back to the frontend.
 /// Unlike the PTY path, this carries whole newline-delimited JSON lines from
 /// `claude --output-format stream-json` — parsing/rendering happens in the UI.
@@ -71,7 +73,7 @@ impl AgentManager {
         settings: Option<String>,
         emberyx_session_id: String,
         on_event: Channel<AgentEvent>,
-    ) -> Result<u32, String> {
+    ) -> Result<u32> {
         let mut cmd = Command::new("claude");
         cmd.arg("-p")
             .arg("--input-format")
@@ -139,7 +141,7 @@ impl AgentManager {
         let err_channel = on_event.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
+            for line in reader.lines().map_while(std::io::Result::ok) {
                 if err_channel.send(AgentEvent::Stderr(line)).is_err() {
                     return;
                 }
@@ -151,7 +153,7 @@ impl AgentManager {
         let sessions = Arc::clone(&self.sessions);
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
-            for line in reader.lines().map_while(Result::ok) {
+            for line in reader.lines().map_while(std::io::Result::ok) {
                 if out_channel.send(AgentEvent::Line(line)).is_err() {
                     return;
                 }
@@ -169,21 +171,21 @@ impl AgentManager {
     }
 
     /// Write one stream-json message line to the process stdin (a user turn).
-    pub fn send(&self, id: u32, message: &str) -> Result<(), String> {
+    pub fn send(&self, id: u32, message: &str) -> Result<()> {
         let mut sessions = self.sessions.lock().unwrap();
         let session = sessions.get_mut(&id).ok_or("no such agent session")?;
         session
             .stdin
             .write_all(message.as_bytes())
             .and_then(|_| session.stdin.write_all(b"\n"))
-            .and_then(|_| session.stdin.flush())
-            .map_err(|e| e.to_string())
+            .and_then(|_| session.stdin.flush())?;
+        Ok(())
     }
 
     /// Terminate the process and reap it. The stdout reader normally reaps on
     /// EOF, but can't once we've removed the session here — so wait() ourselves
     /// (after releasing the lock) to avoid leaving a zombie.
-    pub fn kill(&self, id: u32) -> Result<(), String> {
+    pub fn kill(&self, id: u32) -> Result<()> {
         let session = self.sessions.lock().unwrap().remove(&id);
         if let Some(mut session) = session {
             let _ = session.child.kill();
@@ -217,7 +219,7 @@ impl AgentManager {
         cwd: String,
         session_id: String,
         first_message: String,
-    ) -> Result<String, String> {
+    ) -> Result<String> {
         let prompt = format!(
             "Generate a concise 3-6 word title for a coding conversation that \
              opens with this user message. Reply with ONLY the title — no quotes, \
@@ -250,7 +252,7 @@ impl AgentManager {
 
         let output = cmd.output().map_err(|e| e.to_string())?;
         if !output.status.success() {
-            return Err(format!("title generation exited {:?}", output.status.code()));
+            return Err(crate::err!("title generation exited {:?}", output.status.code()));
         }
         let raw = String::from_utf8_lossy(&output.stdout);
         let title: String = raw
@@ -292,8 +294,8 @@ pub fn agent_spawn(
     settings: Option<String>,
     emberyx_session_id: String,
     on_event: Channel<AgentEvent>,
-) -> Result<u32, String> {
-    manager.spawn(
+) -> Result<u32> {
+    Ok(manager.spawn(
         cwd,
         session_id,
         resume,
@@ -301,7 +303,7 @@ pub fn agent_spawn(
         settings,
         emberyx_session_id,
         on_event,
-    )
+    )?)
 }
 
 #[tauri::command]
@@ -309,13 +311,13 @@ pub fn agent_send(
     manager: tauri::State<'_, AgentManager>,
     id: u32,
     message: String,
-) -> Result<(), String> {
-    manager.send(id, &message)
+) -> Result<()> {
+    Ok(manager.send(id, &message)?)
 }
 
 #[tauri::command]
-pub fn agent_kill(manager: tauri::State<'_, AgentManager>, id: u32) -> Result<(), String> {
-    manager.kill(id)
+pub fn agent_kill(manager: tauri::State<'_, AgentManager>, id: u32) -> Result<()> {
+    Ok(manager.kill(id)?)
 }
 
 #[tauri::command]
@@ -324,6 +326,6 @@ pub fn title_thread(
     cwd: String,
     session_id: String,
     first_message: String,
-) -> Result<String, String> {
-    manager.title_thread(cwd, session_id, first_message)
+) -> Result<String> {
+    Ok(manager.title_thread(cwd, session_id, first_message)?)
 }

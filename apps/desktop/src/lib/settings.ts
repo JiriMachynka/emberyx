@@ -7,8 +7,10 @@ export interface Settings {
   agentCommand: string;
   /** Terminal font-family stack. */
   fontFamily: string;
-  /** Terminal font size in px. */
+  /** Terminal + chat font size in px. */
   fontSize: number;
+  /** Built-in file editor font size in px. */
+  editorFontSize: number;
   /** Terminal scrollback in lines. */
   scrollback: number;
   /** Launch Claude with --dangerously-skip-permissions. */
@@ -32,6 +34,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agentCommand: "claude",
   fontFamily: '"Geist Mono Variable", ui-monospace, Menlo, monospace',
   fontSize: 13,
+  editorFontSize: 13,
   scrollback: 1000,
   dangerouslySkipPermissions: true,
   resumeLatestThread: false,

@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::error::Result;
+
 /// A single runnable package (has a dev-ish script).
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,10 +154,10 @@ fn package_from_dir(root: &Path, dir: &Path, pm: &str) -> Option<PackageInfo> {
     })
 }
 
-pub fn scan(root_str: &str) -> Result<WorkspaceInfo, String> {
+pub fn scan(root_str: &str) -> Result<WorkspaceInfo> {
     let root = PathBuf::from(root_str);
     if !root.is_dir() {
-        return Err(format!("not a directory: {}", root_str));
+        return Err(crate::err!("not a directory: {}", root_str));
     }
 
     let pm = detect_package_manager(&root);
@@ -222,7 +224,7 @@ pub fn scan(root_str: &str) -> Result<WorkspaceInfo, String> {
 }
 
 #[tauri::command]
-pub fn scan_workspace(path: String) -> Result<WorkspaceInfo, String> {
+pub fn scan_workspace(path: String) -> Result<WorkspaceInfo> {
     scan(&path)
 }
 

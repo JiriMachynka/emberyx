@@ -5,6 +5,8 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::error::Result;
+
 /// Default model used when the user hasn't set one in Settings.
 const DEFAULT_MODEL: &str = "google/gemini-3.5-flash";
 /// Cap the diff we send so a huge changeset doesn't blow the token budget.
@@ -66,7 +68,7 @@ pub struct OpenRouterModel {
 
 /// List available OpenRouter models (public endpoint, no key required).
 #[tauri::command]
-pub async fn openrouter_models() -> Result<Vec<OpenRouterModel>, String> {
+pub async fn openrouter_models() -> Result<Vec<OpenRouterModel>> {
     tauri::async_runtime::spawn_blocking(move || {
         let agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(10))
@@ -108,7 +110,7 @@ pub async fn generate_commit_message(
     files: Vec<String>,
     api_key: String,
     model: String,
-) -> Result<String, String> {
+) -> Result<String> {
     tauri::async_runtime::spawn_blocking(move || {
         let api_key = api_key.trim();
         if api_key.is_empty() {

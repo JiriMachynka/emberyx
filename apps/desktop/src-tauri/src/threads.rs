@@ -6,6 +6,8 @@ use std::time::UNIX_EPOCH;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::error::Result;
+
 /// A Claude Code conversation thread stored under ~/.claude/projects.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,15 +76,15 @@ fn scan(text: &str) -> (String, String) {
 /// prior turns on resume — headless `--resume` loads context but never re-emits
 /// past messages to stdout.
 #[tauri::command]
-pub fn read_thread(cwd: String, session_id: String) -> Result<String, String> {
+pub fn read_thread(cwd: String, session_id: String) -> Result<String> {
     let base = projects_dir().ok_or("no home dir")?;
     let path = base.join(encode_cwd(&cwd)).join(format!("{session_id}.jsonl"));
-    fs::read_to_string(&path).map_err(|e| e.to_string())
+    Ok(fs::read_to_string(&path)?)
 }
 
 /// List the Claude Code threads recorded for `cwd`, newest first.
 #[tauri::command]
-pub fn list_threads(cwd: String) -> Result<Vec<Thread>, String> {
+pub fn list_threads(cwd: String) -> Result<Vec<Thread>> {
     let Some(base) = projects_dir() else {
         return Ok(vec![]);
     };

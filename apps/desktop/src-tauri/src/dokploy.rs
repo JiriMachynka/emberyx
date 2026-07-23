@@ -4,6 +4,8 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::error::Result;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DokployService {
@@ -170,8 +172,8 @@ pub async fn dokploy_services(
     url: String,
     api_key: String,
     cwd: String,
-) -> Result<Option<DokployMatch>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+) -> Result<Option<DokployMatch>> {
+    Ok(tauri::async_runtime::spawn_blocking(move || -> Result<Option<DokployMatch>> {
         let local = match remote_url(&cwd).as_deref().and_then(git_slug) {
             Some(s) => s,
             None => return Ok(None),
@@ -190,7 +192,7 @@ pub async fn dokploy_services(
             .set("x-api-key", api_key)
             .set("accept", "application/json")
             .call()
-            .map_err(|e| format!("Dokploy request failed: {e}"))?;
+            .map_err(|e| crate::err!("Dokploy request failed: {e}"))?;
         let json: Value = resp.into_json().map_err(|e| e.to_string())?;
         let projects = json.as_array().ok_or("Unexpected Dokploy response")?;
 
@@ -257,13 +259,13 @@ pub async fn dokploy_services(
         Ok(None)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??)
 }
 
 /// Trigger a redeploy of a Dokploy application or compose service.
 #[tauri::command]
-pub async fn dokploy_redeploy(url: String, api_key: String, kind: String, id: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn dokploy_redeploy(url: String, api_key: String, kind: String, id: String) -> Result<()> {
+    Ok(tauri::async_runtime::spawn_blocking(move || -> Result<()> {
         let base = url.trim().trim_end_matches('/');
         if base.is_empty() {
             return Err("Dokploy URL not set".into());
@@ -271,7 +273,7 @@ pub async fn dokploy_redeploy(url: String, api_key: String, kind: String, id: St
         let (path, body) = match kind.as_str() {
             "application" => ("application.redeploy", serde_json::json!({ "applicationId": id })),
             "compose" => ("compose.redeploy", serde_json::json!({ "composeId": id })),
-            other => return Err(format!("Cannot redeploy {other}")),
+            other => return Err(crate::err!("Cannot redeploy {other}")),
         };
         let agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(10))
@@ -282,19 +284,19 @@ pub async fn dokploy_redeploy(url: String, api_key: String, kind: String, id: St
             .set("x-api-key", api_key.trim())
             .set("content-type", "application/json")
             .send_json(body)
-            .map_err(|e| format!("Dokploy redeploy failed: {e}"))?;
+            .map_err(|e| crate::err!("Dokploy redeploy failed: {e}"))?;
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??)
 }
 
 /// Read recent logs for a Dokploy application. Only `application` is supported.
 #[tauri::command]
-pub async fn dokploy_logs(url: String, api_key: String, kind: String, id: String, tail: u32) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn dokploy_logs(url: String, api_key: String, kind: String, id: String, tail: u32) -> Result<String> {
+    Ok(tauri::async_runtime::spawn_blocking(move || -> Result<String> {
         if kind != "application" {
-            return Err(format!("Logs not supported for {kind}"));
+            return Err(crate::err!("Logs not supported for {kind}"));
         }
         let base = url.trim().trim_end_matches('/');
         if base.is_empty() {
@@ -309,13 +311,13 @@ pub async fn dokploy_logs(url: String, api_key: String, kind: String, id: String
             .set("x-api-key", api_key.trim())
             .set("accept", "application/json")
             .call()
-            .map_err(|e| format!("Dokploy logs failed: {e}"))?;
-        let body = resp.into_string().map_err(|e| format!("Dokploy logs failed: {e}"))?;
+            .map_err(|e| crate::err!("Dokploy logs failed: {e}"))?;
+        let body = resp.into_string().map_err(|e| crate::err!("Dokploy logs failed: {e}"))?;
         // Endpoint may return a raw string or a JSON-encoded (quoted) string.
         Ok(serde_json::from_str::<String>(&body).unwrap_or(body))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??)
 }
 
 #[cfg(test)]

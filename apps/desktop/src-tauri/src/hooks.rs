@@ -31,7 +31,7 @@ fn gen_token() -> String {
 }
 
 /// Start the local hook listener and write the settings file the agent uses.
-pub fn start(app: &AppHandle) -> Result<HookConfig, String> {
+pub fn start(app: &AppHandle) -> crate::error::Result<HookConfig> {
     let server = tiny_http::Server::http("127.0.0.1:0").map_err(|e| e.to_string())?;
     let port = match server.server_addr() {
         tiny_http::ListenAddr::IP(addr) => addr.port(),

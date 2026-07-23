@@ -13,6 +13,8 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::Manager;
 
+use crate::error::Result;
+
 /// Cap on persisted / replayed scrollback per project (bytes).
 const SCROLLBACK_CAP: u64 = 1_000_000;
 
@@ -139,7 +141,7 @@ impl PtyManager {
         rows: u16,
         on_event: Channel<PtyEvent>,
         log_path: Option<PathBuf>,
-    ) -> Result<u32, String> {
+    ) -> Result<u32> {
         let pty_system = NativePtySystem::default();
         let pair = pty_system
             .openpty(PtySize {
@@ -299,17 +301,15 @@ impl PtyManager {
         Ok(id)
     }
 
-    pub fn write(&self, id: u32, data: &str) -> Result<(), String> {
+    pub fn write(&self, id: u32, data: &str) -> Result<()> {
         let mut sessions = self.sessions.lock().unwrap();
         let session = sessions.get_mut(&id).ok_or("pty not found")?;
-        session
-            .writer
-            .write_all(data.as_bytes())
-            .map_err(|e| e.to_string())?;
-        session.writer.flush().map_err(|e| e.to_string())
+        session.writer.write_all(data.as_bytes())?;
+        session.writer.flush()?;
+        Ok(())
     }
 
-    pub fn resize(&self, id: u32, cols: u16, rows: u16) -> Result<(), String> {
+    pub fn resize(&self, id: u32, cols: u16, rows: u16) -> Result<()> {
         let sessions = self.sessions.lock().unwrap();
         let session = sessions.get(&id).ok_or("pty not found")?;
         session
@@ -320,10 +320,11 @@ impl PtyManager {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
-    pub fn kill(&self, id: u32) -> Result<(), String> {
+    pub fn kill(&self, id: u32) -> Result<()> {
         // Dropping the session drops the master, which hangs up the PTY.
         self.sessions.lock().unwrap().remove(&id);
         Ok(())
@@ -350,16 +351,16 @@ pub fn pty_spawn(
     cols: u16,
     rows: u16,
     on_event: Channel<PtyEvent>,
-) -> Result<u32, String> {
+) -> Result<u32> {
     let log_path = persist_key
         .as_deref()
         .and_then(|k| scrollback_file(&app, k));
-    manager.spawn(cwd, command, session_id, cols, rows, on_event, log_path)
+    Ok(manager.spawn(cwd, command, session_id, cols, rows, on_event, log_path)?)
 }
 
 /// Return the tail of a project's persisted scrollback, base64-encoded.
 #[tauri::command]
-pub fn read_scrollback(app: tauri::AppHandle, persist_key: String) -> Result<String, String> {
+pub fn read_scrollback(app: tauri::AppHandle, persist_key: String) -> Result<String> {
     let Some(path) = scrollback_file(&app, &persist_key) else {
         return Ok(String::new());
     };
@@ -375,8 +376,8 @@ pub fn pty_write(
     manager: tauri::State<'_, PtyManager>,
     id: u32,
     data: String,
-) -> Result<(), String> {
-    manager.write(id, &data)
+) -> Result<()> {
+    Ok(manager.write(id, &data)?)
 }
 
 #[tauri::command]
@@ -385,11 +386,11 @@ pub fn pty_resize(
     id: u32,
     cols: u16,
     rows: u16,
-) -> Result<(), String> {
-    manager.resize(id, cols, rows)
+) -> Result<()> {
+    Ok(manager.resize(id, cols, rows)?)
 }
 
 #[tauri::command]
-pub fn pty_kill(manager: tauri::State<'_, PtyManager>, id: u32) -> Result<(), String> {
-    manager.kill(id)
+pub fn pty_kill(manager: tauri::State<'_, PtyManager>, id: u32) -> Result<()> {
+    Ok(manager.kill(id)?)
 }
