@@ -1,4 +1,5 @@
 mod agent;
+mod ask;
 mod defs;
 mod dokploy;
 mod error;
@@ -39,8 +40,9 @@ pub fn run() {
         .manage(usage::UsageCache::default())
         .manage(usage::SummaryCache::default())
         .setup(|app| {
-            let config = hooks::start(&app.handle())?;
+            let config = hooks::start(app.handle())?;
             app.manage(config);
+            app.manage(ask::start(app.handle())?);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -53,6 +55,7 @@ pub fn run() {
             agent::agent_send,
             agent::agent_kill,
             agent::title_thread,
+            ask::answer_ask,
             workspace::scan_workspace,
             files::list_dir,
             files::list_files,

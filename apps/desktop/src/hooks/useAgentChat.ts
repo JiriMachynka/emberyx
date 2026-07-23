@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 /** A stream-json line from the headless `claude` process (Rust AgentEvent). */
 type AgentEvent =
@@ -55,6 +56,16 @@ export interface PendingPermission {
   /** CLI-computed permission_suggestions, echoed back for "allow always". */
   suggestions: unknown[];
   toolUseId: string;
+}
+
+/** A question raised by the agent's `ask_user` MCP tool. The call is blocked in
+ *  the backend until `answerAsk` sends a choice back. */
+export interface PendingAsk {
+  id: string;
+  question: string;
+  header: string;
+  options: { label: string; description: string }[];
+  multiSelect: boolean;
 }
 
 export interface ChatUsage {
@@ -229,6 +240,11 @@ export function useAgentChat({
     pendingRef.current = p;
     setPendingPermission(p);
   }, []);
+
+  const [pendingAsk, setPendingAsk] = useState<PendingAsk | null>(null);
+  // Mirror for reads inside callbacks, same reason as pendingRef above.
+  const askRef = useRef<PendingAsk | null>(null);
+  askRef.current = pendingAsk;
 
   const idRef = useRef<number | null>(null);
   const sessionRef = useRef<string | undefined>(resume);
@@ -549,6 +565,27 @@ export function useAgentChat({
     [setPending]
   );
 
+  // `ask_user` questions arrive as a Tauri event (the tool call blocks in Rust,
+  // not on the stream-json wire), tagged with the session that asked.
+  useEffect(() => {
+    const unlisten = listen<PendingAsk & { session: string }>("ask-user", (ev) => {
+      if (ev.payload.session !== emberyxSessionId) return;
+      setPendingAsk(ev.payload);
+    });
+    return () => {
+      void unlisten.then((off) => off());
+    };
+  }, [emberyxSessionId]);
+
+  /** Hand a choice back to the blocked tool call. */
+  const answerAsk = useCallback((answer: string) => {
+    const pending = askRef.current;
+    if (!pending) return;
+    setPendingAsk(null);
+    void invoke("answer_ask", { id: pending.id, answer });
+    setStatus("thinking");
+  }, []);
+
   const send = useCallback((text: string, images?: ChatImage[]) => {
     const id = idRef.current;
     const hasImages = !!images && images.length > 0;
@@ -611,6 +648,8 @@ export function useAgentChat({
     stop,
     pendingPermission,
     respond,
+    pendingAsk,
+    answerAsk,
   };
 }
 

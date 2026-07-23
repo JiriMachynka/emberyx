@@ -1,10 +1,18 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { Check, ChevronRight, Copy, Loader2, Wrench } from "lucide-react";
+import {
+  Check,
+  ChevronRight,
+  Copy,
+  Loader2,
+  MessageCircleQuestionMark,
+  Wrench,
+} from "lucide-react";
 import {
   useAgentChat,
   type ChatImage,
   type ChatMessage,
   type ChatStatus,
+  type PendingAsk,
   type PendingPermission,
   type PermissionDecision,
   type ToolCall,
@@ -51,13 +59,23 @@ export function ChatPane({
   fontSize,
   onTitled,
 }: ChatPaneProps) {
-  const { messages, status, usage, ready, send, stop, pendingPermission, respond } =
-    useAgentChat({
-      cwd,
-      emberyxSessionId: sessionId,
-      resume,
-      onTitled,
-    });
+  const {
+    messages,
+    status,
+    usage,
+    ready,
+    send,
+    stop,
+    pendingPermission,
+    respond,
+    pendingAsk,
+    answerAsk,
+  } = useAgentChat({
+    cwd,
+    emberyxSessionId: sessionId,
+    resume,
+    onTitled,
+  });
   const [preview, setPreview] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -121,13 +139,18 @@ export function ChatPane({
               <PermissionPrompt pending={pendingPermission} onDecide={respond} />
             </div>
           )}
+          {pendingAsk && (
+            <div className="mb-2">
+              <AskPrompt pending={pendingAsk} onAnswer={answerAsk} />
+            </div>
+          )}
           <ChatComposer
             cwd={cwd}
             active={active}
             ready={ready}
             busy={busy}
             exited={status === "exited"}
-            blocked={pendingPermission != null}
+            blocked={pendingPermission != null || pendingAsk != null}
             usage={usage}
             onSend={send}
             onStop={stop}
@@ -353,6 +376,123 @@ function ToolCode({
         dangerouslySetInnerHTML={{ __html: highlightCode(code, lang) }}
       />
     </pre>
+  );
+}
+
+/** The agent's own question, from the ask_user tool. Same keyboard contract as
+ *  the permission prompt: number keys, arrows + Enter, or click. Multi-select
+ *  toggles rows and confirms with Enter. */
+function AskPrompt({
+  pending,
+  onAnswer,
+}: {
+  pending: PendingAsk;
+  onAnswer: (answer: string) => void;
+}) {
+  const [active, setActive] = useState(0);
+  const [chosen, setChosen] = useState<Set<number>>(new Set());
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setActive(0);
+    setChosen(new Set());
+    ref.current?.focus();
+  }, [pending.id]);
+
+  const answerWith = (indexes: number[]) => {
+    const labels = indexes.map((i) => pending.options[i].label);
+    if (labels.length) onAnswer(labels.join(", "));
+  };
+
+  const pick = (i: number) => {
+    if (!pending.multiSelect) {
+      answerWith([i]);
+      return;
+    }
+    setChosen((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const count = pending.options.length;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActive((i) => (i + 1) % count);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActive((i) => (i - 1 + count) % count);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (pending.multiSelect && chosen.size) answerWith([...chosen].sort());
+      else pick(active);
+    } else if (/^[1-9]$/.test(e.key)) {
+      const idx = Number(e.key) - 1;
+      if (idx < count) {
+        e.preventDefault();
+        pick(idx);
+      }
+    }
+  };
+
+  return (
+    <div
+      ref={ref}
+      tabIndex={0}
+      onKeyDown={onKeyDown}
+      className="rounded-xl border border-border bg-card p-3 shadow-sm outline-none ring-1 ring-transparent focus:ring-ring/40"
+    >
+      <div className="mb-2 flex items-center gap-2 text-sm">
+        <MessageCircleQuestionMark className="size-3.5 text-primary" />
+        <span className="font-medium">{pending.question}</span>
+        {pending.header && (
+          <span className="ml-auto shrink-0 rounded bg-secondary px-1.5 text-[10px] text-muted-foreground">
+            {pending.header}
+          </span>
+        )}
+      </div>
+      <div className="flex flex-col gap-1">
+        {pending.options.map((o, i) => (
+          <button
+            key={o.label}
+            type="button"
+            onMouseEnter={() => setActive(i)}
+            onClick={() => pick(i)}
+            className={cn(
+              "flex items-start gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors",
+              i === active
+                ? "bg-primary/15 text-foreground"
+                : "text-muted-foreground hover:bg-muted"
+            )}
+          >
+            <kbd
+              className={cn(
+                "mt-0.5 grid size-5 shrink-0 place-items-center rounded border border-border font-mono text-xs",
+                chosen.has(i) ? "bg-primary text-primary-foreground" : "bg-background"
+              )}
+            >
+              {chosen.has(i) ? "✓" : i + 1}
+            </kbd>
+            <span className="min-w-0">
+              <span className="block text-foreground">{o.label}</span>
+              {o.description && (
+                <span className="block text-xs text-muted-foreground">
+                  {o.description}
+                </span>
+              )}
+            </span>
+          </button>
+        ))}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        {pending.multiSelect
+          ? "Toggle with 1–9 or click, Enter to confirm."
+          : `Press 1–${pending.options.length}, ↑↓ + Enter, or click.`}
+      </p>
+    </div>
   );
 }
 

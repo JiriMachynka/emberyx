@@ -71,6 +71,7 @@ impl AgentManager {
         resume: Option<String>,
         permission_mode: String,
         settings: Option<String>,
+        mcp_config: Option<String>,
         emberyx_session_id: String,
         on_event: Channel<AgentEvent>,
     ) -> Result<u32> {
@@ -100,6 +101,14 @@ impl AgentManager {
         }
         if let Some(s) = &settings {
             cmd.arg("--settings").arg(s);
+        }
+        // Emberyx's own MCP server, which exposes ask_user. Pre-allowed so the
+        // question itself doesn't first raise a permission prompt.
+        if let Some(config) = &mcp_config {
+            cmd.arg("--mcp-config")
+                .arg(config)
+                .arg("--allowedTools")
+                .arg("mcp__emberyx__ask_user");
         }
 
         cmd.current_dir(&cwd)
@@ -287,6 +296,7 @@ impl AgentManager {
 #[allow(clippy::too_many_arguments)]
 pub fn agent_spawn(
     manager: tauri::State<'_, AgentManager>,
+    ask: tauri::State<'_, crate::ask::AskServer>,
     cwd: String,
     session_id: String,
     resume: Option<String>,
@@ -295,12 +305,14 @@ pub fn agent_spawn(
     emberyx_session_id: String,
     on_event: Channel<AgentEvent>,
 ) -> Result<u32> {
+    let mcp_config = ask.mcp_config(&emberyx_session_id);
     Ok(manager.spawn(
         cwd,
         session_id,
         resume,
         permission_mode,
         settings,
+        Some(mcp_config),
         emberyx_session_id,
         on_event,
     )?)
