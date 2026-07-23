@@ -138,3 +138,106 @@ pub fn list_threads(cwd: String) -> Result<Vec<Thread>> {
     out.sort_by(|a, b| b.modified.cmp(&a.modified));
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("emberyx_test_threads_{name}.jsonl"));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn encodes_a_cwd_the_way_claude_code_names_its_project_dir() {
+        assert_eq!(encode_cwd("/Users/jiri/dev/app"), "-Users-jiri-dev-app");
+        assert_eq!(encode_cwd("/a_b.c"), "-a-b-c");
+        assert_eq!(encode_cwd("plain123"), "plain123");
+        // Non-ASCII is not alphanumeric by this rule, and the walk is per char
+        // (not per byte), so "é" collapses to a single dash.
+        assert_eq!(encode_cwd("/café"), "-caf-");
+        assert_eq!(encode_cwd(""), "");
+    }
+
+    #[test]
+    fn reads_the_whole_file_when_it_is_smaller_than_the_window() {
+        let path = temp("tail_small");
+        std::fs::write(&path, "line one\nline two\n").unwrap();
+
+        let (text, full) = read_tail(&path, 1024).unwrap();
+        assert!(full);
+        assert_eq!(text, "line one\nline two\n");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reads_only_the_tail_of_a_large_file() {
+        let path = temp("tail_large");
+        std::fs::write(&path, format!("{}TAIL", "x".repeat(1000))).unwrap();
+
+        let (text, full) = read_tail(&path, 4).unwrap();
+        assert!(!full);
+        assert_eq!(text, "TAIL");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn returns_nothing_for_a_missing_file() {
+        assert!(read_tail(Path::new("/nonexistent/x.jsonl"), 10).is_none());
+    }
+
+    #[test]
+    fn scans_the_last_title_and_prompt_from_a_transcript() {
+        let text = concat!(
+            r#"{"type":"last-prompt","lastPrompt":"first ask"}"#,
+            "\n",
+            r#"{"type":"ai-title","aiTitle":"Early title"}"#,
+            "\n",
+            r#"{"type":"assistant","message":{}}"#,
+            "\n",
+            r#"{"type":"ai-title","aiTitle":"Latest title"}"#,
+            "\n",
+            r#"{"type":"last-prompt","lastPrompt":"latest ask"}"#,
+            "\n",
+        );
+        assert_eq!(
+            scan(text),
+            ("Latest title".to_string(), "latest ask".to_string())
+        );
+    }
+
+    #[test]
+    fn scans_an_untitled_transcript_down_to_its_prompt() {
+        let text = concat!(r#"{"type":"last-prompt","lastPrompt":"only ask"}"#, "\n");
+        assert_eq!(scan(text), (String::new(), "only ask".to_string()));
+    }
+
+    #[test]
+    fn scan_ignores_malformed_and_unrelated_lines() {
+        let text = concat!(
+            "not json\n",
+            r#"{"type":"ai-title""#,
+            "\n",
+            r#"{"type":"user","message":{"content":"hi"}}"#,
+            "\n",
+        );
+        assert_eq!(scan(text), (String::new(), String::new()));
+        assert_eq!(scan(""), (String::new(), String::new()));
+    }
+
+    #[test]
+    fn scan_survives_a_tail_that_starts_mid_line() {
+        // read_tail can slice a file anywhere, so the first line is often a
+        // fragment — it must be skipped, not derail the rest.
+        let text = concat!(
+            r#"pt":"truncated"}"#,
+            "\n",
+            r#"{"type":"ai-title","aiTitle":"Good title"}"#,
+            "\n",
+        );
+        assert_eq!(scan(text).0, "Good title");
+    }
+}

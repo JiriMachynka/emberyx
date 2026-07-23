@@ -17,7 +17,6 @@ apps/desktop/          the app
     lib/               settings, pricing, queries, diff/hunk helpers, fuzzy, slash
   src-tauri/src/       Rust core, one module per capability
 apps/web/              Astro marketing site (separate, rarely touched)
-docs/design-log.md     why each decision was made — read before re-litigating one
 ```
 
 ## Commands
@@ -28,11 +27,38 @@ bun run desktop                      # turbo dev, desktop only
 bun run tauri dev                    # full Tauri dev
 bun run tauri build                  # local .dmg
 bun run --cwd apps/desktop build     # tsc && vite build — the typecheck gate
+bun run --cwd apps/desktop test      # vitest (the canonical runner)
+bun test --cwd apps/desktop          # Bun's runner — same files, also passes
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml
 ```
 
-There is no linter or test suite. Verification = `tsc` (via the desktop build)
-plus `cargo clippy`. Don't add Biome/oxlint config without asking.
+There is no linter. Verification = `tsc` (via the desktop build), `vitest`,
+`cargo test`, and `cargo clippy` — all four run in CI (`.github/workflows/test.yml`).
+Don't add Biome/oxlint config without asking.
+
+### Tests
+
+Vitest (happy-dom) covers `src/lib/**` and `src/hooks/**`; tests are colocated
+as `*.test.ts(x)`. The Tauri boundary is stubbed per test file (`vi.mock` over
+`@tauri-apps/api`), not mocked globally.
+
+**Two runners, one suite.** `bun test` is Bun's own runner and ignores
+`vitest.config.ts` entirely — no environment, no `setupFiles`. `bunfig.toml`
+preloads `bun-test-setup.ts` to register the same happy-dom globals, so both
+commands pass on the same files. If you add a config option to
+`vitest.config.ts` that tests depend on, mirror it in the preload or `bun test`
+silently diverges.
+
+Both setup files install an in-memory `localStorage`: Node 26 ships a built-in
+one that stays `undefined` and shadows happy-dom's, and Bun provides none.
+
+Rust tests live in `#[cfg(test)] mod tests` at the bottom of each module. The
+git tests build throwaway repos in `std::env::temp_dir()` with local identity
+and `commit.gpgsign=false`, so a developer's global git config can't sway them.
+
+`tsc` typechecks test files too, and the project targets ES2020 — `Array.at()`
+is not available.
 
 ## Architecture
 

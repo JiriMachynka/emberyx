@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
+    "test": "turbo run test",
     "desktop": "turbo run dev --filter=@emberyx/desktop",
     "web": "turbo run dev --filter=@emberyx/web",
     "tauri": "bun run --cwd apps/desktop tauri"

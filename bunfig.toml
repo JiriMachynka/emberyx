@@ -1,0 +1,5 @@
+[test]
+# Bun reads bunfig.toml from the directory it is invoked in, so the desktop
+# app's own config does not apply to a root-level `bun test`. Point at the same
+# preload here, otherwise a root run loses the DOM globals and fails.
+preload = ["./apps/desktop/bun-test-setup.ts"]

@@ -1,0 +1,4 @@
+[test]
+# `bun test` uses Bun's own runner and ignores vitest.config.ts, so the DOM
+# globals the suite needs are registered here instead.
+preload = ["./bun-test-setup.ts"]

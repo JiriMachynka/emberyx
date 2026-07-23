@@ -1,0 +1,52 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # macOS matches the only shipped target, and skips the webkit2gtk/glib
+    # system deps a Linux runner would need just to build the Tauri crate.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+          # Deliberately NOT `release`: this job builds the debug/test profile,
+          # and sharing that key would thrash the cache release.yml restores.
+          shared-key: test
+
+      - run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bunx tsc --noEmit
+        working-directory: apps/desktop
+
+      - name: Frontend tests
+        run: bun run test
+        working-directory: apps/desktop
+
+      # No `-D warnings`: the crate carries a couple of pre-existing lints, and
+      # failing the build on them is a separate decision from adding tests.
+      - name: Clippy
+        run: cargo clippy --all-targets
+        working-directory: apps/desktop/src-tauri
+
+      - name: Rust tests
+        run: cargo test
+        working-directory: apps/desktop/src-tauri

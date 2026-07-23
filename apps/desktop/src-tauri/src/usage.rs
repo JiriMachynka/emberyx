@@ -317,3 +317,219 @@ pub fn read_usage(cache: State<UsageCache>, transcript_path: String) -> Result<U
         messages: entry.messages,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("emberyx_test_usage_{name}.jsonl"));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    fn append(path: &std::path::Path, text: &str) -> u64 {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        f.write_all(text.as_bytes()).unwrap();
+        f.metadata().unwrap().len()
+    }
+
+    /// One assistant turn as Claude Code writes it to a transcript.
+    fn turn(timestamp: &str, model: &str, input: u64, output: u64) -> String {
+        serde_json::json!({
+            "cwd": "/repo",
+            "timestamp": timestamp,
+            "message": {
+                "model": model,
+                "usage": {
+                    "input_tokens": input,
+                    "output_tokens": output,
+                    "cache_read_input_tokens": 1,
+                    "cache_creation_input_tokens": 2,
+                }
+            }
+        })
+        .to_string()
+            + "\n"
+    }
+
+    #[test]
+    fn converts_epoch_days_to_civil_dates() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(-1), (1969, 12, 31));
+        assert_eq!(civil_from_days(19_723), (2024, 1, 1));
+        // 2024 is a leap year: Feb 29 exists and Mar 1 follows it.
+        assert_eq!(civil_from_days(19_782), (2024, 2, 29));
+        assert_eq!(civil_from_days(19_783), (2024, 3, 1));
+        // 2000 is a leap year, 1900 was not — the 400/100 year rules.
+        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
+    }
+
+    #[test]
+    fn round_trips_every_day_of_a_leap_year() {
+        // Day counts must advance monotonically and stay inside valid ranges.
+        let mut previous = civil_from_days(19_723);
+        for day in 19_724..(19_723 + 366) {
+            let current = civil_from_days(day);
+            assert!(current > previous, "{current:?} did not follow {previous:?}");
+            assert!((1..=12).contains(&current.1));
+            assert!((1..=31).contains(&current.2));
+            previous = current;
+        }
+        assert_eq!(civil_from_days(19_723 + 366), (2025, 1, 1));
+    }
+
+    #[test]
+    fn formats_dates_zero_padded() {
+        assert_eq!(date_string(0), "1970-01-01");
+        assert_eq!(date_string(19_723 * 86_400), "2024-01-01");
+        // Any time within the day maps to the same date.
+        assert_eq!(date_string(19_723 * 86_400 + 86_399), "2024-01-01");
+    }
+
+    #[test]
+    fn sums_usage_into_per_day_per_model_buckets() {
+        let path = temp("buckets");
+        let len = append(
+            &path,
+            &(turn("2026-07-01T10:00:00Z", "claude-opus-4-8", 10, 5)
+                + &turn("2026-07-01T11:00:00Z", "claude-opus-4-8", 1, 2)
+                + &turn("2026-07-02T10:00:00Z", "claude-sonnet-4-5", 100, 50)),
+        );
+
+        let mut entry = SummaryEntry::default();
+        parse_into(path.to_str().unwrap(), len, &mut entry);
+
+        assert_eq!(entry.project, "/repo");
+        // Two days, and the first day's two turns share one (date, model) key.
+        assert_eq!(entry.buckets.len(), 2);
+
+        let day_one = &entry.buckets[&("2026-07-01".into(), "claude-opus-4-8".into())];
+        assert_eq!((day_one.input, day_one.output), (11, 7));
+        assert_eq!(day_one.messages, 2);
+        assert_eq!((day_one.cache_read, day_one.cache_creation), (2, 4));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn parses_only_the_bytes_appended_since_the_last_pass() {
+        let path = temp("incremental");
+        let mut entry = SummaryEntry::default();
+
+        let len = append(&path, &turn("2026-07-01T10:00:00Z", "opus", 10, 5));
+        parse_into(path.to_str().unwrap(), len, &mut entry);
+        let after_first = entry.offset;
+        assert_eq!(after_first, len);
+
+        let len = append(&path, &turn("2026-07-01T11:00:00Z", "opus", 3, 1));
+        parse_into(path.to_str().unwrap(), len, &mut entry);
+
+        let bucket = &entry.buckets[&("2026-07-01".into(), "opus".into())];
+        assert_eq!((bucket.input, bucket.output, bucket.messages), (13, 6, 2));
+        assert_eq!(entry.offset, len);
+
+        // A pass with nothing appended must not double-count.
+        parse_into(path.to_str().unwrap(), len, &mut entry);
+        let bucket = &entry.buckets[&("2026-07-01".into(), "opus".into())];
+        assert_eq!(bucket.messages, 2);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn leaves_a_half_written_final_line_for_the_next_pass() {
+        let path = temp("partial");
+        let mut entry = SummaryEntry::default();
+
+        let complete = turn("2026-07-01T10:00:00Z", "opus", 10, 5);
+        let len = append(&path, &format!("{complete}{{\"partial\": tru"));
+        parse_into(path.to_str().unwrap(), len, &mut entry);
+
+        assert_eq!(entry.buckets[&("2026-07-01".into(), "opus".into())].messages, 1);
+        assert_eq!(entry.offset, complete.len() as u64);
+
+        // Once the line is finished, the next pass picks it up whole.
+        append(&path, "e}\n");
+        let len = append(&path, &turn("2026-07-01T12:00:00Z", "opus", 1, 1));
+        parse_into(path.to_str().unwrap(), len, &mut entry);
+        assert_eq!(entry.buckets[&("2026-07-01".into(), "opus".into())].messages, 2);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn restarts_when_the_transcript_shrinks() {
+        let path = temp("truncated");
+        let mut entry = SummaryEntry::default();
+
+        let len = append(&path, &turn("2026-07-01T10:00:00Z", "opus", 10, 5).repeat(3));
+        parse_into(path.to_str().unwrap(), len, &mut entry);
+        assert_eq!(entry.buckets[&("2026-07-01".into(), "opus".into())].messages, 3);
+
+        // A different session resumed at this path and rewrote it shorter.
+        let _ = std::fs::remove_file(&path);
+        let len = append(&path, &turn("2026-07-05T10:00:00Z", "opus", 1, 1));
+        parse_into(path.to_str().unwrap(), len, &mut entry);
+
+        assert!(!entry.buckets.contains_key(&("2026-07-01".into(), "opus".into())));
+        assert_eq!(entry.buckets[&("2026-07-05".into(), "opus".into())].messages, 1);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn skips_lines_that_carry_no_usage() {
+        let path = temp("no_usage");
+        let len = append(
+            &path,
+            &format!(
+                "not json\n\n{}{}{}",
+                r#"{"type":"summary"}"#.to_string() + "\n",
+                r#"{"message":{"model":"opus","usage":"not an object"}}"#.to_string() + "\n",
+                turn("2026-07-01T10:00:00Z", "opus", 7, 3)
+            ),
+        );
+
+        let mut entry = SummaryEntry::default();
+        parse_into(path.to_str().unwrap(), len, &mut entry);
+
+        assert_eq!(entry.buckets.len(), 1);
+        assert_eq!(entry.buckets[&("2026-07-01".into(), "opus".into())].input, 7);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn defaults_the_model_when_a_turn_does_not_name_one() {
+        let path = temp("unknown_model");
+        let len = append(
+            &path,
+            &(serde_json::json!({
+                "timestamp": "2026-07-01T10:00:00Z",
+                "message": { "usage": { "input_tokens": 5 } }
+            })
+            .to_string()
+                + "\n"),
+        );
+
+        let mut entry = SummaryEntry::default();
+        parse_into(path.to_str().unwrap(), len, &mut entry);
+        assert_eq!(entry.buckets[&("2026-07-01".into(), "unknown".into())].input, 5);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ignores_a_missing_transcript() {
+        let mut entry = SummaryEntry::default();
+        parse_into("/nonexistent/transcript.jsonl", 100, &mut entry);
+        assert!(entry.buckets.is_empty());
+        assert_eq!(entry.offset, 0);
+    }
+}
