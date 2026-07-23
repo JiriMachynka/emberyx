@@ -1,0 +1,49 @@
+name: Warm Rust cache
+
+# Release runs are triggered by tags, and GitHub scopes caches per tag — a cache
+# saved by `v0.1.6` is unreachable from `v0.1.7`. Tag runs *can* read the default
+# branch's cache, so build the dependency graph here on `main` and let releases
+# restore it. The `shared-key` must match the one in release.yml.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "bun.lock"
+      - "apps/desktop/src-tauri/Cargo.lock"
+      - "apps/desktop/src-tauri/Cargo.toml"
+      - ".github/workflows/warm-cache.yml"
+  schedule:
+    # Weekly, so the cache never ages out of GitHub's 7-day eviction window.
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: warm-cache
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+          shared-key: release
+
+      - run: bun install --frozen-lockfile
+
+      # generate_context! embeds the frontend bundle at compile time, so dist/
+      # has to exist before cargo runs.
+      - run: bun run --cwd apps/desktop build
+
+      - run: cargo build --release --target aarch64-apple-darwin
+        working-directory: apps/desktop/src-tauri
