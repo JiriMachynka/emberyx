@@ -1,6 +1,16 @@
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
-import type { GitBranch, GitFile, GitStash, OpenRouterModel } from "@/types";
+import type {
+  DirEntry,
+  GitBranch,
+  GitCommit,
+  GitFile,
+  GitStash,
+  OpenRouterModel,
+  SearchFile,
+  SlashCommand,
+  UsageRow,
+} from "@/types";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -16,11 +26,16 @@ export const queryClient = new QueryClient({
 // ChangesPanel, GitActions) share one cache entry and one fetch per path.
 export const gitKeys = {
   changes: (path: string) => ["git", "changes", path] as const,
-  diff: (path: string, file: string, untracked: boolean) =>
-    ["git", "diff", path, file, untracked] as const,
+  diff: (path: string, file: string, untracked: boolean, staged: boolean) =>
+    ["git", "diff", path, file, untracked, staged] as const,
   branch: (path: string) => ["git", "branch", path] as const,
   branches: (path: string) => ["git", "branches", path] as const,
   stashes: (path: string) => ["git", "stashes", path] as const,
+  log: (path: string, file: string) => ["git", "log", path, file] as const,
+  show: (path: string, sha: string, file: string) =>
+    ["git", "show", path, sha, file] as const,
+  pickaxe: (path: string, file: string, term: string) =>
+    ["git", "pickaxe", path, file, term] as const,
 };
 
 export const useGitChanges = (path: string) =>
@@ -34,12 +49,45 @@ export const useGitChanges = (path: string) =>
 export const useGitFileDiff = (
   path: string,
   file: string | null,
-  untracked: boolean
+  untracked: boolean,
+  staged: boolean
 ) =>
   useQuery({
-    queryKey: gitKeys.diff(path, file ?? "", untracked),
-    queryFn: () => invoke<string>("git_file_diff", { path, file, untracked }),
+    queryKey: gitKeys.diff(path, file ?? "", untracked, staged),
+    queryFn: () =>
+      invoke<string>("git_file_diff", { path, file, untracked, staged }),
     enabled: !!file,
+  });
+
+/** A file's commit history, newest first, following renames. */
+export const useGitFileLog = (path: string, file: string | null) =>
+  useQuery({
+    queryKey: gitKeys.log(path, file ?? ""),
+    queryFn: () => invoke<GitCommit[]>("git_file_log", { path, file }),
+    enabled: !!file,
+    staleTime: 30_000,
+  });
+
+/** A file's contents at one commit. `file` is its path *at that commit*. */
+export const useGitShowFile = (
+  path: string,
+  sha: string | null,
+  file: string | null
+) =>
+  useQuery({
+    queryKey: gitKeys.show(path, sha ?? "", file ?? ""),
+    queryFn: () => invoke<string>("git_show_file", { path, sha, file }),
+    enabled: !!sha && !!file,
+    staleTime: Infinity,
+  });
+
+/** Shas of commits that added or removed `term` in this file (`git log -S`). */
+export const useGitPickaxe = (path: string, file: string | null, term: string) =>
+  useQuery({
+    queryKey: gitKeys.pickaxe(path, file ?? "", term),
+    queryFn: () => invoke<string[]>("git_pickaxe", { path, file, term }),
+    enabled: !!file && term.trim().length > 0,
+    staleTime: 30_000,
   });
 
 export const useGitBranch = (path: string) =>
@@ -67,11 +115,97 @@ export const useGitStashes = (path: string, enabled: boolean) =>
 export const useInvalidateGit = () => {
   const qc = useQueryClient();
   return (path: string) => {
-    for (const key of ["changes", "diff", "branch", "branches", "stashes"]) {
+    for (const key of ["changes", "diff", "branch", "branches", "stashes", "log"]) {
       qc.invalidateQueries({ queryKey: ["git", key, path] });
     }
   };
 };
+
+// Editor file-tree + buffer reads, keyed by absolute path.
+export const fileKeys = {
+  dir: (path: string) => ["files", "dir", path] as const,
+  all: (path: string) => ["files", "all", path] as const,
+  text: (path: string) => ["files", "text", path] as const,
+};
+
+/** Flat recursive file list for the editor's ⌘K finder. Fetched when the
+ *  finder first opens and kept for the session — a re-walk per keystroke would
+ *  be wasteful, and new files are rare mid-session. */
+export const useProjectFiles = (path: string, enabled: boolean) =>
+  useQuery({
+    queryKey: fileKeys.all(path),
+    queryFn: () => invoke<string[]>("list_files", { path }),
+    enabled,
+    staleTime: 60_000,
+  });
+
+export const useDirEntries = (path: string, enabled: boolean) =>
+  useQuery({
+    queryKey: fileKeys.dir(path),
+    queryFn: () => invoke<DirEntry[]>("list_dir", { path }),
+    enabled,
+  });
+
+/** `path` null → disabled. Never auto-refetches: the pane owns an editable
+ *  buffer, so a background refetch would fight the user's typing. */
+export const useFileText = (path: string | null) =>
+  useQuery({
+    queryKey: fileKeys.text(path ?? ""),
+    queryFn: () => invoke<string>("read_text_file", { path }),
+    enabled: !!path,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  });
+
+export const searchKeys = {
+  text: (path: string, query: string, caseSensitive: boolean, isRegex: boolean) =>
+    ["search", path, query, caseSensitive, isRegex] as const,
+};
+
+/** Project-wide content search. Disabled until the query is submitted — the
+ *  walk touches every file, so it must not fire per keystroke. */
+export const useSearchText = (
+  path: string,
+  query: string,
+  caseSensitive: boolean,
+  isRegex: boolean
+) =>
+  useQuery({
+    queryKey: searchKeys.text(path, query, caseSensitive, isRegex),
+    queryFn: () =>
+      invoke<SearchFile[]>("search_text", {
+        path,
+        query,
+        caseSensitive,
+        isRegex,
+      }),
+    enabled: query.length > 0,
+    staleTime: 30_000,
+  });
+
+export const slashKeys = { commands: (cwd: string) => ["slash", cwd] as const };
+
+/** Slash commands available in a project (project + user + plugin). Fetched on
+ *  the first `/` typed and kept for the session — command files rarely change
+ *  mid-session, and the menu refetches when a chat pane remounts. */
+export const useSlashCommands = (cwd: string, enabled: boolean) =>
+  useQuery({
+    queryKey: slashKeys.commands(cwd),
+    queryFn: () => invoke<SlashCommand[]>("slash_commands", { cwd }),
+    enabled,
+    staleTime: 5 * 60 * 1000,
+  });
+
+export const usageKeys = { summary: (days: number) => ["usage", days] as const };
+
+/** Cross-project token usage for the last `days`, one row per day/project/model. */
+export const useUsageSummary = (days: number, enabled: boolean) =>
+  useQuery({
+    queryKey: usageKeys.summary(days),
+    queryFn: () => invoke<UsageRow[]>("usage_summary", { days }),
+    enabled,
+    staleTime: 60_000,
+  });
 
 export const openRouterKeys = { models: () => ["openrouter", "models"] as const };
 

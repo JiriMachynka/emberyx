@@ -1,16 +1,31 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
 import { diffLines } from "diff";
-import { X, FileDiff, RefreshCw, GitBranch, Bot, Check, Plus, Minus } from "lucide-react";
+import {
+  FileDiff,
+  RefreshCw,
+  GitBranch,
+  Bot,
+  Check,
+  Plus,
+  Minus,
+  Undo2,
+  History,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { basename } from "@/lib/path";
+import { parseDiff, hunkPatch } from "@/lib/hunks";
 import { highlightCode, langFromPath } from "@/lib/highlight";
 import { useGitChanges, useGitFileDiff, useInvalidateGit } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
 import type { Change } from "@/lib/changes";
 import type { GitFile } from "@/types";
 import { GitActions } from "@/components/GitActions";
+import { GitRewind } from "@/components/GitRewind";
+import { SidePanel } from "@/components/SidePanel";
 
 /** True for unified-diff header lines that aren't source code. */
 function isDiffMeta(line: string): boolean {
@@ -51,57 +66,99 @@ const DiffLine = memo(function DiffLine({
   );
 });
 
-/** Raw unified diff with per-line syntax highlighting. */
-function UnifiedDiff({ text, lang }: { text: string; lang: string | null }) {
+/** The body of one hunk, syntax-highlighted line by line. */
+function HunkBody({ text, lang }: { text: string; lang: string | null }) {
+  return (
+    <>
+      {text.split("\n").map((line, i) => {
+        if (line === "")
+          return (
+            <div key={i} className="border-l-2 border-transparent pl-5">
+              {" "}
+            </div>
+          );
+        if (isDiffMeta(line)) {
+          return (
+            <div
+              key={i}
+              className="border-l-2 border-transparent pl-5 pr-2 text-muted-foreground"
+            >
+              {line}
+            </div>
+          );
+        }
+        const c = line[0];
+        const tint =
+          c === "+"
+            ? "border-emerald-500/50 bg-emerald-500/15"
+            : c === "-"
+              ? "border-red-500/50 bg-red-500/15"
+              : "";
+        return (
+          <DiffLine
+            key={i}
+            marker={c === "+" || c === "-" ? c : " "}
+            code={line.slice(1)}
+            lang={lang}
+            tint={tint}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+/** Unified diff rendered hunk by hunk, each with its own apply actions. */
+function UnifiedDiff({
+  text,
+  lang,
+  file,
+  actions,
+}: {
+  text: string;
+  lang: string | null;
+  file: string;
+  /** Per-hunk buttons; omitted for views where applying makes no sense. */
+  actions?: (patch: string) => React.ReactNode;
+}) {
+  const parsed = useMemo(() => parseDiff(text), [text]);
+
   if (!text.trim()) {
     return (
       <div className="p-3 text-xs text-muted-foreground">No diff to show.</div>
     );
   }
+  // Untracked files and `git show` output have no @@ headers — render flat.
+  if (parsed.hunks.length === 0) {
+    return (
+      <pre className="overflow-x-auto whitespace-pre py-1 font-mono text-xs leading-relaxed">
+        <div className="w-max min-w-full">
+          <HunkBody text={text} lang={lang} />
+        </div>
+      </pre>
+    );
+  }
+
   return (
-    <pre className="overflow-x-auto whitespace-pre py-1 font-mono text-xs leading-relaxed">
-      <div className="w-max min-w-full">
-        {text.split("\n").map((line, i) => {
-          if (line === "")
-            return (
-              <div key={i} className="border-l-2 border-transparent pl-5">
-                {" "}
-              </div>
-            );
-          if (isDiffMeta(line)) {
-            return (
-              <div
-                key={i}
-                className={cn(
-                  "border-l-2 pl-5 pr-2",
-                  line.startsWith("@@")
-                    ? "border-sky-500/40 bg-sky-500/10 text-sky-400"
-                    : "border-transparent text-muted-foreground"
-                )}
-              >
-                {line}
-              </div>
-            );
-          }
-          const c = line[0];
-          const tint =
-            c === "+"
-              ? "border-emerald-500/50 bg-emerald-500/15"
-              : c === "-"
-                ? "border-red-500/50 bg-red-500/15"
-                : "";
-          return (
-            <DiffLine
-              key={i}
-              marker={c === "+" || c === "-" ? c : " "}
-              code={line.slice(1)}
-              lang={lang}
-              tint={tint}
-            />
-          );
-        })}
-      </div>
-    </pre>
+    <div className="font-mono text-xs leading-relaxed">
+      {parsed.hunks.map((hunk) => (
+        <div key={hunk.offset}>
+          <div className="flex items-center justify-between gap-2 border-y border-sky-500/20 bg-sky-500/10 py-0.5 pl-5 pr-2">
+            <span className="truncate text-sky-400">{hunk.header}</span>
+            {actions && (
+              <span className="flex shrink-0 items-center gap-1">
+                {actions(hunkPatch(parsed, hunk, file))}
+              </span>
+            )}
+          </div>
+          <pre className="overflow-x-auto whitespace-pre py-1">
+            <div className="w-max min-w-full">
+              <HunkBody text={hunk.text.slice(hunk.header.length + 1)} lang={lang} />
+            </div>
+          </pre>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -140,6 +197,21 @@ function EditDiff({ change }: { change: Change }) {
   );
 }
 
+/** Which side of a file is being viewed — the same path can be both staged and
+ *  unstaged, with a different diff on each side. */
+interface Selection {
+  path: string;
+  staged: boolean;
+}
+
+/** Index column dirty (porcelain X): the file has something staged. */
+const isStaged = (f: GitFile) =>
+  !f.untracked && f.status[0] !== " " && f.status[0] !== "?";
+
+/** Worktree column dirty (porcelain Y), or the file is untracked. */
+const isUnstaged = (f: GitFile) =>
+  f.untracked || (f.status[1] !== " " && f.status[1] !== "?");
+
 interface ChangesPanelProps {
   projectPath: string;
   /** Session ids in this project — selects its slice of the agent edit feed. */
@@ -168,17 +240,26 @@ export function ChangesPanel({
     [allChanges, sessionIds]
   );
 
-  // Git tab state.
+  // Git tab state. The index is the source of truth: a file shows up under
+  // "Staged" when its index column is dirty and under "Changes" when its
+  // worktree column is, so partly-staged files appear in both.
   const gitQuery = useGitChanges(projectPath);
-  const gitFiles = gitQuery.data ?? [];
-  const [gitSel, setGitSel] = useState<string | null>(null);
-  const selFile = gitFiles.find((f) => f.path === gitSel);
-  const diffQuery = useGitFileDiff(projectPath, gitSel, selFile?.untracked ?? false);
+  const gitFiles = useMemo(() => gitQuery.data ?? [], [gitQuery.data]);
+  const stagedFiles = gitFiles.filter(isStaged);
+  const unstagedFiles = gitFiles.filter(isUnstaged);
+
+  const [gitSel, setGitSel] = useState<Selection | null>(null);
+  const selFile = gitFiles.find((f) => f.path === gitSel?.path);
+  const diffQuery = useGitFileDiff(
+    projectPath,
+    gitSel?.path ?? null,
+    selFile?.untracked ?? false,
+    gitSel?.staged ?? false
+  );
   const gitDiff = diffQuery.data ?? "";
   const invalidateGit = useInvalidateGit();
 
   // Commit state.
-  const [staged, setStaged] = useState<Set<string>>(new Set());
   const [commitMsg, setCommitMsg] = useState("");
   const [committing, setCommitting] = useState(false);
   const [commitErr, setCommitErr] = useState<string | null>(null);
@@ -189,31 +270,72 @@ export function ChangesPanel({
   const agentSel =
     changes.find((c) => c.id === agentSelId) ?? changes[changes.length - 1];
 
-  // Drop staged entries whose files no longer have changes.
+  // Clear a selection whose side of the file went away (staged, committed,
+  // discarded), so the pane never shows a diff that no longer exists.
   useEffect(() => {
-    if (!gitQuery.data) return;
-    const present = new Set(gitQuery.data.map((f) => f.path));
-    setStaged((prev) => new Set([...prev].filter((p) => present.has(p))));
-  }, [gitQuery.data]);
+    if (!gitQuery.data || !gitSel) return;
+    const still = gitQuery.data.some(
+      (f) => f.path === gitSel.path && (gitSel.staged ? isStaged(f) : isUnstaged(f))
+    );
+    if (!still) setGitSel(null);
+  }, [gitQuery.data, gitSel]);
 
-  function selectGit(f: GitFile) {
-    setGitSel(f.path);
+  /** Run a git mutation, refresh every git view, and toast on failure. */
+  async function run(fn: () => Promise<unknown>, what: string) {
+    try {
+      await fn();
+      invalidateGit(projectPath);
+    } catch (e) {
+      toast.error(what, { description: String(e) });
+    }
   }
 
-  function toggleStage(path: string) {
-    setStaged((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
+  const stage = (files: string[]) =>
+    run(() => invoke("git_stage", { path: projectPath, files }), "Couldn't stage");
+
+  const unstage = (files: string[]) =>
+    run(
+      () => invoke("git_unstage", { path: projectPath, files }),
+      "Couldn't unstage"
+    );
+
+  const applyHunk = (patch: string, cached: boolean, reverse: boolean) =>
+    run(
+      () => invoke("git_apply", { path: projectPath, patch, cached, reverse }),
+      "Couldn't apply hunk"
+    );
+
+  async function discardFile(file: GitFile) {
+    const ok = await ask(
+      file.untracked
+        ? `Delete ${file.path}? This can't be undone.`
+        : `Discard all changes to ${file.path}? This can't be undone.`,
+      { title: "Discard changes", kind: "warning" }
+    );
+    if (!ok) return;
+    await run(
+      () =>
+        invoke("git_discard", {
+          path: projectPath,
+          files: [file.path],
+          untracked: file.untracked,
+        }),
+      "Couldn't discard"
+    );
+  }
+
+  async function discardHunk(patch: string) {
+    const ok = await ask("Discard this hunk? This can't be undone.", {
+      title: "Discard hunk",
+      kind: "warning",
     });
+    if (ok) await applyHunk(patch, false, true);
   }
 
-  const stagedFiles = gitFiles.filter((f) => staged.has(f.path));
-  const unstagedFiles = gitFiles.filter((f) => !staged.has(f.path));
+  const [historyFile, setHistoryFile] = useState<string | null>(null);
 
-  const stageAll = () => setStaged(new Set(gitFiles.map((f) => f.path)));
-  const unstageAll = () => setStaged(new Set());
+  const stageAll = () => stage(unstagedFiles.map((f) => f.path));
+  const unstageAll = () => unstage(stagedFiles.map((f) => f.path));
 
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -233,7 +355,7 @@ export function ChangesPanel({
   };
 
   async function generateMessage() {
-    const files = [...staged];
+    const files = stagedFiles.map((f) => f.path);
     if (!files.length || generating) return;
     setGenerating(true);
     setCommitErr(null);
@@ -253,17 +375,14 @@ export function ChangesPanel({
   }
 
   async function doCommit() {
-    const files = [...staged];
-    if (!files.length || !commitMsg.trim() || committing) return;
+    if (!stagedFiles.length || !commitMsg.trim() || committing) return;
     setCommitting(true);
     setCommitErr(null);
     try {
       await invoke<string>("git_commit", {
         path: projectPath,
-        files,
         message: commitMsg.trim(),
       });
-      setStaged(new Set());
       setCommitMsg("");
       setGitSel(null);
       invalidateGit(projectPath);
@@ -275,8 +394,11 @@ export function ChangesPanel({
   }
 
   return (
-    <aside className="flex w-96 shrink-0 flex-col border-l bg-card">
-      <header className="flex h-11 shrink-0 items-center justify-between border-b pl-1 pr-2">
+    <SidePanel
+      storageKey="changes"
+      flushHeader
+      onClose={onClose}
+      header={
         <div className="flex items-center">
           <TabButton
             active={tab === "git"}
@@ -291,25 +413,19 @@ export function ChangesPanel({
             label={`Agent${changes.length ? ` (${changes.length})` : ""}`}
           />
         </div>
-        <div className="flex items-center gap-1">
-          {tab === "git" && (
-            <button
-              onClick={() => invalidateGit(projectPath)}
-              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-              title="Refresh"
-            >
-              <RefreshCw className="size-3.5" />
-            </button>
-          )}
+      }
+      actions={
+        tab === "git" && (
           <button
-            onClick={onClose}
+            onClick={() => invalidateGit(projectPath)}
             className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            title="Refresh"
           >
-            <X className="size-3.5" />
+            <RefreshCw className="size-3.5" />
           </button>
-        </div>
-      </header>
-
+        )
+      }
+    >
       {tab === "git" ? (
         <div className="flex min-h-0 flex-1 flex-col">
           <GitActions projectPath={projectPath} />
@@ -338,9 +454,10 @@ export function ChangesPanel({
                           key={f.path}
                           file={f}
                           staged
-                          selected={gitSel === f.path}
-                          onSelect={() => selectGit(f)}
-                          onToggle={() => toggleStage(f.path)}
+                          selected={gitSel?.path === f.path && gitSel.staged}
+                          onSelect={() => setGitSel({ path: f.path, staged: true })}
+                          onToggle={() => void unstage([f.path])}
+                          onHistory={() => setHistoryFile(f.path)}
                         />
                       ))}
                     </ul>
@@ -361,9 +478,11 @@ export function ChangesPanel({
                           key={f.path}
                           file={f}
                           staged={false}
-                          selected={gitSel === f.path}
-                          onSelect={() => selectGit(f)}
-                          onToggle={() => toggleStage(f.path)}
+                          selected={gitSel?.path === f.path && !gitSel.staged}
+                          onSelect={() => setGitSel({ path: f.path, staged: false })}
+                          onToggle={() => void stage([f.path])}
+                          onDiscard={() => void discardFile(f)}
+                          onHistory={f.untracked ? undefined : () => setHistoryFile(f.path)}
                         />
                       ))}
                     </ul>
@@ -375,7 +494,7 @@ export function ChangesPanel({
                 title="Drag to resize"
                 className="h-1 shrink-0 cursor-row-resize bg-transparent transition-colors hover:bg-primary/40"
               />
-              {staged.size > 0 && (
+              {stagedFiles.length > 0 && (
                 <div className="shrink-0 space-y-1.5 border-b p-2">
                   <Input
                     value={commitMsg}
@@ -383,8 +502,8 @@ export function ChangesPanel({
                     onKeyDown={(e) => {
                       if (e.key === "Enter") void doCommit();
                     }}
-                    placeholder={`Commit message for ${staged.size} file${
-                      staged.size > 1 ? "s" : ""
+                    placeholder={`Commit message for ${stagedFiles.length} file${
+                      stagedFiles.length > 1 ? "s" : ""
                     }…`}
                     className="h-8 text-xs"
                   />
@@ -410,10 +529,10 @@ export function ChangesPanel({
                       </button>
                     )}
                     <button
-                      onClick={() => setStaged(new Set())}
+                      onClick={unstageAll}
                       className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
                     >
-                      Clear
+                      Unstage all
                     </button>
                     <button
                       onClick={() => void doCommit()}
@@ -421,14 +540,54 @@ export function ChangesPanel({
                       className="flex items-center gap-1.5 rounded bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
                     >
                       <Check className="size-3.5" />
-                      Commit {staged.size}
+                      Commit {stagedFiles.length}
                     </button>
                   </div>
                 </div>
               )}
               <div className="min-h-0 flex-1 overflow-auto">
                 {gitSel ? (
-                  <UnifiedDiff text={gitDiff} lang={langFromPath(gitSel)} />
+                  <>
+                    <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-card px-3 py-1 text-[11px] text-muted-foreground">
+                      <span className="truncate">{gitSel.path}</span>
+                      <span className="ml-auto shrink-0">
+                        {gitSel.staged ? "staged" : "working tree"}
+                      </span>
+                    </div>
+                    <UnifiedDiff
+                      text={gitDiff}
+                      lang={langFromPath(gitSel.path)}
+                      file={gitSel.path}
+                      actions={(patch) =>
+                        gitSel.staged ? (
+                          <HunkButton
+                            title="Unstage this hunk"
+                            onClick={() => void applyHunk(patch, true, true)}
+                          >
+                            <Minus className="size-3" />
+                            Unstage
+                          </HunkButton>
+                        ) : (
+                          <>
+                            <HunkButton
+                              title="Discard this hunk"
+                              onClick={() => void discardHunk(patch)}
+                            >
+                              <Undo2 className="size-3" />
+                              Discard
+                            </HunkButton>
+                            <HunkButton
+                              title="Stage this hunk"
+                              onClick={() => void applyHunk(patch, true, false)}
+                            >
+                              <Plus className="size-3" />
+                              Stage
+                            </HunkButton>
+                          </>
+                        )
+                      }
+                    />
+                  </>
                 ) : (
                   <Empty>Select a file to see its diff.</Empty>
                 )}
@@ -474,7 +633,15 @@ export function ChangesPanel({
           )}
         </div>
       )}
-    </aside>
+
+      {historyFile && (
+        <GitRewind
+          projectPath={projectPath}
+          file={historyFile}
+          onClose={() => setHistoryFile(null)}
+        />
+      )}
+    </SidePanel>
   );
 }
 
@@ -510,19 +677,45 @@ function SectionHeader({
   );
 }
 
-/** One file row: click to view its diff, hover-reveal a stage/unstage button. */
+/** Small button in a hunk's action bar. */
+function HunkButton({
+  title,
+  onClick,
+  children,
+}: {
+  title: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+    >
+      {children}
+    </button>
+  );
+}
+
+/** One file row: click to view its diff, hover-reveal stage/unstage (and
+ *  discard, on the working-tree side). */
 function GitFileRow({
   file,
   staged,
   selected,
   onSelect,
   onToggle,
+  onDiscard,
+  onHistory,
 }: {
   file: GitFile;
   staged: boolean;
   selected: boolean;
   onSelect: () => void;
   onToggle: () => void;
+  onDiscard?: () => void;
+  onHistory?: () => void;
 }) {
   return (
     <li
@@ -546,6 +739,24 @@ function GitFileRow({
         </span>
         <span className="flex-1 truncate">{file.path}</span>
       </button>
+      {onHistory && (
+        <button
+          onClick={onHistory}
+          title="File history"
+          className="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground group-hover:opacity-100"
+        >
+          <History className="size-3.5" />
+        </button>
+      )}
+      {onDiscard && (
+        <button
+          onClick={onDiscard}
+          title={file.untracked ? "Delete file" : "Discard changes"}
+          className="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-destructive group-hover:opacity-100"
+        >
+          <Undo2 className="size-3.5" />
+        </button>
+      )}
       <button
         onClick={onToggle}
         title={staged ? "Unstage" : "Stage"}

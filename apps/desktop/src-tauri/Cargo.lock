@@ -899,6 +899,7 @@ dependencies = [
  "base64 0.22.1",
  "glob",
  "portable-pty",
+ "regex",
  "serde",
  "serde_json",
  "tauri",

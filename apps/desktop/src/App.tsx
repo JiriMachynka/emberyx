@@ -1,43 +1,33 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { open, ask } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
-import { Toaster, toast } from "sonner";
-import { TerminalPane } from "@/components/TerminalPane";
-import { ChatPane } from "@/components/ChatPane";
-import { DokployLogsPane } from "@/components/DokployLogsPane";
+import { useMemo, useState } from "react";
+import { Toaster } from "sonner";
+import { SessionPanes } from "@/components/SessionPanes";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { ChangesPanel } from "@/components/ChangesPanel";
+import { DevPanel } from "@/components/DevPanel";
 import { ContextBar } from "@/components/ContextBar";
 import { Sidebar } from "@/components/Sidebar";
 import { CommandPalette } from "@/components/CommandPalette";
+import { UsagePanel } from "@/components/UsagePanel";
 import { WelcomeScreen } from "@/components/WelcomeScreen";
 import { AttentionBanner } from "@/components/AttentionBanner";
 import { cn } from "@/lib/utils";
 import { useSettings, isClaudeAgent } from "@/lib/settings";
-import { useAgentStore } from "@/lib/agentStore";
-import { getRecents, addRecent } from "@/lib/recents";
-import { getProjectConfigs, setProjectDevCommand } from "@/lib/projectConfig";
 import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
-import { checkForUpdates } from "@/lib/update";
-import { useSessions } from "@/hooks/useSessions";
-import { useProjects } from "@/hooks/useProjects";
-import { useAgentEvents } from "@/hooks/useAgentEvents";
+import { requestSearch } from "@/lib/searchRequest";
+import { useWorkspace } from "@/hooks/useWorkspace";
+import { useDevServers } from "@/hooks/useDevServers";
 import { useShortcuts } from "@/hooks/useShortcuts";
-import type {
-  DokployMatch,
-  DokployService,
-  PackageInfo,
-  Project,
-  Thread,
-  WorkspaceInfo,
-} from "@/types";
+import { useLaunchUpdateCheck } from "@/hooks/useLaunchUpdateCheck";
 
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
+  const [devOpen, setDevOpen] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
   // Keep the Changes panel mounted while its exit animation plays (~200ms).
   const [changesClosing, setChangesClosing] = useState(false);
+  const [sidebarCollapsed, setCollapsed] = useState<boolean>(getSidebarCollapsed);
 
   const closeChanges = () => {
     setChangesClosing(true);
@@ -51,9 +41,6 @@ function App() {
     if (changesOpen) closeChanges();
     else setChangesOpen(true);
   };
-  const [sidebarCollapsed, setCollapsed] = useState<boolean>(getSidebarCollapsed);
-  const [recents, setRecents] = useState<string[]>(getRecents);
-  const [projectConfigs, setProjectConfigs] = useState(getProjectConfigs);
 
   function toggleSidebar() {
     setCollapsed((c) => {
@@ -61,370 +48,36 @@ function App() {
       return !c;
     });
   }
-  const { settings, update: updateSettings } = useSettings();
 
+  const { settings, update: updateSettings } = useSettings();
+  const ws = useWorkspace(settings);
   const {
     projects,
-    activeProjectId,
-    setActiveProjectId,
-    openProject,
-    setWorkspace,
-    setIcon,
-    setThreads,
-    setDokploy,
-    closeProject,
-  } = useProjects();
-
-  // Latest projects list for async guards: a superseded pre-warm must not
-  // resurrect a torn-down project's session after its list_threads resolves.
-  const projectsRef = useRef(projects);
-  projectsRef.current = projects;
-
-  const {
     sessions,
-    activeByProject,
-    setActive,
-    startAgent,
-    startChat,
-    startDokployLogs,
-    renameSession,
-    addDev,
-    closeSession,
-    moveSession,
-    stopAllDev,
-    closeProjectSessions,
-    sessionsFor,
-  } = useSessions();
+    activeProject,
+    activeProjectId,
+    activeId,
+    projectSessions,
+    revealed,
+    recents,
+    dokploy,
+  } = ws;
+  const dev = useDevServers(activeProject, ws.addDev);
 
-  const { hookSettings, pendingAttention } = useAgentEvents((id) =>
-    sessions.find((s) => s.id === id)
-  );
-
-  // The most-recent project is pre-warmed (its agent booted) hidden behind the
-  // WelcomeScreen at launch, so opening it is instant. Until the user reveals a
-  // project, the UI treats nothing as active — the pre-warm pane stays mounted
-  // (so it boots) but hidden.
-  const [revealed, setRevealed] = useState(false);
-  const prewarmRef = useRef<{ id: string; path: string } | null>(null);
-  const uiActiveProjectId = revealed ? activeProjectId : null;
-
-  const activeProject =
-    projects.find((p) => p.id === uiActiveProjectId) ?? null;
-  const projectSessions = useMemo(
-    () => (uiActiveProjectId ? sessionsFor(uiActiveProjectId) : []),
-    // sessionsFor derives from `sessions`; recompute only when those change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessions, uiActiveProjectId]
-  );
-  const activeId = uiActiveProjectId
-    ? activeByProject[uiActiveProjectId] ?? null
-    : null;
-
-  /** Build the agent launch command, injecting hooks + any extra flags. */
-  function buildAgentCommand(extra?: string): string {
-    const base = settings.agentCommand;
-    const flags: string[] = [];
-    if (isClaudeAgent(base)) {
-      if (hookSettings) flags.push(`--settings "${hookSettings}"`);
-      if (settings.dangerouslySkipPermissions) {
-        flags.push("--dangerously-skip-permissions");
-      }
-      // Full session (default) expands tool output; compact leaves it collapsed.
-      if (!settings.compactSession) flags.push("--verbose");
-    }
-    if (extra) flags.push(extra);
-    return flags.length ? `${base} ${flags.join(" ")}` : base;
-  }
-
-  /** Fetch and cache the project's Claude Code threads (non-blocking). When
-   *  silent (pre-warm), failures stay in the console — no toast for a project
-   *  the user hasn't opened yet. */
-  function refreshThreads(projectId: string, path: string, silent = false) {
-    invoke<Thread[]>("list_threads", { cwd: path })
-      .then((t) => setThreads(projectId, t))
-      .catch((e) => {
-        console.error("list_threads failed:", e);
-        if (!silent) toast.error("Couldn't load threads", { description: String(e) });
-      });
-  }
-
-  /** Match the project against Dokploy by git remote, caching the result. */
-  function refreshDokploy(projectId: string, path: string) {
-    if (!settings.dokployUrl || !settings.dokployApiKey) return;
-    invoke<DokployMatch | null>("dokploy_services", {
-      url: settings.dokployUrl,
-      apiKey: settings.dokployApiKey,
-      cwd: path,
-    })
-      .then((m) => setDokploy(projectId, m))
-      .catch((e) => {
-        console.error("dokploy_services failed:", e);
-        toast.error("Couldn't reach Dokploy", { description: String(e) });
-      });
-  }
-
-  /** Trigger a redeploy of a Dokploy application/compose service. */
-  const handleRedeployDokploy = (service: DokployService) => {
-    if (!settings.dokployUrl || !settings.dokployApiKey || !service.id) return;
-    invoke("dokploy_redeploy", {
-      url: settings.dokployUrl,
-      apiKey: settings.dokployApiKey,
-      kind: service.kind,
-      id: service.id,
-    })
-      .then(() => toast.success(`Redeploying ${service.name}…`))
-      .catch((e) => toast.error("Redeploy failed", { description: String(e) }));
-  };
-
-  /** Open a live logs pane for a Dokploy application service. */
-  const handleViewDokployLogs = (project: Project, service: DokployService) => {
-    if (!settings.dokployUrl || !settings.dokployApiKey || !service.id) return;
-    setRevealed(true);
-    setActiveProjectId(project.id);
-    startDokployLogs(project.id, project.path, {
-      kind: service.kind,
-      id: service.id,
-      name: service.name,
-    });
-  };
-
-  /** Launch a project's primary agent: the chat UI always resumes the most
-   *  recent thread; the terminal does so only when the setting is on. Both fall
-   *  back to a fresh agent if there is none / on error. Scrollback persists
-   *  under the project path either way. */
-  async function startPrimaryAgent(id: string, path: string) {
-    const chat = settings.agentUi === "chat";
-    // Chat is always Claude, so agentCommand only gates the terminal path.
-    const resumeLatest =
-      chat || (settings.resumeLatestThread && isClaudeAgent(settings.agentCommand));
-    if (resumeLatest) {
-      try {
-        const threads = await invoke<Thread[]>("list_threads", { cwd: path });
-        // A superseded pre-warm may have been torn down while we awaited; don't
-        // resurrect its session (which would orphan a PTY).
-        if (!projectsRef.current.some((p) => p.id === id)) return;
-        setThreads(id, threads);
-        const latest = [...threads].sort((a, b) => b.modified - a.modified)[0];
-        if (latest) {
-          const label =
-            latest.title.length > 24
-              ? `${latest.title.slice(0, 24)}…`
-              : latest.title;
-          if (chat) {
-            startChat(id, path, latest.id, label);
-            return;
-          }
-          startAgent(
-            id,
-            path,
-            buildAgentCommand(`--resume ${latest.id}`),
-            label,
-            path
-          );
-          return;
-        }
-      } catch (e) {
-        console.error("list_threads failed:", e);
-        // Fall through to a fresh agent.
-      }
-    }
-    if (chat) {
-      startChat(id, path);
-      return;
-    }
-    startAgent(id, path, buildAgentCommand(), "agent", path);
-  }
-
-  /** Remove a project and all its sessions (kills their PTYs). */
-  function teardownProject(id: string) {
-    const ids = sessionsFor(id).map((s) => s.id);
-    closeProjectSessions(id);
-    useAgentStore.getState().clearSessions(ids);
-    closeProject(id);
-  }
-
-  async function openProjectAt(path: string, opts?: { prewarm?: boolean }) {
-    const prewarm = opts?.prewarm ?? false;
-    // Revealing the project the pre-warm already owns: its startPrimaryAgent may
-    // still be in flight (awaiting list_threads), so the agent session isn't in
-    // state yet — don't start a second one.
-    let matchedPrewarm = false;
-    if (!prewarm) {
-      // A real open reveals the workspace; drop any pre-warmed project that
-      // isn't the one being opened.
-      const pw = prewarmRef.current;
-      prewarmRef.current = null;
-      setRevealed(true);
-      if (pw) {
-        if (pw.path === path) matchedPrewarm = true;
-        else teardownProject(pw.id);
-      }
-    }
-    const { id, isNew } = openProject(path);
-    if (prewarm) prewarmRef.current = { id, path };
-    else setRecents(addRecent(path));
-    // Fresh project, or a reopened one whose agent tab had been closed. Skip
-    // when the in-flight pre-warm will start the agent itself.
-    if (
-      !matchedPrewarm &&
-      (isNew || !sessionsFor(id).some((s) => s.kind === "agent"))
-    ) {
-      await startPrimaryAgent(id, path);
-    }
-    if (isNew) {
-      invoke<WorkspaceInfo>("scan_workspace", { path })
-        .then((w) => setWorkspace(id, w))
-        .catch((e) => {
-          console.error("scan_workspace failed:", e);
-          if (!prewarm)
-            toast.error("Couldn't scan workspace", { description: String(e) });
-        });
-      invoke<string | null>("project_icon", { path })
-        .then((icon) => setIcon(id, icon))
-        .catch((e) => console.error("project_icon failed:", e));
-    }
-    refreshThreads(id, path, prewarm);
-    // Skip the Dokploy network probe for a hidden pre-warmed project; it runs
-    // when the user actually reveals it.
-    if (!prewarm) refreshDokploy(id, path);
-  }
-
-  /** Reveal a project and focus one of its sessions (used by the palette). */
-  function activateSession(projectId: string, sessionId: string) {
-    setRevealed(true);
-    setActiveProjectId(projectId);
-    setActive(projectId, sessionId);
-  }
-
-  /** Resume a Claude Code thread in a new tab of the given project, revealing
-   *  and focusing it. Uses the default surface (chat / terminal). */
-  function resumeThreadIn(projectId: string, path: string, thread: Thread) {
-    setRevealed(true);
-    setActiveProjectId(projectId);
-    const label =
-      thread.title.length > 24 ? `${thread.title.slice(0, 24)}…` : thread.title;
-    if (settings.agentUi === "chat") {
-      startChat(projectId, path, thread.id, label);
-      return;
-    }
-    startAgent(projectId, path, buildAgentCommand(`--resume ${thread.id}`), label);
-  }
-
-  /** Resume a thread in the active project (ContextBar / Threads menu). */
-  function resumeThread(thread: Thread) {
-    if (!activeProjectId || !activeProject) return;
-    resumeThreadIn(activeProjectId, activeProject.path, thread);
-  }
-
-  async function pickProject() {
-    const selected = await open({ directory: true, multiple: false });
-    if (typeof selected === "string") openProjectAt(selected);
-  }
-
-  /** Spawn a fresh agent tab in the active project, using the default surface. */
-  function newAgent() {
-    if (!activeProjectId || !activeProject) return;
-    if (settings.agentUi === "chat") {
-      startChat(activeProjectId, activeProject.path);
-      return;
-    }
-    startAgent(activeProjectId, activeProject.path, buildAgentCommand());
-  }
-
-  async function handleCloseProject(id: string) {
-    const statuses = useAgentStore.getState().statuses;
-    const busy = sessionsFor(id).some(
-      (s) =>
-        s.kind === "agent" &&
-        (statuses[s.id] === "working" || statuses[s.id] === "waiting")
-    );
-    if (busy) {
-      const ok = await ask(
-        "A running agent is active in this project. Close it anyway?",
-        { title: "Close project", kind: "warning" }
-      );
-      if (!ok) return;
-    }
-    teardownProject(id);
-    if (projects.filter((p) => p.id !== id).length === 0) setRevealed(false);
-  }
-
-  // Per-project custom dev command; overrides workspace detection when set.
-  const customDevCommand = activeProject
-    ? projectConfigs[activeProject.path]?.devCommand ?? ""
-    : "";
-
-  function setCustomDevCommand(command: string) {
+  const openSearch = () => {
     if (!activeProject) return;
-    setProjectConfigs(setProjectDevCommand(activeProject.path, command));
-  }
-
-  function runCustomDev() {
-    if (!activeProject || !activeProjectId || !customDevCommand) return;
-    addDev(activeProjectId, "dev", activeProject.path, customDevCommand);
-  }
-
-  function runPackage(pkg: PackageInfo) {
-    if (!activeProjectId) return;
-    addDev(activeProjectId, pkg.name, pkg.path, pkg.devCommand);
-  }
-
-  function runAll() {
-    if (!activeProject || !activeProjectId) return;
-    const ws = activeProject.workspace;
-    if (!ws) return;
-    if (ws.allCommand) {
-      addDev(activeProjectId, "all", activeProject.path, ws.allCommand);
-    } else {
-      ws.packages.forEach((p) =>
-        addDev(activeProjectId, p.name, p.path, p.devCommand)
-      );
-    }
-  }
+    requestSearch();
+    ws.startEditor(activeProject.id, activeProject.path);
+  };
 
   useShortcuts({
-    onOpen: pickProject,
-    onNewAgent: newAgent,
+    onOpen: ws.pickProject,
+    onNewAgent: ws.newAgent,
     onToggleSidebar: toggleSidebar,
     onCommandPalette: () => setPaletteOpen((v) => !v),
+    onSearch: openSearch,
   });
-
-  // Check for a newer signed release on launch (quiet on failure).
-  useEffect(() => {
-    void checkForUpdates({ silent: true });
-  }, []);
-
-  // Pre-warm the most-recent project once at launch: its agent boots hidden
-  // behind the WelcomeScreen so opening it is instant. Discarded if the user
-  // opens a different project.
-  const didPrewarm = useRef(false);
-  useEffect(() => {
-    if (didPrewarm.current) return;
-    didPrewarm.current = true;
-    const recent = recents[0];
-    if (recent && isClaudeAgent(settings.agentCommand)) {
-      void openProjectAt(recent, { prewarm: true });
-    }
-    // Launch-only; openProjectAt/settings are stable enough for a one-shot.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // When the window regains focus (e.g. clicking the desktop notification),
-  // jump to the session that raised it if it's still waiting.
-  useEffect(() => {
-    function onFocus() {
-      const sid = pendingAttention.current;
-      if (!sid) return;
-      pendingAttention.current = null;
-      const sess = sessions.find((s) => s.id === sid);
-      if (sess && useAgentStore.getState().statuses[sid] === "waiting") {
-        setActiveProjectId(sess.projectId);
-        setActive(sess.projectId, sid);
-      }
-    }
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [sessions, setActiveProjectId, setActive, pendingAttention]);
+  useLaunchUpdateCheck();
 
   // The context bar reflects the active tab when it's an agent, else the first
   // agent — so multiple resumed threads each drive it when focused.
@@ -435,6 +88,14 @@ function App() {
     () => projectSessions.map((s) => s.id),
     [projectSessions]
   );
+  // Dev servers render in the right-hand panel, never as sidebar tabs.
+  const devSessions = useMemo(
+    () => sessions.filter((s) => s.kind === "dev"),
+    [sessions]
+  );
+  const devCount = devSessions.filter(
+    (s) => s.projectId === activeProject?.id
+  ).length;
 
   return (
     <div className="flex h-full bg-background text-foreground">
@@ -442,17 +103,17 @@ function App() {
         <Sidebar
           projects={projects}
           activeProjectId={activeProjectId}
-          activeByProject={activeByProject}
-          sessionsFor={sessionsFor}
+          activeByProject={ws.activeByProject}
+          sessionsFor={ws.sessionsFor}
           collapsed={sidebarCollapsed}
           onToggleCollapse={toggleSidebar}
-          onSelectProject={setActiveProjectId}
-          onCloseProject={handleCloseProject}
-          onPickProject={pickProject}
-          onSelectSession={setActive}
-          onCloseSession={closeSession}
-          onMoveSession={moveSession}
-          onNewAgent={newAgent}
+          onSelectProject={ws.setActiveProjectId}
+          onCloseProject={ws.closeProjectById}
+          onPickProject={ws.pickProject}
+          onSelectSession={ws.setActive}
+          onCloseSession={ws.closeSession}
+          onMoveSession={ws.moveSession}
+          onNewAgent={ws.newAgent}
           onOpenSettings={() => setSettingsOpen(true)}
         />
       )}
@@ -465,32 +126,39 @@ function App() {
           devRunning={projectSessions.some((s) => s.kind === "dev")}
           sessionIds={projectSessionIds}
           changesOpen={changesOpen}
-          customDevCommand={customDevCommand}
-          onSetCustomDevCommand={setCustomDevCommand}
-          onRunCustomDev={runCustomDev}
-          onRunPackage={runPackage}
-          onRunAll={runAll}
+          devOpen={devOpen}
+          devCount={devCount}
+          onToggleDev={() => setDevOpen((v) => !v)}
+          customDevCommand={dev.customCommand}
+          onSetCustomDevCommand={dev.setCustomCommand}
+          onRunCustomDev={dev.runCustom}
+          onRunPackage={dev.runPackage}
+          onRunAll={dev.runAll}
           onStopDev={() => {
-            if (activeProjectId) stopAllDev(activeProjectId);
+            if (activeProjectId) ws.stopAllDev(activeProjectId);
           }}
           onRefreshThreads={() => {
-            if (activeProject) refreshThreads(activeProject.id, activeProject.path);
+            if (activeProject) ws.refreshThreads(activeProject.id, activeProject.path);
           }}
-          onResumeThread={resumeThread}
+          onResumeThread={ws.resumeThread}
           onToggleChanges={toggleChanges}
-          onRefreshDokploy={() => {
-            if (activeProject) refreshDokploy(activeProject.id, activeProject.path);
+          onOpenUsage={() => setUsageOpen(true)}
+          onOpenEditor={() => {
+            if (activeProject) ws.startEditor(activeProject.id, activeProject.path);
           }}
-          onRedeployDokploy={handleRedeployDokploy}
+          onRefreshDokploy={() => {
+            if (activeProject) dokploy.refresh(activeProject.id, activeProject.path);
+          }}
+          onRedeployDokploy={dokploy.redeploy}
           onViewDokployLogs={(service) => {
-            if (activeProject) handleViewDokployLogs(activeProject, service);
+            if (activeProject) dokploy.viewLogs(activeProject, service);
           }}
         />
 
         {agent && activeProjectId && (
           <AttentionBanner
             agentId={agent.id}
-            onJump={() => setActive(activeProjectId, agent.id)}
+            onJump={() => ws.setActive(activeProjectId, agent.id)}
           />
         )}
 
@@ -500,61 +168,36 @@ function App() {
             {/* Panes stay mounted once a session exists, so a pre-warmed
                 project boots in the background. Hidden unless it's the active,
                 revealed tab. */}
-            {sessions.map((s) => (
-              <div
-                key={s.id}
-                className={cn(
-                  "absolute inset-1",
-                  s.id === activeId ? "" : "hidden"
-                )}
-              >
-                {s.kind === "chat" ? (
-                  <ChatPane
-                    sessionId={s.id}
-                    cwd={s.cwd}
-                    resume={s.resume}
-                    active={s.id === activeId}
-                    fontFamily={settings.fontFamily}
-                    fontSize={settings.fontSize}
-                    onTitled={(title) => {
-                      renameSession(s.id, title);
-                      refreshThreads(s.projectId, s.cwd, true);
-                    }}
-                  />
-                ) : s.kind === "dokploy-logs" ? (
-                  <DokployLogsPane
-                    sessionId={s.id}
-                    url={settings.dokployUrl}
-                    apiKey={settings.dokployApiKey}
-                    service={s.dokployLog!}
-                    active={s.id === activeId}
-                    fontFamily={settings.fontFamily}
-                    fontSize={settings.fontSize}
-                  />
-                ) : (
-                  <TerminalPane
-                    sessionId={s.id}
-                    cwd={s.cwd}
-                    command={s.command}
-                    persistKey={s.persistKey}
-                    fontFamily={settings.fontFamily}
-                    fontSize={settings.fontSize}
-                    scrollback={settings.scrollback}
-                    active={s.id === activeId}
-                  />
-                )}
-              </div>
-            ))}
+            <SessionPanes
+              sessions={sessions}
+              activeId={activeId}
+              settings={settings}
+              onTitled={(session, title) => {
+                ws.renameSession(session.id, title);
+                ws.refreshThreads(session.projectId, session.cwd, true);
+              }}
+            />
             {!revealed && (
               <div className="canvas-lit absolute inset-0">
                 <WelcomeScreen
                   recents={recents}
-                  onPick={pickProject}
-                  onOpenRecent={openProjectAt}
+                  onPick={ws.pickProject}
+                  onOpenRecent={ws.openProjectAt}
                 />
               </div>
             )}
           </main>
+          {/* Always mounted: the panes inside own the running dev PTYs. */}
+          <DevPanel
+            sessions={devSessions}
+            projectId={activeProject?.id ?? null}
+            open={devOpen}
+            fontFamily={settings.fontFamily}
+            fontSize={settings.fontSize}
+            scrollback={settings.scrollback}
+            onStop={ws.closeSession}
+            onClose={() => setDevOpen(false)}
+          />
           {activeProject && (changesOpen || changesClosing) && (
             <div
               className={cn(
@@ -582,13 +225,17 @@ function App() {
         sessions={sessions}
         projects={projects}
         chatUi={settings.agentUi === "chat"}
-        onSelectSession={activateSession}
-        onResumeThread={resumeThreadIn}
-        onNewAgent={newAgent}
-        onPickProject={pickProject}
+        onSelectSession={ws.activateSession}
+        onResumeThread={ws.resumeThreadIn}
+        onNewAgent={ws.newAgent}
+        onPickProject={ws.pickProject}
         onOpenSettings={() => setSettingsOpen(true)}
         onToggleChanges={toggleChanges}
+        onSearch={openSearch}
+        onOpenUsage={() => setUsageOpen(true)}
       />
+
+      {usageOpen && <UsagePanel onClose={() => setUsageOpen(false)} />}
 
       <SettingsDialog
         open={settingsOpen}

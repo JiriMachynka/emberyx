@@ -1,7 +1,10 @@
+use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 
 use serde::Serialize;
+
+use crate::error::{Error, Result};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,45 +64,66 @@ fn unquote_path(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Run `git -C <path> <args>` and hand back the raw output. Every git call in
+/// this module goes through here, so process spawning and the repo check live
+/// in exactly one place.
+fn git(path: &str, args: &[&str]) -> Result<Output> {
+    let mut full = vec!["-C", path];
+    full.extend_from_slice(args);
+    Ok(Command::new("git").args(&full).output()?)
+}
+
+/// Like `git`, but feeds `input` to the command's stdin (`git apply -`).
+fn git_stdin(path: &str, args: &[&str], input: &str) -> Result<Output> {
+    let mut child = Command::new("git")
+        .args(["-C", path])
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| Error::new("could not open git stdin"))?
+        .write_all(input.as_bytes())?;
+    Ok(child.wait_with_output()?)
+}
+
+/// git's own message for a failed command: stderr, falling back to stdout.
+fn failure(out: &Output) -> Error {
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    Error::new(format!("{}{}", stdout, stderr).trim())
+}
+
 fn is_repo(path: &str) -> bool {
-    Command::new("git")
-        .args(["-C", path, "rev-parse", "--is-inside-work-tree"])
-        .output()
+    git(path, &["rev-parse", "--is-inside-work-tree"])
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
-/// Run a git command, returning trimmed stdout on success or the combined
-/// stdout+stderr on failure so the UI can show git's own error message.
-fn run_git(path: &str, args: &[&str]) -> Result<String, String> {
+/// Run a git command in a repo, returning trimmed stdout on success or git's
+/// own error message on failure.
+fn run_git(path: &str, args: &[&str]) -> Result<String> {
     if !is_repo(path) {
-        return Err("Not a git repository.".into());
+        return Err(Error::new("Not a git repository."));
     }
-    let mut full = vec!["-C", path];
-    full.extend_from_slice(args);
-    let out = Command::new("git")
-        .args(&full)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let out = git(path, args)?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        Err(format!("{}{}", stdout, stderr).trim().to_string())
+        Err(failure(&out))
     }
 }
 
 /// List working-tree changes (staged, unstaged, untracked).
 #[tauri::command]
-pub fn git_changes(path: String) -> Result<Vec<GitFile>, String> {
+pub fn git_changes(path: String) -> Result<Vec<GitFile>> {
     if !is_repo(&path) {
         return Ok(vec![]);
     }
-    let out = Command::new("git")
-        .args(["-C", &path, "status", "--porcelain=v1"])
-        .output()
-        .map_err(|e| e.to_string())?;
+    let out = git(&path, &["status", "--porcelain=v1"])?;
     let text = String::from_utf8_lossy(&out.stdout);
 
     let mut files = vec![];
@@ -126,9 +150,16 @@ pub fn git_changes(path: String) -> Result<Vec<GitFile>, String> {
     Ok(files)
 }
 
-/// Unified diff for one file (or the whole file's contents if untracked).
+/// Unified diff for one file: the index diff (`--cached`) when `staged`, else
+/// what the working tree has on top of the index. Untracked files have no diff,
+/// so their contents are rendered as one big addition.
 #[tauri::command]
-pub fn git_file_diff(path: String, file: String, untracked: bool) -> Result<String, String> {
+pub fn git_file_diff(
+    path: String,
+    file: String,
+    untracked: bool,
+    staged: bool,
+) -> Result<String> {
     if untracked {
         let content =
             std::fs::read_to_string(Path::new(&path).join(&file)).unwrap_or_default();
@@ -139,59 +170,220 @@ pub fn git_file_diff(path: String, file: String, untracked: bool) -> Result<Stri
             .join("\n"));
     }
 
-    // Diff working tree against HEAD; fall back to the index diff if there's
-    // no HEAD yet (fresh repo).
-    let run = |args: &[&str]| {
-        Command::new("git")
-            .args(args)
-            .output()
-            .map_err(|e| e.to_string())
-    };
-    let out = run(&["-C", &path, "diff", "HEAD", "--no-color", "--", &file])?;
-    if out.status.success() && !out.stdout.is_empty() {
-        return Ok(String::from_utf8_lossy(&out.stdout).to_string());
+    let mut args = vec!["diff", "--no-color"];
+    if staged {
+        args.push("--cached");
     }
-    let fallback = run(&["-C", &path, "diff", "--no-color", "--", &file])?;
-    Ok(String::from_utf8_lossy(&fallback.stdout).to_string())
+    args.extend_from_slice(&["--", &file]);
+    let out = git(&path, &args)?;
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
-/// Stage the selected files and commit only those paths with `message`.
+/// Add paths to the index (picks up untracked files too).
 #[tauri::command]
-pub fn git_commit(path: String, files: Vec<String>, message: String) -> Result<String, String> {
-    if !is_repo(&path) {
-        return Err("Not a git repository.".into());
-    }
+pub fn git_stage(path: String, files: Vec<String>) -> Result<String> {
     if files.is_empty() {
-        return Err("No files selected.".into());
+        return Err(Error::new("No files selected."));
+    }
+    let mut args = vec!["add", "--"];
+    args.extend(files.iter().map(|f| f.as_str()));
+    run_git(&path, &args)
+}
+
+/// Drop paths from the index, leaving the working tree untouched.
+#[tauri::command]
+pub fn git_unstage(path: String, files: Vec<String>) -> Result<String> {
+    if files.is_empty() {
+        return Err(Error::new("No files selected."));
+    }
+    // `reset` (not `restore --staged`) also handles a repo with no HEAD yet.
+    let mut args = vec!["reset", "--quiet", "HEAD", "--"];
+    args.extend(files.iter().map(|f| f.as_str()));
+    run_git(&path, &args).or_else(|_| {
+        let mut args = vec!["rm", "--cached", "--quiet", "--"];
+        args.extend(files.iter().map(|f| f.as_str()));
+        run_git(&path, &args)
+    })
+}
+
+/// Throw away a file's changes: delete it when untracked, else restore it from
+/// the index and HEAD. Irreversible — the caller confirms first.
+#[tauri::command]
+pub fn git_discard(path: String, files: Vec<String>, untracked: bool) -> Result<String> {
+    if files.is_empty() {
+        return Err(Error::new("No files selected."));
+    }
+    if untracked {
+        for file in &files {
+            std::fs::remove_file(Path::new(&path).join(file))?;
+        }
+        return Ok(String::new());
+    }
+    let mut args = vec!["checkout", "HEAD", "--"];
+    args.extend(files.iter().map(|f| f.as_str()));
+    run_git(&path, &args)
+}
+
+/// Apply a unified-diff patch built by the frontend from one hunk of a file's
+/// diff. `cached` targets the index (stage / unstage a hunk); `reverse` undoes
+/// the hunk instead of applying it (unstage, or discard from the working tree).
+#[tauri::command]
+pub fn git_apply(path: String, patch: String, cached: bool, reverse: bool) -> Result<String> {
+    if !is_repo(&path) {
+        return Err(Error::new("Not a git repository."));
+    }
+    let mut args = vec!["apply", "--unidiff-zero", "--whitespace=nowarn"];
+    if cached {
+        args.push("--cached");
+    }
+    if reverse {
+        args.push("--reverse");
+    }
+    args.push("-");
+
+    let out = git_stdin(&path, &args, &patch)?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(failure(&out))
+    }
+}
+
+/// Commit whatever is staged in the index.
+#[tauri::command]
+pub fn git_commit(path: String, message: String) -> Result<String> {
+    if !is_repo(&path) {
+        return Err(Error::new("Not a git repository."));
     }
     if message.trim().is_empty() {
-        return Err("Commit message is empty.".into());
+        return Err(Error::new("Commit message is empty."));
     }
-
-    // Stage the selected files (picks up untracked ones too).
-    let mut add = vec!["-C", &path, "add", "--"];
-    add.extend(files.iter().map(|f| f.as_str()));
-    let out = Command::new("git")
-        .args(&add)
-        .output()
-        .map_err(|e| e.to_string())?;
+    let out = git(&path, &["commit", "-m", &message])?;
     if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
-    }
-
-    // Commit only the selected paths, even if other changes were pre-staged.
-    let mut commit = vec!["-C", &path, "commit", "-m", &message, "--"];
-    commit.extend(files.iter().map(|f| f.as_str()));
-    let out = Command::new("git")
-        .args(&commit)
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        return Err(format!("{}{}", stdout, err).trim().to_string());
+        return Err(failure(&out));
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// One commit that touched a file, as shown on the history timeline.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommit {
+    pub sha: String,
+    pub short_sha: String,
+    pub author: String,
+    /// Author date, ISO-8601.
+    pub date: String,
+    /// Author date relative to now, e.g. "3 days ago".
+    pub relative_date: String,
+    pub subject: String,
+    /// The file's path at this commit — differs from the queried path once the
+    /// walk crosses a rename.
+    pub path: String,
+    /// The path it was renamed from, when this commit did the renaming.
+    pub old_path: Option<String>,
+}
+
+/// Field/record separators for `--pretty=format` — chosen because neither can
+/// appear in a commit subject or author name.
+const SEP: char = '\x1f';
+const RECORD: char = '\x1e';
+
+/// A file's history, newest first, following it across renames.
+#[tauri::command]
+pub fn git_file_log(path: String, file: String) -> Result<Vec<GitCommit>> {
+    let fmt = format!(
+        "{RECORD}%H{SEP}%h{SEP}%an{SEP}%aI{SEP}%ar{SEP}%s"
+    );
+    let out = run_git(
+        &path,
+        &[
+            "log",
+            "--follow",
+            "--name-status",
+            "-M",
+            &format!("--pretty=format:{fmt}"),
+            "--",
+            &file,
+        ],
+    )?;
+
+    let mut commits = vec![];
+    for chunk in out.split(RECORD) {
+        let chunk = chunk.trim_start_matches('\n');
+        if chunk.is_empty() {
+            continue;
+        }
+        let mut lines = chunk.lines();
+        let Some(head) = lines.next() else { continue };
+        let fields: Vec<&str> = head.split(SEP).collect();
+        if fields.len() < 6 || fields[0].len() < 7 {
+            continue;
+        }
+
+        // The name-status line after the header carries the path at this
+        // commit, and both paths when it was a rename (R100 old new).
+        let mut file_path = file.clone();
+        let mut old_path = None;
+        if let Some(status_line) = lines.find(|l| !l.is_empty()) {
+            let parts: Vec<&str> = status_line.split('\t').collect();
+            let status = parts.first().copied().unwrap_or("");
+            if (status.starts_with('R') || status.starts_with('C')) && parts.len() >= 3 {
+                old_path = Some(unquote_path(parts[1]));
+                file_path = unquote_path(parts[2]);
+            } else if parts.len() >= 2 {
+                file_path = unquote_path(parts[1]);
+            }
+        }
+
+        commits.push(GitCommit {
+            sha: fields[0].to_string(),
+            short_sha: fields[1].to_string(),
+            author: fields[2].to_string(),
+            date: fields[3].to_string(),
+            relative_date: fields[4].to_string(),
+            subject: fields[5].to_string(),
+            path: file_path,
+            old_path,
+        });
+    }
+    Ok(commits)
+}
+
+/// A file's contents at one commit. Empty when the file didn't exist there.
+#[tauri::command]
+pub fn git_show_file(path: String, sha: String, file: String) -> Result<String> {
+    let out = git(&path, &["show", &format!("{sha}:{file}")])?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    } else {
+        Ok(String::new())
+    }
+}
+
+/// Pickaxe search (`git log -S`): the shas of commits that added or removed
+/// `term` in this file.
+#[tauri::command]
+pub fn git_pickaxe(path: String, file: String, term: String) -> Result<Vec<String>> {
+    if term.trim().is_empty() {
+        return Ok(vec![]);
+    }
+    let out = run_git(
+        &path,
+        &[
+            "log",
+            "--follow",
+            "--pretty=format:%H",
+            &format!("-S{term}"),
+            "--",
+            &file,
+        ],
+    )?;
+    Ok(out
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
 }
 
 #[derive(Serialize)]
@@ -209,7 +401,7 @@ pub struct GitBranch {
 
 /// Current branch plus upstream tracking / ahead-behind counts.
 #[tauri::command]
-pub fn git_branch(path: String) -> Result<GitBranch, String> {
+pub fn git_branch(path: String) -> Result<GitBranch> {
     let branch = run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
 
     // Upstream lookup fails (non-zero) when no tracking branch is set.
@@ -245,34 +437,34 @@ pub fn git_branch(path: String) -> Result<GitBranch, String> {
 
 /// Local branch names.
 #[tauri::command]
-pub fn git_branches(path: String) -> Result<Vec<String>, String> {
+pub fn git_branches(path: String) -> Result<Vec<String>> {
     let out = run_git(&path, &["branch", "--format=%(refname:short)"])?;
     Ok(out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
 }
 
 /// Fetch and merge from the tracked remote.
 #[tauri::command]
-pub fn git_pull(path: String) -> Result<String, String> {
+pub fn git_pull(path: String) -> Result<String> {
     run_git(&path, &["pull"])
 }
 
 /// Push the current branch to its configured upstream.
 #[tauri::command]
-pub fn git_push(path: String) -> Result<String, String> {
+pub fn git_push(path: String) -> Result<String> {
     run_git(&path, &["push"])
 }
 
 /// Push `branch` to `remote` and set it as the upstream.
 #[tauri::command]
-pub fn git_push_to(path: String, remote: String, branch: String) -> Result<String, String> {
+pub fn git_push_to(path: String, remote: String, branch: String) -> Result<String> {
     run_git(&path, &["push", "-u", &remote, &branch])
 }
 
 /// Switch to `branch`, creating it (`-b`) when `create` is set.
 #[tauri::command]
-pub fn git_checkout(path: String, branch: String, create: bool) -> Result<String, String> {
+pub fn git_checkout(path: String, branch: String, create: bool) -> Result<String> {
     if branch.trim().is_empty() {
-        return Err("Branch name is empty.".into());
+        return Err(Error::new("Branch name is empty."));
     }
     if create {
         run_git(&path, &["checkout", "-b", &branch])
@@ -285,9 +477,9 @@ pub fn git_checkout(path: String, branch: String, create: bool) -> Result<String
 /// commits aren't merged — the error is surfaced to the caller rather than
 /// forced away.
 #[tauri::command]
-pub fn git_branch_delete(path: String, branch: String) -> Result<String, String> {
+pub fn git_branch_delete(path: String, branch: String) -> Result<String> {
     if branch.trim().is_empty() {
-        return Err("Branch name is empty.".into());
+        return Err(Error::new("Branch name is empty."));
     }
     run_git(&path, &["branch", "-d", &branch])
 }
@@ -303,7 +495,7 @@ pub struct GitStash {
 
 /// Stash all working-tree changes, with an optional message.
 #[tauri::command]
-pub fn git_stash_push(path: String, message: String) -> Result<String, String> {
+pub fn git_stash_push(path: String, message: String) -> Result<String> {
     if message.trim().is_empty() {
         run_git(&path, &["stash", "push"])
     } else {
@@ -313,7 +505,7 @@ pub fn git_stash_push(path: String, message: String) -> Result<String, String> {
 
 /// List saved stashes, newest first.
 #[tauri::command]
-pub fn git_stash_list(path: String) -> Result<Vec<GitStash>, String> {
+pub fn git_stash_list(path: String) -> Result<Vec<GitStash>> {
     let out = run_git(&path, &["stash", "list"])?;
     Ok(out
         .lines()
@@ -327,7 +519,7 @@ pub fn git_stash_list(path: String) -> Result<Vec<GitStash>, String> {
 
 /// Apply the stash at `index`, dropping it too when `pop` is set.
 #[tauri::command]
-pub fn git_stash_apply(path: String, index: u32, pop: bool) -> Result<String, String> {
+pub fn git_stash_apply(path: String, index: u32, pop: bool) -> Result<String> {
     let stash = format!("stash@{{{}}}", index);
     let action = if pop { "pop" } else { "apply" };
     run_git(&path, &["stash", action, &stash])
@@ -335,7 +527,7 @@ pub fn git_stash_apply(path: String, index: u32, pop: bool) -> Result<String, St
 
 /// Discard the stash at `index` without applying it.
 #[tauri::command]
-pub fn git_stash_drop(path: String, index: u32) -> Result<String, String> {
+pub fn git_stash_drop(path: String, index: u32) -> Result<String> {
     let stash = format!("stash@{{{}}}", index);
     run_git(&path, &["stash", "drop", &stash])
 }

@@ -1,6 +1,7 @@
 import { Command } from "cmdk";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
+  CircleDollarSign,
   FileDiff,
   FolderOpen,
   History,
@@ -25,6 +26,8 @@ interface CommandPaletteProps {
   onPickProject: () => void;
   onOpenSettings: () => void;
   onToggleChanges: () => void;
+  onSearch: () => void;
+  onOpenUsage: () => void;
 }
 
 /** ⌘K launcher: fuzzy-search open sessions + recent threads, or run a quick
@@ -41,6 +44,8 @@ export function CommandPalette({
   onPickProject,
   onOpenSettings,
   onToggleChanges,
+  onSearch,
+  onOpenUsage,
 }: CommandPaletteProps) {
   const run = (fn: () => void) => {
     onOpenChange(false);
@@ -104,6 +109,14 @@ export function CommandPalette({
                 <Item value="action toggle changes" onSelect={() => run(onToggleChanges)}>
                   <FileDiff className="size-4 text-muted-foreground" />
                   Toggle changes
+                </Item>
+                <Item value="action search in project" onSelect={() => run(onSearch)}>
+                  <Search className="size-4 text-muted-foreground" />
+                  Search in project
+                </Item>
+                <Item value="action usage cost" onSelect={() => run(onOpenUsage)}>
+                  <CircleDollarSign className="size-4 text-muted-foreground" />
+                  Usage & cost
                 </Item>
                 <Item value="action settings" onSelect={() => run(onOpenSettings)}>
                   <Settings className="size-4 text-muted-foreground" />

@@ -19,7 +19,7 @@ export interface Session {
   label: string;
   cwd: string;
   command?: string;
-  kind: "agent" | "dev" | "chat" | "dokploy-logs";
+  kind: "agent" | "dev" | "chat" | "dokploy-logs" | "editor";
   /** Stable key for cross-restart scrollback restore; only the project's
    *  primary agent sets it, so secondary/dev panes never share its log. */
   persistKey?: string;
@@ -27,6 +27,31 @@ export interface Session {
   resume?: string;
   /** Service to stream logs for (dokploy-logs kind only). */
   dokployLog?: { kind: string; id: string; name: string };
+}
+
+/** One entry in a listed directory (editor file tree). */
+export interface DirEntry {
+  name: string;
+  path: string;
+  isDir: boolean;
+}
+
+/** A candidate definition site found for a symbol (editor ⌘-click). */
+export interface DefMatch {
+  path: string;
+  /** 1-based line number. */
+  line: number;
+  text: string;
+}
+
+/** The definition behind a hovered symbol, formatted for the hover card. */
+export interface HoverInfo {
+  path: string;
+  line: number;
+  /** Doc comment + declaration, dedented. */
+  code: string;
+  /** How many other definitions of the symbol exist. */
+  others: number;
 }
 
 /** An open project. Each project owns its own agent + dev sessions. */
@@ -65,6 +90,57 @@ export interface GitBranch {
   upstream: string | null;
   ahead: number;
   behind: number;
+}
+
+/** One matching line from a project-wide search. */
+export interface SearchHit {
+  /** 1-based line number. */
+  line: number;
+  text: string;
+  /** Offsets of the match within `text`, for highlighting. */
+  start: number;
+  end: number;
+}
+
+/** All hits in one file, path relative to the project root. */
+export interface SearchFile {
+  path: string;
+  hits: SearchHit[];
+}
+
+/** A slash command offered in the chat composer. */
+export interface SlashCommand {
+  /** Invocation without the leading slash, e.g. "review" or "caveman:compress". */
+  name: string;
+  description: string;
+  /** "project", "user", or the plugin that provides it. */
+  source: string;
+}
+
+/** One commit on a file's history timeline. */
+export interface GitCommit {
+  sha: string;
+  shortSha: string;
+  author: string;
+  date: string;
+  relativeDate: string;
+  subject: string;
+  /** The file's path at this commit (differs after a rename). */
+  path: string;
+  /** Set when this commit renamed the file. */
+  oldPath: string | null;
+}
+
+/** One day of token usage for a project/model pair. */
+export interface UsageRow {
+  date: string;
+  project: string;
+  model: string;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+  messages: number;
 }
 
 /** A saved stash entry from `git stash list`. */

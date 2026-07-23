@@ -1,4 +1,11 @@
-import { FileDiff, ChevronRight, GitBranch as GitBranchIcon } from "lucide-react";
+import {
+  CircleDollarSign,
+  FileDiff,
+  FileCode,
+  ChevronRight,
+  GitBranch as GitBranchIcon,
+  Terminal,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/StatusDot";
 import { DevMenu } from "@/components/DevMenu";
@@ -20,6 +27,10 @@ interface ContextBarProps {
   /** Session ids in the active project — for the working-tree change count. */
   sessionIds: string[];
   changesOpen: boolean;
+  devOpen: boolean;
+  /** Running dev servers in this project — badge on the Dev output toggle. */
+  devCount: number;
+  onToggleDev: () => void;
   customDevCommand: string;
   onSetCustomDevCommand: (command: string) => void;
   onRunCustomDev: () => void;
@@ -29,6 +40,8 @@ interface ContextBarProps {
   onRefreshThreads: () => void;
   onResumeThread: (thread: Thread) => void;
   onToggleChanges: () => void;
+  onOpenEditor: () => void;
+  onOpenUsage: () => void;
   onRefreshDokploy: () => void;
   onRedeployDokploy: (service: DokployService) => void;
   onViewDokployLogs: (service: DokployService) => void;
@@ -43,6 +56,9 @@ export function ContextBar({
   devRunning,
   sessionIds,
   changesOpen,
+  devOpen,
+  devCount,
+  onToggleDev,
   customDevCommand,
   onSetCustomDevCommand,
   onRunCustomDev,
@@ -52,6 +68,8 @@ export function ContextBar({
   onRefreshThreads,
   onResumeThread,
   onToggleChanges,
+  onOpenEditor,
+  onOpenUsage,
   onRefreshDokploy,
   onRedeployDokploy,
   onViewDokployLogs,
@@ -116,17 +134,26 @@ export function ContextBar({
             onViewLogs={onViewDokployLogs}
           />
         )}
-        {agentUsage && agentUsage.messages > 0 && (
-          <span
-            className="flex items-center gap-1 text-xs text-muted-foreground"
-            title={`${agentUsage.input.toLocaleString()} in · ${agentUsage.output.toLocaleString()} out · ${agentUsage.cacheRead.toLocaleString()} cache read · ${agentUsage.cacheCreation.toLocaleString()} cache write${
-              agentUsage.model ? ` · ${agentUsage.model}` : ""
-            }`}
-          >
-            {formatTokens(totalTokens(agentUsage))} tok
-            <span className="opacity-40">·</span>${costOf(agentUsage).toFixed(2)}
-          </span>
-        )}
+        <button
+          onClick={onOpenUsage}
+          className="flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+          title={
+            agentUsage && agentUsage.messages > 0
+              ? `${agentUsage.input.toLocaleString()} in · ${agentUsage.output.toLocaleString()} out · ${agentUsage.cacheRead.toLocaleString()} cache read · ${agentUsage.cacheCreation.toLocaleString()} cache write${
+                  agentUsage.model ? ` · ${agentUsage.model}` : ""
+                }\nClick for usage across all projects`
+              : "Usage & cost across all projects"
+          }
+        >
+          {agentUsage && agentUsage.messages > 0 ? (
+            <>
+              {formatTokens(totalTokens(agentUsage))} tok
+              <span className="opacity-40">·</span>${costOf(agentUsage).toFixed(2)}
+            </>
+          ) : (
+            <CircleDollarSign className="size-3.5" />
+          )}
+        </button>
         {activeProject && (
           <DevMenu
             workspace={activeProject.workspace}
@@ -145,6 +172,26 @@ export function ContextBar({
             onOpen={onRefreshThreads}
             onResume={onResumeThread}
           />
+        )}
+        {devCount > 0 && (
+          <Button
+            variant={devOpen ? "secondary" : "ghost"}
+            size="sm"
+            onClick={onToggleDev}
+            title="Dev server output"
+          >
+            <Terminal className="size-3.5" />
+            Dev
+            <span className="rounded bg-emerald-500/20 px-1 text-[10px] text-emerald-400">
+              {devCount}
+            </span>
+          </Button>
+        )}
+        {activeProject && (
+          <Button variant="ghost" size="sm" onClick={onOpenEditor} title="Files">
+            <FileCode className="size-3.5" />
+            Files
+          </Button>
         )}
         {activeProject && (
           <Button

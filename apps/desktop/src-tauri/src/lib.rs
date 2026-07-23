@@ -1,10 +1,16 @@
 mod agent;
+mod defs;
 mod dokploy;
+mod error;
+mod files;
+mod fs_walk;
 mod git;
 mod hooks;
 mod icon;
 mod openrouter;
 mod pty;
+mod search;
+mod slash;
 mod threads;
 mod usage;
 mod workspace;
@@ -31,6 +37,7 @@ pub fn run() {
         .manage(PtyManager::new())
         .manage(AgentManager::new())
         .manage(usage::UsageCache::default())
+        .manage(usage::SummaryCache::default())
         .setup(|app| {
             let config = hooks::start(&app.handle())?;
             app.manage(config);
@@ -47,11 +54,27 @@ pub fn run() {
             agent::agent_kill,
             agent::title_thread,
             workspace::scan_workspace,
+            files::list_dir,
+            files::list_files,
+            defs::find_definition,
+            defs::resolve_import,
+            defs::hover_info,
+            files::read_text_file,
+            files::write_text_file,
+            search::search_text,
+            slash::slash_commands,
             icon::project_icon,
             hooks::hook_config,
             git::git_changes,
             git::git_file_diff,
             git::git_commit,
+            git::git_stage,
+            git::git_unstage,
+            git::git_discard,
+            git::git_apply,
+            git::git_file_log,
+            git::git_show_file,
+            git::git_pickaxe,
             git::git_branch,
             git::git_branches,
             git::git_pull,
@@ -64,6 +87,7 @@ pub fn run() {
             git::git_stash_apply,
             git::git_stash_drop,
             usage::read_usage,
+            usage::usage_summary,
             threads::list_threads,
             threads::read_thread,
             dokploy::dokploy_services,
