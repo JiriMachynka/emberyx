@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, History, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { basename } from "@/lib/path";
-import { highlightCode, langFromPath } from "@/lib/highlight";
 import { FileFinder } from "@/components/FileFinder";
 import { FileTree, FileTypeIcon } from "@/components/editor/FileTree";
+import { CodeEditor, type EditorHandle } from "@/components/editor/CodeEditor";
 import { SearchPanel } from "@/components/editor/SearchPanel";
 import { onSearchRequest, takeSearchRequest } from "@/lib/searchRequest";
 import { HoverCard } from "@/components/editor/HoverCard";
@@ -13,10 +13,6 @@ import { DefinitionPicker } from "@/components/editor/DefinitionPicker";
 import { useFileBuffers } from "@/hooks/useFileBuffers";
 import { useCodeNavigation } from "@/hooks/useCodeNavigation";
 import { useSymbolHover } from "@/hooks/useSymbolHover";
-
-/** Files past this size render unhighlighted — re-tokenizing the whole buffer
- *  on every keystroke is what makes a big file feel laggy. */
-const HIGHLIGHT_LIMIT = 100_000;
 
 interface EditorPaneProps {
   projectPath: string;
@@ -27,10 +23,9 @@ interface EditorPaneProps {
 }
 
 /**
- * Lightweight file browser + text editor: a transparent textarea layered over a
- * syntax-highlighted <pre>, with a line-number gutter. ⌘S saves, ⌘-click jumps
- * to a definition, ⌘[ goes back, ⌘K opens the file finder, and hovering a
- * symbol previews where it's declared.
+ * File browser + CodeMirror editor. ⌘S saves, ⌘-click jumps to a definition,
+ * ⌘[ goes back, ⌘K opens the file finder, ⌘F searches the open buffer, and
+ * hovering a symbol previews where it's declared.
  */
 export function EditorPane({
   projectPath,
@@ -46,13 +41,7 @@ export function EditorPane({
   );
   const [searchFocus, setSearchFocus] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
-  // Held ⌘/Ctrl turns the caret into a pointer, signalling clickable symbols.
-  const [cmdHeld, setCmdHeld] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const areaRef = useRef<HTMLTextAreaElement>(null);
-
-  const lineHeight = Math.round(fontSize * 1.6);
-  const codeStyle = { fontFamily, fontSize, lineHeight: `${lineHeight}px` };
+  const editorRef = useRef<EditorHandle | null>(null);
 
   const files = useFileBuffers(projectPath);
   const { selected, text, dirty, dirtyPaths, saving, save, edit } = files;
@@ -61,9 +50,6 @@ export function EditorPane({
     projectPath,
     selected,
     text,
-    fontFamily,
-    fontSize,
-    lineHeight,
     invalidateOn: files.savedAt,
   });
 
@@ -73,20 +59,8 @@ export function EditorPane({
     text,
     ready: !files.status.isPending,
     open: files.select,
-    lineHeight,
-    areaRef,
-    scrollRef,
+    editor: editorRef,
   });
-
-  const lang = useMemo(() => (selected ? langFromPath(selected) : null), [selected]);
-  const html = useMemo(
-    () =>
-      text.length > HIGHLIGHT_LIMIT
-        ? highlightCode(text, null)
-        : highlightCode(text, lang),
-    [text, lang]
-  );
-  const lineCount = useMemo(() => text.split("\n").length, [text]);
 
   // ⌘K opens the file finder instead of the global command palette while this
   // editor tab is focused. Capture phase + stopPropagation beats the window
@@ -115,53 +89,6 @@ export function EditorPane({
       }),
     []
   );
-
-  useEffect(() => {
-    const sync = (e: KeyboardEvent) => setCmdHeld(e.metaKey || e.ctrlKey);
-    const clear = () => setCmdHeld(false);
-    window.addEventListener("keydown", sync);
-    window.addEventListener("keyup", sync);
-    window.addEventListener("blur", clear);
-    return () => {
-      window.removeEventListener("keydown", sync);
-      window.removeEventListener("keyup", sync);
-      window.removeEventListener("blur", clear);
-    };
-  }, []);
-
-  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    hover.cancel();
-    if (e.key === "Escape" && nav.picker) {
-      e.preventDefault();
-      nav.closePicker();
-      return;
-    }
-    if ((e.metaKey || e.ctrlKey) && e.altKey && e.key.toLowerCase() === "h") {
-      e.preventDefault();
-      setHistoryOpen(true);
-      return;
-    }
-    if ((e.metaKey || e.ctrlKey) && e.key === "[") {
-      e.preventDefault();
-      nav.goBack();
-      return;
-    }
-    if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-      e.preventDefault();
-      void save();
-      return;
-    }
-    if (e.key === "Tab") {
-      e.preventDefault();
-      const el = e.currentTarget;
-      const { selectionStart: start, selectionEnd: end } = el;
-      edit(text.slice(0, start) + "  " + text.slice(end));
-      // Restore the caret after React re-renders with the new value.
-      requestAnimationFrame(() => {
-        el.selectionStart = el.selectionEnd = start + 2;
-      });
-    }
-  }
 
   return (
     <div className="relative flex h-full min-h-0 w-full overflow-hidden">
@@ -253,54 +180,20 @@ export function EditorPane({
         ) : files.status.isPending ? (
           <Placeholder>Loading…</Placeholder>
         ) : (
-          <div
-            ref={scrollRef}
-            onScroll={hover.cancel}
-            className="min-h-0 flex-1 overflow-auto"
-          >
-            <div className="flex min-h-full w-max min-w-full">
-              <div
-                style={codeStyle}
-                className="sticky left-0 z-10 shrink-0 select-none border-r bg-canvas px-2 py-2 text-right font-mono text-muted-foreground/60"
-              >
-                {Array.from({ length: lineCount }, (_, i) => (
-                  <div key={i}>{i + 1}</div>
-                ))}
-              </div>
-              {/* flex-1 with the default min-width:auto → the code area fills
-                  the viewport but never shrinks below the longest line, so the
-                  overlaid textarea always covers the full <pre>. */}
-              <div className="relative flex-1">
-                <pre
-                  aria-hidden
-                  style={codeStyle}
-                  className="pointer-events-none m-0 whitespace-pre px-3 py-2 font-mono"
-                >
-                  <code dangerouslySetInnerHTML={{ __html: html + "\n" }} />
-                </pre>
-                <textarea
-                  ref={areaRef}
-                  value={text}
-                  onChange={(e) => edit(e.target.value)}
-                  onKeyDown={onKeyDown}
-                  onClick={(e) => {
-                    hover.cancel();
-                    if (e.metaKey || e.ctrlKey)
-                      void nav.followAt(e.currentTarget.selectionStart);
-                  }}
-                  onMouseMove={hover.onMouseMove}
-                  onMouseLeave={hover.cancel}
-                  spellCheck={false}
-                  wrap="off"
-                  style={codeStyle}
-                  className={cn(
-                    "absolute inset-0 size-full resize-none overflow-hidden whitespace-pre break-normal bg-transparent px-3 py-2 font-mono text-transparent caret-foreground outline-none",
-                    cmdHeld && "cursor-pointer"
-                  )}
-                />
-              </div>
-            </div>
-          </div>
+          <CodeEditor
+            path={selected}
+            value={text}
+            onChange={edit}
+            fontFamily={fontFamily}
+            fontSize={fontSize}
+            handle={editorRef}
+            onFollow={(pos) => void nav.followAt(pos)}
+            onHover={hover.onHover}
+            onHoverEnd={hover.cancel}
+            onSave={() => void save()}
+            onBack={nav.goBack}
+            onHistory={() => setHistoryOpen(true)}
+          />
         )}
       </div>
 

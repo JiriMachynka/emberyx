@@ -1,4 +1,5 @@
 import { useEffect, useState, type RefObject } from "react";
+import type { EditorHandle } from "@/components/editor/CodeEditor";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { clickTargetAt } from "@/lib/clickTarget";
@@ -18,9 +19,7 @@ interface NavigationOptions {
   /** Set when the target file's text has arrived and can be revealed. */
   ready: boolean;
   open: (path: string) => void;
-  lineHeight: number;
-  areaRef: RefObject<HTMLTextAreaElement | null>;
-  scrollRef: RefObject<HTMLDivElement | null>;
+  editor: RefObject<EditorHandle | null>;
 }
 
 /**
@@ -34,9 +33,7 @@ export function useCodeNavigation({
   text,
   ready,
   open,
-  lineHeight,
-  areaRef,
-  scrollRef,
+  editor,
 }: NavigationOptions) {
   const [history, setHistory] = useState<Location[]>([]);
   const [reveal, setReveal] = useState<Location | null>(null);
@@ -45,17 +42,13 @@ export function useCodeNavigation({
   );
   const [seeking, setSeeking] = useState(false);
 
-  /** 1-based line the caret currently sits on, for the back-stack. */
-  function caretLine(): number {
-    const el = areaRef.current;
-    if (!el) return 1;
-    return text.slice(0, el.selectionStart).split("\n").length;
-  }
-
   /** Open a file at a line. `record` pushes the current spot onto the stack. */
   function jumpTo(path: string, line: number, record = true) {
     if (record && selected) {
-      setHistory((h) => [...h, { path: selected, line: caretLine() }]);
+      setHistory((h) => [
+        ...h,
+        { path: selected, line: editor.current?.currentLine() ?? 1 },
+      ]);
     }
     setPicker(null);
     open(path);
@@ -110,25 +103,13 @@ export function useCodeNavigation({
     }
   }
 
-  // Scroll + select the target line once the file's text is in the buffer.
-  // Runs after the async read, so it can't be done in the click handler.
+  // Reveal the target line once the file's text is in the buffer. Runs after
+  // the async read, so it can't be done in the click handler.
   useEffect(() => {
     if (!reveal || reveal.path !== selected || !ready) return;
-    const area = areaRef.current;
-    const scroller = scrollRef.current;
-    if (!area || !scroller) return;
-    const lines = text.split("\n");
-    const start = lines
-      .slice(0, reveal.line - 1)
-      .reduce((n, l) => n + l.length + 1, 0);
-    area.focus();
-    area.setSelectionRange(start, start + (lines[reveal.line - 1]?.length ?? 0));
-    scroller.scrollTop = Math.max(
-      0,
-      (reveal.line - 1) * lineHeight - scroller.clientHeight / 3
-    );
+    editor.current?.revealLine(reveal.line);
     setReveal(null);
-  }, [reveal, selected, ready, text, lineHeight, areaRef, scrollRef]);
+  }, [reveal, selected, ready, text, editor]);
 
   return {
     canGoBack: history.length > 0,

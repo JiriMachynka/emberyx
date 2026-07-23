@@ -5,6 +5,7 @@ import App from "./App";
 import { queryClient } from "@/lib/queries";
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
+import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

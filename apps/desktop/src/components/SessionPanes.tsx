@@ -1,7 +1,11 @@
+import { lazy, Suspense } from "react";
 import { TerminalPane } from "@/components/TerminalPane";
 import { ChatPane } from "@/components/ChatPane";
 import { DokployLogsPane } from "@/components/DokployLogsPane";
-import { EditorPane } from "@/components/EditorPane";
+// CodeMirror is a big chunk; only sessions that open the editor pay for it.
+const EditorPane = lazy(() =>
+  import("@/components/EditorPane").then((m) => ({ default: m.EditorPane }))
+);
 import { cn } from "@/lib/utils";
 import type { Session } from "@/types";
 import type { Settings } from "@/lib/settings";
@@ -45,12 +49,14 @@ export function SessionPanes({
                 onTitled={(title) => onTitled(s, title)}
               />
             ) : s.kind === "editor" ? (
-              <EditorPane
-                projectPath={s.cwd}
-                fontFamily={settings.fontFamily}
-                fontSize={settings.editorFontSize}
-                active={s.id === activeId}
-              />
+              <Suspense fallback={null}>
+                <EditorPane
+                  projectPath={s.cwd}
+                  fontFamily={settings.editorFontFamily}
+                  fontSize={settings.editorFontSize}
+                  active={s.id === activeId}
+                />
+              </Suspense>
             ) : s.kind === "dokploy-logs" ? (
               <DokployLogsPane
                 sessionId={s.id}

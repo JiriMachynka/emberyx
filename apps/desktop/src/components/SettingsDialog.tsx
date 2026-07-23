@@ -224,6 +224,14 @@ export function SettingsDialog({
                 />
               </Field>
 
+              <Field label="Editor font family">
+                <Input
+                  value={settings.editorFontFamily}
+                  onChange={(e) => onUpdate({ editorFontFamily: e.target.value })}
+                  spellCheck={false}
+                />
+              </Field>
+
               <div className="grid grid-cols-3 gap-4">
                 <Field label="Terminal font">
                   <Input

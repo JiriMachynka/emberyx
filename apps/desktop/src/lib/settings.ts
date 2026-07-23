@@ -5,8 +5,11 @@ export interface Settings {
   agentUi: "chat" | "terminal";
   /** Base agent command run on project open. */
   agentCommand: string;
-  /** Terminal font-family stack. */
+  /** Terminal + chat font-family stack. */
   fontFamily: string;
+  /** Editor font-family stack, kept separate so the editor can use a font
+   *  whose ligatures render correctly. */
+  editorFontFamily: string;
   /** Terminal + chat font size in px. */
   fontSize: number;
   /** Built-in file editor font size in px. */
@@ -33,6 +36,8 @@ export const DEFAULT_SETTINGS: Settings = {
   agentUi: "chat",
   agentCommand: "claude",
   fontFamily: '"Geist Mono Variable", ui-monospace, Menlo, monospace',
+  editorFontFamily:
+    '"JetBrains Mono Variable", "Geist Mono Variable", ui-monospace, Menlo, monospace',
   fontSize: 13,
   editorFontSize: 13,
   scrollback: 1000,
