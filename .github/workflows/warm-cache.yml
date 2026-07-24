@@ -13,9 +13,6 @@ on:
       - "apps/desktop/src-tauri/Cargo.lock"
       - "apps/desktop/src-tauri/Cargo.toml"
       - ".github/workflows/warm-cache.yml"
-  schedule:
-    # Weekly, so the cache never ages out of GitHub's 7-day eviction window.
-    - cron: "0 4 * * 1"
   workflow_dispatch:
 
 concurrency:

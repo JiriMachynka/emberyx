@@ -13,7 +13,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Gate the build on the same checks CI runs on main — a red commit must never
+  # ship a .dmg. Uses the `test` cache key so it never thrashes the `release`
+  # cache the build job restores.
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+          shared-key: test
+
+      - run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bunx tsc --noEmit
+        working-directory: apps/desktop
+
+      - name: Frontend tests
+        run: bun run test
+        working-directory: apps/desktop
+
+      - name: Clippy
+        run: cargo clippy --all-targets
+        working-directory: apps/desktop/src-tauri
+
+      - name: Rust tests
+        run: cargo test
+        working-directory: apps/desktop/src-tauri
+
   release:
+    needs: test
     runs-on: macos-latest
     permissions:
       contents: write

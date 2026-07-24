@@ -137,6 +137,15 @@ describe("describeTool", () => {
     expect(describeTool("Mystery", {}).body).toEqual([]);
     expect(describeTool("Bash", {}).body).toEqual([]);
   });
+
+  it("badges a detached background shell", () => {
+    const d = describeTool("Bash", { command: "sleep 100", run_in_background: true });
+    expect(d.meta).toBe("background");
+  });
+
+  it("leaves a foreground bash unbadged", () => {
+    expect(describeTool("Bash", { command: "ls" }).meta).toBeUndefined();
+  });
 });
 
 describe("detectResult", () => {

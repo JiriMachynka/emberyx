@@ -220,10 +220,13 @@ export function describeTool(name: string, input: unknown): ToolDisplay {
         icon: "bash",
         label: "Bash",
         title: description ?? command,
+        // Flag a detached shell — it keeps running after the call returns, so
+        // the badge is the only cue it's still alive in the background.
+        meta: i.run_in_background === true ? "background" : undefined,
         mono: description == null,
         body: [
           ...(command ? [{ kind: "code" as const, code: command, lang: "bash" }] : []),
-          ...genericBody(input, ["command", "description"]),
+          ...genericBody(input, ["command", "description", "run_in_background"]),
         ],
       };
     }

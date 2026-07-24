@@ -83,6 +83,8 @@ interface ChatComposerProps {
   usage: ChatUsage;
   onSend: (text: string, images: ChatImage[]) => void;
   onStop: () => void;
+  /** Un-send the newest in-flight turn; returns its text/images to restore. */
+  onRewind: () => { text: string; images?: ChatImage[] } | null;
   onPreview: (dataUrl: string) => void;
 }
 
@@ -102,6 +104,7 @@ export function ChatComposer({
   usage,
   onSend,
   onStop,
+  onRewind,
   onPreview,
 }: ChatComposerProps) {
   const [input, setInput] = useState("");
@@ -157,6 +160,19 @@ export function ChatComposer({
     setInput("");
     setImages([]);
     closeMenus();
+  };
+
+  /** Escape while a turn is in flight: pull the just-sent message back into the
+   *  box to edit. A draft already typed is kept, below the restored text. */
+  const rewindToDraft = (): boolean => {
+    const r = onRewind();
+    if (!r) return false;
+    setInput((prev) => (prev.trim() ? `${r.text}\n${prev}` : r.text));
+    const imgs = r.images;
+    if (imgs && imgs.length > 0) setImages((prev) => [...imgs, ...prev]);
+    closeMenus();
+    requestAnimationFrame(() => inputRef.current?.focus());
+    return true;
   };
 
   /** Track the caret after every edit / move so a menu opens and closes with the
@@ -335,6 +351,12 @@ export function ChatComposer({
               if (e.key === "Escape") {
                 e.preventDefault();
                 closeMenus();
+                return;
+              }
+            }
+            if (e.key === "Escape" && (busy || queued > 0)) {
+              if (rewindToDraft()) {
+                e.preventDefault();
                 return;
               }
             }

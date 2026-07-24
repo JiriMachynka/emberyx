@@ -46,6 +46,7 @@ import {
 import { Markdown } from "@/components/Markdown";
 import { ChatComposer } from "@/components/ChatComposer";
 import { AgentChips } from "@/components/AgentChips";
+import { useAgentStore } from "@/lib/agentStore";
 import { highlightCode } from "@/lib/highlight";
 import { cn } from "@/lib/utils";
 
@@ -90,6 +91,7 @@ export function ChatPane({
     usage,
     ready,
     send,
+    rewind,
     queued,
     stop,
     pendingPermission,
@@ -198,6 +200,7 @@ export function ChatPane({
               usage={usage}
               onSend={send}
               onStop={stop}
+              onRewind={rewind}
               onPreview={setPreview}
             />
           )}
@@ -262,7 +265,12 @@ const MessageRow = memo(function MessageRow({
   }
   return (
     <div className="group relative flex flex-col gap-2">
-      {message.thinking && <ThinkingBlock text={message.thinking} />}
+      {message.thinking && (
+        <ThinkingBlock
+          text={message.thinking}
+          active={message.streaming && !message.text && message.tools.length === 0}
+        />
+      )}
       {message.tools.length > 0 && (
         <div className="flex flex-col gap-1">
           {message.tools.map((t) => (
@@ -305,18 +313,21 @@ function CopyButton({ text }: { text: string }) {
 }
 
 /** Reasoning, kept out of the way: a borderless dashed strip rather than a
- *  card, so it never reads as a tool call. Always starts collapsed. */
-function ThinkingBlock({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
+ *  card, so it never reads as a tool call. Opens live while the model is
+ *  thinking and closes once it moves on — until the user clicks, then their
+ *  choice sticks. */
+function ThinkingBlock({ text, active }: { text: string; active: boolean }) {
+  const [override, setOverride] = useState<boolean | null>(null);
+  const open = override ?? active;
   return (
     <div className="rounded-lg border border-dashed border-border/70 px-3 py-1.5 text-xs text-muted-foreground">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOverride(!open)}
         className="flex w-full items-center gap-1.5 italic hover:text-foreground"
       >
-        <Brain className="size-3.5 shrink-0 opacity-70" />
-        Thought for a moment
+        <Brain className={cn("size-3.5 shrink-0 opacity-70", active && "animate-pulse")} />
+        {active ? "Thinking…" : "Thought for a moment"}
         <ChevronRight
           className={cn("ml-auto size-3 transition-transform", open && "rotate-90")}
         />
@@ -486,15 +497,27 @@ function ToolCard({ tool }: { tool: ToolCall }) {
   const isAgent = display.icon === "task";
   const open = (override ?? (running && !isAgent)) && expandable;
 
+  // An agent card is a doorway to the side panel — clicking it selects the run
+  // there rather than expanding a body inline. Everything else toggles inline.
+  const selectAgent = useAgentStore((s) => s.selectAgent);
+  const selectedAgent = useAgentStore((s) => s.selectedAgent);
+  const selected = isAgent && selectedAgent === tool.id;
+  const clickable = isAgent || expandable;
+
   return (
     <div className="overflow-hidden rounded-lg border border-border bg-card/50 text-xs">
       <button
         type="button"
-        onClick={() => expandable && setOverride(!open)}
-        disabled={!expandable}
+        onClick={() =>
+          isAgent
+            ? selectAgent(selected ? null : tool.id)
+            : expandable && setOverride(!open)
+        }
+        disabled={!clickable}
         className={cn(
           "flex w-full items-center gap-2 px-3 py-2 text-left transition-colors",
-          expandable && "hover:bg-muted/40"
+          clickable && "hover:bg-muted/40",
+          selected && "bg-primary/10"
         )}
       >
         <Icon
@@ -528,7 +551,7 @@ function ToolCard({ tool }: { tool: ToolCall }) {
           ) : (
             <Check className="size-3.5 text-emerald-400" />
           )}
-          {expandable && (
+          {expandable && !isAgent && (
             <ChevronRight
               className={cn(
                 "size-3 text-muted-foreground transition-transform duration-200",

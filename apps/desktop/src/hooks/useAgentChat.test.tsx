@@ -611,6 +611,60 @@ describe("useAgentChat queueing", () => {
   });
 });
 
+describe("useAgentChat rewind", () => {
+  it("interrupts the active run and hands the turn back", async () => {
+    const { result } = await mount();
+
+    act(() => result.current.send("undo me"));
+    expect(result.current.status).toBe("thinking");
+
+    let restored: { text: string } | null = null;
+    act(() => {
+      restored = result.current.rewind();
+    });
+
+    expect(restored).toEqual({ text: "undo me", images: undefined });
+    expect(result.current.messages).toHaveLength(0);
+    expect(result.current.status).toBe("idle");
+    expect(sentLines().some((l) => l.request?.subtype === "interrupt")).toBe(true);
+  });
+
+  it("drops a queued turn without interrupting the active run", async () => {
+    const { result } = await mount();
+
+    act(() => result.current.send("first"));
+    act(() => result.current.send("second"));
+    expect(result.current.queued).toBe(1);
+
+    let restored: { text: string } | null = null;
+    act(() => {
+      restored = result.current.rewind();
+    });
+
+    expect(restored).toEqual({ text: "second", images: undefined });
+    expect(result.current.queued).toBe(0);
+    expect(result.current.messages.map((m) => m.text)).toEqual(["first"]);
+    // The active run keeps going — no interrupt was sent.
+    expect(sentLines().some((l) => l.request?.subtype === "interrupt")).toBe(false);
+  });
+
+  it("is a no-op once the run is idle", async () => {
+    const { result, emit } = await mount();
+
+    act(() => result.current.send("done"));
+    emit({ type: "result", subtype: "success", usage: {} });
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+
+    let restored: unknown = "unset";
+    act(() => {
+      restored = result.current.rewind();
+    });
+
+    expect(restored).toBeNull();
+    expect(result.current.messages.map((m) => m.text)).toEqual(["done"]);
+  });
+});
+
 describe("useAgentChat subagents", () => {
   it("tracks a Task dispatch, its sidechain activity and its result", async () => {
     useAgentStore.setState({ subagents: {} });
@@ -687,5 +741,42 @@ describe("useAgentChat subagents", () => {
       message: { role: "assistant", content: [{ type: "text", text: "inner chatter" }] },
     });
     expect(result.current.messages).toHaveLength(0);
+  });
+
+  it("tracks a nested agent spawned inside a subagent turn", async () => {
+    useAgentStore.setState({ subagents: {} });
+    const { emit } = await mount();
+
+    // A subagent turn (parent = outer run) that itself dispatches another agent.
+    emit({
+      type: "assistant",
+      parent_tool_use_id: "outer",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "nested",
+            name: "Agent",
+            input: { description: "Sub-audit", subagent_type: "Explore", prompt: "dig" },
+          },
+        ],
+      },
+    });
+
+    const nested = () => useAgentStore.getState().subagents.nested;
+    expect(nested()).toMatchObject({ description: "Sub-audit", subagentType: "Explore" });
+    expect(nested().endedAt).toBeUndefined();
+
+    // Its result arrives as a parent-tagged user message and closes it out.
+    emit({
+      type: "user",
+      parent_tool_use_id: "outer",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "nested", content: "sub done" }],
+      },
+    });
+    expect(nested().endedAt).toBeGreaterThan(0);
   });
 });

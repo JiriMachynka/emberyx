@@ -221,6 +221,22 @@ function isSynthetic(text: string): boolean {
   );
 }
 
+/** Build a SubagentRun from a Task/Agent tool_use input. Shared by the top-level
+ *  streamed dispatch and the nested case (an agent spawned inside another). */
+function agentRunFrom(id: string, session: string, input: unknown) {
+  const i = (input ?? {}) as Record<string, unknown>;
+  return {
+    id,
+    session,
+    description: typeof i.description === "string" ? i.description : "Agent",
+    subagentType: typeof i.subagent_type === "string" ? i.subagent_type : "",
+    prompt: typeof i.prompt === "string" ? i.prompt : "",
+    background: i.run_in_background !== false,
+  };
+}
+
+const isAgentTool = (name: unknown): boolean => name === "Task" || name === "Agent";
+
 /** Flatten one subagent turn into the lines the agent panel shows. */
 export function readActivity(content: unknown): SubagentActivity[] {
   const out: SubagentActivity[] = [];
@@ -269,6 +285,10 @@ export function useAgentChat({
   onTitled,
 }: Options) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Mirror for reads inside callbacks (rewind) without stale closures or making
+  // the callback re-created — and thus the composer re-rendered — every token.
+  const messagesRef = useRef<ChatMessage[]>(messages);
+  messagesRef.current = messages;
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
   const [ready, setReady] = useState(false);
@@ -450,16 +470,8 @@ export function useAgentChat({
               } catch {
                 /* keep partial */
               }
-              if (tool.name === "Task" || tool.name === "Agent") {
-                const i = (tool.input ?? {}) as Record<string, unknown>;
-                startSubagent({
-                  id: tool.id,
-                  session: emberyxSessionId,
-                  description: typeof i.description === "string" ? i.description : "Agent",
-                  subagentType: typeof i.subagent_type === "string" ? i.subagent_type : "",
-                  prompt: typeof i.prompt === "string" ? i.prompt : "",
-                  background: i.run_in_background !== false,
-                });
+              if (isAgentTool(tool.name)) {
+                startSubagent(agentRunFrom(tool.id, emberyxSessionId, tool.input));
               }
             }
           });
@@ -477,6 +489,26 @@ export function useAgentChat({
           const inner = (msg.message as Record<string, unknown>)?.content;
           for (const activity of readActivity(inner)) {
             addSubagentActivity(parent, activity);
+          }
+          // A Task/Agent tool_use *inside* a subagent turn is a nested run —
+          // register it so it gets its own chip and captures its own activity.
+          if (Array.isArray(inner)) {
+            for (const b of inner as Array<Record<string, unknown>>) {
+              if (b.type === "tool_use" && isAgentTool(b.name) && typeof b.id === "string") {
+                startSubagent(agentRunFrom(b.id, emberyxSessionId, b.input));
+              }
+            }
+          }
+        } else if (type === "user") {
+          // A nested run's result closes out here — it never reaches the
+          // top-level tool_result branch below.
+          const content = (msg.message as Record<string, unknown>)?.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (block?.type === "tool_result") {
+                endSubagent(block.tool_use_id as string, Boolean(block.is_error));
+              }
+            }
           }
         }
         return;
@@ -613,6 +645,41 @@ export function useAgentChat({
     void invoke("agent_send", { id, message: line });
     setPending(null);
     setStatus("idle");
+  }, [setPending]);
+
+  // Un-send the most recent pending turn and hand its text/images back so the
+  // composer can restore them for editing. If the turn is still queued it's just
+  // dropped; if it's the active run it's interrupted. No-op once idle, so it
+  // never eats a finished exchange.
+  const rewind = useCallback((): { text: string; images?: ChatImage[] } | null => {
+    if (!BUSY_STATUS.has(statusRef.current) && queueRef.current.length === 0) {
+      return null;
+    }
+    const msgs = messagesRef.current;
+    const idx = msgs.map((m) => m.role).lastIndexOf("user");
+    if (idx === -1) return null;
+    const restored = { text: msgs[idx].text, images: msgs[idx].images };
+
+    if (queueRef.current.length > 0) {
+      // Newest turn never left the queue — discard it, leave the active run.
+      queueRef.current.pop();
+      setQueued(queueRef.current.length);
+    } else {
+      // Newest turn is the active run — interrupt it, same wire as stop().
+      const id = idRef.current;
+      if (id !== null) {
+        const line = JSON.stringify({
+          type: "control_request",
+          request_id: crypto.randomUUID(),
+          request: { subtype: "interrupt" },
+        });
+        void invoke("agent_send", { id, message: line });
+      }
+      setPending(null);
+      setStatus("idle");
+    }
+    setMessages(msgs.slice(0, idx));
+    return restored;
   }, [setPending]);
 
   // Answer a pending can_use_tool prompt: allow (once/always) or deny.
@@ -765,6 +832,7 @@ export function useAgentChat({
     send,
     queued,
     stop,
+    rewind,
     pendingPermission,
     respond,
     pendingAsk,
