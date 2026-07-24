@@ -88,3 +88,52 @@ describe("useAgentStore", () => {
     expect(store().statuses).not.toBe(before);
   });
 });
+
+describe("subagent runs", () => {
+  it("tracks a run from dispatch through activity to completion", () => {
+    const s = () => useAgentStore.getState();
+    s().startSubagent({
+      id: "toolu_1",
+      session: "sess-a",
+      description: "Audit ask_user",
+      subagentType: "Explore",
+      prompt: "look at ask.rs",
+      background: true,
+    });
+
+    const started = s().subagents.toolu_1;
+    expect(started).toMatchObject({ description: "Audit ask_user", activity: [] });
+    expect(started.endedAt).toBeUndefined();
+
+    s().addSubagentActivity("toolu_1", { kind: "tool", name: "Read", detail: "ask.rs" });
+    s().addSubagentActivity("toolu_1", { kind: "text", name: "", detail: "found it" });
+    expect(s().subagents.toolu_1.activity).toHaveLength(2);
+
+    s().endSubagent("toolu_1", false);
+    expect(s().subagents.toolu_1.endedAt).toBeGreaterThan(0);
+    expect(s().subagents.toolu_1.isError).toBe(false);
+  });
+
+  it("ignores activity for a run it never saw", () => {
+    const before = useAgentStore.getState().subagents;
+    useAgentStore.getState().addSubagentActivity("ghost", {
+      kind: "tool",
+      name: "Read",
+      detail: "x",
+    });
+    expect(useAgentStore.getState().subagents).toBe(before);
+  });
+
+  it("drops runs belonging to closed sessions", () => {
+    useAgentStore.getState().startSubagent({
+      id: "toolu_2",
+      session: "sess-doomed",
+      description: "x",
+      subagentType: "",
+      prompt: "",
+      background: true,
+    });
+    useAgentStore.getState().clearSessions(["sess-doomed"]);
+    expect(useAgentStore.getState().subagents.toolu_2).toBeUndefined();
+  });
+});

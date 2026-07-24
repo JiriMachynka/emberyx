@@ -17,7 +17,9 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(600);
 /// MCP protocol revision we speak.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
-/// A question the agent is waiting on, pushed to the chat pane that owns it.
+/// One or more questions the agent is waiting on, pushed to the chat pane that
+/// owns it. A single tool call can carry several related questions; the pane
+/// renders each as its own tab and answers them together.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AskEvent {
@@ -25,8 +27,15 @@ struct AskEvent {
     id: String,
     /// Emberyx session id — which chat pane should show the prompt.
     session: String,
+    /// Never empty; the tool call is rejected before we get here otherwise.
+    questions: Vec<AskQuestion>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AskQuestion {
     question: String,
-    /// Short label shown as the prompt's heading.
+    /// Short label shown as the question's tab heading.
     header: String,
     options: Vec<AskOption>,
     multi_select: bool,
@@ -72,21 +81,61 @@ fn tool_definition() -> Value {
         "name": "ask_user",
         "description": "Ask the user to choose between options when a decision \
 is genuinely theirs to make — an ambiguous requirement, or a trade-off you \
-cannot resolve from the code. The call blocks until they answer, and returns \
-the option they picked. Do not use it for choices with an obvious default.",
+cannot resolve from the code. Ask several related questions in one call by \
+passing multiple entries in `questions`; each is rendered as its own tab and \
+answered together. The call blocks until they answer, and returns the options \
+they picked. Do not use it for choices with an obvious default.",
         "inputSchema": {
             "type": "object",
             "properties": {
+                "questions": {
+                    "type": "array",
+                    "description": "The questions to ask, each shown as its own tab.",
+                    "minItems": 1,
+                    "maxItems": 4,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "question": {
+                                "type": "string",
+                                "description": "The question, ending in a question mark."
+                            },
+                            "header": {
+                                "type": "string",
+                                "description": "Very short tab label, max 12 chars."
+                            },
+                            "options": {
+                                "type": "array",
+                                "minItems": 2,
+                                "maxItems": 4,
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "label": { "type": "string" },
+                                        "description": { "type": "string" }
+                                    },
+                                    "required": ["label"]
+                                }
+                            },
+                            "multiSelect": {
+                                "type": "boolean",
+                                "description": "Allow picking more than one option."
+                            }
+                        },
+                        "required": ["question", "options"]
+                    }
+                },
                 "question": {
                     "type": "string",
-                    "description": "The question, ending in a question mark."
+                    "description": "Legacy single-question form; prefer `questions`."
                 },
                 "header": {
                     "type": "string",
-                    "description": "Very short label for the prompt, max 12 chars."
+                    "description": "Legacy single-question form; prefer `questions`."
                 },
                 "options": {
                     "type": "array",
+                    "description": "Legacy single-question form; prefer `questions`.",
                     "minItems": 2,
                     "maxItems": 4,
                     "items": {
@@ -100,10 +149,13 @@ the option they picked. Do not use it for choices with an obvious default.",
                 },
                 "multiSelect": {
                     "type": "boolean",
-                    "description": "Allow picking more than one option."
+                    "description": "Legacy single-question form; prefer `questions`."
                 }
             },
-            "required": ["question", "options"]
+            "anyOf": [
+                { "required": ["questions"] },
+                { "required": ["question", "options"] }
+            ]
         }
     })
 }
@@ -200,14 +252,11 @@ fn serve(mut req: tiny_http::Request, app: &AppHandle, token: &str) {
     let _ = req.respond(response);
 }
 
-/// Push the question to the chat pane and block until it answers.
-fn call_tool(app: &AppHandle, url: &str, params: &Value) -> std::result::Result<Value, String> {
-    if params["name"].as_str() != Some("ask_user") {
-        return Err(format!("unknown tool: {}", params["name"]));
-    }
-    let args = &params["arguments"];
-    let question = args["question"].as_str().unwrap_or("").to_string();
-    let options: Vec<AskOption> = args["options"]
+/// One question out of the tool arguments, sanitised: unlabelled options are
+/// dropped, and a question left without text or options is not worth showing.
+fn parse_question(value: &Value) -> Option<AskQuestion> {
+    let question = value["question"].as_str().unwrap_or("").to_string();
+    let options: Vec<AskOption> = value["options"]
         .as_array()
         .map(|list| {
             list.iter()
@@ -220,8 +269,35 @@ fn call_tool(app: &AppHandle, url: &str, params: &Value) -> std::result::Result<
         })
         .unwrap_or_default();
     if question.is_empty() || options.is_empty() {
-        return Err("ask_user needs a question and at least one option".into());
+        return None;
     }
+    Some(AskQuestion {
+        question,
+        header: value["header"].as_str().unwrap_or("").to_string(),
+        options,
+        multi_select: value["multiSelect"].as_bool().unwrap_or(false),
+    })
+}
+
+/// `questions` is the current shape; the flat top-level fields are the legacy
+/// single-question form, kept working for agents that still emit it.
+fn parse_questions(args: &Value) -> std::result::Result<Vec<AskQuestion>, String> {
+    let questions: Vec<AskQuestion> = match args["questions"].as_array() {
+        Some(list) if !list.is_empty() => list.iter().filter_map(parse_question).collect(),
+        _ => parse_question(args).into_iter().collect(),
+    };
+    if questions.is_empty() {
+        return Err("ask_user needs at least one question with at least one option".into());
+    }
+    Ok(questions)
+}
+
+/// Push the questions to the chat pane and block until it answers.
+fn call_tool(app: &AppHandle, url: &str, params: &Value) -> std::result::Result<Value, String> {
+    if params["name"].as_str() != Some("ask_user") {
+        return Err(format!("unknown tool: {}", params["name"]));
+    }
+    let questions = parse_questions(&params["arguments"])?;
 
     let session = url
         .split_once("session=")
@@ -240,10 +316,7 @@ fn call_tool(app: &AppHandle, url: &str, params: &Value) -> std::result::Result<
         AskEvent {
             id: id.clone(),
             session,
-            question,
-            header: args["header"].as_str().unwrap_or("").to_string(),
-            options,
-            multi_select: args["multiSelect"].as_bool().unwrap_or(false),
+            questions,
         },
     );
 
@@ -296,11 +369,107 @@ mod tests {
     }
 
     #[test]
-    fn tool_schema_requires_a_question_and_options() {
+    fn tool_schema_accepts_either_form() {
         let tool = tool_definition();
         assert_eq!(tool["name"], "ask_user");
-        let required = tool["inputSchema"]["required"].as_array().unwrap();
+        let schema = &tool["inputSchema"];
+        let items = &schema["properties"]["questions"]["items"];
+        assert_eq!(schema["properties"]["questions"]["minItems"], 1);
+        assert_eq!(schema["properties"]["questions"]["maxItems"], 4);
+        let required = items["required"].as_array().unwrap();
         assert!(required.iter().any(|r| r == "question"));
         assert!(required.iter().any(|r| r == "options"));
+
+        let any_of = schema["anyOf"].as_array().unwrap();
+        assert_eq!(any_of[0]["required"], json!(["questions"]));
+        assert_eq!(any_of[1]["required"], json!(["question", "options"]));
+    }
+
+    #[test]
+    fn parses_multiple_questions() {
+        let args = json!({
+            "questions": [
+                {
+                    "question": "Which auth?",
+                    "header": "Auth",
+                    "options": [{ "label": "better-auth", "description": "batteries" }, { "label": "manual" }],
+                    "multiSelect": false
+                },
+                {
+                    "question": "Which db?",
+                    "options": [{ "label": "postgres" }, { "label": "sqlite" }],
+                    "multiSelect": true
+                }
+            ]
+        });
+        let questions = parse_questions(&args).unwrap();
+        assert_eq!(questions.len(), 2);
+        assert_eq!(questions[0].question, "Which auth?");
+        assert_eq!(questions[0].header, "Auth");
+        assert_eq!(questions[0].options[0].label, "better-auth");
+        assert_eq!(questions[0].options[0].description, "batteries");
+        assert_eq!(questions[0].options[1].description, "");
+        assert!(!questions[0].multi_select);
+        assert_eq!(questions[1].header, "");
+        assert!(questions[1].multi_select);
+    }
+
+    #[test]
+    fn falls_back_to_the_legacy_single_question_form() {
+        let args = json!({
+            "question": "Ship it?",
+            "header": "Ship",
+            "options": [{ "label": "yes" }, { "label": "no" }],
+            "multiSelect": true
+        });
+        let questions = parse_questions(&args).unwrap();
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].question, "Ship it?");
+        assert_eq!(questions[0].header, "Ship");
+        assert_eq!(questions[0].options.len(), 2);
+        assert!(questions[0].multi_select);
+    }
+
+    #[test]
+    fn drops_unlabelled_options_and_empty_questions() {
+        let args = json!({
+            "questions": [
+                { "question": "", "options": [{ "label": "a" }] },
+                { "question": "No options left?", "options": [{ "label": "" }] },
+                { "question": "Keep?", "options": [{ "label": "" }, { "label": "yes" }] }
+            ]
+        });
+        let questions = parse_questions(&args).unwrap();
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].question, "Keep?");
+        assert_eq!(questions[0].options.len(), 1);
+        assert_eq!(questions[0].options[0].label, "yes");
+    }
+
+    #[test]
+    fn rejects_input_with_nothing_answerable() {
+        assert!(parse_questions(&json!({ "questions": [] })).is_err());
+        assert!(parse_questions(&json!({ "question": "Hi?" })).is_err());
+        assert!(parse_questions(&json!({})).is_err());
+    }
+
+    #[test]
+    fn event_serialises_multi_select_as_camel_case() {
+        let event = AskEvent {
+            id: "ask-1".into(),
+            session: "s7".into(),
+            questions: vec![AskQuestion {
+                question: "Which auth?".into(),
+                header: "Auth".into(),
+                options: vec![AskOption {
+                    label: "better-auth".into(),
+                    description: String::new(),
+                }],
+                multi_select: true,
+            }],
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        assert_eq!(value["questions"][0]["multiSelect"], true);
+        assert_eq!(value["questions"][0]["header"], "Auth");
     }
 }

@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentChat } from "@/hooks/useAgentChat";
+import { useAgentStore } from "@/lib/agentStore";
 
 /** Events pushed by the stubbed Channel into the hook, per test. */
 type Emit = (event: Record<string, unknown>) => void;
@@ -561,5 +562,130 @@ describe("useAgentChat titling", () => {
     emit({ type: "result", subtype: "success", usage: {} });
     await act(async () => {});
     expect(sentTo("title_thread")).toEqual([]);
+  });
+});
+
+describe("useAgentChat queueing", () => {
+  it("holds a turn typed while the agent is working, then sends it when idle", async () => {
+    const { result, emit } = await mount();
+
+    act(() => result.current.send("first"));
+    expect(sentLines()).toHaveLength(1);
+    expect(result.current.status).toBe("thinking");
+
+    // Typed mid-run: shown immediately, but not on the wire yet.
+    act(() => result.current.send("second"));
+    expect(sentLines()).toHaveLength(1);
+    expect(result.current.queued).toBe(1);
+    expect(result.current.messages.map((m) => m.text)).toEqual(["first", "second"]);
+
+    emit({ type: "result", subtype: "success", usage: {} });
+
+    await waitFor(() => expect(sentLines()).toHaveLength(2));
+    expect(sentLines()[1].message.content).toBe("second");
+    expect(result.current.queued).toBe(0);
+    // The queued turn is not duplicated into the transcript when it goes out.
+    expect(result.current.messages.map((m) => m.text)).toEqual(["first", "second"]);
+  });
+
+  it("drains queued turns one per idle, oldest first", async () => {
+    const { result, emit } = await mount();
+
+    act(() => result.current.send("first"));
+    act(() => result.current.send("second"));
+    act(() => result.current.send("third"));
+    expect(result.current.queued).toBe(2);
+
+    emit({ type: "result", subtype: "success", usage: {} });
+    await waitFor(() => expect(sentLines()).toHaveLength(2));
+    expect(result.current.queued).toBe(1);
+
+    emit({ type: "result", subtype: "success", usage: {} });
+    await waitFor(() => expect(sentLines()).toHaveLength(3));
+    expect(sentLines().map((l) => l.message.content)).toEqual([
+      "first",
+      "second",
+      "third",
+    ]);
+    expect(result.current.queued).toBe(0);
+  });
+});
+
+describe("useAgentChat subagents", () => {
+  it("tracks a Task dispatch, its sidechain activity and its result", async () => {
+    useAgentStore.setState({ subagents: {} });
+    const { emit } = await mount();
+
+    emit({ type: "stream_event", event: { type: "message_start", message: {} } });
+    emit({
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "toolu_a", name: "Task" },
+      },
+    });
+    emit({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: {
+          type: "input_json_delta",
+          partial_json: JSON.stringify({
+            description: "Audit picker",
+            subagent_type: "Explore",
+            prompt: "read ask.rs",
+          }),
+        },
+      },
+    });
+    emit({ type: "stream_event", event: { type: "content_block_stop", index: 0 } });
+
+    const run = () => useAgentStore.getState().subagents.toolu_a;
+    expect(run()).toMatchObject({
+      description: "Audit picker",
+      subagentType: "Explore",
+      prompt: "read ask.rs",
+      session: "emberyx-1",
+    });
+
+    // A turn the subagent took, tagged with the dispatching tool's id.
+    emit({
+      type: "assistant",
+      parent_tool_use_id: "toolu_a",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Looking now" },
+          { type: "tool_use", id: "t1", name: "Read", input: { file_path: "/a/b/ask.rs" } },
+        ],
+      },
+    });
+    expect(run().activity).toEqual([
+      { kind: "text", name: "", detail: "Looking now" },
+      { kind: "tool", name: "Read", detail: "…/b/ask.rs" },
+    ]);
+
+    emit({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "toolu_a", content: "done" }],
+      },
+    });
+    expect(run().endedAt).toBeGreaterThan(0);
+    expect(run().isError).toBe(false);
+  });
+
+  it("keeps subagent turns out of the transcript", async () => {
+    useAgentStore.setState({ subagents: {} });
+    const { result, emit } = await mount();
+    emit({
+      type: "assistant",
+      parent_tool_use_id: "toolu_x",
+      message: { role: "assistant", content: [{ type: "text", text: "inner chatter" }] },
+    });
+    expect(result.current.messages).toHaveLength(0);
   });
 });

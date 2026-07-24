@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Toaster } from "sonner";
 import { SessionPanes } from "@/components/SessionPanes";
 import { SettingsDialog } from "@/components/SettingsDialog";
+import { AgentPanel } from "@/components/AgentPanel";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { DevPanel } from "@/components/DevPanel";
 import { ContextBar } from "@/components/ContextBar";
@@ -216,6 +217,7 @@ function App() {
               />
             </div>
           )}
+          <AgentPanel />
         </div>
       </div>
 

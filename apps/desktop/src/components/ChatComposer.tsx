@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Coins, Sparkles, Square, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Clock, Coins, Sparkles, Square, X } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { MentionMenu } from "@/components/MentionMenu";
 import { SlashMenu } from "@/components/SlashMenu";
@@ -76,9 +76,10 @@ interface ChatComposerProps {
   active: boolean;
   ready: boolean;
   busy: boolean;
+  /** Turns typed while busy and not yet sent. */
+  queued: number;
   exited: boolean;
   /** True while a permission prompt owns the keyboard. */
-  blocked: boolean;
   usage: ChatUsage;
   onSend: (text: string, images: ChatImage[]) => void;
   onStop: () => void;
@@ -96,8 +97,8 @@ export function ChatComposer({
   active,
   ready,
   busy,
+  queued,
   exited,
-  blocked,
   usage,
   onSend,
   onStop,
@@ -343,14 +344,26 @@ export function ChatComposer({
             }
           }}
           placeholder={
-            exited ? "Session ended" : ready ? "Message Claude…" : "Starting agent…"
+            exited
+              ? "Session ended"
+              : !ready
+                ? "Starting agent…"
+                : busy
+                  ? "Queue a message…"
+                  : "Message Claude…"
           }
-          disabled={!ready || busy || exited || blocked}
+          disabled={!ready || exited}
           rows={1}
           className="max-h-40 min-h-16 resize-none overflow-y-auto border-0 bg-transparent px-3.5 pb-1 pt-3 shadow-none focus-visible:ring-0"
         />
         <div className="flex items-center justify-between gap-2 px-2.5 pb-2 pt-1">
           <div className="flex min-w-0 items-center gap-2.5 text-xs text-muted-foreground">
+            {queued > 0 && (
+              <span className="flex shrink-0 items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-[0.7rem]">
+                <Clock className="size-3" />
+                {queued} queued
+              </span>
+            )}
             {usage.model && (
               <span className="flex items-center gap-1.5 font-medium text-foreground">
                 <Sparkles className="size-3.5 shrink-0 text-primary" />
@@ -381,25 +394,27 @@ export function ChatComposer({
               </span>
             )}
           </div>
-          {busy ? (
-            <button
-              type="button"
-              onClick={onStop}
-              title="Stop"
-              className="grid size-8 shrink-0 place-items-center rounded-lg bg-card text-foreground transition-colors hover:bg-muted"
-            >
-              <Square className="size-3.5 fill-current" />
-            </button>
-          ) : (
+          <div className="flex shrink-0 items-center gap-1.5">
+            {busy && (
+              <button
+                type="button"
+                onClick={onStop}
+                title="Stop"
+                className="grid size-8 place-items-center rounded-lg bg-card text-foreground transition-colors hover:bg-muted"
+              >
+                <Square className="size-3.5 fill-current" />
+              </button>
+            )}
             <button
               type="button"
               onClick={submit}
+              title={busy ? "Queue message" : "Send"}
               disabled={(!input.trim() && images.length === 0) || !ready || exited}
-              className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
+              className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
             >
               <ArrowUp className="size-4" />
             </button>
-          )}
+          </div>
         </div>
       </div>
     </>

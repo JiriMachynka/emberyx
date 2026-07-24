@@ -70,6 +70,7 @@ impl AgentManager {
         session_id: String,
         resume: Option<String>,
         permission_mode: String,
+        skip_permissions: bool,
         settings: Option<String>,
         mcp_config: Option<String>,
         emberyx_session_id: String,
@@ -82,14 +83,21 @@ impl AgentManager {
             .arg("--output-format")
             .arg("stream-json")
             .arg("--include-partial-messages")
-            .arg("--verbose")
-            .arg("--permission-mode")
-            .arg(&permission_mode)
-            // Opt into the permission control protocol: `stdio` makes the CLI
-            // emit `can_use_tool` control_requests for tools the mode doesn't
-            // already resolve, instead of silently applying the mode.
-            .arg("--permission-prompt-tool")
-            .arg("stdio");
+            .arg("--verbose");
+
+        if skip_permissions {
+            // Bypass entirely. `--permission-mode` and `--permission-prompt-tool`
+            // are mutually exclusive with this flag, so neither is passed.
+            cmd.arg("--dangerously-skip-permissions");
+        } else {
+            cmd.arg("--permission-mode")
+                .arg(&permission_mode)
+                // Opt into the permission control protocol: `stdio` makes the CLI
+                // emit `can_use_tool` control_requests for tools the mode doesn't
+                // already resolve, instead of silently applying the mode.
+                .arg("--permission-prompt-tool")
+                .arg("stdio");
+        }
 
         match &resume {
             Some(id) => {
@@ -301,6 +309,7 @@ pub fn agent_spawn(
     session_id: String,
     resume: Option<String>,
     permission_mode: String,
+    skip_permissions: bool,
     settings: Option<String>,
     emberyx_session_id: String,
     on_event: Channel<AgentEvent>,
@@ -311,6 +320,7 @@ pub fn agent_spawn(
         session_id,
         resume,
         permission_mode,
+        skip_permissions,
         settings,
         Some(mcp_config),
         emberyx_session_id,

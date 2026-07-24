@@ -46,6 +46,7 @@ export function SessionPanes({
                 active={s.id === activeId}
                 fontFamily={settings.fontFamily}
                 fontSize={settings.fontSize}
+                skipPermissions={settings.dangerouslySkipPermissions}
                 onTitled={(title) => onTitled(s, title)}
               />
             ) : s.kind === "editor" ? (

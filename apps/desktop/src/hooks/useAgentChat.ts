@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useAgentStore, type SubagentActivity } from "@/lib/agentStore";
+import { describeTool } from "@/lib/toolDisplay";
 
 /** A stream-json line from the headless `claude` process (Rust AgentEvent). */
 type AgentEvent =
@@ -43,10 +45,20 @@ export type ChatStatus =
   | "streaming"
   | "tool"
   | "awaiting_permission"
+  | "awaiting_answer"
   | "error"
   | "exited";
 
 export type PermissionDecision = "allow_once" | "allow_always" | "deny";
+
+/** States where the agent can't take a new turn, so one gets queued instead. */
+const BUSY_STATUS = new Set<ChatStatus>([
+  "thinking",
+  "streaming",
+  "tool",
+  "awaiting_permission",
+  "awaiting_answer",
+]);
 
 /** A pending `can_use_tool` prompt from the CLI awaiting the user's choice. */
 export interface PendingPermission {
@@ -60,12 +72,17 @@ export interface PendingPermission {
 
 /** A question raised by the agent's `ask_user` MCP tool. The call is blocked in
  *  the backend until `answerAsk` sends a choice back. */
-export interface PendingAsk {
-  id: string;
+export interface AskQuestion {
   question: string;
   header: string;
   options: { label: string; description: string }[];
   multiSelect: boolean;
+}
+
+export interface PendingAsk {
+  id: string;
+  /** Always at least one; several render as tabs. */
+  questions: AskQuestion[];
 }
 
 export interface ChatUsage {
@@ -82,6 +99,8 @@ interface Options {
   /** Claude session id to resume; omit to start fresh. */
   resume?: string;
   permissionMode?: string;
+  /** Bypass the permission protocol entirely — no in-chat approval prompts. */
+  skipPermissions?: boolean;
   /** Called with the generated title once a fresh chat has been auto-titled. */
   onTitled?: (title: string) => void;
 }
@@ -202,6 +221,26 @@ function isSynthetic(text: string): boolean {
   );
 }
 
+/** Flatten one subagent turn into the lines the agent panel shows. */
+export function readActivity(content: unknown): SubagentActivity[] {
+  const out: SubagentActivity[] = [];
+  if (!Array.isArray(content)) return out;
+  for (const b of content as Array<Record<string, unknown>>) {
+    if (b.type === "tool_use") {
+      const d = describeTool(b.name as string, b.input);
+      out.push({ kind: "tool", name: d.label, detail: d.title ?? "" });
+    } else if (
+      b.type === "text" &&
+      typeof b.text === "string" &&
+      b.text.trim() &&
+      !isSynthetic(b.text)
+    ) {
+      out.push({ kind: "text", name: "", detail: b.text.trim() });
+    }
+  }
+  return out;
+}
+
 function newMessage(
   role: "user" | "assistant",
   partial: Partial<ChatMessage>
@@ -226,6 +265,7 @@ export function useAgentChat({
   emberyxSessionId,
   resume,
   permissionMode = "acceptEdits",
+  skipPermissions = false,
   onTitled,
 }: Options) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -245,6 +285,19 @@ export function useAgentChat({
   // Mirror for reads inside callbacks, same reason as pendingRef above.
   const askRef = useRef<PendingAsk | null>(null);
   askRef.current = pendingAsk;
+
+  // Subagent runs are telemetry, not transcript — they live in the store so the
+  // agent panel and the chip row can subscribe without re-rendering the chat.
+  const startSubagent = useAgentStore((st) => st.startSubagent);
+  const addSubagentActivity = useAgentStore((st) => st.addSubagentActivity);
+  const endSubagent = useAgentStore((st) => st.endSubagent);
+
+  // Turns typed while the agent was busy, oldest first, plus its rendered count.
+  const queueRef = useRef<{ text: string; images?: ChatImage[] }[]>([]);
+  const [queued, setQueued] = useState(0);
+  // Mirror of status for reads inside callbacks without stale closures.
+  const statusRef = useRef<ChatStatus>("idle");
+  statusRef.current = status;
 
   const idRef = useRef<number | null>(null);
   const sessionRef = useRef<string | undefined>(resume);
@@ -391,15 +444,40 @@ export function useAgentChat({
           pushDraft((d) => {
             const ti = blockToolRef.current[index];
             if (ti != null && d.tools[ti]) {
+              const tool = d.tools[ti];
               try {
-                d.tools[ti].input = JSON.parse(d.tools[ti].partial || "{}");
+                tool.input = JSON.parse(tool.partial || "{}");
               } catch {
                 /* keep partial */
+              }
+              if (tool.name === "Task" || tool.name === "Agent") {
+                const i = (tool.input ?? {}) as Record<string, unknown>;
+                startSubagent({
+                  id: tool.id,
+                  session: emberyxSessionId,
+                  description: typeof i.description === "string" ? i.description : "Agent",
+                  subagentType: typeof i.subagent_type === "string" ? i.subagent_type : "",
+                  prompt: typeof i.prompt === "string" ? i.prompt : "",
+                  background: i.run_in_background !== false,
+                });
               }
             }
           });
         } else if (evType === "message_stop") {
           flushDraft();
+        }
+        return;
+      }
+
+      // Turns produced by a subagent carry the dispatching tool's id. They are
+      // not part of this thread's transcript — they feed the agent panel.
+      const parent = msg.parent_tool_use_id;
+      if (typeof parent === "string" && parent) {
+        if (type === "assistant") {
+          const inner = (msg.message as Record<string, unknown>)?.content;
+          for (const activity of readActivity(inner)) {
+            addSubagentActivity(parent, activity);
+          }
         }
         return;
       }
@@ -410,6 +488,7 @@ export function useAgentChat({
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block?.type === "tool_result") {
+              endSubagent(block.tool_use_id as string, Boolean(block.is_error));
               attachToolResult(
                 setMessages,
                 block.tool_use_id as string,
@@ -435,7 +514,14 @@ export function useAgentChat({
         return;
       }
     },
-    [flushDraft, pushDraft]
+    [
+      flushDraft,
+      pushDraft,
+      emberyxSessionId,
+      startSubagent,
+      addSubagentActivity,
+      endSubagent,
+    ]
   );
 
   // On resume, hydrate prior turns from the on-disk transcript (headless
@@ -487,6 +573,7 @@ export function useAgentChat({
           sessionId: crypto.randomUUID(),
           resume: resume ?? null,
           permissionMode,
+          skipPermissions,
           settings: null,
           emberyxSessionId,
           onEvent: channel,
@@ -511,7 +598,7 @@ export function useAgentChat({
         idRef.current = null;
       }
     };
-  }, [cwd, resume, permissionMode, emberyxSessionId, handleLine]);
+  }, [cwd, resume, permissionMode, skipPermissions, emberyxSessionId, handleLine]);
 
   // Stop the current turn via a real `interrupt` control_request — aborts the
   // turn but keeps the process/session alive so the user can continue.
@@ -571,6 +658,7 @@ export function useAgentChat({
     const unlisten = listen<PendingAsk & { session: string }>("ask-user", (ev) => {
       if (ev.payload.session !== emberyxSessionId) return;
       setPendingAsk(ev.payload);
+      setStatus("awaiting_answer");
     });
     return () => {
       void unlisten.then((off) => off());
@@ -586,23 +674,11 @@ export function useAgentChat({
     setStatus("thinking");
   }, []);
 
-  const send = useCallback((text: string, images?: ChatImage[]) => {
+  /** Put a turn on the wire. Callers must have checked the agent is free. */
+  const deliver = useCallback((text: string, images?: ChatImage[]) => {
     const id = idRef.current;
     const hasImages = !!images && images.length > 0;
-    if (id === null || (!text.trim() && !hasImages)) return;
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: localId(),
-        role: "user",
-        text,
-        thinking: "",
-        tools: [],
-        streaming: false,
-        images: hasImages ? images : undefined,
-      },
-    ]);
-    if (!firstMsgRef.current && text.trim()) firstMsgRef.current = text;
+    if (id === null) return;
     setStatus("thinking");
     const content = hasImages
       ? [
@@ -619,6 +695,48 @@ export function useAgentChat({
     });
     void invoke("agent_send", { id, message: line });
   }, []);
+
+  /**
+   * Accept a turn at any time. While the agent is working the message is shown
+   * in the transcript straight away and held until the run finishes, so typing
+   * never has to wait for the agent.
+   */
+  const send = useCallback(
+    (text: string, images?: ChatImage[]) => {
+      const id = idRef.current;
+      const hasImages = !!images && images.length > 0;
+      if (id === null || (!text.trim() && !hasImages)) return;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: localId(),
+          role: "user",
+          text,
+          thinking: "",
+          tools: [],
+          streaming: false,
+          images: hasImages ? images : undefined,
+        },
+      ]);
+      if (!firstMsgRef.current && text.trim()) firstMsgRef.current = text;
+      if (BUSY_STATUS.has(statusRef.current)) {
+        queueRef.current.push({ text, images });
+        setQueued(queueRef.current.length);
+        return;
+      }
+      deliver(text, images);
+    },
+    [deliver]
+  );
+
+  // Drain one queued turn each time the agent goes idle.
+  useEffect(() => {
+    if (status !== "idle") return;
+    const next = queueRef.current.shift();
+    if (!next) return;
+    setQueued(queueRef.current.length);
+    deliver(next.text, next.images);
+  }, [status, deliver]);
 
   // Auto-title a fresh chat after its first turn completes (headless CC never
   // titles a session itself). Skipped for resumed threads (already titled).
@@ -645,6 +763,7 @@ export function useAgentChat({
     usage,
     ready,
     send,
+    queued,
     stop,
     pendingPermission,
     respond,
