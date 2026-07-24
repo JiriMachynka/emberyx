@@ -220,6 +220,8 @@ function App() {
                 openRouterApiKey={settings.openRouterApiKey}
                 openRouterModel={settings.openRouterModel}
                 onClose={closeChanges}
+                onOpenWorktree={ws.openWorktree}
+                onRemoveWorktree={ws.removeWorktree}
               />
             </div>
           )}

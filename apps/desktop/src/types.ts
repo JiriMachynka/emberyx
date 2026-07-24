@@ -65,6 +65,8 @@ export interface Project {
   threads: Thread[];
   /** Matched Dokploy deployment, or null if not deployed / not configured. */
   dokploy: DokployMatch | null;
+  /** Set when the path is a git worktree, so the UI can label it by branch. */
+  worktree: { repoRoot: string; branch: string } | null;
 }
 
 /** Agent status derived from Claude Code hook events. */
@@ -90,6 +92,24 @@ export interface GitBranch {
   upstream: string | null;
   ahead: number;
   behind: number;
+}
+
+/** One entry from `git worktree list`. */
+export interface GitWorktree {
+  path: string;
+  branch: string;
+  head: string;
+  isMain: boolean;
+  locked: boolean;
+  prunable: boolean;
+}
+
+/** Where a path sits in a repo: its own root, and the main checkout's root. */
+export interface GitRepoRoot {
+  root: string;
+  mainRoot: string;
+  branch: string;
+  isWorktree: boolean;
 }
 
 /** One matching line from a project-wide search. */

@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { isClaudeAgent, type Settings } from "@/lib/settings";
 import { useAgentStore } from "@/lib/agentStore";
-import { getRecents, addRecent } from "@/lib/recents";
+import { getRecents, addRecent, removeRecent } from "@/lib/recents";
 import { useProjects } from "@/hooks/useProjects";
 import { useSessions } from "@/hooks/useSessions";
 import { useAgentEvents } from "@/hooks/useAgentEvents";
@@ -163,7 +163,10 @@ export function useWorkspace(settings: Settings) {
     closeProject(id);
   }
 
-  async function openProjectAt(path: string, opts?: { prewarm?: boolean }) {
+  async function openProjectAt(
+    path: string,
+    opts?: { prewarm?: boolean; worktree?: { repoRoot: string; branch: string } }
+  ) {
     const prewarm = opts?.prewarm ?? false;
     // Revealing the project the pre-warm already owns: its startPrimaryAgent may
     // still be in flight (awaiting list_threads), so the agent session isn't in
@@ -180,7 +183,7 @@ export function useWorkspace(settings: Settings) {
         else teardownProject(pw.id);
       }
     }
-    const { id, isNew } = openProject(path);
+    const { id, isNew } = openProject(path, opts?.worktree);
     if (prewarm) prewarmRef.current = { id, path };
     else setRecents(addRecent(path));
     // Fresh project, or a reopened one whose agent tab had been closed. Skip
@@ -207,6 +210,11 @@ export function useWorkspace(settings: Settings) {
     // Skip the Dokploy network probe for a hidden pre-warmed project; it runs
     // when the user actually reveals it.
     if (!prewarm) dokploy.refresh(id, path);
+  }
+
+  /** Open a git worktree as its own project, labelled by its branch. */
+  function openWorktree(path: string, repoRoot: string, branch: string) {
+    return openProjectAt(path, { worktree: { repoRoot, branch } });
   }
 
   /** Reveal a project and focus one of its sessions (used by the palette). */
@@ -250,6 +258,7 @@ export function useWorkspace(settings: Settings) {
     startAgent(activeProject.id, activeProject.path, buildAgentCommand());
   }
 
+  /** Returns false when the user declines to close a project with a live agent. */
   async function closeProjectById(id: string) {
     const statuses = useAgentStore.getState().statuses;
     const busy = sessionsFor(id).some(
@@ -262,10 +271,52 @@ export function useWorkspace(settings: Settings) {
         "A running agent is active in this project. Close it anyway?",
         { title: "Close project", kind: "warning" }
       );
-      if (!ok) return;
+      if (!ok) return false;
     }
     teardownProject(id);
     if (projects.filter((p) => p.id !== id).length === 0) setRevealed(false);
+    return true;
+  }
+
+  /** Delete a worktree's directory and its git registration. Anything running
+   *  with a cwd inside it is torn down first, or git would race the shells. */
+  async function removeWorktree(
+    worktreePath: string,
+    repoRoot: string,
+    force = false
+  ) {
+    const openProj = projects.find((p) => p.path === worktreePath);
+    if (openProj && !(await closeProjectById(openProj.id))) return;
+
+    const attempt = async (f: boolean) => {
+      try {
+        await invoke("git_worktree_remove", {
+          path: repoRoot,
+          worktree: worktreePath,
+          force: f,
+        });
+        return null;
+      } catch (e) {
+        return String(e);
+      }
+    };
+
+    let err = await attempt(force);
+    if (err && !force && /modified|untracked/i.test(err)) {
+      const ok = await ask(
+        "This worktree has modified or untracked files. Delete it anyway?",
+        { title: "Remove worktree", kind: "warning" }
+      );
+      if (!ok) return;
+      err = await attempt(true);
+    }
+    if (err) {
+      toast.error("Couldn't remove worktree", { description: err });
+      return;
+    }
+    // The directory is gone — a stale recent would pre-warm it at next launch.
+    setRecents(removeRecent(worktreePath));
+    toast.success("Worktree removed");
   }
 
   // Pre-warm the most-recent project once at launch: its agent boots hidden
@@ -313,6 +364,8 @@ export function useWorkspace(settings: Settings) {
     dokploy,
     refreshThreads,
     openProjectAt,
+    openWorktree,
+    removeWorktree,
     pickProject,
     newAgent,
     activateSession,

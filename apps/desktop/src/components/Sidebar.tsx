@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Plus, PanelLeftClose, PanelLeftOpen, Settings, Bot, FolderOpen } from "lucide-react";
+import { Plus, PanelLeftClose, PanelLeftOpen, Settings, Bot, FolderOpen, GitBranch } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { basename } from "@/lib/path";
+import { projectLabel, projectTitle } from "@/lib/worktree";
 import { statusOf } from "@/lib/status";
 import { StatusDot } from "@/components/StatusDot";
 import { TabCloseButton } from "@/components/TabCloseButton";
@@ -117,14 +118,14 @@ function Tree(props: SidebarProps) {
                   ? "surface-raised bg-secondary text-foreground"
                   : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
               )}
-              title={p.path}
+              title={projectTitle(p)}
             >
               <div className="relative shrink-0">
                 {p.icon ? (
                   <img src={p.icon} alt="" className="size-7 rounded-md" />
                 ) : (
                   <div className="flex size-7 items-center justify-center rounded-md bg-secondary text-xs font-semibold uppercase text-muted-foreground">
-                    {basename(p.path).charAt(0)}
+                    {basename(p.worktree?.repoRoot ?? p.path).charAt(0)}
                   </div>
                 )}
                 <StatusDot
@@ -139,11 +140,17 @@ function Tree(props: SidebarProps) {
                 />
               </div>
               <span className="flex-1 truncate font-medium">
-                {basename(p.path)}
+                {projectLabel(p)}
               </span>
               {active && p.workspace && (
                 <span className="rounded bg-background/60 px-1 py-px text-xs text-muted-foreground">
                   {p.workspace.kind}
+                </span>
+              )}
+              {p.worktree && (
+                <span className="flex min-w-0 max-w-20 shrink items-center gap-1 rounded bg-background/60 px-1 py-px text-xs text-muted-foreground">
+                  <GitBranch className="size-3 shrink-0" />
+                  <span className="truncate">{p.worktree.branch}</span>
                 </span>
               )}
               <TabCloseButton
@@ -296,7 +303,7 @@ function Rail({
           <button
             key={p.id}
             onClick={() => onSelectProject(p.id)}
-            title={basename(p.path)}
+            title={projectTitle(p)}
             className={cn(
               "relative flex size-10 items-center justify-center rounded-lg text-sm font-semibold uppercase transition-colors",
               active
@@ -311,7 +318,7 @@ function Rail({
                 className="size-8 rounded object-contain"
               />
             ) : (
-              basename(p.path).slice(0, 2)
+              basename(p.worktree?.repoRoot ?? p.path).slice(0, 2)
             )}
             {st !== "idle" && (
               <StatusDot

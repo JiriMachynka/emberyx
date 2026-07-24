@@ -9,6 +9,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   GitBranchPlus,
+  GitFork,
   Archive,
   Check,
   Trash2,
@@ -24,10 +25,19 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { useGitBranch, useGitBranches, useGitStashes, useInvalidateGit } from "@/lib/queries";
+import {
+  useGitBranch,
+  useGitBranches,
+  useGitRepoRoot,
+  useGitStashes,
+  useGitWorktrees,
+  useInvalidateGit,
+} from "@/lib/queries";
 
 interface GitActionsProps {
   projectPath: string;
+  onOpenWorktree: (path: string, repoRoot: string, branch: string) => void;
+  onRemoveWorktree: (worktreePath: string, repoRoot: string) => void | Promise<void>;
 }
 
 /** `stash@{0}: On main: message` / `stash@{0}: WIP on main: abc123 subject`
@@ -44,18 +54,25 @@ type Prompt =
   | { kind: "new-branch"; label: string; placeholder: string; value: string }
   | { kind: "push-to"; label: string; placeholder: string; value: string }
   | { kind: "stash"; label: string; placeholder: string; value: string }
+  | { kind: "worktree"; label: string; placeholder: string; value: string }
   | null;
 
-/** Branch bar + pull/push/checkout/stash actions for the current repo. */
-export function GitActions({ projectPath }: GitActionsProps) {
+/** Branch bar + pull/push/checkout/stash/worktree actions for the current repo. */
+export function GitActions({ projectPath, onOpenWorktree, onRemoveWorktree }: GitActionsProps) {
   const [branchesOpen, setBranchesOpen] = useState(false);
   const [stashesOpen, setStashesOpen] = useState(false);
+  const [worktreesOpen, setWorktreesOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [prompt, setPrompt] = useState<Prompt>(null);
 
   const branchQuery = useGitBranch(projectPath);
-  const branchesQuery = useGitBranches(projectPath, branchesOpen);
+  // The worktree menu needs the branch list too, to tell "checkout existing"
+  // from "create new" when adding a worktree.
+  const branchesQuery = useGitBranches(projectPath, branchesOpen || worktreesOpen);
   const stashesQuery = useGitStashes(projectPath, stashesOpen);
+  // The branch menu greys out branches already checked out in a worktree.
+  const worktreesQuery = useGitWorktrees(projectPath, worktreesOpen || branchesOpen);
+  const repoRootQuery = useGitRepoRoot(projectPath);
   const invalidateGit = useInvalidateGit();
 
   /** Run a git op, toast the outcome, then refresh branch + change list. */
@@ -77,6 +94,63 @@ export function GitActions({ projectPath }: GitActionsProps) {
 
   const branch = branchQuery.data;
   const { upstream, ahead, behind } = branch;
+  const branches = branchesQuery.data ?? [];
+  const worktrees = worktreesQuery.data ?? [];
+  // Worktrees are always managed from the main checkout — git refuses to add or
+  // remove them from a linked worktree path.
+  const mainRoot = repoRootQuery.data?.mainRoot ?? projectPath;
+  // A branch checked out elsewhere can't be checked out here.
+  const usedBy = new Map(
+    worktrees.filter((w) => w.path !== projectPath && w.branch).map((w) => [w.branch, w.path])
+  );
+
+  /** Add a worktree for `name`, creating the branch when it doesn't exist yet,
+   *  and open it as its own project. */
+  async function addWorktree(name: string) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const path = await invoke<string>("git_worktree_add", {
+        path: mainRoot,
+        branch: name,
+        create: !branches.includes(name),
+        base: null,
+      });
+      onOpenWorktree(path, mainRoot, name);
+      invalidateGit(projectPath, mainRoot);
+      toast.success("Created worktree", {
+        description: `${path} — tracked files only (no node_modules or .env) and no prior Claude thread history.`,
+      });
+    } catch (e) {
+      toast.error("Create worktree failed", { description: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Teardown, confirmation and toasts live in the workspace handler. */
+  async function dropWorktree(worktreePath: string) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onRemoveWorktree(worktreePath, mainRoot);
+      invalidateGit(projectPath, mainRoot);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Worktrees deleted outside the app linger in git's registry until pruned. */
+  async function openWorktrees(open: boolean) {
+    setWorktreesOpen(open);
+    if (!open) return;
+    try {
+      await invoke("git_worktree_prune", { path: mainRoot });
+      await worktreesQuery.refetch();
+    } catch (e) {
+      toast.error("Prune worktrees failed", { description: String(e) });
+    }
+  }
 
   /** Deleting a branch can discard unmerged work — confirm before doing it.
    *  Git itself still refuses (`-d`) if the branch isn't merged. */
@@ -112,6 +186,8 @@ export function GitActions({ projectPath }: GitActionsProps) {
       run("Created branch", () =>
         invoke<string>("git_checkout", { path: projectPath, branch: value, create: true })
       );
+    } else if (prompt.kind === "worktree") {
+      void addWorktree(value);
     } else if (prompt.kind === "stash") {
       run("Stashed", () =>
         invoke<string>("git_stash_push", { path: projectPath, message: value })
@@ -216,12 +292,14 @@ export function GitActions({ projectPath }: GitActionsProps) {
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuLabel>Checkout</DropdownMenuLabel>
-            {(branchesQuery.data ?? []).map((b) => {
+            {branches.map((b) => {
               const isCurrent = b === branch.branch;
+              const elsewhere = usedBy.get(b);
               return (
                 <div key={b} className="flex items-center px-1">
                   <button
-                    disabled={isCurrent}
+                    disabled={isCurrent || !!elsewhere}
+                    title={elsewhere}
                     onClick={() =>
                       run("Checked out", () =>
                         invoke<string>("git_checkout", { path: projectPath, branch: b, create: false })
@@ -231,11 +309,18 @@ export function GitActions({ projectPath }: GitActionsProps) {
                       "flex min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors",
                       isCurrent
                         ? "font-medium disabled:pointer-events-none"
-                        : "hover:bg-accent"
+                        : elsewhere
+                          ? "disabled:pointer-events-none disabled:opacity-50"
+                          : "hover:bg-accent"
                     )}
                   >
                     {isCurrent && <Check className="size-4 shrink-0" />}
                     <span className="truncate">{b}</span>
+                    {elsewhere && (
+                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                        in worktree
+                      </span>
+                    )}
                   </button>
                   {!isCurrent && (
                     <button
@@ -312,6 +397,69 @@ export function GitActions({ projectPath }: GitActionsProps) {
                   <Trash2 className="size-4" />
                 </button>
               </div>
+              );
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <DropdownMenu onOpenChange={(open) => void openWorktrees(open)}>
+          <DropdownMenuTrigger asChild>
+            <span>
+              <ActionButton
+                icon={<GitFork className="size-3.5" />}
+                label="Worktree"
+                disabled={busy}
+                title="Open or create a worktree"
+                as="span"
+              />
+            </span>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="max-h-80 w-96 overflow-auto">
+            <DropdownMenuItem
+              onSelect={() =>
+                setPrompt({
+                  kind: "worktree",
+                  label: "Worktree branch name:",
+                  placeholder: "feature/…",
+                  value: "",
+                })
+              }
+            >
+              <GitFork className="size-4" />
+              New worktree…
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Worktrees</DropdownMenuLabel>
+            {worktrees.map((w) => {
+              const isCurrent = w.path === projectPath;
+              return (
+                <div key={w.path} className="flex items-center px-1">
+                  <button
+                    onClick={() => onOpenWorktree(w.path, mainRoot, w.branch)}
+                    className={cn(
+                      "flex min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent",
+                      isCurrent && "font-medium",
+                      w.prunable && "text-muted-foreground"
+                    )}
+                    title={w.path}
+                  >
+                    {isCurrent && <Check className="size-4 shrink-0" />}
+                    <span className="truncate">{w.branch || w.head}</span>
+                    {(w.isMain || w.prunable) && (
+                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                        {w.isMain ? "main" : "missing"}
+                      </span>
+                    )}
+                  </button>
+                  {!w.isMain && (
+                    <button
+                      onClick={() => void dropWorktree(w.path)}
+                      className="ml-1 grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-red-400"
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  )}
+                </div>
               );
             })}
           </DropdownMenuContent>

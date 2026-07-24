@@ -15,3 +15,9 @@ export function addRecent(path: string): string[] {
   localStorage.setItem(KEY, JSON.stringify(next));
   return next;
 }
+
+export function removeRecent(path: string): string[] {
+  const next = getRecents().filter((p) => p !== path);
+  localStorage.setItem(KEY, JSON.stringify(next));
+  return next;
+}

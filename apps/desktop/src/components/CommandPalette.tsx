@@ -11,7 +11,7 @@ import {
   Settings,
   Terminal,
 } from "lucide-react";
-import { basename } from "@/lib/path";
+import { projectLabel } from "@/lib/worktree";
 import type { Project, Session, Thread } from "@/types";
 
 interface CommandPaletteProps {
@@ -54,7 +54,7 @@ export function CommandPalette({
 
   const projectName = (id: string) => {
     const p = projects.find((x) => x.id === id);
-    return p ? basename(p.path) : "";
+    return p ? projectLabel(p) : "";
   };
 
   const openSessions = sessions.filter((s) => s.kind !== "dev");
@@ -154,13 +154,13 @@ export function CommandPalette({
                     .map((t) => (
                       <Item
                         key={`${p.id}:${t.id}`}
-                        value={`thread ${basename(p.path)} ${t.title} ${t.id}`}
+                        value={`thread ${projectLabel(p)} ${t.title} ${t.id}`}
                         onSelect={() => run(() => onResumeThread(p.id, p.path, t))}
                       >
                         <History className="size-4 text-muted-foreground" />
                         <span className="truncate">{t.title}</span>
                         <span className="ml-auto shrink-0 truncate pl-2 text-xs text-muted-foreground">
-                          {basename(p.path)}
+                          {projectLabel(p)}
                         </span>
                       </Item>
                     ))

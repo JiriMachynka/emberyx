@@ -1,24 +1,13 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { diffLines } from "diff";
 import {
-  Blocks,
-  Bot,
   Brain,
   Check,
   ChevronRight,
-  ClipboardList,
   Copy,
-  FilePen,
-  FilePlus,
-  FileText,
-  Globe,
-  ListTodo,
   Loader2,
   MessageCircleQuestionMark,
-  Search,
-  Terminal,
   Wrench,
-  type LucideIcon,
 } from "lucide-react";
 import {
   describeResult,
@@ -26,8 +15,8 @@ import {
   stripReminders,
   type TodoItem,
   type ToolBodyPart,
-  type ToolIcon,
 } from "@/lib/toolDisplay";
+import { TOOL_ICONS, TOOL_TINT } from "@/lib/toolIcons";
 import {
   useAgentChat,
   type ChatImage,
@@ -356,35 +345,6 @@ function ThinkingBlock({ text, active }: { text: string; active: boolean }) {
     </div>
   );
 }
-
-const TOOL_ICONS: Record<ToolIcon, LucideIcon> = {
-  task: Bot,
-  read: FileText,
-  write: FilePlus,
-  edit: FilePen,
-  bash: Terminal,
-  search: Search,
-  globe: Globe,
-  list: ListTodo,
-  plan: ClipboardList,
-  mcp: Blocks,
-  tool: Wrench,
-};
-
-/** A steady per-tool hue so a run of cards is scannable without reading labels. */
-const TOOL_TINT: Record<ToolIcon, string> = {
-  task: "text-violet-400",
-  read: "text-sky-400",
-  write: "text-emerald-400",
-  edit: "text-amber-400",
-  bash: "text-teal-300",
-  search: "text-cyan-400",
-  globe: "text-blue-400",
-  list: "text-pink-400",
-  plan: "text-indigo-400",
-  mcp: "text-orange-400",
-  tool: "text-muted-foreground",
-};
 
 const TODO_MARK: Record<TodoItem["status"], { mark: string; className: string }> = {
   completed: { mark: "✓", className: "text-emerald-400 line-through opacity-60" },

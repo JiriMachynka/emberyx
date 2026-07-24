@@ -5,7 +5,9 @@ import type {
   GitBranch,
   GitCommit,
   GitFile,
+  GitRepoRoot,
   GitStash,
+  GitWorktree,
   OpenRouterModel,
   SearchFile,
   SlashCommand,
@@ -31,6 +33,8 @@ export const gitKeys = {
   branch: (path: string) => ["git", "branch", path] as const,
   branches: (path: string) => ["git", "branches", path] as const,
   stashes: (path: string) => ["git", "stashes", path] as const,
+  worktrees: (path: string) => ["git", "worktrees", path] as const,
+  repoRoot: (path: string) => ["git", "repoRoot", path] as const,
   log: (path: string, file: string) => ["git", "log", path, file] as const,
   show: (path: string, sha: string, file: string) =>
     ["git", "show", path, sha, file] as const,
@@ -104,6 +108,21 @@ export const useGitBranches = (path: string, enabled: boolean) =>
     enabled,
   });
 
+export const useGitWorktrees = (path: string, enabled: boolean) =>
+  useQuery({
+    queryKey: gitKeys.worktrees(path),
+    queryFn: () => invoke<GitWorktree[]>("git_worktrees", { path }),
+    enabled,
+  });
+
+export const useGitRepoRoot = (path: string) =>
+  useQuery({
+    queryKey: gitKeys.repoRoot(path),
+    queryFn: () => invoke<GitRepoRoot>("git_repo_root", { path }),
+    // A checkout never changes which repo owns it.
+    staleTime: Infinity,
+  });
+
 export const useGitStashes = (path: string, enabled: boolean) =>
   useQuery({
     queryKey: gitKeys.stashes(path),
@@ -111,12 +130,17 @@ export const useGitStashes = (path: string, enabled: boolean) =>
     enabled,
   });
 
-/** Refetch every git view for a repo after a mutating op (commit, checkout…). */
+/** Refetch every git view for a repo after a mutating op (commit, checkout…).
+ *  `also` refreshes a second path too — a mutation inside a worktree changes
+ *  what the main repo's views show. */
 export const useInvalidateGit = () => {
   const qc = useQueryClient();
-  return (path: string) => {
-    for (const key of ["changes", "diff", "branch", "branches", "stashes", "log"]) {
-      qc.invalidateQueries({ queryKey: ["git", key, path] });
+  return (path: string, also?: string) => {
+    for (const p of also ? [path, also] : [path]) {
+      const views = ["changes", "diff", "branch", "branches", "stashes", "log", "worktrees"];
+      for (const key of views) {
+        qc.invalidateQueries({ queryKey: ["git", key, p] });
+      }
     }
   };
 };

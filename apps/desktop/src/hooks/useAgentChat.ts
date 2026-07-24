@@ -244,7 +244,7 @@ export function readActivity(content: unknown): SubagentActivity[] {
   for (const b of content as Array<Record<string, unknown>>) {
     if (b.type === "tool_use") {
       const d = describeTool(b.name as string, b.input);
-      out.push({ kind: "tool", name: d.label, detail: d.title ?? "" });
+      out.push({ kind: "tool", name: d.label, detail: d.title ?? "", icon: d.icon });
     } else if (
       b.type === "text" &&
       typeof b.text === "string" &&
@@ -291,6 +291,16 @@ export function useAgentChat({
   messagesRef.current = messages;
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
+  // Live token tally for the turn in flight. A turn is several assistant
+  // messages (one per tool-loop hop): `done` holds finished messages, `cur` the
+  // streaming one, whose count is restated (not incremented) by message_delta.
+  const turnUsageRef = useRef({
+    inputDone: 0,
+    outputDone: 0,
+    curInput: 0,
+    curOutput: 0,
+    active: false,
+  });
   const [ready, setReady] = useState(false);
   const [pendingPermission, setPendingPermission] =
     useState<PendingPermission | null>(null);
@@ -370,6 +380,19 @@ export function useAgentChat({
     });
   }, []);
 
+  const publishTurnUsage = useCallback(() => {
+    const t = turnUsageRef.current;
+    const inputTokens = t.inputDone + t.curInput;
+    const outputTokens = t.outputDone + t.curOutput;
+    // Nothing counted yet — leave the badge as it was rather than showing 0.
+    if (!inputTokens && !outputTokens) return;
+    setUsage((u) =>
+      u.inputTokens === inputTokens && u.outputTokens === outputTokens
+        ? u
+        : { ...u, inputTokens, outputTokens }
+    );
+  }, []);
+
   const handleLine = useCallback(
     (raw: string) => {
       let msg: Record<string, unknown>;
@@ -420,9 +443,19 @@ export function useAgentChat({
             streaming: true,
           };
           blockToolRef.current = {};
-          const model = (ev.message as Record<string, unknown> | undefined)
-            ?.model as string | undefined;
+          const message = ev.message as Record<string, unknown> | undefined;
+          const model = message?.model as string | undefined;
           if (model) setUsage((u) => ({ ...u, model }));
+          const t = turnUsageRef.current;
+          if (!t.active) {
+            t.active = true;
+            t.inputDone = 0;
+            t.outputDone = 0;
+          }
+          const mu = message?.usage as Record<string, number> | undefined;
+          t.curInput = mu?.input_tokens ?? 0;
+          t.curOutput = mu?.output_tokens ?? 0;
+          publishTurnUsage();
           setStatus("thinking");
         } else if (evType === "content_block_start") {
           const index = ev.index as number;
@@ -476,7 +509,18 @@ export function useAgentChat({
               }
             }
           });
+        } else if (evType === "message_delta") {
+          const mu = ev.usage as Record<string, number> | undefined;
+          const t = turnUsageRef.current;
+          if (mu?.output_tokens != null) t.curOutput = mu.output_tokens;
+          if (mu?.input_tokens != null) t.curInput = mu.input_tokens;
+          publishTurnUsage();
         } else if (evType === "message_stop") {
+          const t = turnUsageRef.current;
+          t.inputDone += t.curInput;
+          t.outputDone += t.curOutput;
+          t.curInput = 0;
+          t.curOutput = 0;
           flushDraft();
         }
         return;
@@ -546,12 +590,24 @@ export function useAgentChat({
       }
 
       if (type === "result") {
+        const t = turnUsageRef.current;
+        const ru = msg.usage as Record<string, number> | undefined;
+        // `result` is authoritative; fall back to the live tally when a run ends
+        // without one (errors, aborts). Read before the reset below, since the
+        // state updater runs later.
+        const inputTokens = ru?.input_tokens ?? (t.inputDone + t.curInput || undefined);
+        const outputTokens = ru?.output_tokens ?? (t.outputDone + t.curOutput || undefined);
         setUsage((u) => ({
           ...u,
           costUsd: msg.total_cost_usd as number | undefined,
-          inputTokens: (msg.usage as Record<string, number>)?.input_tokens,
-          outputTokens: (msg.usage as Record<string, number>)?.output_tokens,
+          inputTokens,
+          outputTokens,
         }));
+        t.active = false;
+        t.inputDone = 0;
+        t.outputDone = 0;
+        t.curInput = 0;
+        t.curOutput = 0;
         setStatus(msg.subtype === "error" ? "error" : "idle");
         // The turn is over — resolve any background runs still marked open,
         // since they never get a per-completion signal.
@@ -562,6 +618,7 @@ export function useAgentChat({
     [
       flushDraft,
       pushDraft,
+      publishTurnUsage,
       emberyxSessionId,
       startSubagent,
       addSubagentActivity,

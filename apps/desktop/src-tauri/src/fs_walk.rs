@@ -41,6 +41,9 @@ pub fn walk_files(
             }
             walk_files(&path, visit)?;
         } else {
+            if entry.file_name() == ".git" {
+                continue;
+            }
             visit(&path)?;
         }
     }
@@ -69,6 +72,7 @@ mod tests {
         std::fs::write(root.join("src/a.ts"), "").unwrap();
         std::fs::write(root.join("node_modules/b.ts"), "").unwrap();
         std::fs::write(root.join(".cache/c.ts"), "").unwrap();
+        std::fs::write(root.join(".git"), "gitdir: /elsewhere").unwrap();
 
         let mut seen = vec![];
         let _ = walk_files(&root, &mut |p| {

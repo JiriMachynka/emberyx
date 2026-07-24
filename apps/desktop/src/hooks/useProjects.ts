@@ -11,16 +11,33 @@ export function useProjects() {
    * Open a project, or focus it if its path is already open. Returns the
    * project id and whether it was newly created (caller starts the agent).
    */
-  function openProject(path: string): { id: string; isNew: boolean } {
+  function openProject(
+    path: string,
+    worktree?: { repoRoot: string; branch: string }
+  ): { id: string; isNew: boolean } {
     const existing = projects.find((p) => p.path === path);
     if (existing) {
+      // A worktree opened earlier as a plain folder gets relabelled.
+      if (!existing.worktree && worktree) {
+        setProjects((prev) =>
+          prev.map((p) => (p.id === existing.id ? { ...p, worktree } : p))
+        );
+      }
       setActiveProjectId(existing.id);
       return { id: existing.id, isNew: false };
     }
     const id = `p${++counter.current}`;
     setProjects((prev) => [
       ...prev,
-      { id, path, workspace: null, icon: null, threads: [], dokploy: null },
+      {
+        id,
+        path,
+        workspace: null,
+        icon: null,
+        threads: [],
+        dokploy: null,
+        worktree: worktree ?? null,
+      },
     ]);
     setActiveProjectId(id);
     return { id, isNew: true };

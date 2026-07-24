@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { Change } from "@/lib/changes";
 import type { Usage } from "@/lib/pricing";
+import type { ToolIcon } from "@/lib/toolDisplay";
 import type { ChatImage } from "@/hooks/useAgentChat";
 import type { SessionStatus } from "@/types";
 
@@ -17,6 +18,8 @@ export interface SubagentActivity {
   name: string;
   /** One-line summary: the tool's title, or the text itself. */
   detail: string;
+  /** Which glyph the row shows; absent for text rows. */
+  icon?: ToolIcon;
 }
 
 /** A Task tool call, tracked from dispatch to result. */

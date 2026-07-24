@@ -1,7 +1,9 @@
 import { useState } from "react";
-import { Bot, Check, Loader2, Wrench } from "lucide-react";
+import { Bot, Check, Loader2 } from "lucide-react";
 import { SidePanel } from "@/components/SidePanel";
 import { useAgentStore } from "@/lib/agentStore";
+import type { ToolIcon } from "@/lib/toolDisplay";
+import { TOOL_ICONS, TOOL_TINT } from "@/lib/toolIcons";
 import { cn } from "@/lib/utils";
 
 /** What a running subagent is doing: its brief, then a live feed of the tools
@@ -77,7 +79,7 @@ export function AgentPanel() {
                 >
                   {a.kind === "tool" ? (
                     <>
-                      <Wrench className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
+                      <ToolGlyph icon={a.icon} />
                       <span className="shrink-0 font-medium">{a.name}</span>
                       <span
                         className={cn(
@@ -105,5 +107,13 @@ export function AgentPanel() {
         </div>
       </div>
     </SidePanel>
+  );
+}
+
+/** The chat's per-tool glyph and hue, so a step reads the same in both places. */
+function ToolGlyph({ icon }: { icon?: ToolIcon }) {
+  const Icon = TOOL_ICONS[icon ?? "tool"];
+  return (
+    <Icon className={cn("mt-0.5 size-3 shrink-0", TOOL_TINT[icon ?? "tool"])} />
   );
 }

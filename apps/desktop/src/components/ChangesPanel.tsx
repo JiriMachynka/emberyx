@@ -219,6 +219,8 @@ interface ChangesPanelProps {
   openRouterApiKey: string;
   openRouterModel: string;
   onClose: () => void;
+  onOpenWorktree: (path: string, repoRoot: string, branch: string) => void;
+  onRemoveWorktree: (worktreePath: string, repoRoot: string) => void | Promise<void>;
 }
 
 export function ChangesPanel({
@@ -227,6 +229,8 @@ export function ChangesPanel({
   openRouterApiKey,
   openRouterModel,
   onClose,
+  onOpenWorktree,
+  onRemoveWorktree,
 }: ChangesPanelProps) {
   const [tab, setTab] = useState<"git" | "agent">("git");
   const [fileListHeight, setFileListHeight] = useState(208);
@@ -428,7 +432,11 @@ export function ChangesPanel({
     >
       {tab === "git" ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          <GitActions projectPath={projectPath} />
+          <GitActions
+            projectPath={projectPath}
+            onOpenWorktree={onOpenWorktree}
+            onRemoveWorktree={onRemoveWorktree}
+          />
           {gitFiles.length === 0 ? (
             <Empty icon={<GitBranch className="size-5" />}>
               No working-tree changes (or not a git repo).

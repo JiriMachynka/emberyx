@@ -719,7 +719,7 @@ describe("useAgentChat subagents", () => {
     });
     expect(run().activity).toEqual([
       { kind: "text", name: "", detail: "Looking now" },
-      { kind: "tool", name: "Read", detail: "…/b/ask.rs" },
+      { kind: "tool", name: "Read", detail: "…/b/ask.rs", icon: "read" },
     ]);
 
     emit({
@@ -828,5 +828,89 @@ describe("useAgentChat subagents", () => {
       },
     });
     expect(nested().endedAt).toBeGreaterThan(0);
+  });
+});
+
+describe("useAgentChat live usage", () => {
+  it("reports input tokens as soon as the turn starts", async () => {
+    const { result, emit } = await mount();
+    emit({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: { model: "claude-opus-4-8", usage: { input_tokens: 900, output_tokens: 1 } },
+      },
+    });
+    expect(result.current.usage).toMatchObject({ inputTokens: 900, outputTokens: 1 });
+  });
+
+  it("restates the streaming message's output count from message_delta", async () => {
+    const { result, emit } = await mount();
+    emit({
+      type: "stream_event",
+      event: { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } },
+    });
+    emit({ type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 64 } } });
+    expect(result.current.usage.outputTokens).toBe(64);
+  });
+
+  it("accumulates across the assistant messages of one tool loop", async () => {
+    const { result, emit } = await mount();
+    for (const [input, output] of [
+      [100, 30],
+      [250, 12],
+    ]) {
+      emit({
+        type: "stream_event",
+        event: { type: "message_start", message: { usage: { input_tokens: input } } },
+      });
+      emit({
+        type: "stream_event",
+        event: { type: "message_delta", usage: { output_tokens: output } },
+      });
+      emit({ type: "stream_event", event: { type: "message_stop" } });
+    }
+    expect(result.current.usage).toMatchObject({ inputTokens: 350, outputTokens: 42 });
+  });
+
+  it("starts a fresh tally for the next turn after a result", async () => {
+    const { result, emit } = await mount();
+    emit({
+      type: "stream_event",
+      event: { type: "message_start", message: { usage: { input_tokens: 100 } } },
+    });
+    emit({ type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 40 } } });
+    emit({ type: "stream_event", event: { type: "message_stop" } });
+    emit({ type: "result", subtype: "success", usage: { input_tokens: 100, output_tokens: 40 } });
+
+    emit({
+      type: "stream_event",
+      event: { type: "message_start", message: { usage: { input_tokens: 7 } } },
+    });
+    expect(result.current.usage).toMatchObject({ inputTokens: 7, outputTokens: 0 });
+  });
+
+  it("keeps the live tally when a result carries no usage", async () => {
+    const { result, emit } = await mount();
+    emit({
+      type: "stream_event",
+      event: { type: "message_start", message: { usage: { input_tokens: 55 } } },
+    });
+    emit({ type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 8 } } });
+    emit({ type: "result", subtype: "error", usage: {} });
+    expect(result.current.usage).toMatchObject({ inputTokens: 55, outputTokens: 8 });
+  });
+});
+
+describe("readActivity", () => {
+  it("tags each tool row with the chat's icon for that tool", async () => {
+    const { readActivity } = await import("@/hooks/useAgentChat");
+    const rows = readActivity([
+      { type: "tool_use", name: "Read", input: { file_path: "/repo/src/git.rs" } },
+      { type: "tool_use", name: "Bash", input: { command: "wc -l git.rs" } },
+      { type: "tool_use", name: "Mystery", input: {} },
+      { type: "text", text: "thinking out loud" },
+    ]);
+    expect(rows.map((r) => r.icon)).toEqual(["read", "bash", "tool", undefined]);
   });
 });
