@@ -110,6 +110,15 @@ export function ChatPane({
   // Drives the elapsed counters on the agent chips.
   const [now, setNow] = useState(() => Date.now());
 
+  const registerSender = useAgentStore((s) => s.registerSender);
+  const unregisterSender = useAgentStore((s) => s.unregisterSender);
+  // Expose this session's `send` so panels outside the pane (the slash-command
+  // list) can run a command in the active chat.
+  useEffect(() => {
+    registerSender(sessionId, send);
+    return () => unregisterSender(sessionId);
+  }, [sessionId, send, registerSender, unregisterSender]);
+
   // Stick to the bottom as messages stream in, and when this pane is revealed.
   // Resumed threads hydrate their history while the pane is still hidden
   // (display:none → scrollHeight is 0), so an rAF after reveal lets layout and
@@ -181,29 +190,33 @@ export function ChatPane({
               Session ended — open a new chat to continue.
             </div>
           )}
-          <AgentChips session={sessionId} now={now} />
-          {/* A prompt replaces the composer rather than stacking above it —
-              two focusable surfaces competing for the same keys is what made
-              picking an option unreliable. Permission wins if both are live. */}
-          {pendingPermission ? (
-            <PermissionPrompt pending={pendingPermission} onDecide={respond} />
-          ) : pendingAsk ? (
-            <AskPrompt pending={pendingAsk} onAnswer={answerAsk} />
-          ) : (
-            <ChatComposer
-              cwd={cwd}
-              active={active}
-              ready={ready}
-              busy={busy}
-              queued={queued}
-              exited={status === "exited"}
-              usage={usage}
-              onSend={send}
-              onStop={stop}
-              onRewind={rewind}
-              onPreview={setPreview}
-            />
-          )}
+          <div className="flex items-start gap-3">
+            <div className="min-w-0 flex-1">
+              {/* A prompt replaces the composer rather than stacking above it —
+                  two focusable surfaces competing for the same keys is what made
+                  picking an option unreliable. Permission wins if both are live. */}
+              {pendingPermission ? (
+                <PermissionPrompt pending={pendingPermission} onDecide={respond} />
+              ) : pendingAsk ? (
+                <AskPrompt pending={pendingAsk} onAnswer={answerAsk} />
+              ) : (
+                <ChatComposer
+                  cwd={cwd}
+                  active={active}
+                  ready={ready}
+                  busy={busy}
+                  queued={queued}
+                  exited={status === "exited"}
+                  usage={usage}
+                  onSend={send}
+                  onStop={stop}
+                  onRewind={rewind}
+                  onPreview={setPreview}
+                />
+              )}
+            </div>
+            <AgentChips session={sessionId} now={now} />
+          </div>
         </div>
       </div>
 

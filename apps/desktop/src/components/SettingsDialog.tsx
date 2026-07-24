@@ -195,6 +195,15 @@ export function SettingsDialog({
                 </Toggle>
               )}
 
+              <Toggle
+                checked={settings.shareChatsAcrossProjects}
+                onChange={(v) => onUpdate({ shareChatsAcrossProjects: v })}
+                title="Show chats across all projects"
+              >
+                When on, chat sessions appear under every project instead of
+                only the one they were started in.
+              </Toggle>
+
               <div className="flex items-center justify-between border-t pt-4">
                 <div className="text-sm">
                   <div className="font-medium">Updates</div>

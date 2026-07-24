@@ -6,7 +6,7 @@ import type { Session } from "@/types";
  * plus which session is active within each project. Session ids stay globally
  * unique so the agent-status map can key on them directly.
  */
-export function useSessions() {
+export function useSessions(shareChatsAcrossProjects = false) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeByProject, setActiveByProject] = useState<Record<string, string>>(
     {}
@@ -172,7 +172,11 @@ export function useSessions() {
   }
 
   const sessionsFor = (projectId: string) =>
-    sessions.filter((s) => s.projectId === projectId);
+    sessions.filter(
+      (s) =>
+        s.projectId === projectId ||
+        (shareChatsAcrossProjects && s.kind === "chat")
+    );
 
   return {
     sessions,

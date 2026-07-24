@@ -9,6 +9,7 @@ import { ContextBar } from "@/components/ContextBar";
 import { Sidebar } from "@/components/Sidebar";
 import { CommandPalette } from "@/components/CommandPalette";
 import { UsagePanel } from "@/components/UsagePanel";
+import { SlashCommandsPanel } from "@/components/SlashCommandsPanel";
 import { WelcomeScreen } from "@/components/WelcomeScreen";
 import { AttentionBanner } from "@/components/AttentionBanner";
 import { cn } from "@/lib/utils";
@@ -26,6 +27,7 @@ function App() {
   const [changesOpen, setChangesOpen] = useState(false);
   const [devOpen, setDevOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [slashOpen, setSlashOpen] = useState(false);
   // Keep the Changes panel mounted while its exit animation plays (~200ms).
   const [changesClosing, setChangesClosing] = useState(false);
   const [sidebarCollapsed, setCollapsed] = useState<boolean>(getSidebarCollapsed);
@@ -85,6 +87,8 @@ function App() {
   const firstAgent = projectSessions.find((s) => s.kind === "agent");
   const activeSession = projectSessions.find((s) => s.id === activeId);
   const agent = activeSession?.kind === "agent" ? activeSession : firstAgent;
+  // The chat session slash commands run in — the active tab when it's a chat.
+  const activeChatId = activeSession?.kind === "chat" ? activeSession.id : null;
   const projectSessionIds = useMemo(
     () => projectSessions.map((s) => s.id),
     [projectSessions]
@@ -144,6 +148,7 @@ function App() {
           onResumeThread={ws.resumeThread}
           onToggleChanges={toggleChanges}
           onOpenUsage={() => setUsageOpen(true)}
+          onOpenSlash={() => setSlashOpen(true)}
           onOpenEditor={() => {
             if (activeProject) ws.startEditor(activeProject.id, activeProject.path);
           }}
@@ -218,6 +223,13 @@ function App() {
             </div>
           )}
           <AgentPanel />
+          {slashOpen && (
+            <SlashCommandsPanel
+              onClose={() => setSlashOpen(false)}
+              cwd={activeProject?.path ?? null}
+              activeChatId={activeChatId}
+            />
+          )}
         </div>
       </div>
 

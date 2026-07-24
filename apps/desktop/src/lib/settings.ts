@@ -20,6 +20,8 @@ export interface Settings {
   dangerouslySkipPermissions: boolean;
   /** On project open, resume the most recent thread instead of a fresh agent. */
   resumeLatestThread: boolean;
+  /** Show chat sessions under every project, not just the one they started in. */
+  shareChatsAcrossProjects: boolean;
   /** Launch Claude compact (collapsed tool output). Off = full (--verbose). */
   compactSession: boolean;
   /** Dokploy server base URL, e.g. https://dokploy.example.com. */
@@ -43,6 +45,7 @@ export const DEFAULT_SETTINGS: Settings = {
   scrollback: 1000,
   dangerouslySkipPermissions: true,
   resumeLatestThread: false,
+  shareChatsAcrossProjects: false,
   compactSession: false,
   dokployUrl: "",
   dokployApiKey: "",

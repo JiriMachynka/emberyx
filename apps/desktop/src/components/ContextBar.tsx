@@ -4,6 +4,7 @@ import {
   FileCode,
   ChevronRight,
   GitBranch as GitBranchIcon,
+  SlashSquare,
   Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -42,6 +43,7 @@ interface ContextBarProps {
   onToggleChanges: () => void;
   onOpenEditor: () => void;
   onOpenUsage: () => void;
+  onOpenSlash: () => void;
   onRefreshDokploy: () => void;
   onRedeployDokploy: (service: DokployService) => void;
   onViewDokployLogs: (service: DokployService) => void;
@@ -70,6 +72,7 @@ export function ContextBar({
   onToggleChanges,
   onOpenEditor,
   onOpenUsage,
+  onOpenSlash,
   onRefreshDokploy,
   onRedeployDokploy,
   onViewDokployLogs,
@@ -185,6 +188,12 @@ export function ContextBar({
             <span className="rounded bg-emerald-500/20 px-1 text-[10px] text-emerald-400">
               {devCount}
             </span>
+          </Button>
+        )}
+        {activeProject && claudeAgent && (
+          <Button variant="ghost" size="sm" onClick={onOpenSlash} title="Slash commands">
+            <SlashSquare className="size-3.5" />
+            Commands
           </Button>
         )}
         {activeProject && (

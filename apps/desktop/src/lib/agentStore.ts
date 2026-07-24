@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { Change } from "@/lib/changes";
 import type { Usage } from "@/lib/pricing";
+import type { ChatImage } from "@/hooks/useAgentChat";
 import type { SessionStatus } from "@/types";
 
 /** Max entries kept in the live file-edit feed (most recent wins). */
@@ -33,6 +34,9 @@ export interface SubagentRun {
   endedAt?: number;
   isError?: boolean;
   activity: SubagentActivity[];
+  /** Last time inner activity arrived — the end fallback for background runs,
+   *  which have no correlatable per-completion signal. */
+  lastActivityAt?: number;
 }
 
 /**
@@ -48,13 +52,24 @@ interface AgentState {
   subagents: Record<string, SubagentRun>;
   /** Which run the agent panel is showing; null closes it. */
   selectedAgent: string | null;
+  /** Each live chat session's `send`, so panels outside the pane can dispatch a
+   *  turn (e.g. running a slash command) into the active session. */
+  senders: Record<string, (text: string, images?: ChatImage[]) => void>;
   selectAgent: (id: string | null) => void;
+  registerSender: (
+    id: string,
+    fn: (text: string, images?: ChatImage[]) => void
+  ) => void;
+  unregisterSender: (id: string) => void;
   setStatus: (id: string, status: SessionStatus) => void;
   setUsage: (id: string, usage: Usage) => void;
   addChange: (change: Change) => void;
   startSubagent: (run: Omit<SubagentRun, "activity" | "startedAt">) => void;
   addSubagentActivity: (id: string, activity: SubagentActivity) => void;
   endSubagent: (id: string, isError: boolean) => void;
+  /** End every still-open run in a session — used when the turn's `result`
+   *  arrives, since background runs never get a per-completion signal. */
+  endOpenSubagents: (session: string) => void;
   /** Drop status/usage/change state for a set of sessions (closed project). */
   clearSessions: (ids: string[]) => void;
 }
@@ -65,7 +80,15 @@ export const useAgentStore = create<AgentState>()((set) => ({
   changes: [],
   subagents: {},
   selectedAgent: null,
+  senders: {},
   selectAgent: (id) => set({ selectedAgent: id }),
+  registerSender: (id, fn) =>
+    set((s) => ({ senders: { ...s.senders, [id]: fn } })),
+  unregisterSender: (id) =>
+    set((s) => {
+      const { [id]: _, ...rest } = s.senders;
+      return { senders: rest };
+    }),
   setStatus: (id, status) =>
     set((s) => ({ statuses: { ...s.statuses, [id]: status } })),
   setUsage: (id, usage) =>
@@ -95,6 +118,7 @@ export const useAgentStore = create<AgentState>()((set) => ({
           [id]: {
             ...run,
             activity: next.length > MAX_ACTIVITY ? next.slice(-MAX_ACTIVITY) : next,
+            lastActivityAt: Date.now(),
           },
         },
       };
@@ -106,6 +130,17 @@ export const useAgentStore = create<AgentState>()((set) => ({
       return {
         subagents: { ...s.subagents, [id]: { ...run, endedAt: Date.now(), isError } },
       };
+    }),
+  endOpenSubagents: (session) =>
+    set((s) => {
+      const next = { ...s.subagents };
+      let changed = false;
+      for (const [id, run] of Object.entries(s.subagents)) {
+        if (run.session !== session || run.endedAt != null) continue;
+        next[id] = { ...run, endedAt: run.lastActivityAt ?? Date.now() };
+        changed = true;
+      }
+      return changed ? { subagents: next } : s;
     }),
   clearSessions: (ids) =>
     set((s) => {
@@ -120,6 +155,9 @@ export const useAgentStore = create<AgentState>()((set) => ({
         changes: s.changes.filter((c) => !drop.has(c.session)),
         subagents: Object.fromEntries(
           Object.entries(s.subagents).filter(([, r]) => !drop.has(r.session))
+        ),
+        senders: Object.fromEntries(
+          Object.entries(s.senders).filter(([id]) => !drop.has(id))
         ),
       };
     }),

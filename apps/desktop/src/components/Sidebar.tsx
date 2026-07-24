@@ -101,6 +101,9 @@ function Tree(props: SidebarProps) {
         const active = p.id === activeProjectId;
         const pSessions = sessionsFor(p.id);
         const pAgent = pSessions.find((s) => s.kind === "agent");
+        const anyWorking = pSessions.some(
+          (s) => s.kind === "agent" && statusOf(statuses, s.id) === "working"
+        );
         return (
           <div key={p.id} className="mb-0.5">
             <div
@@ -122,7 +125,13 @@ function Tree(props: SidebarProps) {
                   </div>
                 )}
                 <StatusDot
-                  status={pAgent ? statusOf(statuses, pAgent.id) : "idle"}
+                  status={
+                    anyWorking
+                      ? "working"
+                      : pAgent
+                        ? statusOf(statuses, pAgent.id)
+                        : "idle"
+                  }
                   className="absolute -bottom-0.5 -right-0.5 ring-2 ring-background"
                 />
               </div>
@@ -270,8 +279,16 @@ function Rail({
     <div className="flex flex-col items-center gap-1.5">
       {projects.map((p) => {
         const active = p.id === activeProjectId;
-        const pAgent = sessionsFor(p.id).find((s) => s.kind === "agent");
-        const st = pAgent ? statusOf(statuses, pAgent.id) : "idle";
+        const pSessions = sessionsFor(p.id);
+        const pAgent = pSessions.find((s) => s.kind === "agent");
+        const anyWorking = pSessions.some(
+          (s) => s.kind === "agent" && statusOf(statuses, s.id) === "working"
+        );
+        const st = anyWorking
+          ? "working"
+          : pAgent
+            ? statusOf(statuses, pAgent.id)
+            : "idle";
         return (
           <button
             key={p.id}

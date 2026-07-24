@@ -21,7 +21,7 @@ export function AgentChips({ session, now }: { session: string; now: number }) {
   if (runs.length === 0) return null;
 
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-1.5">
+    <div className="flex w-48 shrink-0 flex-col items-stretch gap-1.5">
       {runs.map((run) => {
         const running = run.endedAt == null;
         const last = run.activity[run.activity.length - 1];
@@ -32,7 +32,7 @@ export function AgentChips({ session, now }: { session: string; now: number }) {
             onClick={() => selectAgent(selected === run.id ? null : run.id)}
             title={running && last ? last.detail : run.description}
             className={cn(
-              "flex max-w-64 items-center gap-1.5 rounded-full border px-2 py-1 text-xs transition-colors",
+              "flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs transition-colors",
               selected === run.id
                 ? "border-primary/50 bg-primary/15 text-foreground"
                 : "border-border bg-card/50 text-muted-foreground hover:bg-muted"
@@ -45,7 +45,7 @@ export function AgentChips({ session, now }: { session: string; now: number }) {
             ) : (
               <Check className="size-3 shrink-0 text-emerald-400" />
             )}
-            <span className="truncate">{run.description}</span>
+            <span className="min-w-0 truncate">{run.description}</span>
             <span className="shrink-0 font-mono tabular-nums opacity-60">
               {elapsed(run.startedAt, run.endedAt ?? now)}
             </span>

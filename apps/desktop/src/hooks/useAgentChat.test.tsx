@@ -690,6 +690,7 @@ describe("useAgentChat subagents", () => {
             description: "Audit picker",
             subagent_type: "Explore",
             prompt: "read ask.rs",
+            run_in_background: false,
           }),
         },
       },
@@ -730,6 +731,55 @@ describe("useAgentChat subagents", () => {
     });
     expect(run().endedAt).toBeGreaterThan(0);
     expect(run().isError).toBe(false);
+  });
+
+  it("keeps a background run open until the turn's result arrives", async () => {
+    useAgentStore.setState({ subagents: {} });
+    const { emit } = await mount();
+
+    emit({ type: "stream_event", event: { type: "message_start", message: {} } });
+    emit({
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "toolu_bg", name: "Task" },
+      },
+    });
+    emit({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: {
+          type: "input_json_delta",
+          partial_json: JSON.stringify({
+            description: "Long job",
+            subagent_type: "Explore",
+            prompt: "dig",
+            run_in_background: true,
+          }),
+        },
+      },
+    });
+    emit({ type: "stream_event", event: { type: "content_block_stop", index: 0 } });
+
+    const run = () => useAgentStore.getState().subagents.toolu_bg;
+    expect(run().background).toBe(true);
+
+    // The launch-ack tool_result must NOT end a background run.
+    emit({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "toolu_bg", content: "started" }],
+      },
+    });
+    expect(run().endedAt).toBeUndefined();
+
+    // The turn's result closes it out.
+    emit({ type: "result", subtype: "success", usage: {} });
+    expect(run().endedAt).toBeGreaterThan(0);
   });
 
   it("keeps subagent turns out of the transcript", async () => {

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Bot, Check, Loader2, Wrench } from "lucide-react";
 import { SidePanel } from "@/components/SidePanel";
 import { useAgentStore } from "@/lib/agentStore";
@@ -10,9 +11,17 @@ export function AgentPanel() {
   const selected = useAgentStore((s) => s.selectedAgent);
   const run = useAgentStore((s) => (s.selectedAgent ? s.subagents[s.selectedAgent] : null));
   const selectAgent = useAgentStore((s) => s.selectAgent);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
   if (!selected || !run) return null;
 
   const running = run.endedAt == null;
+
+  const toggle = (i: number) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(i) ? next.delete(i) : next.add(i);
+      return next;
+    });
 
   return (
     <SidePanel
@@ -33,6 +42,9 @@ export function AgentPanel() {
               {run.subagentType}
             </span>
           )}
+          <span className="shrink-0 text-[0.65rem] text-muted-foreground">
+            {running ? "running…" : "done"}
+          </span>
         </div>
       }
     >
@@ -54,26 +66,41 @@ export function AgentPanel() {
               {running ? "Working — no steps reported yet." : "No steps were reported."}
             </p>
           ) : (
-            run.activity.map((a, i) => (
-              <div
-                key={i}
-                className="flex items-start gap-2 border-b border-border/50 px-3 py-1.5 text-xs"
-              >
-                {a.kind === "tool" ? (
-                  <>
-                    <Wrench className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
-                    <span className="shrink-0 font-medium">{a.name}</span>
-                    <span className="min-w-0 truncate font-mono text-[0.7rem] text-muted-foreground">
+            run.activity.map((a, i) => {
+              const open = expanded.has(i);
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => toggle(i)}
+                  className="flex w-full items-start gap-2 rounded border-b border-border/50 px-3 py-1.5 text-left text-xs hover:bg-muted/50"
+                >
+                  {a.kind === "tool" ? (
+                    <>
+                      <Wrench className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
+                      <span className="shrink-0 font-medium">{a.name}</span>
+                      <span
+                        className={cn(
+                          "min-w-0 font-mono text-[0.7rem] text-muted-foreground",
+                          open ? "whitespace-pre-wrap break-words" : "truncate"
+                        )}
+                      >
+                        {a.detail}
+                      </span>
+                    </>
+                  ) : (
+                    <span
+                      className={cn(
+                        "min-w-0 leading-relaxed text-muted-foreground",
+                        open ? "whitespace-pre-wrap break-words" : "truncate"
+                      )}
+                    >
                       {a.detail}
                     </span>
-                  </>
-                ) : (
-                  <span className={cn("whitespace-pre-wrap leading-relaxed text-muted-foreground")}>
-                    {a.detail}
-                  </span>
-                )}
-              </div>
-            ))
+                  )}
+                </button>
+              );
+            })
           )}
         </div>
       </div>

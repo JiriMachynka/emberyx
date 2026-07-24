@@ -311,6 +311,7 @@ export function useAgentChat({
   const startSubagent = useAgentStore((st) => st.startSubagent);
   const addSubagentActivity = useAgentStore((st) => st.addSubagentActivity);
   const endSubagent = useAgentStore((st) => st.endSubagent);
+  const endOpenSubagents = useAgentStore((st) => st.endOpenSubagents);
 
   // Turns typed while the agent was busy, oldest first, plus its rendered count.
   const queueRef = useRef<{ text: string; images?: ChatImage[] }[]>([]);
@@ -520,7 +521,16 @@ export function useAgentChat({
         if (Array.isArray(content)) {
           for (const block of content) {
             if (block?.type === "tool_result") {
-              endSubagent(block.tool_use_id as string, Boolean(block.is_error));
+              // Background runs have no correlatable completion signal — their
+              // launch-ack tool_result must NOT end them (that pins duration to
+              // ~0s). They resolve on the turn's `result` instead. Foreground
+              // runs end here as normal.
+              const run = useAgentStore.getState().subagents[
+                block.tool_use_id as string
+              ];
+              if (!run?.background) {
+                endSubagent(block.tool_use_id as string, Boolean(block.is_error));
+              }
               attachToolResult(
                 setMessages,
                 block.tool_use_id as string,
@@ -543,6 +553,9 @@ export function useAgentChat({
           outputTokens: (msg.usage as Record<string, number>)?.output_tokens,
         }));
         setStatus(msg.subtype === "error" ? "error" : "idle");
+        // The turn is over — resolve any background runs still marked open,
+        // since they never get a per-completion signal.
+        endOpenSubagents(emberyxSessionId);
         return;
       }
     },
@@ -553,6 +566,7 @@ export function useAgentChat({
       startSubagent,
       addSubagentActivity,
       endSubagent,
+      endOpenSubagents,
     ]
   );
 

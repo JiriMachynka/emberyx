@@ -34,7 +34,7 @@ export const STATUS_META: Record<
   },
   working: {
     label: "working",
-    text: "text-sky-400",
+    text: "text-orange-400",
     pulse: true,
   },
   waiting: {
