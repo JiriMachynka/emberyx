@@ -50,7 +50,7 @@ export function useWorkspace(settings: Settings) {
   const projectsRef = useRef(projects);
   projectsRef.current = projects;
 
-  const sessionApi = useSessions(settings.shareChatsAcrossProjects);
+  const sessionApi = useSessions();
   const {
     sessions,
     activeByProject,

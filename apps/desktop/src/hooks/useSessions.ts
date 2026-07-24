@@ -6,7 +6,7 @@ import type { Session } from "@/types";
  * plus which session is active within each project. Session ids stay globally
  * unique so the agent-status map can key on them directly.
  */
-export function useSessions(shareChatsAcrossProjects = false) {
+export function useSessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeByProject, setActiveByProject] = useState<Record<string, string>>(
     {}
@@ -111,22 +111,30 @@ export function useSessions(shareChatsAcrossProjects = false) {
     setSessions((s) => s.map((x) => (x.id === id ? { ...x, label } : x)));
   }
 
+  /** Repoint any project focused on a now-gone session. A shared chat can be
+   *  focused by projects that don't own it, so every pointer is checked. */
+  function repointActive(next: Session[], gone: Set<string>) {
+    setActiveByProject((m) => {
+      const copy = { ...m };
+      let changed = false;
+      for (const [projectId, id] of Object.entries(m)) {
+        if (!gone.has(id)) continue;
+        changed = true;
+        const siblings = next.filter((s) => s.projectId === projectId);
+        const fallback =
+          siblings.find((s) => s.kind === "agent")?.id ??
+          siblings[siblings.length - 1]?.id;
+        if (fallback) copy[projectId] = fallback;
+        else delete copy[projectId];
+      }
+      return changed ? copy : m;
+    });
+  }
+
   function closeSession(id: string) {
-    const target = sessions.find((s) => s.id === id);
     const next = sessions.filter((s) => s.id !== id);
     setSessions(next);
-    if (!target) return;
-    setActiveByProject((m) => {
-      if (m[target.projectId] !== id) return m;
-      const siblings = next.filter((s) => s.projectId === target.projectId);
-      const fallback =
-        siblings.find((s) => s.kind === "agent")?.id ??
-        siblings[siblings.length - 1]?.id;
-      const copy = { ...m };
-      if (fallback) copy[target.projectId] = fallback;
-      else delete copy[target.projectId];
-      return copy;
-    });
+    repointActive(next, new Set([id]));
   }
 
   /** Reorder a session within its project, dropping it at another tab's slot. */
@@ -163,7 +171,12 @@ export function useSessions(shareChatsAcrossProjects = false) {
 
   /** Remove every session belonging to a closed project. */
   function closeProjectSessions(projectId: string) {
-    setSessions((prev) => prev.filter((s) => s.projectId !== projectId));
+    const gone = new Set(
+      sessions.filter((s) => s.projectId === projectId).map((s) => s.id)
+    );
+    const next = sessions.filter((s) => s.projectId !== projectId);
+    setSessions(next);
+    repointActive(next, gone);
     setActiveByProject((m) => {
       const copy = { ...m };
       delete copy[projectId];
@@ -171,12 +184,9 @@ export function useSessions(shareChatsAcrossProjects = false) {
     });
   }
 
+  /** A project's own sessions — the only ones it displays or may act on. */
   const sessionsFor = (projectId: string) =>
-    sessions.filter(
-      (s) =>
-        s.projectId === projectId ||
-        (shareChatsAcrossProjects && s.kind === "chat")
-    );
+    sessions.filter((s) => s.projectId === projectId);
 
   return {
     sessions,

@@ -14,6 +14,8 @@ interface SidebarProps {
   activeByProject: Record<string, string>;
   statuses: Record<string, SessionStatus>;
   sessionsFor: (id: string) => Session[];
+  /** Keep every project's session list open, not only the active project's. */
+  expandAll: boolean;
   collapsed: boolean;
   onToggleCollapse: () => void;
   onSelectProject: (id: string) => void;
@@ -90,6 +92,7 @@ function Tree(props: SidebarProps) {
     activeByProject,
     statuses,
     sessionsFor,
+    expandAll,
     onSelectProject,
     onCloseProject,
     onPickProject,
@@ -150,7 +153,7 @@ function Tree(props: SidebarProps) {
               />
             </div>
 
-            {active && (
+            {(active || expandAll) && (
               <SessionList
                 {...props}
                 // Dev servers live in the Dev panel, not as sidebar tabs.

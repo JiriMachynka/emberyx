@@ -110,12 +110,13 @@ function App() {
           activeProjectId={activeProjectId}
           activeByProject={ws.activeByProject}
           sessionsFor={ws.sessionsFor}
+          expandAll={settings.expandAllProjects}
           collapsed={sidebarCollapsed}
           onToggleCollapse={toggleSidebar}
           onSelectProject={ws.setActiveProjectId}
           onCloseProject={ws.closeProjectById}
           onPickProject={ws.pickProject}
-          onSelectSession={ws.setActive}
+          onSelectSession={ws.activateSession}
           onCloseSession={ws.closeSession}
           onMoveSession={ws.moveSession}
           onNewAgent={ws.newAgent}

@@ -196,12 +196,12 @@ export function SettingsDialog({
               )}
 
               <Toggle
-                checked={settings.shareChatsAcrossProjects}
-                onChange={(v) => onUpdate({ shareChatsAcrossProjects: v })}
-                title="Show chats across all projects"
+                checked={settings.expandAllProjects}
+                onChange={(v) => onUpdate({ expandAllProjects: v })}
+                title="Expand every project"
               >
-                When on, chat sessions appear under every project instead of
-                only the one they were started in.
+                When on, the sidebar keeps each project's own sessions listed,
+                not just the active project's.
               </Toggle>
 
               <div className="flex items-center justify-between border-t pt-4">

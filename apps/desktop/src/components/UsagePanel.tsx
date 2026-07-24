@@ -86,9 +86,6 @@ export function UsagePanel({ onClose }: UsagePanelProps) {
         >
           <header className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
             <Dialog.Title className="text-sm font-medium">Usage & cost</Dialog.Title>
-            <span className="text-xs text-muted-foreground">
-              across every project
-            </span>
             <div className="ml-auto flex items-center gap-1">
               {RANGES.map((r) => (
                 <button
@@ -134,18 +131,7 @@ export function UsagePanel({ onClose }: UsagePanelProps) {
                   {query.isPending ? "Reading transcripts…" : "No usage recorded."}
                 </Empty>
               ) : (
-                <div className="flex h-32 items-end gap-0.5 rounded border p-2">
-                  {byDay.map((d) => (
-                    <div
-                      key={d.key}
-                      title={`${d.key} · $${d.cost.toFixed(2)} · ${formatTokens(
-                        d.tokens
-                      )} tokens`}
-                      style={{ height: `${Math.max(2, (d.cost / peak) * 100)}%` }}
-                      className="flex-1 rounded-sm bg-primary/60 transition-colors hover:bg-primary"
-                    />
-                  ))}
-                </div>
+                <DailyChart days={byDay} peak={peak} />
               )}
             </section>
 
@@ -179,6 +165,103 @@ export function UsagePanel({ onClose }: UsagePanelProps) {
   );
 }
 
+/** Daily-spend bars with a $ axis, dated ticks, and a hover tooltip. */
+function DailyChart({ days, peak }: { days: Bucket[]; peak: number }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const active = hover === null ? null : days[hover];
+  // Three ticks read cleanly at this height; more crowds the 8rem plot.
+  const ticks = [peak, peak / 2, 0];
+  const xTicks = [0, Math.floor((days.length - 1) / 2), days.length - 1].filter(
+    (i, pos, all) => i >= 0 && all.indexOf(i) === pos
+  );
+
+  return (
+    <div className="rounded border p-2">
+      <div className="flex gap-2">
+        <div className="flex h-32 w-12 shrink-0 flex-col justify-between py-px text-right text-xs tabular-nums text-muted-foreground">
+          {ticks.map((t) => (
+            <span key={t}>${t.toFixed(t < 10 ? 2 : 0)}</span>
+          ))}
+        </div>
+        <div className="relative min-w-0 flex-1">
+          {/* Gridlines sit behind the bars, aligned to the $ ticks. */}
+          <div className="pointer-events-none absolute inset-0 flex flex-col justify-between">
+            {ticks.map((t) => (
+              <span key={t} className="block border-t border-border/50" />
+            ))}
+          </div>
+          <div
+            className="relative flex h-32 items-end gap-0.5"
+            onMouseLeave={() => setHover(null)}
+          >
+            {days.map((d, i) => (
+              // The hit area is the full-height column, so a near-zero bar is
+              // still hoverable.
+              <button
+                key={d.key}
+                type="button"
+                onMouseEnter={() => setHover(i)}
+                className={cn(
+                  "flex h-full flex-1 flex-col justify-end rounded-sm transition-colors",
+                  hover === i && "bg-primary/10"
+                )}
+              >
+                <span
+                  style={{ height: `${Math.max(2, (d.cost / peak) * 100)}%` }}
+                  className={cn(
+                    "block w-full rounded-sm transition-colors",
+                    hover === i ? "bg-primary" : "bg-primary/60"
+                  )}
+                />
+              </button>
+            ))}
+          </div>
+          {active && (
+            <div
+              style={{
+                left: `${((hover! + 0.5) / days.length) * 100}%`,
+                // Keep the card inside the plot at both ends.
+                transform: `translateX(${
+                  hover! < days.length / 4
+                    ? "0"
+                    : hover! > (days.length * 3) / 4
+                      ? "-100%"
+                      : "-50%"
+                })`,
+              }}
+              className="pointer-events-none absolute -top-1 z-10 w-max rounded-md border bg-popover px-2 py-1 text-xs shadow-lg"
+            >
+              <p className="font-medium tabular-nums">
+                ${active.cost.toFixed(2)}
+              </p>
+              <p className="tabular-nums text-muted-foreground">
+                {formatTokens(active.tokens)} tokens · {active.messages} msgs
+              </p>
+              <p className="tabular-nums text-muted-foreground">{active.key}</p>
+            </div>
+          )}
+          <div className="relative mt-1 h-4 border-t text-xs tabular-nums text-muted-foreground">
+            {xTicks.map((i) => (
+              <span
+                key={days[i].key}
+                style={{
+                  left: `${((i + 0.5) / days.length) * 100}%`,
+                  transform: `translateX(${
+                    i === 0 ? "0" : i === days.length - 1 ? "-100%" : "-50%"
+                  })`,
+                }}
+                className="absolute top-0.5"
+              >
+                {days[i].key.slice(5)}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Table({
   rows,
   total,
@@ -194,11 +277,11 @@ function Table({
   return (
     <ul className="divide-y rounded border">
       {rows.map((row) => (
-        <li key={row.key} className="flex items-center gap-3 px-3 py-1.5 text-xs">
+        <li key={row.key} className="flex items-center gap-3 px-3 py-2 text-sm">
           <span className="min-w-0 flex-1">
-            <span className="block truncate">{label(row.key)}</span>
+            <span className="block truncate font-medium">{label(row.key)}</span>
             {sub && (
-              <span className="block truncate text-[10px] text-muted-foreground">
+              <span className="block truncate text-xs text-muted-foreground">
                 {sub(row.key)}
               </span>
             )}
@@ -211,10 +294,10 @@ function Table({
               />
             </span>
           </span>
-          <span className="w-16 shrink-0 text-right tabular-nums text-muted-foreground">
+          <span className="w-20 shrink-0 text-right tabular-nums text-muted-foreground">
             {formatTokens(row.tokens)}
           </span>
-          <span className="w-16 shrink-0 text-right tabular-nums">
+          <span className="w-20 shrink-0 text-right tabular-nums">
             ${row.cost.toFixed(2)}
           </span>
         </li>

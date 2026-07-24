@@ -70,5 +70,11 @@ describe("formatTokens", () => {
   it("abbreviates millions to two decimals", () => {
     expect(formatTokens(1_000_000)).toBe("1.00M");
     expect(formatTokens(2_500_000)).toBe("2.50M");
+    expect(formatTokens(999_000_000)).toBe("999.00M");
+  });
+
+  it("abbreviates billions to two decimals", () => {
+    expect(formatTokens(1_000_000_000)).toBe("1.00B");
+    expect(formatTokens(5_154_410_000)).toBe("5.15B");
   });
 });
