@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { checkForUpdates } from "@/lib/update";
 import { useOpenRouterModels } from "@/lib/queries";
+import { Field, Toggle } from "@/components/SettingsFields";
 import type { Settings } from "@/lib/settings";
 
 interface SettingsDialogProps {
@@ -28,51 +29,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "terminal", label: "Appearance" },
   { id: "integrations", label: "Integrations" },
 ];
-
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="grid gap-1.5">
-      <span className="text-sm font-medium">{label}</span>
-      {children}
-      {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
-    </label>
-  );
-}
-
-function Toggle({
-  checked,
-  onChange,
-  title,
-  children,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="flex items-start gap-2.5">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 size-4 shrink-0 accent-primary"
-      />
-      <span className="grid gap-0.5">
-        <span className="text-sm font-medium">{title}</span>
-        <span className="text-xs text-muted-foreground">{children}</span>
-      </span>
-    </label>
-  );
-}
 
 export function SettingsDialog({
   open,
@@ -105,7 +61,8 @@ export function SettingsDialog({
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
-            Applies to terminals you open next; font changes apply live.
+            Applies to every project. Per-project config lives in the project's
+            Settings tab.
           </DialogDescription>
         </DialogHeader>
 
@@ -202,6 +159,38 @@ export function SettingsDialog({
               >
                 When on, the sidebar keeps each project's own sessions listed,
                 not just the active project's.
+              </Toggle>
+
+              <Toggle
+                checked={settings.notifyOnDone}
+                onChange={(v) => onUpdate({ notifyOnDone: v })}
+                title="Notify when a task finishes"
+              >
+                Raise a notification once a run completes.
+              </Toggle>
+
+              <Toggle
+                checked={settings.notifyOnError}
+                onChange={(v) => onUpdate({ notifyOnError: v })}
+                title="Notify on errors"
+              >
+                Raise a notification when a run fails.
+              </Toggle>
+
+              <Toggle
+                checked={settings.notifyOnlyWhenUnfocused}
+                onChange={(v) => onUpdate({ notifyOnlyWhenUnfocused: v })}
+                title="Only when app is unfocused"
+              >
+                Stay quiet while Emberyx is the focused window.
+              </Toggle>
+
+              <Toggle
+                checked={settings.notifySound}
+                onChange={(v) => onUpdate({ notifySound: v })}
+                title="Play sound"
+              >
+                Play a chime alongside each notification.
               </Toggle>
 
               <div className="flex items-center justify-between border-t pt-4">

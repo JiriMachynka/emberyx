@@ -10,8 +10,32 @@ import { statusForEvent } from "@/lib/status";
 import { parseChange } from "@/lib/changes";
 import { basename } from "@/lib/path";
 import { useAgentStore } from "@/lib/agentStore";
+import { loadSettings, type Settings } from "@/lib/settings";
+import type { NotificationKind } from "@/lib/notifications";
 import type { Usage } from "@/lib/pricing";
 import type { HookEvent, Session } from "@/types";
+
+/**
+ * Raises an OS notification, honouring the notification settings. Kinds the
+ * user switched off, and (optionally) anything raised while the window is
+ * focused, are dropped.
+ */
+export async function notifyNative(
+  settings: Settings,
+  kind: NotificationKind,
+  title: string,
+  body: string
+): Promise<void> {
+  if (kind === "done" && !settings.notifyOnDone) return;
+  if (kind === "error" && !settings.notifyOnError) return;
+  if (settings.notifyOnlyWhenUnfocused && document.hasFocus()) return;
+  if (!(await isPermissionGranted())) return;
+  sendNotification({
+    title,
+    body,
+    sound: settings.notifySound ? "default" : undefined,
+  });
+}
 
 /**
  * Subscribes to Claude Code hook events (via the Rust listener) and pushes the
@@ -77,18 +101,43 @@ export function useAgentEvents(
       if (!status) return;
       store.setStatus(payload.session, status);
 
-      if (status === "waiting" && !document.hasFocus()) {
-        const s = resolveRef.current(payload.session);
-        pendingAttention.current = payload.session;
-        void isPermissionGranted().then((granted) => {
-          if (granted) {
-            sendNotification({
-              title: "Emberyx — agent needs you",
-              body: s ? basename(s.cwd) : "Claude is waiting for input",
-            });
-          }
+      // Only turn boundaries are worth a notification; SubagentStop fires far
+      // too often to be one.
+      if (payload.event !== "Stop" && payload.event !== "Notification") return;
+
+      const s = resolveRef.current(payload.session);
+      const project = s ? basename(s.cwd) : "Claude";
+      const settings = loadSettings();
+
+      if (payload.event === "Stop") {
+        const title = `${project} — done`;
+        const body = "Claude finished responding";
+        store.pushNotification({
+          session: payload.session,
+          project,
+          kind: "done",
+          title,
+          body,
         });
+        void notifyNative(settings, "done", title, body);
+        return;
       }
+
+      store.pushNotification({
+        session: payload.session,
+        project,
+        kind: "needs-input",
+        title: `${project} — needs you`,
+        body: "Claude is waiting for input",
+      });
+      // Clicking the notification brings the window back; remember where to jump.
+      if (!document.hasFocus()) pendingAttention.current = payload.session;
+      void notifyNative(
+        settings,
+        "needs-input",
+        "Emberyx — agent needs you",
+        project
+      );
     });
 
     return () => {

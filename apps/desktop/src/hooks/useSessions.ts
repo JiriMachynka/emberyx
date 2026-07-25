@@ -92,6 +92,25 @@ export function useSessions() {
     return id;
   }
 
+  /** Open the project settings pane and focus it. One per project — a second
+   *  call just re-focuses the existing tab. */
+  function startSettings(projectId: string, cwd: string): string {
+    const existing = sessions.find(
+      (s) => s.projectId === projectId && s.kind === "settings"
+    );
+    if (existing) {
+      setActive(projectId, existing.id);
+      return existing.id;
+    }
+    const id = nextId();
+    setSessions((s) => [
+      ...s,
+      { id, projectId, label: "settings", cwd, kind: "settings" },
+    ]);
+    setActive(projectId, id);
+    return id;
+  }
+
   /** Add a background dev-server session (does not steal focus). */
   function addDev(
     projectId: string,
@@ -196,6 +215,7 @@ export function useSessions() {
     startChat,
     startDokployLogs,
     startEditor,
+    startSettings,
     renameSession,
     addDev,
     closeSession,

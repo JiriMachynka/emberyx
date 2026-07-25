@@ -4,6 +4,12 @@ import type { Usage } from "@/lib/pricing";
 import type { ToolIcon } from "@/lib/toolDisplay";
 import type { ChatImage } from "@/hooks/useAgentChat";
 import type { SessionStatus } from "@/types";
+import {
+  MAX_NOTIFICATIONS,
+  loadNotifications,
+  saveNotifications,
+  type AppNotification,
+} from "@/lib/notifications";
 
 /** Max entries kept in the live file-edit feed (most recent wins). */
 const MAX_CHANGES = 500;
@@ -75,6 +81,12 @@ interface AgentState {
   endOpenSubagents: (session: string) => void;
   /** Drop status/usage/change state for a set of sessions (closed project). */
   clearSessions: (ids: string[]) => void;
+  /** Notification centre feed, newest first, persisted to localStorage. */
+  notifications: AppNotification[];
+  pushNotification: (n: Omit<AppNotification, "id" | "time" | "read">) => void;
+  markNotificationsRead: () => void;
+  markNotificationRead: (id: string) => void;
+  clearNotifications: () => void;
 }
 
 export const useAgentStore = create<AgentState>()((set) => ({
@@ -84,6 +96,7 @@ export const useAgentStore = create<AgentState>()((set) => ({
   subagents: {},
   selectedAgent: null,
   senders: {},
+  notifications: loadNotifications(),
   selectAgent: (id) => set({ selectedAgent: id }),
   registerSender: (id, fn) =>
     set((s) => ({ senders: { ...s.senders, [id]: fn } })),
@@ -164,4 +177,38 @@ export const useAgentStore = create<AgentState>()((set) => ({
         ),
       };
     }),
+  pushNotification: (n) =>
+    set((s) => {
+      const next = [
+        { ...n, id: crypto.randomUUID(), time: Date.now(), read: false },
+        ...s.notifications,
+      ];
+      const capped =
+        next.length > MAX_NOTIFICATIONS ? next.slice(0, MAX_NOTIFICATIONS) : next;
+      saveNotifications(capped);
+      return { notifications: capped };
+    }),
+  markNotificationsRead: () =>
+    set((s) => {
+      const next = s.notifications.map((n) => (n.read ? n : { ...n, read: true }));
+      saveNotifications(next);
+      return { notifications: next };
+    }),
+  markNotificationRead: (id) =>
+    set((s) => {
+      const next = s.notifications.map((n) =>
+        n.id === id ? { ...n, read: true } : n
+      );
+      saveNotifications(next);
+      return { notifications: next };
+    }),
+  clearNotifications: () =>
+    set(() => {
+      saveNotifications([]);
+      return { notifications: [] };
+    }),
 }));
+
+/** Unread badge count for the notification centre. */
+export const selectUnreadCount = (s: AgentState) =>
+  s.notifications.filter((n) => !n.read).length;

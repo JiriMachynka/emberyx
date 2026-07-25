@@ -33,7 +33,8 @@ interface ContextBarProps {
   devCount: number;
   onToggleDev: () => void;
   customDevCommand: string;
-  onSetCustomDevCommand: (command: string) => void;
+  /** Opens the project settings pane, where the dev command is edited. */
+  onOpenProjectSettings: () => void;
   onRunCustomDev: () => void;
   onRunPackage: (pkg: PackageInfo) => void;
   onRunAll: () => void;
@@ -62,7 +63,7 @@ export function ContextBar({
   devCount,
   onToggleDev,
   customDevCommand,
-  onSetCustomDevCommand,
+  onOpenProjectSettings,
   onRunCustomDev,
   onRunPackage,
   onRunAll,
@@ -162,7 +163,7 @@ export function ContextBar({
             workspace={activeProject.workspace}
             running={devRunning}
             customCommand={customDevCommand}
-            onSetCustom={onSetCustomDevCommand}
+            onEditCustom={onOpenProjectSettings}
             onRunCustom={onRunCustomDev}
             onRunPackage={onRunPackage}
             onRunAll={onRunAll}

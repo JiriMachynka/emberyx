@@ -1,9 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Toaster } from "sonner";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SessionPanes } from "@/components/SessionPanes";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { AgentPanel } from "@/components/AgentPanel";
 import { ChangesPanel } from "@/components/ChangesPanel";
+import { NotificationPanel } from "@/components/NotificationPanel";
 import { DevPanel } from "@/components/DevPanel";
 import { ContextBar } from "@/components/ContextBar";
 import { Sidebar } from "@/components/Sidebar";
@@ -14,6 +16,7 @@ import { WelcomeScreen } from "@/components/WelcomeScreen";
 import { AttentionBanner } from "@/components/AttentionBanner";
 import { cn } from "@/lib/utils";
 import { useSettings, isClaudeAgent } from "@/lib/settings";
+import { useAgentStore, selectUnreadCount } from "@/lib/agentStore";
 import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
 import { requestSearch } from "@/lib/searchRequest";
 import { useWorkspace } from "@/hooks/useWorkspace";
@@ -28,6 +31,7 @@ function App() {
   const [devOpen, setDevOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   // Keep the Changes panel mounted while its exit animation plays (~200ms).
   const [changesClosing, setChangesClosing] = useState(false);
   const [sidebarCollapsed, setCollapsed] = useState<boolean>(getSidebarCollapsed);
@@ -66,6 +70,35 @@ function App() {
     dokploy,
   } = ws;
   const dev = useDevServers(activeProject, ws.addDev);
+  const unread = useAgentStore(selectUnreadCount);
+  const markNotificationsRead = useAgentStore((s) => s.markNotificationsRead);
+
+  // Mirror unread onto the macOS dock badge. Guarded — there's no window in
+  // tests or a plain browser.
+  useEffect(() => {
+    try {
+      void getCurrentWindow()
+        .setBadgeCount(unread > 0 ? unread : undefined)
+        .catch(() => {});
+    } catch {
+      // Not running under Tauri.
+    }
+  }, [unread]);
+
+  const toggleNotifications = () => {
+    if (!notificationsOpen) markNotificationsRead();
+    setNotificationsOpen(!notificationsOpen);
+  };
+
+  const jumpToSession = (sessionId: string) => {
+    const target = sessions.find((s) => s.id === sessionId);
+    if (target) ws.activateSession(target.projectId, target.id);
+  };
+
+  const openProjectSettings = () => {
+    if (!activeProject) return;
+    ws.startSettings(activeProject.id, activeProject.path);
+  };
 
   const openSearch = () => {
     if (!activeProject) return;
@@ -121,6 +154,9 @@ function App() {
           onMoveSession={ws.moveSession}
           onNewAgent={ws.newAgent}
           onOpenSettings={() => setSettingsOpen(true)}
+          onOpenProjectSettings={openProjectSettings}
+          notificationCount={unread}
+          onOpenNotifications={toggleNotifications}
         />
       )}
 
@@ -136,7 +172,7 @@ function App() {
           devCount={devCount}
           onToggleDev={() => setDevOpen((v) => !v)}
           customDevCommand={dev.customCommand}
-          onSetCustomDevCommand={dev.setCustomCommand}
+          onOpenProjectSettings={openProjectSettings}
           onRunCustomDev={dev.runCustom}
           onRunPackage={dev.runPackage}
           onRunAll={dev.runAll}
@@ -177,11 +213,22 @@ function App() {
                 revealed tab. */}
             <SessionPanes
               sessions={sessions}
+              projects={projects}
               activeId={activeId}
               settings={settings}
               onTitled={(session, title) => {
                 ws.renameSession(session.id, title);
                 ws.refreshThreads(session.projectId, session.cwd, true);
+              }}
+              projectSettings={{
+                devCommand: dev.customCommand,
+                onSetDevCommand: dev.setCustomCommand,
+                onRefreshDokploy: () => {
+                  if (activeProject)
+                    dokploy.refresh(activeProject.id, activeProject.path);
+                },
+                onOpenWorktree: ws.openWorktree,
+                onRemoveWorktree: ws.removeWorktree,
               }}
             />
             {!revealed && (
@@ -225,6 +272,12 @@ function App() {
               />
             </div>
           )}
+          {notificationsOpen && (
+            <NotificationPanel
+              onClose={() => setNotificationsOpen(false)}
+              onSelect={jumpToSession}
+            />
+          )}
           <AgentPanel />
           {slashOpen && (
             <SlashCommandsPanel
@@ -250,6 +303,7 @@ function App() {
         onToggleChanges={toggleChanges}
         onSearch={openSearch}
         onOpenUsage={() => setUsageOpen(true)}
+        onOpenNotifications={toggleNotifications}
       />
 
       {usageOpen && <UsagePanel onClose={() => setUsageOpen(false)} />}

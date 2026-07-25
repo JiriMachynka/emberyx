@@ -29,6 +29,12 @@ vi.mock("@tauri-apps/api/event", () => ({
   },
 }));
 
+vi.mock("@tauri-apps/plugin-notification", () => ({
+  isPermissionGranted: () => Promise.resolve(false),
+  requestPermission: () => Promise.resolve("denied"),
+  sendNotification: () => {},
+}));
+
 const options = { cwd: "/repo", emberyxSessionId: "emberyx-1" };
 
 /** Mount the hook and wait until the agent process is reported ready. */
@@ -330,6 +336,36 @@ describe("useAgentChat streaming", () => {
     const { result, emit } = await mount();
     emit({ type: "result", subtype: "error", usage: {} });
     expect(result.current.status).toBe("error");
+  });
+
+  it("records an error notification for an errored result", async () => {
+    useAgentStore.setState({ notifications: [] });
+    const { emit } = await mount();
+    emit({ type: "result", subtype: "error", usage: {} });
+    expect(useAgentStore.getState().notifications[0]).toMatchObject({
+      kind: "error",
+      project: "repo",
+      session: "emberyx-1",
+    });
+  });
+
+  it("records no notification when notifyOnError is off", async () => {
+    useAgentStore.setState({ notifications: [] });
+    localStorage.setItem(
+      "emberyx.settings",
+      JSON.stringify({ notifyOnError: false })
+    );
+    const { emit } = await mount();
+    emit({ type: "result", subtype: "error", usage: {} });
+    expect(useAgentStore.getState().notifications).toHaveLength(0);
+    localStorage.removeItem("emberyx.settings");
+  });
+
+  it("records no notification for a successful result", async () => {
+    useAgentStore.setState({ notifications: [] });
+    const { emit } = await mount();
+    emit({ type: "result", subtype: "success", usage: {} });
+    expect(useAgentStore.getState().notifications).toHaveLength(0);
   });
 
   it("ignores lines that are not JSON", async () => {

@@ -34,6 +34,14 @@ describe("useSettings", () => {
     expect(JSON.parse(localStorage.getItem("emberyx.settings")!).fontSize).toBe(16);
   });
 
+  it("notifies on done and error by default, focused and silent", () => {
+    const { result } = renderHook(() => useSettings());
+    expect(result.current.settings.notifyOnDone).toBe(true);
+    expect(result.current.settings.notifyOnError).toBe(true);
+    expect(result.current.settings.notifyOnlyWhenUnfocused).toBe(false);
+    expect(result.current.settings.notifySound).toBe(false);
+  });
+
   it("fills gaps in stored settings with the defaults", () => {
     localStorage.setItem("emberyx.settings", JSON.stringify({ fontSize: 20 }));
     const { result } = renderHook(() => useSettings());

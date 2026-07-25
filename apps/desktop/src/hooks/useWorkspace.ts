@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { isClaudeAgent, type Settings } from "@/lib/settings";
 import { useAgentStore } from "@/lib/agentStore";
 import { getRecents, addRecent, removeRecent } from "@/lib/recents";
+import { getOpenProjects, saveOpenProjects } from "@/lib/openProjects";
 import { useProjects } from "@/hooks/useProjects";
 import { useSessions } from "@/hooks/useSessions";
 import { useAgentEvents } from "@/hooks/useAgentEvents";
@@ -319,13 +320,32 @@ export function useWorkspace(settings: Settings) {
     toast.success("Worktree removed");
   }
 
-  // Pre-warm the most-recent project once at launch: its agent boots hidden
-  // behind the WelcomeScreen so opening it is instant. Discarded if the user
-  // opens a different project.
+  /** Reopen last session's projects, active one last so it ends up focused. */
+  async function restoreProjects(stored: ReturnType<typeof getOpenProjects>) {
+    const ordered = [
+      ...stored.projects.filter((p) => p.path !== stored.activePath),
+      ...stored.projects.filter((p) => p.path === stored.activePath),
+    ];
+    for (const p of ordered) {
+      await openProjectAt(p.path, { worktree: p.worktree ?? undefined });
+    }
+  }
+
+  // At launch: restore the projects that were open when the app last quit. With
+  // nothing stored, fall back to pre-warming the most-recent project — its agent
+  // boots hidden behind the WelcomeScreen so opening it is instant, and it's
+  // discarded if the user opens a different project.
   const didPrewarm = useRef(false);
+  const didRestore = useRef(false);
   useEffect(() => {
     if (didPrewarm.current) return;
     didPrewarm.current = true;
+    didRestore.current = true;
+    const stored = getOpenProjects();
+    if (stored.projects.length > 0) {
+      void restoreProjects(stored);
+      return;
+    }
     const recent = recents[0];
     if (recent && isClaudeAgent(settings.agentCommand)) {
       void openProjectAt(recent, { prewarm: true });
@@ -333,6 +353,18 @@ export function useWorkspace(settings: Settings) {
     // Launch-only; openProjectAt/settings are stable enough for a one-shot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Mirror the open projects into storage for the next launch. Skipped until
+  // the restore above has run, or boot would persist the empty initial list. A
+  // pre-warmed project the user never revealed doesn't count as open.
+  useEffect(() => {
+    if (!didRestore.current) return;
+    const open = revealed ? projects : [];
+    saveOpenProjects(
+      open.map((p) => ({ path: p.path, worktree: p.worktree })),
+      open.find((p) => p.id === activeProjectId)?.path ?? null
+    );
+  }, [projects, activeProjectId, revealed]);
 
   // When the window regains focus (e.g. clicking the desktop notification),
   // jump to the session that raised it if it's still waiting.

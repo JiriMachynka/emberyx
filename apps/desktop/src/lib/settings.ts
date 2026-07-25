@@ -32,6 +32,14 @@ export interface Settings {
   openRouterApiKey: string;
   /** OpenRouter model slug, e.g. anthropic/claude-3.5-haiku. */
   openRouterModel: string;
+  /** Notify when the agent finishes a turn. */
+  notifyOnDone: boolean;
+  /** Notify when an agent run ends in an error. */
+  notifyOnError: boolean;
+  /** Only raise OS notifications while the window is unfocused. */
+  notifyOnlyWhenUnfocused: boolean;
+  /** Play the system sound with OS notifications. */
+  notifySound: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -51,6 +59,10 @@ export const DEFAULT_SETTINGS: Settings = {
   dokployApiKey: "",
   openRouterApiKey: "",
   openRouterModel: "",
+  notifyOnDone: true,
+  notifyOnError: true,
+  notifyOnlyWhenUnfocused: false,
+  notifySound: false,
 };
 
 /** Whether an agent command drives Claude Code (enables thread/usage UI). */
@@ -60,7 +72,9 @@ export function isClaudeAgent(cmd: string): boolean {
 
 const KEY = "emberyx.settings";
 
-function load(): Settings {
+/** Reads the stored settings. Exported for callbacks that outlive a render and
+ *  so must not close over a `useSettings` snapshot. */
+export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
     return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : DEFAULT_SETTINGS;
@@ -70,7 +84,7 @@ function load(): Settings {
 }
 
 export function useSettings() {
-  const [settings, setSettings] = useState<Settings>(load);
+  const [settings, setSettings] = useState<Settings>(loadSettings);
 
   function update(patch: Partial<Settings>) {
     setSettings((prev) => {

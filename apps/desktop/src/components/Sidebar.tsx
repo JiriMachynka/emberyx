@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Plus, PanelLeftClose, PanelLeftOpen, Settings, Bot, FolderOpen, GitBranch } from "lucide-react";
+import { Plus, PanelLeftClose, PanelLeftOpen, Settings, SlidersHorizontal, Bot, FolderOpen, GitBranch, Bell } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { basename } from "@/lib/path";
 import { projectLabel, projectTitle } from "@/lib/worktree";
@@ -27,6 +27,9 @@ interface SidebarProps {
   onMoveSession: (projectId: string, from: string, to: string) => void;
   onNewAgent: () => void;
   onOpenSettings: () => void;
+  onOpenProjectSettings: () => void;
+  notificationCount: number;
+  onOpenNotifications: () => void;
 }
 
 /** Left navigation: projects as rows, the active one expanded to its sessions
@@ -239,6 +242,8 @@ function SessionList({
           >
             {s.kind === "agent" ? (
               <Bot className="size-4 shrink-0 opacity-70" />
+            ) : s.kind === "settings" ? (
+              <SlidersHorizontal className="size-4 shrink-0 opacity-70" />
             ) : (
               <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
             )}
@@ -261,6 +266,7 @@ function SessionList({
 /** Project-scoped actions for the active project. */
 function ActionRow({
   onNewAgent,
+  onOpenProjectSettings,
 }: SidebarProps & { project: Project }) {
   return (
     <div className="ml-3 mt-1 flex flex-wrap items-center gap-1 pl-1.5">
@@ -271,6 +277,14 @@ function ActionRow({
       >
         <Plus className="size-4" />
         Agent
+      </button>
+      <button
+        onClick={onOpenProjectSettings}
+        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        title="Project settings"
+      >
+        <SlidersHorizontal className="size-4" />
+        Settings
       </button>
     </div>
   );
@@ -340,12 +354,19 @@ function Rail({
   );
 }
 
-function SidebarFooter({ collapsed, onOpenSettings }: SidebarProps) {
+function SidebarFooter({
+  collapsed,
+  onOpenSettings,
+  notificationCount,
+  onOpenNotifications,
+}: SidebarProps) {
   return (
     <footer
       className={cn(
-        "flex h-10 shrink-0 items-center border-t",
-        collapsed ? "justify-center" : "px-2.5"
+        "flex shrink-0 items-center border-t",
+        collapsed
+          ? "flex-col justify-center gap-0.5 py-1"
+          : "h-10 justify-between px-2.5"
       )}
     >
       <button
@@ -355,6 +376,21 @@ function SidebarFooter({ collapsed, onOpenSettings }: SidebarProps) {
       >
         <Settings className="size-5" />
         {!collapsed && <span className="text-sm">Settings</span>}
+      </button>
+      <button
+        onClick={onOpenNotifications}
+        className="relative flex items-center gap-2 rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        title="Notifications"
+      >
+        <Bell className="size-5" />
+        {notificationCount > 0 &&
+          (collapsed ? (
+            <span className="absolute right-1 top-1 size-2 rounded-full bg-primary" />
+          ) : (
+            <span className="rounded bg-primary/20 px-1 text-[10px] tabular-nums text-primary">
+              {notificationCount}
+            </span>
+          ))}
       </button>
     </footer>
   );

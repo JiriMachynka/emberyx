@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { addRecent, getRecents } from "@/lib/recents";
+import { getOpenProjects, saveOpenProjects } from "@/lib/openProjects";
 import { PANEL_MIN_WIDTH, getPanelWidth, setPanelWidth } from "@/lib/panels";
 import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
 import { getProjectConfigs, setProjectDevCommand } from "@/lib/projectConfig";
@@ -32,6 +33,45 @@ describe("recents", () => {
   it("recovers from corrupt storage", () => {
     localStorage.setItem("emberyx.recents", "{not json");
     expect(getRecents()).toEqual([]);
+  });
+});
+
+describe("openProjects", () => {
+  it("starts empty", () => {
+    expect(getOpenProjects()).toEqual({ projects: [], activePath: null });
+  });
+
+  it("round-trips the open list and the active path", () => {
+    saveOpenProjects(
+      [
+        { path: "/a", worktree: null },
+        { path: "/b", worktree: null },
+      ],
+      "/b"
+    );
+    expect(getOpenProjects()).toEqual({
+      projects: [
+        { path: "/a", worktree: null },
+        { path: "/b", worktree: null },
+      ],
+      activePath: "/b",
+    });
+  });
+
+  it("preserves worktree metadata", () => {
+    const worktree = { repoRoot: "/code/emberyx", branch: "fix/panes" };
+    saveOpenProjects([{ path: "/code/.wt/emberyx-fix", worktree }], null);
+    expect(getOpenProjects().projects[0].worktree).toEqual(worktree);
+  });
+
+  it("recovers from corrupt storage", () => {
+    localStorage.setItem("emberyx.openProjects", "{not json");
+    expect(getOpenProjects()).toEqual({ projects: [], activePath: null });
+  });
+
+  it("recovers from a stored value of the wrong shape", () => {
+    localStorage.setItem("emberyx.openProjects", JSON.stringify(["/a"]));
+    expect(getOpenProjects()).toEqual({ projects: [], activePath: null });
   });
 });
 

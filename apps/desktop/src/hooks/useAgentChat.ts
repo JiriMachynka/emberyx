@@ -3,6 +3,9 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAgentStore, type SubagentActivity } from "@/lib/agentStore";
 import { describeTool } from "@/lib/toolDisplay";
+import { notifyNative } from "@/hooks/useAgentEvents";
+import { loadSettings } from "@/lib/settings";
+import { basename } from "@/lib/path";
 
 /** A stream-json line from the headless `claude` process (Rust AgentEvent). */
 type AgentEvent =
@@ -322,6 +325,7 @@ export function useAgentChat({
   const addSubagentActivity = useAgentStore((st) => st.addSubagentActivity);
   const endSubagent = useAgentStore((st) => st.endSubagent);
   const endOpenSubagents = useAgentStore((st) => st.endOpenSubagents);
+  const pushNotification = useAgentStore((st) => st.pushNotification);
 
   // Turns typed while the agent was busy, oldest first, plus its rendered count.
   const queueRef = useRef<{ text: string; images?: ChatImage[] }[]>([]);
@@ -608,7 +612,25 @@ export function useAgentChat({
         t.outputDone = 0;
         t.curInput = 0;
         t.curOutput = 0;
-        setStatus(msg.subtype === "error" ? "error" : "idle");
+        const failed = msg.subtype === "error";
+        setStatus(failed ? "error" : "idle");
+        // Only the failure is announced here; the Stop hook covers success.
+        if (failed) {
+          const project = basename(cwd);
+          const title = `${project} — error`;
+          const body = "The agent run ended with an error";
+          const settings = loadSettings();
+          if (settings.notifyOnError) {
+            pushNotification({
+              session: emberyxSessionId,
+              project,
+              kind: "error",
+              title,
+              body,
+            });
+          }
+          void notifyNative(settings, "error", title, body);
+        }
         // The turn is over — resolve any background runs still marked open,
         // since they never get a per-completion signal.
         endOpenSubagents(emberyxSessionId);
@@ -620,10 +642,12 @@ export function useAgentChat({
       pushDraft,
       publishTurnUsage,
       emberyxSessionId,
+      cwd,
       startSubagent,
       addSubagentActivity,
       endSubagent,
       endOpenSubagents,
+      pushNotification,
     ]
   );
 

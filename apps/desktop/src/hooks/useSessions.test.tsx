@@ -30,6 +30,24 @@ describe("useSessions", () => {
     expect(result.current.activeByProject.a).toBe(agentId);
   });
 
+  it("keeps one settings pane per project", () => {
+    const { result } = renderHook(() => useSessions());
+    let first = "";
+    act(() => {
+      result.current.startAgent("a", "/a", "claude");
+      first = result.current.startSettings("a", "/a");
+    });
+    expect(result.current.sessionsFor("a")).toHaveLength(2);
+
+    let second = "";
+    act(() => {
+      second = result.current.startSettings("a", "/a");
+    });
+    expect(second).toBe(first);
+    expect(result.current.sessionsFor("a")).toHaveLength(2);
+    expect(result.current.activeByProject.a).toBe(first);
+  });
+
   it("drops a closed project's sessions and its focus", () => {
     const { result } = renderHook(() => useSessions());
     act(() => {
