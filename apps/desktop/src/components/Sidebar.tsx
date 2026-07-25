@@ -168,7 +168,9 @@ function Tree(props: SidebarProps) {
                 {...props}
                 // Dev servers live in the Dev panel, not as sidebar tabs.
                 sessions={pSessions.filter((s) => s.kind !== "dev")}
-                activeId={activeByProject[p.id] ?? null}
+                // Only the active project's session is on screen, so it is the
+                // only one that may read as selected.
+                activeId={active ? activeByProject[p.id] ?? null : null}
                 projectId={p.id}
               />
             )}
