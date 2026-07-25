@@ -242,8 +242,6 @@ function SessionList({
           >
             {s.kind === "agent" ? (
               <Bot className="size-4 shrink-0 opacity-70" />
-            ) : s.kind === "settings" ? (
-              <SlidersHorizontal className="size-4 shrink-0 opacity-70" />
             ) : (
               <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
             )}

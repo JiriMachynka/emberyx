@@ -19,7 +19,7 @@ export interface Session {
   label: string;
   cwd: string;
   command?: string;
-  kind: "agent" | "dev" | "chat" | "dokploy-logs" | "editor" | "settings";
+  kind: "agent" | "dev" | "chat" | "dokploy-logs";
   /** Stable key for cross-restart scrollback restore; only the project's
    *  primary agent sets it, so secondary/dev panes never share its log. */
   persistKey?: string;

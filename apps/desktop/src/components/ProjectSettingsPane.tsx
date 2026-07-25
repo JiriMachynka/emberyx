@@ -4,12 +4,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/SettingsFields";
 import { basename } from "@/lib/path";
-import { projectLabel } from "@/lib/worktree";
 import type { Project } from "@/types";
 
 interface ProjectSettingsPaneProps {
   project: Project;
-  active: boolean;
   /** Per-project custom dev command; overrides workspace detection when set. */
   devCommand: string;
   onSetDevCommand: (command: string) => void;
@@ -44,127 +42,119 @@ export function ProjectSettingsPane({
   };
 
   return (
-    <div className="flex h-full w-full flex-col overflow-hidden rounded-md border bg-background">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-        <span className="flex-1 truncate text-xs font-medium text-muted-foreground">
-          {projectLabel(project)} · settings
-        </span>
-      </div>
+    <div className="grid min-h-0 flex-1 content-start gap-6 overflow-auto p-4">
+      <section className="grid gap-3">
+        <div className="text-sm font-semibold">Dev command</div>
+        <Field
+          label="Custom command"
+          hint="Runs at the project root instead of the detected packages. Leave blank to fall back to workspace detection."
+        >
+          <Input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit();
+            }}
+            placeholder="e.g. turbo run dev --filter=web"
+            spellCheck={false}
+          />
+        </Field>
+      </section>
 
-      <div className="grid content-start gap-6 overflow-auto p-4">
-        <section className="grid gap-3">
-          <div className="text-sm font-semibold">Dev command</div>
-          <Field
-            label="Custom command"
-            hint="Runs at the project root instead of the detected packages. Leave blank to fall back to workspace detection."
-          >
-            <Input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onBlur={commit}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commit();
-              }}
-              placeholder="e.g. turbo run dev --filter=web"
-              spellCheck={false}
-            />
-          </Field>
-        </section>
-
-        <section className="grid gap-3 border-t pt-4">
-          <div className="flex items-center gap-2">
-            <div className="flex-1 text-sm font-semibold">Dokploy</div>
-            <Button variant="outline" size="sm" onClick={onRefreshDokploy}>
-              <RotateCw className="size-3.5" />
-              Refresh
-            </Button>
-          </div>
-          {!dokployConfigured ? (
-            <p className="text-xs text-muted-foreground">
-              Set a Dokploy server URL and API key in global Settings →
-              Integrations, then refresh to match this project by git remote.
-            </p>
-          ) : !dokploy ? (
-            <p className="text-xs text-muted-foreground">
-              No Dokploy project matched this repo's git remote.
-            </p>
-          ) : (
-            <div className="grid gap-2">
-              <div className="text-sm">
-                <span className="font-medium">{dokploy.projectName}</span>
-                <span className="text-muted-foreground">
-                  {" "}
-                  · matched via {dokploy.matchedService}
-                </span>
-              </div>
-              <ul className="grid gap-1">
-                {dokploy.services.map((s) => (
-                  <li
-                    key={`${s.kind}:${s.name}`}
-                    className="flex items-center gap-2 rounded border px-2 py-1.5 text-sm"
-                  >
-                    <span className="flex-1 truncate">{s.name}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {s.kind}
+      <section className="grid gap-3 border-t pt-4">
+        <div className="flex items-center gap-2">
+          <div className="flex-1 text-sm font-semibold">Dokploy</div>
+          <Button variant="outline" size="sm" onClick={onRefreshDokploy}>
+            <RotateCw className="size-3.5" />
+            Refresh
+          </Button>
+        </div>
+        {!dokployConfigured ? (
+          <p className="text-xs text-muted-foreground">
+            Set a Dokploy server URL and API key in global Settings →
+            Integrations, then refresh to match this project by git remote.
+          </p>
+        ) : !dokploy ? (
+          <p className="text-xs text-muted-foreground">
+            No Dokploy project matched this repo's git remote.
+          </p>
+        ) : (
+          <div className="grid gap-2">
+            <div className="text-sm">
+              <span className="font-medium">{dokploy.projectName}</span>
+              <span className="text-muted-foreground">
+                {" "}
+                · matched via {dokploy.matchedService}
+              </span>
+            </div>
+            <ul className="grid gap-1">
+              {dokploy.services.map((s) => (
+                <li
+                  key={`${s.kind}:${s.name}`}
+                  className="flex items-center gap-2 rounded border px-2 py-1.5 text-sm"
+                >
+                  <span className="flex-1 truncate">{s.name}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {s.kind}
+                  </span>
+                  {s.status && (
+                    <span className="rounded bg-secondary px-1 py-px text-xs text-muted-foreground">
+                      {s.status}
                     </span>
-                    {s.status && (
-                      <span className="rounded bg-secondary px-1 py-px text-xs text-muted-foreground">
-                        {s.status}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </section>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
 
-        <section className="grid gap-3 border-t pt-4">
-          <div className="text-sm font-semibold">Worktree</div>
-          {worktree ? (
-            <div className="grid gap-2">
-              <div className="flex items-center gap-2 text-sm">
-                <GitBranch className="size-4 shrink-0 opacity-70" />
-                <span className="font-medium">{worktree.branch}</span>
-                <span className="truncate text-xs text-muted-foreground">
-                  {project.path}
-                </span>
-              </div>
-              <div className="text-xs text-muted-foreground">
-                Main checkout: {basename(worktree.repoRoot)}
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    onOpenWorktree(
-                      project.path,
-                      worktree.repoRoot,
-                      worktree.branch
-                    )
-                  }
-                >
-                  Open
-                </Button>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={() =>
-                    void onRemoveWorktree(project.path, worktree.repoRoot)
-                  }
-                >
-                  Remove worktree
-                </Button>
-              </div>
+      <section className="grid gap-3 border-t pt-4">
+        <div className="text-sm font-semibold">Worktree</div>
+        {worktree ? (
+          <div className="grid gap-2">
+            <div className="flex items-center gap-2 text-sm">
+              <GitBranch className="size-4 shrink-0 opacity-70" />
+              <span className="font-medium">{worktree.branch}</span>
+              <span className="truncate text-xs text-muted-foreground">
+                {project.path}
+              </span>
             </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              This project is the main checkout, not a worktree.
-            </p>
-          )}
-        </section>
-      </div>
+            <div className="text-xs text-muted-foreground">
+              Main checkout: {basename(worktree.repoRoot)}
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  onOpenWorktree(
+                    project.path,
+                    worktree.repoRoot,
+                    worktree.branch
+                  )
+                }
+              >
+                Open
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() =>
+                  void onRemoveWorktree(project.path, worktree.repoRoot)
+                }
+              >
+                Remove worktree
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            This project is the main checkout, not a worktree.
+          </p>
+        )}
+      </section>
     </div>
   );
 }

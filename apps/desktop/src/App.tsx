@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Toaster } from "sonner";
+import { SlidersHorizontal } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SessionPanes } from "@/components/SessionPanes";
+import { SidePanel } from "@/components/SidePanel";
+import { ProjectSettingsPane } from "@/components/ProjectSettingsPane";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { AgentPanel } from "@/components/AgentPanel";
 import { ChangesPanel } from "@/components/ChangesPanel";
@@ -19,10 +22,16 @@ import { useSettings, isClaudeAgent } from "@/lib/settings";
 import { useAgentStore, selectUnreadCount } from "@/lib/agentStore";
 import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
 import { requestSearch } from "@/lib/searchRequest";
+import { projectLabel } from "@/lib/worktree";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useDevServers } from "@/hooks/useDevServers";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { useLaunchUpdateCheck } from "@/hooks/useLaunchUpdateCheck";
+
+// CodeMirror is a big chunk; only sessions that open the editor pay for it.
+const EditorPane = lazy(() =>
+  import("@/components/EditorPane").then((m) => ({ default: m.EditorPane }))
+);
 
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -32,6 +41,11 @@ function App() {
   const [usageOpen, setUsageOpen] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  // Once opened the editor stays mounted and is merely hidden, so open buffers,
+  // scroll position and undo history survive closing it.
+  const [editorMounted, setEditorMounted] = useState(false);
   // Keep the Changes panel mounted while its exit animation plays (~200ms).
   const [changesClosing, setChangesClosing] = useState(false);
   const [sidebarCollapsed, setCollapsed] = useState<boolean>(getSidebarCollapsed);
@@ -97,14 +111,31 @@ function App() {
 
   const openProjectSettings = () => {
     if (!activeProject) return;
-    ws.startSettings(activeProject.id, activeProject.path);
+    setProjectSettingsOpen(true);
+  };
+
+  const openEditor = () => {
+    if (!activeProject) return;
+    setEditorMounted(true);
+    setEditorOpen(true);
   };
 
   const openSearch = () => {
-    if (!activeProject) return;
+    // requestSearch first: a mounting editor consumes the pending flag, an
+    // already-open one gets the event.
     requestSearch();
-    ws.startEditor(activeProject.id, activeProject.path);
+    openEditor();
   };
+
+  // Esc closes the editor overlay, unless a child (the file finder) claimed it.
+  useEffect(() => {
+    if (!editorOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !e.defaultPrevented) setEditorOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [editorOpen]);
 
   useShortcuts({
     onOpen: ws.pickProject,
@@ -187,7 +218,8 @@ function App() {
           onOpenUsage={() => setUsageOpen(true)}
           onOpenSlash={() => setSlashOpen(true)}
           onOpenEditor={() => {
-            if (activeProject) ws.startEditor(activeProject.id, activeProject.path);
+            if (editorOpen) setEditorOpen(false);
+            else openEditor();
           }}
           onRefreshDokploy={() => {
             if (activeProject) dokploy.refresh(activeProject.id, activeProject.path);
@@ -213,24 +245,33 @@ function App() {
                 revealed tab. */}
             <SessionPanes
               sessions={sessions}
-              projects={projects}
               activeId={activeId}
               settings={settings}
               onTitled={(session, title) => {
                 ws.renameSession(session.id, title);
                 ws.refreshThreads(session.projectId, session.cwd, true);
               }}
-              projectSettings={{
-                devCommand: dev.customCommand,
-                onSetDevCommand: dev.setCustomCommand,
-                onRefreshDokploy: () => {
-                  if (activeProject)
-                    dokploy.refresh(activeProject.id, activeProject.path);
-                },
-                onOpenWorktree: ws.openWorktree,
-                onRemoveWorktree: ws.removeWorktree,
-              }}
             />
+            {/* The editor is an overlay, not a tab: it covers the active pane
+                while open and keeps its buffers when hidden. */}
+            {activeProject && editorMounted && (
+              <div
+                className={cn(
+                  "absolute inset-1 overflow-hidden rounded-md border bg-background",
+                  editorOpen ? "" : "hidden"
+                )}
+              >
+                <Suspense fallback={null}>
+                  <EditorPane
+                    key={activeProject.path}
+                    projectPath={activeProject.path}
+                    fontFamily={settings.editorFontFamily}
+                    fontSize={settings.editorFontSize}
+                    active={editorOpen}
+                  />
+                </Suspense>
+              </div>
+            )}
             {!revealed && (
               <div className="canvas-lit absolute inset-0">
                 <WelcomeScreen
@@ -271,6 +312,33 @@ function App() {
                 onRemoveWorktree={ws.removeWorktree}
               />
             </div>
+          )}
+          {activeProject && projectSettingsOpen && (
+            <SidePanel
+              storageKey="projectSettings"
+              onClose={() => setProjectSettingsOpen(false)}
+              header={
+                <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+                  <SlidersHorizontal className="size-4 shrink-0" />
+                  <span className="truncate">{projectLabel(activeProject)}</span>
+                </div>
+              }
+            >
+              <ProjectSettingsPane
+                key={activeProject.id}
+                project={activeProject}
+                devCommand={dev.customCommand}
+                onSetDevCommand={dev.setCustomCommand}
+                onRefreshDokploy={() =>
+                  dokploy.refresh(activeProject.id, activeProject.path)
+                }
+                onOpenWorktree={ws.openWorktree}
+                onRemoveWorktree={ws.removeWorktree}
+                dokployConfigured={Boolean(
+                  settings.dokployUrl && settings.dokployApiKey
+                )}
+              />
+            </SidePanel>
           )}
           {notificationsOpen && (
             <NotificationPanel
