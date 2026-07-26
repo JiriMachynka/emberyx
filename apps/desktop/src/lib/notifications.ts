@@ -1,6 +1,19 @@
 const KEY = "emberyx.notifications";
 
-export type NotificationKind = "done" | "needs-input" | "error";
+export type NotificationKind =
+  | "done"
+  | "needs-input"
+  | "error"
+  | "rate-limited"
+  | "logged-out";
+
+const KINDS: readonly NotificationKind[] = [
+  "done",
+  "needs-input",
+  "error",
+  "rate-limited",
+  "logged-out",
+];
 
 export interface AppNotification {
   id: string;
@@ -24,7 +37,7 @@ const isNotification = (value: unknown): value is AppNotification => {
     typeof n.id === "string" &&
     typeof n.session === "string" &&
     typeof n.time === "number" &&
-    (n.kind === "done" || n.kind === "needs-input" || n.kind === "error")
+    KINDS.includes(n.kind as NotificationKind)
   );
 };
 

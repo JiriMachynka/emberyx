@@ -7,6 +7,7 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import { statusForEvent } from "@/lib/status";
+import { classify, issueTitle, resetLabel } from "@/lib/accountState";
 import { parseChange } from "@/lib/changes";
 import { basename } from "@/lib/path";
 import { useAgentStore } from "@/lib/agentStore";
@@ -28,6 +29,12 @@ export async function notifyNative(
 ): Promise<void> {
   if (kind === "done" && !settings.notifyOnDone) return;
   if (kind === "error" && !settings.notifyOnError) return;
+  if (
+    (kind === "rate-limited" || kind === "logged-out") &&
+    !settings.notifyOnAccountIssue
+  ) {
+    return;
+  }
   if (settings.notifyOnlyWhenUnfocused && document.hasFocus()) return;
   if (!(await isPermissionGranted())) return;
   sendNotification({
@@ -78,11 +85,16 @@ export function useAgentEvents(
 
       // Remember the transcript path so we can compute token usage. Present on
       // every hook payload, so capture it before any status early-return.
+      let message: string | undefined;
       try {
-        const raw = JSON.parse(payload.payload) as { transcript_path?: string };
+        const raw = JSON.parse(payload.payload) as {
+          transcript_path?: string;
+          message?: string;
+        };
         if (raw.transcript_path) {
           transcripts.current[payload.session] = raw.transcript_path;
         }
+        message = raw.message;
       } catch {
         /* payload not JSON */
       }
@@ -97,7 +109,30 @@ export function useAgentEvents(
         }
       }
 
-      const status = statusForEvent(payload.event);
+      // The hook path is the only signal a terminal session gives us, so an
+      // account block has to be recognised here too — it reads as a plain
+      // Notification otherwise.
+      const issue = message ? classify(message) : null;
+      if (issue) {
+        const s = resolveRef.current(payload.session);
+        store.reportAccountIssue(payload.session, issue);
+        const kind = issue.kind === "rate_limit" ? "rate-limited" : "logged-out";
+        const title = issueTitle(issue);
+        const reset = resetLabel(issue);
+        const body = reset ? `${issue.message} — ${reset}` : issue.message;
+        store.pushNotification({
+          session: payload.session,
+          project: s ? basename(s.cwd) : "Claude",
+          kind,
+          title,
+          body,
+        });
+        if (!document.hasFocus()) pendingAttention.current = payload.session;
+        void notifyNative(loadSettings(), kind, title, body);
+        return;
+      }
+
+      const status = statusForEvent(payload.event, message);
       if (!status) return;
       store.setStatus(payload.session, status);
 

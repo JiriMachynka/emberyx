@@ -1,13 +1,24 @@
+import { classify } from "@/lib/accountState";
 import type { SessionStatus } from "@/types";
 
-/** Map a Claude Code hook event name to an agent status. */
-export function statusForEvent(event: string): SessionStatus | null {
+/**
+ * Map a Claude Code hook event name to an agent status.
+ *
+ * @param message the Notification hook's own message, when there is one. A
+ * usage limit or a lost login also arrives as a Notification, and neither is
+ * the agent waiting on the user — those carry no status, so the session keeps
+ * the one it had and the account banner speaks instead.
+ */
+export function statusForEvent(
+  event: string,
+  message?: string
+): SessionStatus | null {
   switch (event) {
     case "UserPromptSubmit":
     case "SubagentStop":
       return "working";
     case "Notification":
-      return "waiting";
+      return message && classify(message) ? null : "waiting";
     case "Stop":
       return "idle";
     default:

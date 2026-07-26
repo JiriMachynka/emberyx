@@ -178,6 +178,15 @@ export function SettingsDialog({
               </Toggle>
 
               <Toggle
+                checked={settings.notifyOnAccountIssue}
+                onChange={(v) => onUpdate({ notifyOnAccountIssue: v })}
+                title="Notify on account issues"
+              >
+                Raise a notification when the usage limit is hit or the login
+                expires.
+              </Toggle>
+
+              <Toggle
                 checked={settings.notifyOnlyWhenUnfocused}
                 onChange={(v) => onUpdate({ notifyOnlyWhenUnfocused: v })}
                 title="Only when app is unfocused"

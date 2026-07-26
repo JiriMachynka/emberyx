@@ -33,9 +33,9 @@ const SESSION: Session = {
   kind: "chat",
 };
 
-const emit = (event: string) =>
+const emit = (event: string, message?: string) =>
   listeners.forEach((fn) =>
-    fn({ session: "s1", event, payload: JSON.stringify({}) })
+    fn({ session: "s1", event, payload: JSON.stringify({ message }) })
   );
 
 const mount = () =>
@@ -47,7 +47,7 @@ beforeEach(() => {
   listeners.length = 0;
   sent.length = 0;
   localStorage.clear();
-  useAgentStore.setState({ notifications: [] });
+  useAgentStore.setState({ notifications: [], statuses: {}, accountIssue: null });
 });
 
 describe("useAgentEvents notifications", () => {
@@ -74,6 +74,34 @@ describe("useAgentEvents notifications", () => {
     const [n] = useAgentStore.getState().notifications;
     expect(n.kind).toBe("needs-input");
     expect(n.title).toBe("emberyx — needs you");
+  });
+
+  it("reports a usage limit instead of treating it as needs-input", async () => {
+    mount();
+    await waitFor(() => expect(listeners).toHaveLength(1));
+
+    emit("Notification", "Claude usage limit reached. Resets at 3pm.");
+
+    const state = useAgentStore.getState();
+    expect(state.accountIssue?.kind).toBe("rate_limit");
+    expect(state.notifications[0].kind).toBe("rate-limited");
+    // The session keeps the status it had — nothing here is waiting on the user.
+    expect(state.statuses.s1).toBeUndefined();
+  });
+
+  it("skips the OS notification for an account issue when the setting is off", async () => {
+    localStorage.setItem(
+      "emberyx.settings",
+      JSON.stringify({ notifyOnAccountIssue: false })
+    );
+    mount();
+    await waitFor(() => expect(listeners).toHaveLength(1));
+
+    emit("Notification", "Invalid API key · Please run /login");
+
+    expect(useAgentStore.getState().notifications).toHaveLength(1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toHaveLength(0);
   });
 
   it("stays silent for SubagentStop", async () => {

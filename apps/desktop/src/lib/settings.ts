@@ -36,6 +36,8 @@ export interface Settings {
   notifyOnDone: boolean;
   /** Notify when an agent run ends in an error. */
   notifyOnError: boolean;
+  /** Notify when the account is blocked — usage limit reached or signed out. */
+  notifyOnAccountIssue: boolean;
   /** Only raise OS notifications while the window is unfocused. */
   notifyOnlyWhenUnfocused: boolean;
   /** Play the system sound with OS notifications. */
@@ -61,6 +63,7 @@ export const DEFAULT_SETTINGS: Settings = {
   openRouterModel: "",
   notifyOnDone: true,
   notifyOnError: true,
+  notifyOnAccountIssue: true,
   notifyOnlyWhenUnfocused: false,
   notifySound: false,
 };

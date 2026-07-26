@@ -38,6 +38,7 @@ describe("useSettings", () => {
     const { result } = renderHook(() => useSettings());
     expect(result.current.settings.notifyOnDone).toBe(true);
     expect(result.current.settings.notifyOnError).toBe(true);
+    expect(result.current.settings.notifyOnAccountIssue).toBe(true);
     expect(result.current.settings.notifyOnlyWhenUnfocused).toBe(false);
     expect(result.current.settings.notifySound).toBe(false);
   });

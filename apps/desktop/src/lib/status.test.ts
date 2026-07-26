@@ -13,6 +13,29 @@ describe("statusForEvent", () => {
     expect(statusForEvent("Stop")).toBe("idle");
   });
 
+  it("still waits for a notification whose message is an ordinary prompt", () => {
+    expect(statusForEvent("Notification", "Claude needs your permission")).toBe(
+      "waiting"
+    );
+    expect(statusForEvent("Notification", "")).toBe("waiting");
+  });
+
+  it("carries no status for a notification that is an account block", () => {
+    expect(
+      statusForEvent("Notification", "Claude usage limit reached. Resets 3pm.")
+    ).toBeNull();
+    expect(
+      statusForEvent("Notification", "Invalid API key · Please run /login")
+    ).toBeNull();
+  });
+
+  it("only inspects the message of a notification", () => {
+    expect(statusForEvent("Stop", "usage limit reached")).toBe("idle");
+    expect(statusForEvent("UserPromptSubmit", "usage limit reached")).toBe(
+      "working"
+    );
+  });
+
   it("returns null for events that carry no status", () => {
     expect(statusForEvent("PostToolUse")).toBeNull();
     expect(statusForEvent("")).toBeNull();

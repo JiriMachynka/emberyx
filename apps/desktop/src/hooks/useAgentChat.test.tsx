@@ -59,6 +59,15 @@ const textTurn = (emit: Emit, ...chunks: string[]) => {
   emit({ type: "stream_event", event: { type: "message_stop" } });
 };
 
+/** Streamed draft/usage updates are published once per animation frame, so a
+ *  mid-turn assertion has to let one pass first. */
+const frame = () =>
+  act(async () => {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+
 const sentTo = (command: string) =>
   invoke.mock.calls.filter(([name]) => name === command);
 
@@ -147,6 +156,7 @@ describe("useAgentChat streaming", () => {
         delta: { type: "text_delta", text: "par" },
       },
     });
+    await frame();
     expect(result.current.messages[0]).toMatchObject({
       text: "par",
       streaming: true,
@@ -813,9 +823,11 @@ describe("useAgentChat subagents", () => {
     });
     expect(run().endedAt).toBeUndefined();
 
-    // The turn's result closes it out.
+    // The turn's result only marks it eligible to settle; the idle grace period
+    // (settleSubagents) is what actually ends a background run.
     emit({ type: "result", subtype: "success", usage: {} });
-    expect(run().endedAt).toBeGreaterThan(0);
+    expect(run().turnEndedAt).toBeGreaterThan(0);
+    expect(run().endedAt).toBeUndefined();
   });
 
   it("keeps subagent turns out of the transcript", async () => {
@@ -877,6 +889,7 @@ describe("useAgentChat live usage", () => {
         message: { model: "claude-opus-4-8", usage: { input_tokens: 900, output_tokens: 1 } },
       },
     });
+    await frame();
     expect(result.current.usage).toMatchObject({ inputTokens: 900, outputTokens: 1 });
   });
 
@@ -887,6 +900,7 @@ describe("useAgentChat live usage", () => {
       event: { type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } },
     });
     emit({ type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 64 } } });
+    await frame();
     expect(result.current.usage.outputTokens).toBe(64);
   });
 
@@ -923,6 +937,7 @@ describe("useAgentChat live usage", () => {
       type: "stream_event",
       event: { type: "message_start", message: { usage: { input_tokens: 7 } } },
     });
+    await frame();
     expect(result.current.usage).toMatchObject({ inputTokens: 7, outputTokens: 0 });
   });
 

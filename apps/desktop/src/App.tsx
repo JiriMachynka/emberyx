@@ -17,6 +17,7 @@ import { UsagePanel } from "@/components/UsagePanel";
 import { SlashCommandsPanel } from "@/components/SlashCommandsPanel";
 import { WelcomeScreen } from "@/components/WelcomeScreen";
 import { AttentionBanner } from "@/components/AttentionBanner";
+import { AccountBanner } from "@/components/AccountBanner";
 import { cn } from "@/lib/utils";
 import { useSettings, isClaudeAgent } from "@/lib/settings";
 import { useAgentStore, selectUnreadCount } from "@/lib/agentStore";
@@ -107,6 +108,19 @@ function App() {
   const jumpToSession = (sessionId: string) => {
     const target = sessions.find((s) => s.id === sessionId);
     if (target) ws.activateSession(target.projectId, target.id);
+  };
+
+  // Signing in is interactive (browser hand-off, then a code pasted back), so
+  // it runs in a real terminal tab. `/login` is a REPL slash command that can't
+  // be reached from outside the pane; `claude auth login` is the same flow as a
+  // command. The binary comes from the configured agent command so a wrapper or
+  // absolute path still resolves.
+  const startLogin = () => {
+    if (!activeProject) return;
+    const bin = isClaudeAgent(settings.agentCommand)
+      ? settings.agentCommand.split(" ")[0]
+      : "claude";
+    ws.startAgent(activeProject.id, activeProject.path, `${bin} auth login`, "login");
   };
 
   const openProjectSettings = () => {
@@ -229,6 +243,8 @@ function App() {
             if (activeProject) dokploy.viewLogs(activeProject, service);
           }}
         />
+
+        <AccountBanner onLogin={activeProject ? startLogin : undefined} />
 
         {agent && activeProjectId && (
           <AttentionBanner

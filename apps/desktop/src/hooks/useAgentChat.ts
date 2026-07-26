@@ -2,6 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAgentStore, type SubagentActivity } from "@/lib/agentStore";
+import {
+  classifyFailure,
+  issueTitle,
+  resetLabel,
+  type AccountIssue,
+} from "@/lib/accountState";
 import { describeTool } from "@/lib/toolDisplay";
 import { notifyNative } from "@/hooks/useAgentEvents";
 import { loadSettings } from "@/lib/settings";
@@ -10,6 +16,8 @@ import { basename } from "@/lib/path";
 /** A stream-json line from the headless `claude` process (Rust AgentEvent). */
 type AgentEvent =
   | { type: "line"; data: string }
+  /** Several stdout lines coalesced by the Rust forwarder into one IPC message. */
+  | { type: "lines"; data: string[] }
   | { type: "stderr"; data: string }
   | { type: "exit"; data: number | null };
 
@@ -110,6 +118,10 @@ interface Options {
 
 let counter = 0;
 const localId = () => `m${++counter}`;
+
+/** Rolling stderr kept per spawn — enough tail to classify a failure without
+ *  holding a chatty run's whole output. */
+const STDERR_CAP = 8192;
 
 /**
  * Parse a Claude Code transcript (`.jsonl`) into the chat message model, so a
@@ -305,6 +317,8 @@ export function useAgentChat({
     active: false,
   });
   const [ready, setReady] = useState(false);
+  // Bumped by `restart` to re-run the spawn effect for the same target.
+  const [attempt, setAttempt] = useState(0);
   const [pendingPermission, setPendingPermission] =
     useState<PendingPermission | null>(null);
   // Mirror of pendingPermission for reads inside callbacks without stale closures.
@@ -326,6 +340,8 @@ export function useAgentChat({
   const endSubagent = useAgentStore((st) => st.endSubagent);
   const endOpenSubagents = useAgentStore((st) => st.endOpenSubagents);
   const pushNotification = useAgentStore((st) => st.pushNotification);
+  const reportAccountIssue = useAgentStore((st) => st.reportAccountIssue);
+  const clearAccountIssue = useAgentStore((st) => st.clearAccountIssue);
 
   // Turns typed while the agent was busy, oldest first, plus its rendered count.
   const queueRef = useRef<{ text: string; images?: ChatImage[] }[]>([]);
@@ -345,42 +361,32 @@ export function useAgentChat({
   const onTitledRef = useRef(onTitled);
   onTitledRef.current = onTitled;
 
-  const flushDraft = useCallback(() => {
-    const draft = draftRef.current;
-    if (!draft) return;
-    const finalized = { ...draft, streaming: false };
-    draftRef.current = null;
-    blockToolRef.current = {};
-    // pushDraft already inserted this draft (by id) during streaming, so replace
-    // it in place — appending would duplicate the message and collide on key.
-    setMessages((prev) => {
-      const i = prev.findIndex((m) => m.id === finalized.id);
-      if (i === -1) {
-        const empty =
-          !finalized.text && !finalized.thinking && finalized.tools.length === 0;
-        return empty ? prev : [...prev, finalized];
-      }
-      const next = prev.slice();
-      next[i] = finalized;
-      return next;
-    });
-  }, []);
+  // The draft is mutated on every token but published to React at most once per
+  // animation frame; these track what a frame still owes and the frame itself.
+  const frameRef = useRef<number | null>(null);
+  const draftDirtyRef = useRef(false);
+  const usageDirtyRef = useRef(false);
+  // Last published copy of each live tool, keyed by tool_use id. Downstream
+  // memoisation compares tool identity, so unchanged tools must keep theirs.
+  const toolSnapsRef = useRef<Map<string, ToolCall>>(new Map());
 
-  const pushDraft = useCallback((patch: (d: ChatMessage) => void) => {
-    const draft = draftRef.current;
-    if (!draft) return;
-    patch(draft);
-    // Re-render with the live draft appended so text streams into the UI.
-    setMessages((prev) => {
-      const next = prev.slice();
-      const i = next.findIndex((m) => m.id === draft.id);
-      const snapshot = {
-        ...draft,
-        tools: draft.tools.map((t) => ({ ...t })),
-      };
-      if (i === -1) next.push(snapshot);
-      else next[i] = snapshot;
-      return next;
+  const snapshotTools = useCallback((draft: ChatMessage): ToolCall[] => {
+    const snaps = toolSnapsRef.current;
+    return draft.tools.map((t) => {
+      const prev = snaps.get(t.id);
+      if (
+        prev &&
+        prev.name === t.name &&
+        prev.input === t.input &&
+        prev.partial === t.partial &&
+        prev.result === t.result &&
+        prev.isError === t.isError
+      ) {
+        return prev;
+      }
+      const copy = { ...t };
+      snaps.set(t.id, copy);
+      return copy;
     });
   }, []);
 
@@ -396,6 +402,114 @@ export function useAgentChat({
         : { ...u, inputTokens, outputTokens }
     );
   }, []);
+
+  const cancelFrame = useCallback(() => {
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+  }, []);
+
+  /** Publish everything the pending frame owed, right now. */
+  const flushPending = useCallback(() => {
+    cancelFrame();
+    if (draftDirtyRef.current) {
+      draftDirtyRef.current = false;
+      const draft = draftRef.current;
+      if (draft) {
+        const snapshot = { ...draft, tools: snapshotTools(draft) };
+        setMessages((prev) => {
+          const i = prev.findIndex((m) => m.id === draft.id);
+          if (i === -1) return [...prev, snapshot];
+          const next = prev.slice();
+          next[i] = snapshot;
+          return next;
+        });
+      }
+    }
+    if (usageDirtyRef.current) {
+      usageDirtyRef.current = false;
+      publishTurnUsage();
+    }
+  }, [cancelFrame, snapshotTools, publishTurnUsage]);
+
+  const scheduleFlush = useCallback(() => {
+    if (frameRef.current !== null) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null;
+      flushPending();
+    });
+  }, [flushPending]);
+
+  const flushDraft = useCallback(() => {
+    const draft = draftRef.current;
+    if (!draft) return;
+    // This finalize supersedes any queued frame's draft snapshot.
+    cancelFrame();
+    draftDirtyRef.current = false;
+    if (usageDirtyRef.current) {
+      usageDirtyRef.current = false;
+      publishTurnUsage();
+    }
+    const finalized = { ...draft, streaming: false, tools: snapshotTools(draft) };
+    draftRef.current = null;
+    blockToolRef.current = {};
+    toolSnapsRef.current.clear();
+    // pushDraft already inserted this draft (by id) during streaming, so replace
+    // it in place — appending would duplicate the message and collide on key.
+    setMessages((prev) => {
+      const i = prev.findIndex((m) => m.id === finalized.id);
+      if (i === -1) {
+        const empty =
+          !finalized.text && !finalized.thinking && finalized.tools.length === 0;
+        return empty ? prev : [...prev, finalized];
+      }
+      const next = prev.slice();
+      next[i] = finalized;
+      return next;
+    });
+  }, [cancelFrame, publishTurnUsage, snapshotTools]);
+
+  const pushDraft = useCallback(
+    (patch: (d: ChatMessage) => void) => {
+      const draft = draftRef.current;
+      if (!draft) return;
+      patch(draft);
+      draftDirtyRef.current = true;
+      scheduleFlush();
+    },
+    [scheduleFlush]
+  );
+
+  const scheduleUsage = useCallback(() => {
+    usageDirtyRef.current = true;
+    scheduleFlush();
+  }, [scheduleFlush]);
+
+  // A queued frame can only render into a live component; drop it on unmount.
+  useEffect(() => cancelFrame, [cancelFrame]);
+
+  /** Record an account-level failure and announce it in the generic error's
+   *  place — "usage limit reached" is actionable, "ended with an error" isn't. */
+  const announceIssue = useCallback(
+    (issue: AccountIssue) => {
+      reportAccountIssue(emberyxSessionId, issue);
+      const kind = issue.kind === "rate_limit" ? "rate-limited" : "logged-out";
+      const title = issueTitle(issue);
+      const reset = resetLabel(issue);
+      const body = reset ? `${issue.message} — ${reset}` : issue.message;
+      const settings = loadSettings();
+      pushNotification({
+        session: emberyxSessionId,
+        project: basename(cwd),
+        kind,
+        title,
+        body,
+      });
+      void notifyNative(settings, kind, title, body);
+    },
+    [cwd, emberyxSessionId, pushNotification, reportAccountIssue]
+  );
 
   const handleLine = useCallback(
     (raw: string) => {
@@ -459,7 +573,7 @@ export function useAgentChat({
           const mu = message?.usage as Record<string, number> | undefined;
           t.curInput = mu?.input_tokens ?? 0;
           t.curOutput = mu?.output_tokens ?? 0;
-          publishTurnUsage();
+          scheduleUsage();
           setStatus("thinking");
         } else if (evType === "content_block_start") {
           const index = ev.index as number;
@@ -518,7 +632,7 @@ export function useAgentChat({
           const t = turnUsageRef.current;
           if (mu?.output_tokens != null) t.curOutput = mu.output_tokens;
           if (mu?.input_tokens != null) t.curInput = mu.input_tokens;
-          publishTurnUsage();
+          scheduleUsage();
         } else if (evType === "message_stop") {
           const t = turnUsageRef.current;
           t.inputDone += t.curInput;
@@ -607,29 +721,43 @@ export function useAgentChat({
           inputTokens,
           outputTokens,
         }));
+        // `result` is authoritative — drop the tally a queued frame would restate.
+        usageDirtyRef.current = false;
         t.active = false;
         t.inputDone = 0;
         t.outputDone = 0;
         t.curInput = 0;
         t.curOutput = 0;
-        const failed = msg.subtype === "error";
+        // The CLI names the failure ("error_max_turns", "error_during_execution"),
+        // it never emits a bare "error".
+        const subtype = msg.subtype;
+        const failed = typeof subtype === "string" && subtype.startsWith("error");
         setStatus(failed ? "error" : "idle");
         // Only the failure is announced here; the Stop hook covers success.
         if (failed) {
-          const project = basename(cwd);
-          const title = `${project} — error`;
-          const body = "The agent run ended with an error";
-          const settings = loadSettings();
-          if (settings.notifyOnError) {
-            pushNotification({
-              session: emberyxSessionId,
-              project,
-              kind: "error",
-              title,
-              body,
-            });
+          const detail = typeof msg.result === "string" ? msg.result : "";
+          const issue = classifyFailure(detail, "result");
+          if (issue) {
+            announceIssue(issue);
+          } else {
+            const project = basename(cwd);
+            const title = `${project} — error`;
+            const body = "The agent run ended with an error";
+            const settings = loadSettings();
+            if (settings.notifyOnError) {
+              pushNotification({
+                session: emberyxSessionId,
+                project,
+                kind: "error",
+                title,
+                body,
+              });
+            }
+            void notifyNative(settings, "error", title, body);
           }
-          void notifyNative(settings, "error", title, body);
+        } else {
+          // A completed turn is the only proof the account works again.
+          clearAccountIssue();
         }
         // The turn is over — resolve any background runs still marked open,
         // since they never get a per-completion signal.
@@ -640,7 +768,7 @@ export function useAgentChat({
     [
       flushDraft,
       pushDraft,
-      publishTurnUsage,
+      scheduleUsage,
       emberyxSessionId,
       cwd,
       startSubagent,
@@ -648,6 +776,8 @@ export function useAgentChat({
       endSubagent,
       endOpenSubagents,
       pushNotification,
+      announceIssue,
+      clearAccountIssue,
     ]
   );
 
@@ -685,12 +815,35 @@ export function useAgentChat({
   useEffect(() => {
     let disposed = false;
     const channel = new Channel<AgentEvent>();
+    // Chunks arrive split mid-line, so the buffer — not the chunk — is what gets
+    // classified, and only the first hit per spawn is announced.
+    let stderr = "";
+    let announced = false;
+    const checkStderr = () => {
+      if (announced) return;
+      const issue = classifyFailure(stderr, "stderr");
+      if (!issue) return;
+      announced = true;
+      announceIssue(issue);
+    };
     channel.onmessage = (ev) => {
       // Ignore late events from a torn-down effect (StrictMode double-mount kills
       // the first agent; its Exit must not flip the live session to "exited").
       if (disposed) return;
       if (ev.type === "line") handleLine(ev.data);
-      else if (ev.type === "exit") setStatus("exited");
+      else if (ev.type === "lines") for (const line of ev.data) handleLine(line);
+      else if (ev.type === "stderr") {
+        stderr = (stderr + ev.data).slice(-STDERR_CAP);
+        checkStderr();
+      } else if (ev.type === "exit") {
+        setStatus("exited");
+        // Nothing is left to answer them: a prompt outliving its process would
+        // replace the composer permanently.
+        setPending(null);
+        setPendingAsk(null);
+        // A crash often says why only on stderr, and never reaches `result`.
+        if (ev.data !== 0) checkStderr();
+      }
     };
 
     void (async () => {
@@ -714,6 +867,8 @@ export function useAgentChat({
       } catch (e) {
         console.error("[emberyx] agent_spawn failed", e);
         setStatus("error");
+        setPending(null);
+        setPendingAsk(null);
       }
     })();
 
@@ -725,13 +880,34 @@ export function useAgentChat({
         idRef.current = null;
       }
     };
-  }, [cwd, resume, permissionMode, skipPermissions, emberyxSessionId, handleLine]);
+  }, [
+    cwd,
+    resume,
+    permissionMode,
+    skipPermissions,
+    emberyxSessionId,
+    handleLine,
+    announceIssue,
+    setPending,
+    attempt,
+  ]);
+
+  // Respawn the same thread in place. A dead session used to be recoverable only
+  // by opening a new chat, which loses the transcript the user was reading.
+  const restart = useCallback(() => {
+    setStatus("idle");
+    setPending(null);
+    setPendingAsk(null);
+    setAttempt((n) => n + 1);
+  }, [setPending]);
 
   // Stop the current turn via a real `interrupt` control_request — aborts the
   // turn but keeps the process/session alive so the user can continue.
   const stop = useCallback(() => {
     const id = idRef.current;
     if (id === null) return;
+    // No further tokens are coming — publish what the frame still owed.
+    flushPending();
     const line = JSON.stringify({
       type: "control_request",
       request_id: crypto.randomUUID(),
@@ -740,7 +916,7 @@ export function useAgentChat({
     void invoke("agent_send", { id, message: line });
     setPending(null);
     setStatus("idle");
-  }, [setPending]);
+  }, [setPending, flushPending]);
 
   // Un-send the most recent pending turn and hand its text/images back so the
   // composer can restore them for editing. If the turn is still queued it's just
@@ -750,6 +926,9 @@ export function useAgentChat({
     if (!BUSY_STATUS.has(statusRef.current) && queueRef.current.length === 0) {
       return null;
     }
+    // A queued frame would re-append the draft after the slice below.
+    cancelFrame();
+    draftDirtyRef.current = false;
     const msgs = messagesRef.current;
     const idx = msgs.map((m) => m.role).lastIndexOf("user");
     if (idx === -1) return null;
@@ -775,7 +954,7 @@ export function useAgentChat({
     }
     setMessages(msgs.slice(0, idx));
     return restored;
-  }, [setPending]);
+  }, [setPending, cancelFrame]);
 
   // Answer a pending can_use_tool prompt: allow (once/always) or deny.
   const respond = useCallback(
@@ -927,6 +1106,7 @@ export function useAgentChat({
     send,
     queued,
     stop,
+    restart,
     rewind,
     pendingPermission,
     respond,
@@ -941,13 +1121,18 @@ function attachToolResult(
   result: string,
   isError: boolean
 ) {
-  setMessages((prev) =>
-    prev.map((m) => {
-      const ti = m.tools.findIndex((t) => t.id === toolUseId);
-      if (ti === -1) return m;
-      const tools = m.tools.slice();
+  setMessages((prev) => {
+    // Results land on the most recent calls, so scan from the end and copy only
+    // the one message that owns the tool.
+    for (let i = prev.length - 1; i >= 0; i--) {
+      const ti = prev[i].tools.findIndex((t) => t.id === toolUseId);
+      if (ti === -1) continue;
+      const tools = prev[i].tools.slice();
       tools[ti] = { ...tools[ti], result, isError };
-      return { ...m, tools };
-    })
-  );
+      const next = prev.slice();
+      next[i] = { ...prev[i], tools };
+      return next;
+    }
+    return prev;
+  });
 }

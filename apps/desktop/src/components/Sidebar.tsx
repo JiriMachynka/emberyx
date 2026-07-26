@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Plus, PanelLeftClose, PanelLeftOpen, Settings, SlidersHorizontal, Bot, FolderOpen, GitBranch, Bell } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { basename } from "@/lib/path";
@@ -7,13 +7,12 @@ import { statusOf } from "@/lib/status";
 import { StatusDot } from "@/components/StatusDot";
 import { TabCloseButton } from "@/components/TabCloseButton";
 import { useAgentStore } from "@/lib/agentStore";
-import type { Project, Session, SessionStatus } from "@/types";
+import type { Project, Session } from "@/types";
 
 interface SidebarProps {
   projects: Project[];
   activeProjectId: string | null;
   activeByProject: Record<string, string>;
-  statuses: Record<string, SessionStatus>;
   sessionsFor: (id: string) => Session[];
   /** Keep every project's session list open, not only the active project's. */
   expandAll: boolean;
@@ -35,12 +34,10 @@ interface SidebarProps {
 /** Left navigation: projects as rows, the active one expanded to its sessions
  *  plus a project-scoped action row. Collapses to an icon rail (status dots
  *  survive) via the header toggle / ⌘B. */
-export function Sidebar(props: Omit<SidebarProps, "statuses">) {
+export function Sidebar(props: SidebarProps) {
   const { collapsed } = props;
-  // Live status comes from the store so status-dot updates re-render the
-  // sidebar (which must reflect them) without re-rendering App.
-  const statuses = useAgentStore((s) => s.statuses);
-  const full: SidebarProps = { ...props, statuses };
+  // Status is read by the dots themselves, so one session going working
+  // re-renders that dot instead of the whole sidebar.
   return (
     <aside
       className={cn(
@@ -48,13 +45,41 @@ export function Sidebar(props: Omit<SidebarProps, "statuses">) {
         collapsed ? "w-14" : "w-64"
       )}
     >
-      <SidebarHeader {...full} />
+      <SidebarHeader {...props} />
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1.5">
-        {collapsed ? <Rail {...full} /> : <Tree {...full} />}
+        {collapsed ? <Rail {...props} /> : <Tree {...props} />}
       </div>
-      <SidebarFooter {...full} />
+      <SidebarFooter {...props} />
     </aside>
   );
+}
+
+/** Status dot for one session, subscribed on its own so a status change
+ *  re-renders just this dot. Hidden while idle. */
+const SessionStatusDot = memo(function SessionStatusDot({ id }: { id: string }) {
+  const status = useAgentStore((s) => statusOf(s.statuses, id));
+  if (status === "idle") return null;
+  return <StatusDot status={status} />;
+});
+
+/** Rolled-up status for a project row: working if any of its agents is,
+ *  otherwise the first agent's own status. */
+function ProjectStatusDot({
+  sessions,
+  className,
+  hideIdle,
+}: {
+  sessions: Session[];
+  className?: string;
+  hideIdle?: boolean;
+}) {
+  const status = useAgentStore((s) => {
+    const agents = sessions.filter((x) => x.kind === "agent");
+    if (agents.some((x) => statusOf(s.statuses, x.id) === "working")) return "working";
+    return agents[0] ? statusOf(s.statuses, agents[0].id) : "idle";
+  });
+  if (hideIdle && status === "idle") return null;
+  return <StatusDot status={status} className={className} />;
 }
 
 function SidebarHeader({ collapsed, onToggleCollapse }: SidebarProps) {
@@ -94,7 +119,6 @@ function Tree(props: SidebarProps) {
     projects,
     activeProjectId,
     activeByProject,
-    statuses,
     sessionsFor,
     expandAll,
     onSelectProject,
@@ -107,10 +131,6 @@ function Tree(props: SidebarProps) {
       {projects.map((p) => {
         const active = p.id === activeProjectId;
         const pSessions = sessionsFor(p.id);
-        const pAgent = pSessions.find((s) => s.kind === "agent");
-        const anyWorking = pSessions.some(
-          (s) => s.kind === "agent" && statusOf(statuses, s.id) === "working"
-        );
         return (
           <div key={p.id} className="mb-0.5">
             <div
@@ -131,14 +151,8 @@ function Tree(props: SidebarProps) {
                     {basename(p.worktree?.repoRoot ?? p.path).charAt(0)}
                   </div>
                 )}
-                <StatusDot
-                  status={
-                    anyWorking
-                      ? "working"
-                      : pAgent
-                        ? statusOf(statuses, pAgent.id)
-                        : "idle"
-                  }
+                <ProjectStatusDot
+                  sessions={pSessions}
                   className="absolute -bottom-0.5 -right-0.5 ring-2 ring-background"
                 />
               </div>
@@ -196,7 +210,6 @@ function SessionList({
   sessions,
   activeId,
   projectId,
-  statuses,
   onSelectSession,
   onCloseSession,
   onMoveSession,
@@ -211,7 +224,6 @@ function SessionList({
   return (
     <ul className="ml-3 mt-0.5 border-l pl-1.5">
       {sessions.map((s) => {
-        const st = statusOf(statuses, s.id);
         const active = s.id === activeId;
         return (
           <li
@@ -235,9 +247,11 @@ function SessionList({
             }}
             className={cn(
               "group flex cursor-grab items-center gap-2 rounded px-2 py-1.5 text-sm active:cursor-grabbing",
+              // Only the session on screen gets the filled+ringed treatment;
+              // hover stays deliberately fainter so it can't be mistaken for it.
               active
-                ? "bg-accent text-foreground"
-                : "text-muted-foreground hover:bg-secondary/50",
+                ? "bg-accent font-medium text-foreground ring-1 ring-primary/40"
+                : "text-muted-foreground hover:bg-secondary/40",
               dragId === s.id && "opacity-40",
               overId === s.id && "ring-1 ring-primary/60"
             )}
@@ -250,7 +264,7 @@ function SessionList({
             <span className="flex-1 truncate">
               {s.kind === "dev" ? `dev:${s.label}` : s.label}
             </span>
-            {s.kind === "agent" && st !== "idle" && <StatusDot status={st} />}
+            {s.kind === "agent" && <SessionStatusDot id={s.id} />}
             <TabCloseButton
               active={active}
               title={s.kind === "dev" ? "Stop" : "Close"}
@@ -294,7 +308,6 @@ function ActionRow({
 function Rail({
   projects,
   activeProjectId,
-  statuses,
   sessionsFor,
   onSelectProject,
   onPickProject,
@@ -304,15 +317,6 @@ function Rail({
       {projects.map((p) => {
         const active = p.id === activeProjectId;
         const pSessions = sessionsFor(p.id);
-        const pAgent = pSessions.find((s) => s.kind === "agent");
-        const anyWorking = pSessions.some(
-          (s) => s.kind === "agent" && statusOf(statuses, s.id) === "working"
-        );
-        const st = anyWorking
-          ? "working"
-          : pAgent
-            ? statusOf(statuses, pAgent.id)
-            : "idle";
         return (
           <button
             key={p.id}
@@ -334,12 +338,11 @@ function Rail({
             ) : (
               basename(p.worktree?.repoRoot ?? p.path).slice(0, 2)
             )}
-            {st !== "idle" && (
-              <StatusDot
-                status={st}
-                className="absolute -right-0.5 -top-0.5 ring-2 ring-sidebar"
-              />
-            )}
+            <ProjectStatusDot
+              sessions={pSessions}
+              hideIdle
+              className="absolute -right-0.5 -top-0.5 ring-2 ring-sidebar"
+            />
           </button>
         );
       })}

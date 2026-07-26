@@ -4,6 +4,7 @@ import type { Usage } from "@/lib/pricing";
 import type { ToolIcon } from "@/lib/toolDisplay";
 import type { ChatImage } from "@/hooks/useAgentChat";
 import type { SessionStatus } from "@/types";
+import type { AccountIssue } from "@/lib/accountState";
 import {
   MAX_NOTIFICATIONS,
   loadNotifications,
@@ -16,6 +17,14 @@ const MAX_CHANGES = 500;
 
 /** Max activity lines kept per subagent run, so a long run can't grow forever. */
 const MAX_ACTIVITY = 200;
+
+/**
+ * A backgrounded run outlives the turn that dispatched it and gets no
+ * per-completion signal, so the only proof it is alive is its activity feed.
+ * It counts as finished once that feed has been quiet this long *after* the
+ * dispatching turn ended.
+ */
+export const BACKGROUND_IDLE_MS = 15_000;
 
 /** One thing a subagent did — a tool it called, or a line it said. */
 export interface SubagentActivity {
@@ -46,6 +55,9 @@ export interface SubagentRun {
   /** Last time inner activity arrived — the end fallback for background runs,
    *  which have no correlatable per-completion signal. */
   lastActivityAt?: number;
+  /** When the dispatching turn finished. Only then can a background run be
+   *  settled by going idle; before it, silence means "not started yet". */
+  turnEndedAt?: number;
 }
 
 /**
@@ -57,6 +69,9 @@ interface AgentState {
   statuses: Record<string, SessionStatus>;
   usages: Record<string, Usage>;
   changes: Change[];
+  /** Change count per session, kept in step with `changes` so consumers don't
+   *  rescan the whole feed on every store update. */
+  changeCounts: Record<string, number>;
   /** Subagent runs by tool_use id, newest last. */
   subagents: Record<string, SubagentRun>;
   /** Which run the agent panel is showing; null closes it. */
@@ -76,11 +91,25 @@ interface AgentState {
   startSubagent: (run: Omit<SubagentRun, "activity" | "startedAt">) => void;
   addSubagentActivity: (id: string, activity: SubagentActivity) => void;
   endSubagent: (id: string, isError: boolean) => void;
-  /** End every still-open run in a session — used when the turn's `result`
-   *  arrives, since background runs never get a per-completion signal. */
+  /** The turn's `result` arrived: end still-open foreground runs, and mark
+   *  background ones eligible to settle once they go quiet. */
   endOpenSubagents: (session: string) => void;
+  /** Close background runs whose activity feed has been idle past the grace
+   *  period. Driven by the chip ticker, which only runs while something runs. */
+  settleSubagents: () => void;
   /** Drop status/usage/change state for a set of sessions (closed project). */
   clearSessions: (ids: string[]) => void;
+  /**
+   * The account-level block in force, if any. Global rather than per-session:
+   * one login and one usage window back every session, so the first pane to
+   * notice speaks for all of them. `session` is only the reporter.
+   */
+  accountIssue: (AccountIssue & { session: string; at: number }) | null;
+  /** Record an issue. A repeat of the same kind is ignored so a failing loop
+   *  can't re-render the banner on every line. */
+  reportAccountIssue: (session: string, issue: AccountIssue) => void;
+  /** Proof the block lifted (a turn succeeded), or the user dismissed it. */
+  clearAccountIssue: () => void;
   /** Notification centre feed, newest first, persisted to localStorage. */
   notifications: AppNotification[];
   pushNotification: (n: Omit<AppNotification, "id" | "time" | "read">) => void;
@@ -93,6 +122,7 @@ export const useAgentStore = create<AgentState>()((set) => ({
   statuses: {},
   usages: {},
   changes: [],
+  changeCounts: {},
   subagents: {},
   selectedAgent: null,
   senders: {},
@@ -112,9 +142,13 @@ export const useAgentStore = create<AgentState>()((set) => ({
   addChange: (change) =>
     set((s) => {
       const next = [...s.changes, change];
-      return {
-        changes: next.length > MAX_CHANGES ? next.slice(-MAX_CHANGES) : next,
-      };
+      const counts = { ...s.changeCounts };
+      counts[change.session] = (counts[change.session] ?? 0) + 1;
+      if (next.length <= MAX_CHANGES) return { changes: next, changeCounts: counts };
+      for (const dropped of next.slice(0, next.length - MAX_CHANGES)) {
+        counts[dropped.session] = Math.max(0, (counts[dropped.session] ?? 0) - 1);
+      }
+      return { changes: next.slice(-MAX_CHANGES), changeCounts: counts };
     }),
   startSubagent: (run) =>
     set((s) => ({
@@ -128,6 +162,9 @@ export const useAgentStore = create<AgentState>()((set) => ({
       const run = s.subagents[id];
       if (!run) return s;
       const next = [...run.activity, activity];
+      // Activity is proof of life: a background run settled early (or closed by
+      // the turn's result) is still working, so reopen it.
+      const alive = run.background && run.endedAt != null;
       return {
         subagents: {
           ...s.subagents,
@@ -135,6 +172,7 @@ export const useAgentStore = create<AgentState>()((set) => ({
             ...run,
             activity: next.length > MAX_ACTIVITY ? next.slice(-MAX_ACTIVITY) : next,
             lastActivityAt: Date.now(),
+            ...(alive ? { endedAt: undefined, isError: undefined } : null),
           },
         },
       };
@@ -149,11 +187,33 @@ export const useAgentStore = create<AgentState>()((set) => ({
     }),
   endOpenSubagents: (session) =>
     set((s) => {
+      const now = Date.now();
       const next = { ...s.subagents };
       let changed = false;
       for (const [id, run] of Object.entries(s.subagents)) {
         if (run.session !== session || run.endedAt != null) continue;
-        next[id] = { ...run, endedAt: run.lastActivityAt ?? Date.now() };
+        // A background run keeps working after the turn that dispatched it
+        // returns — ending it here is what made a live run show as done.
+        if (run.background) {
+          if (run.turnEndedAt != null) continue;
+          next[id] = { ...run, turnEndedAt: now };
+        } else {
+          next[id] = { ...run, endedAt: run.lastActivityAt ?? now };
+        }
+        changed = true;
+      }
+      return changed ? { subagents: next } : s;
+    }),
+  settleSubagents: () =>
+    set((s) => {
+      const now = Date.now();
+      const next = { ...s.subagents };
+      let changed = false;
+      for (const [id, run] of Object.entries(s.subagents)) {
+        if (!run.background || run.endedAt != null || run.turnEndedAt == null) continue;
+        const quietSince = Math.max(run.turnEndedAt, run.lastActivityAt ?? 0);
+        if (now - quietSince < BACKGROUND_IDLE_MS) continue;
+        next[id] = { ...run, endedAt: quietSince };
         changed = true;
       }
       return changed ? { subagents: next } : s;
@@ -169,6 +229,9 @@ export const useAgentStore = create<AgentState>()((set) => ({
           Object.entries(s.usages).filter(([id]) => !drop.has(id))
         ),
         changes: s.changes.filter((c) => !drop.has(c.session)),
+        changeCounts: Object.fromEntries(
+          Object.entries(s.changeCounts).filter(([id]) => !drop.has(id))
+        ),
         subagents: Object.fromEntries(
           Object.entries(s.subagents).filter(([, r]) => !drop.has(r.session))
         ),
@@ -177,6 +240,14 @@ export const useAgentStore = create<AgentState>()((set) => ({
         ),
       };
     }),
+  accountIssue: null,
+  reportAccountIssue: (session, issue) =>
+    set((s) =>
+      s.accountIssue?.kind === issue.kind
+        ? s
+        : { accountIssue: { ...issue, session, at: Date.now() } }
+    ),
+  clearAccountIssue: () => set((s) => (s.accountIssue ? { accountIssue: null } : s)),
   pushNotification: (n) =>
     set((s) => {
       const next = [

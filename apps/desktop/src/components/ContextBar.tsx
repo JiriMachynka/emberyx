@@ -89,9 +89,13 @@ export function ContextBar({
   const agentUsage = useAgentStore((s) =>
     agent ? s.usages[agent.id] : undefined
   );
-  const changesCount = useAgentStore(
-    (s) => s.changes.filter((c) => sessionIds.includes(c.session)).length
-  );
+  // Summing per-session counts keeps this O(sessions) per store update; the old
+  // scan of the whole change feed ran on every streaming event.
+  const changesCount = useAgentStore((s) => {
+    let n = 0;
+    for (const id of sessionIds) n += s.changeCounts[id] ?? 0;
+    return n;
+  });
 
   return (
     <header className="flex h-10 shrink-0 items-center justify-between border-b px-3">

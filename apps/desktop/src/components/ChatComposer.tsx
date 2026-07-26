@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Clock, Coins, Sparkles, Square, X } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { MentionMenu } from "@/components/MentionMenu";
@@ -69,6 +69,57 @@ const prettyModel = (id: string): string => {
   return version ? `${name} ${version}` : name;
 };
 
+interface UsageFooterProps {
+  /** Turns typed while busy and not yet sent. */
+  queued: number;
+  usage: ChatUsage;
+}
+
+/** Token/cost telemetry restated on every message_delta. Split out so that
+ *  churn re-renders this row alone, and so typing (which changes the composer's
+ *  draft state, not the usage) skips it. */
+const UsageFooter = memo(function UsageFooter({ queued, usage }: UsageFooterProps) {
+  return (
+    <div className="flex min-w-0 items-center gap-2.5 text-xs text-muted-foreground">
+      {queued > 0 && (
+        <span className="flex shrink-0 items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-[0.7rem]">
+          <Clock className="size-3" />
+          {queued} queued
+        </span>
+      )}
+      {usage.model && (
+        <span className="flex items-center gap-1.5 font-medium text-foreground">
+          <Sparkles className="size-3.5 shrink-0 text-primary" />
+          <span className="truncate">{prettyModel(usage.model)}</span>
+        </span>
+      )}
+      {(usage.inputTokens != null ||
+        usage.outputTokens != null ||
+        usage.costUsd != null) && (
+        <span className="flex items-center gap-2 font-mono tabular-nums">
+          {usage.inputTokens != null && (
+            <span className="flex items-center gap-0.5">
+              <ArrowDown className="size-3 opacity-60" />
+              {usage.inputTokens.toLocaleString("en-US")}
+            </span>
+          )}
+          {usage.outputTokens != null && (
+            <span className="flex items-center gap-0.5">
+              <ArrowUp className="size-3 opacity-60" />
+              {usage.outputTokens.toLocaleString("en-US")}
+            </span>
+          )}
+          {usage.costUsd != null && (
+            <span className="flex items-center gap-0.5 text-primary">
+              <Coins className="size-3 opacity-70" />${usage.costUsd.toFixed(4)}
+            </span>
+          )}
+        </span>
+      )}
+    </div>
+  );
+});
+
 interface ChatComposerProps {
   /** Project root — the corpus for `@` file references. */
   cwd: string;
@@ -94,7 +145,7 @@ interface ChatComposerProps {
  * — with a long thread, re-rendering every markdown block per keystroke is what
  * makes the composer feel laggy.
  */
-export function ChatComposer({
+export const ChatComposer = memo(function ChatComposer({
   cwd,
   active,
   ready,
@@ -115,6 +166,9 @@ export function ChatComposer({
   const [slash, setSlash] = useState<SlashToken | null>(null);
   const [menuIndex, setMenuIndex] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const heightRef = useRef("");
+  const lengthRef = useRef(0);
+  const frameRef = useRef(0);
 
   // The file list is walked once per project and cached; only fetch it after an
   // `@` is actually typed.
@@ -142,11 +196,23 @@ export function ChatComposer({
   }, [active]);
 
   // Grow the composer with its content, capped by max-h-40 (then it scrolls).
+  // Measuring forces a reflow, so coalesce a burst of keystrokes into one frame,
+  // skip the write when the height is unchanged, and only reset to `auto` when
+  // the text got shorter — growing text can be measured in place.
   useEffect(() => {
     const el = inputRef.current;
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    cancelAnimationFrame(frameRef.current);
+    frameRef.current = requestAnimationFrame(() => {
+      if (input.length <= lengthRef.current) el.style.height = "auto";
+      lengthRef.current = input.length;
+      const next = `${Math.min(el.scrollHeight, 160)}px`;
+      if (next !== heightRef.current || el.style.height === "auto") {
+        heightRef.current = next;
+        el.style.height = next;
+      }
+    });
+    return () => cancelAnimationFrame(frameRef.current);
   }, [input]);
 
   const closeMenus = () => {
@@ -379,43 +445,7 @@ export function ChatComposer({
           className="max-h-40 min-h-16 resize-none overflow-y-auto border-0 bg-transparent px-3.5 pb-1 pt-3 shadow-none focus-visible:ring-0"
         />
         <div className="flex items-center justify-between gap-2 px-2.5 pb-2 pt-1">
-          <div className="flex min-w-0 items-center gap-2.5 text-xs text-muted-foreground">
-            {queued > 0 && (
-              <span className="flex shrink-0 items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-[0.7rem]">
-                <Clock className="size-3" />
-                {queued} queued
-              </span>
-            )}
-            {usage.model && (
-              <span className="flex items-center gap-1.5 font-medium text-foreground">
-                <Sparkles className="size-3.5 shrink-0 text-primary" />
-                <span className="truncate">{prettyModel(usage.model)}</span>
-              </span>
-            )}
-            {(usage.inputTokens != null ||
-              usage.outputTokens != null ||
-              usage.costUsd != null) && (
-              <span className="flex items-center gap-2 font-mono tabular-nums">
-                {usage.inputTokens != null && (
-                  <span className="flex items-center gap-0.5">
-                    <ArrowDown className="size-3 opacity-60" />
-                    {usage.inputTokens.toLocaleString("en-US")}
-                  </span>
-                )}
-                {usage.outputTokens != null && (
-                  <span className="flex items-center gap-0.5">
-                    <ArrowUp className="size-3 opacity-60" />
-                    {usage.outputTokens.toLocaleString("en-US")}
-                  </span>
-                )}
-                {usage.costUsd != null && (
-                  <span className="flex items-center gap-0.5 text-primary">
-                    <Coins className="size-3 opacity-70" />${usage.costUsd.toFixed(4)}
-                  </span>
-                )}
-              </span>
-            )}
-          </div>
+          <UsageFooter queued={queued} usage={usage} />
           <div className="flex shrink-0 items-center gap-1.5">
             {busy && (
               <button
@@ -441,4 +471,4 @@ export function ChatComposer({
       </div>
     </>
   );
-}
+});

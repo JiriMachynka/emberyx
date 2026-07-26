@@ -1,5 +1,14 @@
 import { useMemo } from "react";
-import { Bell, CheckCheck, CircleAlert, CircleCheck, CircleX, Trash2 } from "lucide-react";
+import {
+  Bell,
+  CheckCheck,
+  CircleAlert,
+  CircleCheck,
+  CircleX,
+  Gauge,
+  KeyRound,
+  Trash2,
+} from "lucide-react";
 import { SidePanel } from "@/components/SidePanel";
 import { useAgentStore } from "@/lib/agentStore";
 import type { AppNotification, NotificationKind } from "@/lib/notifications";
@@ -9,12 +18,17 @@ const KIND_ICON = {
   done: CircleCheck,
   "needs-input": CircleAlert,
   error: CircleX,
+  "rate-limited": Gauge,
+  "logged-out": KeyRound,
 } as const;
 
 const KIND_TINT: Record<NotificationKind, string> = {
   done: "text-emerald-400",
   "needs-input": "text-amber-400",
   error: "text-red-400",
+  // A limit lifts by itself; a lost login needs the user, like an error.
+  "rate-limited": "text-amber-400",
+  "logged-out": "text-red-400",
 };
 
 const MINUTE = 60_000;

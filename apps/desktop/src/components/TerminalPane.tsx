@@ -4,7 +4,14 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { classify, stripAnsi } from "@/lib/accountState";
+import { useAgentStore } from "@/lib/agentStore";
 import "@xterm/xterm/css/xterm.css";
+
+/** How much stripped output to keep for matching. A limit message spans a few
+ *  lines at most, but PTY chunks are coalesced arbitrarily, so a message can
+ *  straddle several — the tail is what lets a split message still match. */
+const TAIL_LIMIT = 4096;
 
 type PtyEvent =
   | { type: "output"; data: string }
@@ -92,10 +99,36 @@ function TerminalPaneImpl({
     let ptyId: number | null = null;
     let disposed = false;
 
+    // Account-failure detection runs beside the write, never in front of it —
+    // these locals live for one shell, so a restart starts from an empty tail.
+    const decoder = new TextDecoder();
+    let tail = "";
+    let lastTail = "";
+
+    const detect = (bytes: Uint8Array) => {
+      // Streaming decode: a multi-byte char can be split across PTY chunks.
+      const chunk = stripAnsi(decoder.decode(bytes, { stream: true }));
+      // The TUI repaints on every keystroke and spinner frame; most chunks are
+      // pure cursor movement, so skip them before touching the patterns.
+      if (!chunk.trim()) return;
+      tail = (tail + chunk).slice(-TAIL_LIMIT);
+      if (tail === lastTail) return;
+      lastTail = tail;
+      const issue = classify(tail);
+      if (!issue) return;
+      useAgentStore.getState().reportAccountIssue(sessionId, issue);
+      // Drop the matched window so the same message can't keep re-firing as it
+      // scrolls; a genuinely new failure refills the tail.
+      tail = "";
+    };
+
     const channel = new Channel<PtyEvent>();
     channel.onmessage = (msg) => {
-      if (msg.type === "output") term.write(base64ToBytes(msg.data));
-      else term.write("\r\n\x1b[90m[process exited]\x1b[0m\r\n");
+      if (msg.type === "output") {
+        const bytes = base64ToBytes(msg.data);
+        term.write(bytes);
+        detect(bytes);
+      } else term.write("\r\n\x1b[90m[process exited]\x1b[0m\r\n");
     };
 
     // Replay any persisted scrollback first, then start the live session so
