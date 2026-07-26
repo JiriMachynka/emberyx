@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, Once, OnceLock};
 
 use base64::Engine;
 use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
@@ -44,6 +44,59 @@ pub(crate) fn capture_shell_env() -> Option<Vec<(String, String)>> {
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     (!vars.is_empty()).then_some(vars)
+}
+
+/// Warm-up state of the process-wide login-shell env capture.
+enum EnvState {
+    Warming,
+    Done(Option<Vec<(String, String)>>),
+}
+
+/// Captured once per process, shared by every manager that spawns children.
+static SHELL_ENV: OnceLock<(Mutex<EnvState>, Condvar)> = OnceLock::new();
+
+fn env_cell() -> &'static (Mutex<EnvState>, Condvar) {
+    SHELL_ENV.get_or_init(|| (Mutex::new(EnvState::Warming), Condvar::new()))
+}
+
+/// Kick off the capture off-thread, once. Cheap and idempotent to call.
+pub(crate) fn warm_shell_env() {
+    static STARTED: Once = Once::new();
+    STARTED.call_once(|| {
+        std::thread::spawn(|| {
+            let env = capture_shell_env();
+            let (lock, cv) = env_cell();
+            *lock.lock().unwrap() = EnvState::Done(env);
+            cv.notify_all();
+        });
+    });
+}
+
+/// Non-blocking peek: `None` while the capture is still running. For callers
+/// that have a working fallback and must not stall (terminal panes).
+pub(crate) fn shell_env_now() -> Option<Vec<(String, String)>> {
+    warm_shell_env();
+    match &*env_cell().0.lock().unwrap() {
+        EnvState::Done(env) => env.clone(),
+        EnvState::Warming => None,
+    }
+}
+
+/// Block until the capture finishes (or `timeout` elapses). For callers with no
+/// fallback: in the packaged app the inherited PATH is Finder's stub, so
+/// spawning before the capture lands fails with ENOENT and cannot be retried.
+pub(crate) fn shell_env_blocking(timeout: std::time::Duration) -> Option<Vec<(String, String)>> {
+    warm_shell_env();
+    let (lock, cv) = env_cell();
+    let (state, _) = cv
+        .wait_timeout_while(lock.lock().unwrap(), timeout, |s| {
+            matches!(s, EnvState::Warming)
+        })
+        .unwrap();
+    match &*state {
+        EnvState::Done(env) => env.clone(),
+        EnvState::Warming => None,
+    }
 }
 
 /// Path of the scrollback log for a persistence key (created on demand).
@@ -90,22 +143,15 @@ struct PtySession {
 pub struct PtyManager {
     sessions: Arc<Mutex<HashMap<u32, PtySession>>>,
     next_id: AtomicU32,
-    /// The user's fully-resolved shell environment, captured once in the
-    /// background at startup. Present = we can spawn panes with a fast non-rc
-    /// shell (see `spawn`); absent = capture hasn't finished, fall back to a
-    /// login shell.
-    shell_env: Arc<OnceLock<Vec<(String, String)>>>,
 }
 
 impl Default for PtyManager {
     fn default() -> Self {
-        let mgr = Self {
+        warm_shell_env();
+        Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             next_id: AtomicU32::new(0),
-            shell_env: Arc::new(OnceLock::new()),
-        };
-        mgr.warm_shell_env();
-        mgr
+        }
     }
 }
 
@@ -116,18 +162,6 @@ impl PtyManager {
 
     fn user_shell() -> String {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
-    }
-
-    /// Capture the resolved shell env once, off-thread, so it's ready before
-    /// the user opens a project. Interactive login shell (`-lic`) so PATH picks
-    /// up nvm/bun/etc. exactly as the user's real terminal would.
-    fn warm_shell_env(&self) {
-        let cell = self.shell_env.clone();
-        std::thread::spawn(move || {
-            if let Some(env) = capture_shell_env() {
-                let _ = cell.set(env);
-            }
-        });
     }
 
     /// Spawn the user's shell in `cwd`, optionally auto-running `command`.
@@ -167,10 +201,10 @@ impl PtyManager {
         } else {
             None
         };
-        match (self.shell_env.get(), norc) {
+        match (shell_env_now(), norc) {
             (Some(env), Some(flag)) => {
                 cmd.arg(flag);
-                for (k, v) in env {
+                for (k, v) in &env {
                     cmd.env(k, v);
                 }
             }

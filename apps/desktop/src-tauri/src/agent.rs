@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -17,6 +17,9 @@ use crate::error::Result;
 pub enum AgentEvent {
     /// One JSON object line from stdout (a stream-json message).
     Line(String),
+    /// Several stdout lines coalesced into one IPC message. A burst of partial
+    /// message events would otherwise cross the boundary one tiny event at a time.
+    Lines(Vec<String>),
     /// A line of stderr (debug/diagnostics only).
     Stderr(String),
     /// Process exited (exit code if known).
@@ -31,26 +34,21 @@ struct AgentSession {
 pub struct AgentManager {
     sessions: Arc<Mutex<HashMap<u32, AgentSession>>>,
     next_id: AtomicU32,
-    /// Resolved login-shell environment, captured once at startup so the
-    /// packaged app (launched from Finder, without a shell PATH) can still find
-    /// `claude`, nvm/bun shims, etc. Mirrors PtyManager's warming.
-    shell_env: Arc<OnceLock<Vec<(String, String)>>>,
 }
+
+/// How long a spawn waits for the login-shell env capture. Sessions restored on
+/// launch race that capture, and unlike a terminal pane there is no usable
+/// fallback: with Finder's stub PATH the spawn fails with ENOENT and the chat is
+/// stuck disabled until the user opens a new one.
+const ENV_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl Default for AgentManager {
     fn default() -> Self {
-        let mgr = Self {
+        crate::pty::warm_shell_env();
+        Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             next_id: AtomicU32::new(0),
-            shell_env: Arc::new(OnceLock::new()),
-        };
-        let cell = mgr.shell_env.clone();
-        std::thread::spawn(move || {
-            if let Some(env) = crate::pty::capture_shell_env() {
-                let _ = cell.set(env);
-            }
-        });
-        mgr
+        }
     }
 }
 
@@ -129,8 +127,8 @@ impl AgentManager {
             .stderr(Stdio::piped());
 
         // Apply the resolved shell env so PATH finds `claude` in the packaged app.
-        if let Some(env) = self.shell_env.get() {
-            for (k, v) in env {
+        if let Some(env) = crate::pty::shell_env_blocking(ENV_WAIT) {
+            for (k, v) in &env {
                 cmd.env(k, v);
             }
         }
@@ -165,23 +163,69 @@ impl AgentManager {
             }
         });
 
-        // stdout: one JSON message per line. On EOF, reap the child and report exit.
-        let out_channel = on_event.clone();
-        let sessions = Arc::clone(&self.sessions);
+        // stdout: one JSON message per line, read on one thread and forwarded on
+        // another so a burst of partial-message events crosses the IPC boundary as
+        // a single batch instead of hundreds of tiny ones. The forwarder only
+        // drains what is already queued, so a lone line adds no latency. Mirrors
+        // the PTY path. On EOF the forwarder reaps the child and reports exit.
+        enum Chunk {
+            Line(String),
+            Done,
+        }
+        let (tx, rx) = std::sync::mpsc::channel::<Chunk>();
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(std::io::Result::ok) {
-                if out_channel.send(AgentEvent::Line(line)).is_err() {
+                if tx.send(Chunk::Line(line)).is_err() {
                     return;
                 }
             }
-            let code = sessions
-                .lock()
-                .unwrap()
-                .remove(&id)
-                .and_then(|mut s| s.child.wait().ok())
-                .and_then(|status| status.code());
-            let _ = out_channel.send(AgentEvent::Exit(code));
+            let _ = tx.send(Chunk::Done);
+        });
+
+        let out_channel = on_event.clone();
+        let sessions = Arc::clone(&self.sessions);
+        std::thread::spawn(move || {
+            const MAX_BATCH: usize = 512;
+            let reap = || {
+                sessions
+                    .lock()
+                    .unwrap()
+                    .remove(&id)
+                    .and_then(|mut s| s.child.wait().ok())
+                    .and_then(|status| status.code())
+            };
+            while let Ok(first) = rx.recv() {
+                let mut batch = match first {
+                    Chunk::Line(line) => vec![line],
+                    Chunk::Done => {
+                        let _ = out_channel.send(AgentEvent::Exit(reap()));
+                        return;
+                    }
+                };
+                let mut done = false;
+                while batch.len() < MAX_BATCH {
+                    match rx.try_recv() {
+                        Ok(Chunk::Line(line)) => batch.push(line),
+                        Ok(Chunk::Done) => {
+                            done = true;
+                            break;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let event = match batch.len() {
+                    1 => AgentEvent::Line(batch.remove(0)),
+                    _ => AgentEvent::Lines(batch),
+                };
+                if out_channel.send(event).is_err() {
+                    return;
+                }
+                if done {
+                    let _ = out_channel.send(AgentEvent::Exit(reap()));
+                    return;
+                }
+            }
         });
 
         Ok(id)
@@ -261,8 +305,8 @@ impl AgentManager {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        if let Some(env) = self.shell_env.get() {
-            for (k, v) in env {
+        if let Some(env) = crate::pty::shell_env_blocking(ENV_WAIT) {
+            for (k, v) in &env {
                 cmd.env(k, v);
             }
         }
