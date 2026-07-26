@@ -31,15 +31,18 @@ const releases = `${repo}/releases/latest`;
           <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
             <a
               href={releases}
-              class="rounded-md bg-ember px-5 py-2.5 text-sm font-medium text-ink transition-colors hover:bg-ember-soft"
+              class="rounded-md bg-ember px-5 py-2.5 text-sm font-medium text-ink transition-[background-color,transform] duration-150 hover:bg-ember-soft active:scale-95"
             >
               Download for macOS
             </a>
           </div>
         </div>
 
-        <div class="mt-16">
-          <AppMockup />
+        <div class="relative mt-16">
+          <div class="mockup-glow pointer-events-none absolute -inset-8"></div>
+          <div class="relative">
+            <AppMockup />
+          </div>
         </div>
       </div>
     </section>
@@ -52,7 +55,7 @@ const releases = `${repo}/releases/latest`;
 
       <div class="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
         <!-- Multi-project cockpit (wide, mini terminal) -->
-        <div class="rounded-xl border border-line bg-ink-card p-6 transition-colors hover:border-ash/25 sm:col-span-2 lg:col-span-4">
+        <div class="card p-6 sm:col-span-2 lg:col-span-4">
           <h3 class="font-medium text-white">Multi-project cockpit</h3>
           <p class="mt-1.5 max-w-md text-sm leading-relaxed text-ash">
             Tab through every project. Each gets its own integrated PTY
@@ -70,22 +73,22 @@ const releases = `${repo}/releases/latest`;
         </div>
 
         <!-- Token & cost meter -->
-        <div class="rounded-xl border border-line bg-ink-card p-6 transition-colors hover:border-ash/25 sm:col-span-1 lg:col-span-2">
+        <div class="card p-6 sm:col-span-1 lg:col-span-2">
           <h3 class="font-medium text-white">Token &amp; cost meter</h3>
           <p class="mt-1.5 text-sm leading-relaxed text-ash">
             Live tokens and dollar cost per session.
           </p>
-          <p class="mt-5 font-mono text-2xl font-semibold text-white">
+          <p class="mt-5 font-mono text-2xl font-semibold tabular-nums text-white">
             $0.62<span class="text-sm font-normal text-ash-dim">/hr</span>
           </p>
           <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-line">
             <div class="h-full w-2/3 rounded-full bg-ember"></div>
           </div>
-          <p class="mt-2 font-mono text-[11px] text-ash-dim">128k tokens · $12.40 today</p>
+          <p class="mt-2 font-mono text-[11px] tabular-nums text-ash-dim">128k tokens · $12.40 today</p>
         </div>
 
         <!-- Thread resume -->
-        <div class="rounded-xl border border-line bg-ink-card p-6 transition-colors hover:border-ash/25 sm:col-span-1 lg:col-span-2">
+        <div class="card p-6 sm:col-span-1 lg:col-span-2">
           <h3 class="font-medium text-white">Thread resume</h3>
           <p class="mt-1.5 text-sm leading-relaxed text-ash">
             Reopen any past thread instantly — prefetched and cached, so there's
@@ -97,7 +100,7 @@ const releases = `${repo}/releases/latest`;
         </div>
 
         <!-- Inline git (wide, mini diff) -->
-        <div class="rounded-xl border border-line bg-ink-card p-6 transition-colors hover:border-ash/25 sm:col-span-2 lg:col-span-4">
+        <div class="card p-6 sm:col-span-2 lg:col-span-4">
           <h3 class="font-medium text-white">Inline git</h3>
           <p class="mt-1.5 max-w-md text-sm leading-relaxed text-ash">
             Read diffs with syntax highlighting and commit — without ever leaving
@@ -114,7 +117,7 @@ const releases = `${repo}/releases/latest`;
         </div>
 
         <!-- Session tabs -->
-        <div class="rounded-xl border border-line bg-ink-card p-6 transition-colors hover:border-ash/25 sm:col-span-1 lg:col-span-2">
+        <div class="card p-6 sm:col-span-1 lg:col-span-2">
           <h3 class="font-medium text-white">Session tabs</h3>
           <p class="mt-1.5 text-sm leading-relaxed text-ash">
             Several agent sessions side by side; a banner flags the one that
@@ -128,7 +131,7 @@ const releases = `${repo}/releases/latest`;
         </div>
 
         <!-- Dokploy status -->
-        <div class="rounded-xl border border-line bg-ink-card p-6 transition-colors hover:border-ash/25 sm:col-span-1 lg:col-span-2">
+        <div class="card p-6 sm:col-span-1 lg:col-span-2">
           <h3 class="font-medium text-white">Dokploy status</h3>
           <p class="mt-1.5 text-sm leading-relaxed text-ash">
             Deployment health for the current project, matched by git remote.
@@ -139,7 +142,7 @@ const releases = `${repo}/releases/latest`;
         </div>
 
         <!-- Signed updates -->
-        <div class="rounded-xl border border-line bg-ink-card p-6 transition-colors hover:border-ash/25 sm:col-span-2 lg:col-span-2">
+        <div class="card p-6 sm:col-span-2 lg:col-span-2">
           <h3 class="font-medium text-white">Signed auto-updates</h3>
           <p class="mt-1.5 text-sm leading-relaxed text-ash">
             Updates land in-app over a signed channel. Install once — you never
@@ -168,13 +171,13 @@ const releases = `${repo}/releases/latest`;
         <div class="flex shrink-0 flex-wrap gap-3">
           <a
             href={releases}
-            class="rounded-md bg-ember px-5 py-2.5 text-sm font-medium text-ink transition-colors hover:bg-ember-soft"
+            class="rounded-md bg-ember px-5 py-2.5 text-sm font-medium text-ink transition-[background-color,transform] duration-150 hover:bg-ember-soft active:scale-95"
           >
             Download for macOS
           </a>
           <a
             href="/docs"
-            class="rounded-md border border-line px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-ink-card"
+            class="rounded-md border border-line px-5 py-2.5 text-sm font-medium text-white transition-[background-color,border-color,transform] duration-150 hover:border-ash/25 hover:bg-ink-card active:scale-95"
           >
             Docs
           </a>
