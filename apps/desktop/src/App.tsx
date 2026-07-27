@@ -284,6 +284,7 @@ function App() {
               sessions={sessions}
               activeId={activeId}
               settings={settings}
+              onModelChange={(model) => updateSettings({ model })}
               onTitled={(session, title) => {
                 ws.renameSession(session.id, title);
                 ws.refreshThreads(session.projectId, session.cwd, true);

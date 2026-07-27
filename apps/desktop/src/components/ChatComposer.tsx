@@ -1,6 +1,25 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Clock, Coins, Sparkles, Square, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  ChevronsUpDown,
+  Clock,
+  Coins,
+  Sparkles,
+  Square,
+  X,
+} from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { MentionMenu } from "@/components/MentionMenu";
 import { SlashMenu } from "@/components/SlashMenu";
 import { fuzzyFilter } from "@/lib/fuzzy";
@@ -69,16 +88,129 @@ const prettyModel = (id: string): string => {
   return version ? `${name} ${version}` : name;
 };
 
+/** Model families, each expanding to a "Latest" alias plus pinned versions.
+ *  Values are passed straight to `claude --model` (aliases or full ids);
+ *  "" (Default) lets the CLI resolve the model. */
+const MODEL_GROUPS: { label: string; options: { value: string; label: string }[] }[] = [
+  {
+    label: "Opus",
+    options: [
+      { value: "opus", label: "Latest" },
+      { value: "claude-opus-5", label: "Opus 5" },
+      { value: "claude-opus-4-8", label: "Opus 4.8" },
+      { value: "claude-opus-4-7", label: "Opus 4.7" },
+      { value: "claude-opus-4-6", label: "Opus 4.6" },
+    ],
+  },
+  {
+    label: "Sonnet",
+    options: [
+      { value: "sonnet", label: "Latest" },
+      { value: "claude-sonnet-5", label: "Sonnet 5" },
+      { value: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+      { value: "sonnet[1m]", label: "Sonnet (1M)" },
+    ],
+  },
+  {
+    label: "Haiku",
+    options: [
+      { value: "haiku", label: "Latest" },
+      { value: "claude-haiku-4-5", label: "Haiku 4.5" },
+    ],
+  },
+];
+
+/** Human label for a stored value: the pinned name, or the family name for a
+ *  bare "Latest" alias. Falls back to prettyModel for anything unknown. */
+const modelLabel = (value: string): string => {
+  for (const g of MODEL_GROUPS) {
+    const o = g.options.find((x) => x.value === value);
+    if (o) return o.label === "Latest" ? g.label : o.label;
+  }
+  return prettyModel(value);
+};
+
+interface ModelPickerProps {
+  /** Selected `--model` value for this session; "" = default. */
+  model: string;
+  usage: ChatUsage;
+  onModelChange: (model: string) => void;
+}
+
+/** Dropdown that swaps the running model. "Default" shows the model the CLI
+ *  actually resolved (from usage) so the footer still reads e.g. "Opus 5".
+ *  Families open a submenu of pinned versions. */
+const ModelPicker = memo(function ModelPicker({
+  model,
+  usage,
+  onModelChange,
+}: ModelPickerProps) {
+  const label =
+    model === ""
+      ? usage.model
+        ? prettyModel(usage.model)
+        : "Default"
+      : modelLabel(model);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger className="flex items-center gap-1.5 rounded font-medium text-foreground outline-none transition-colors hover:text-primary">
+        <Sparkles className="size-3.5 shrink-0 text-primary" />
+        <span className="truncate">{label}</span>
+        <ChevronsUpDown className="size-3 shrink-0 opacity-50" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-36">
+        <DropdownMenuItem
+          onSelect={() => onModelChange("")}
+          className="justify-between gap-4"
+        >
+          {usage.model ? `Default (${prettyModel(usage.model)})` : "Default"}
+          {model === "" && <Check className="size-3.5" />}
+        </DropdownMenuItem>
+        {MODEL_GROUPS.map((g) => {
+          const active = g.options.some((o) => o.value === model);
+          return (
+            <DropdownMenuSub key={g.label}>
+              <DropdownMenuSubTrigger className={active ? "text-primary" : undefined}>
+                {g.label}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                {g.options.map((o) => (
+                  <DropdownMenuItem
+                    key={o.value}
+                    onSelect={() => onModelChange(o.value)}
+                    className="justify-between gap-4"
+                  >
+                    {o.label}
+                    {o.value === model && <Check className="size-3.5" />}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+});
+
 interface UsageFooterProps {
   /** Turns typed while busy and not yet sent. */
   queued: number;
   usage: ChatUsage;
+  /** Selected `--model` alias; "" = default. */
+  model: string;
+  onModelChange: (model: string) => void;
 }
 
 /** Token/cost telemetry restated on every message_delta. Split out so that
  *  churn re-renders this row alone, and so typing (which changes the composer's
  *  draft state, not the usage) skips it. */
-const UsageFooter = memo(function UsageFooter({ queued, usage }: UsageFooterProps) {
+const UsageFooter = memo(function UsageFooter({
+  queued,
+  usage,
+  model,
+  onModelChange,
+}: UsageFooterProps) {
   return (
     <div className="flex min-w-0 items-center gap-2.5 text-xs text-muted-foreground">
       {queued > 0 && (
@@ -87,12 +219,7 @@ const UsageFooter = memo(function UsageFooter({ queued, usage }: UsageFooterProp
           {queued} queued
         </span>
       )}
-      {usage.model && (
-        <span className="flex items-center gap-1.5 font-medium text-foreground">
-          <Sparkles className="size-3.5 shrink-0 text-primary" />
-          <span className="truncate">{prettyModel(usage.model)}</span>
-        </span>
-      )}
+      <ModelPicker model={model} usage={usage} onModelChange={onModelChange} />
       {(usage.inputTokens != null ||
         usage.outputTokens != null ||
         usage.costUsd != null) && (
@@ -132,6 +259,9 @@ interface ChatComposerProps {
   exited: boolean;
   /** True while a permission prompt owns the keyboard. */
   usage: ChatUsage;
+  /** Selected `--model` alias for this session; "" = default. */
+  model: string;
+  onModelChange: (model: string) => void;
   onSend: (text: string, images: ChatImage[]) => void;
   onStop: () => void;
   /** Un-send the newest in-flight turn; returns its text/images to restore. */
@@ -153,6 +283,8 @@ export const ChatComposer = memo(function ChatComposer({
   queued,
   exited,
   usage,
+  model,
+  onModelChange,
   onSend,
   onStop,
   onRewind,
@@ -445,7 +577,12 @@ export const ChatComposer = memo(function ChatComposer({
           className="max-h-40 min-h-16 resize-none overflow-y-auto border-0 bg-transparent px-3.5 pb-1 pt-3 shadow-none focus-visible:ring-0"
         />
         <div className="flex items-center justify-between gap-2 px-2.5 pb-2 pt-1">
-          <UsageFooter queued={queued} usage={usage} />
+          <UsageFooter
+            queued={queued}
+            usage={usage}
+            model={model}
+            onModelChange={onModelChange}
+          />
           <div className="flex shrink-0 items-center gap-1.5">
             {busy && (
               <button

@@ -18,6 +18,8 @@ export interface Settings {
   scrollback: number;
   /** Launch Claude with --dangerously-skip-permissions. */
   dangerouslySkipPermissions: boolean;
+  /** `--model` alias for new chats: "" = CLI default, else opus/sonnet/sonnet[1m]/haiku. */
+  model: string;
   /** On project open, resume the most recent thread instead of a fresh agent. */
   resumeLatestThread: boolean;
   /** Keep every open project's session list expanded, not just the active one. */
@@ -57,6 +59,7 @@ export const DEFAULT_SETTINGS: Settings = {
   editorFontSize: 13,
   scrollback: 1000,
   dangerouslySkipPermissions: true,
+  model: "",
   resumeLatestThread: false,
   expandAllProjects: false,
   compactSession: false,

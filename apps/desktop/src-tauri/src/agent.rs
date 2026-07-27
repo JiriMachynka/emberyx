@@ -71,6 +71,7 @@ impl AgentManager {
         skip_permissions: bool,
         settings: Option<String>,
         mcp_config: Option<String>,
+        model: Option<String>,
         emberyx_session_id: String,
         on_event: Channel<AgentEvent>,
     ) -> Result<u32> {
@@ -82,6 +83,12 @@ impl AgentManager {
             .arg("stream-json")
             .arg("--include-partial-messages")
             .arg("--verbose");
+
+        // Empty/absent model means the user picked "Default": let the CLI resolve
+        // it. Otherwise pin the alias (opus, sonnet, sonnet[1m], haiku).
+        if let Some(m) = model.as_deref().filter(|m| !m.is_empty()) {
+            cmd.arg("--model").arg(m);
+        }
 
         if skip_permissions {
             // Bypass entirely. `--permission-mode` and `--permission-prompt-tool`
@@ -355,6 +362,7 @@ pub fn agent_spawn(
     permission_mode: String,
     skip_permissions: bool,
     settings: Option<String>,
+    model: Option<String>,
     emberyx_session_id: String,
     on_event: Channel<AgentEvent>,
 ) -> Result<u32> {
@@ -367,6 +375,7 @@ pub fn agent_spawn(
         skip_permissions,
         settings,
         Some(mcp_config),
+        model,
         emberyx_session_id,
         on_event,
     )?)

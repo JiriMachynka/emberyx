@@ -112,6 +112,8 @@ interface Options {
   permissionMode?: string;
   /** Bypass the permission protocol entirely — no in-chat approval prompts. */
   skipPermissions?: boolean;
+  /** `--model` alias; "" / undefined lets the CLI pick. Changing it respawns. */
+  model?: string;
   /** Called with the generated title once a fresh chat has been auto-titled. */
   onTitled?: (title: string) => void;
 }
@@ -297,6 +299,7 @@ export function useAgentChat({
   resume,
   permissionMode = "acceptEdits",
   skipPermissions = false,
+  model = "",
   onTitled,
 }: Options) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -851,10 +854,13 @@ export function useAgentChat({
         const id = await invoke<number>("agent_spawn", {
           cwd,
           sessionId: crypto.randomUUID(),
-          resume: resume ?? null,
+          // Prefer the live session id so a respawn (model switch, restart)
+          // resumes the same thread instead of starting a fresh one.
+          resume: sessionRef.current ?? resume ?? null,
           permissionMode,
           skipPermissions,
           settings: null,
+          model: model || null,
           emberyxSessionId,
           onEvent: channel,
         });
@@ -885,6 +891,7 @@ export function useAgentChat({
     resume,
     permissionMode,
     skipPermissions,
+    model,
     emberyxSessionId,
     handleLine,
     announceIssue,

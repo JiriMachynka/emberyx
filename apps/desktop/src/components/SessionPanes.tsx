@@ -9,6 +9,8 @@ interface SessionPanesProps {
   sessions: Session[];
   activeId: string | null;
   settings: Settings;
+  /** Persist a new default `--model` when a chat pane switches models. */
+  onModelChange: (model: string) => void;
   /** Chat sessions rename themselves once Claude titles the thread. */
   onTitled: (session: Session, title: string) => void;
 }
@@ -22,6 +24,7 @@ export function SessionPanes({
   sessions,
   activeId,
   settings,
+  onModelChange,
   onTitled,
 }: SessionPanesProps) {
   return (
@@ -42,6 +45,8 @@ export function SessionPanes({
                 fontFamily={settings.fontFamily}
                 fontSize={settings.fontSize}
                 skipPermissions={settings.dangerouslySkipPermissions}
+                model={settings.model}
+                onModelChange={onModelChange}
                 onTitled={(title) => onTitled(s, title)}
               />
             ) : s.kind === "dokploy-logs" ? (
