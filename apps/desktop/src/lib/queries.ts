@@ -13,6 +13,14 @@ import type {
   SlashCommand,
   UsageRow,
 } from "@/types";
+import type {
+  ConflictStages,
+  MergeRequest,
+  MergeRequestDetail,
+  MrDiffFile,
+  MrNote,
+  MrState,
+} from "@/lib/gitlab";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -35,6 +43,10 @@ export const gitKeys = {
   stashes: (path: string) => ["git", "stashes", path] as const,
   worktrees: (path: string) => ["git", "worktrees", path] as const,
   repoRoot: (path: string) => ["git", "repoRoot", path] as const,
+  conflicts: (path: string) => ["git", "conflicts", path] as const,
+  mergeState: (path: string) => ["git", "mergeState", path] as const,
+  conflictStages: (path: string, file: string) =>
+    ["git", "conflictStages", path, file] as const,
   log: (path: string, file: string) => ["git", "log", path, file] as const,
   show: (path: string, sha: string, file: string) =>
     ["git", "show", path, sha, file] as const,
@@ -137,12 +149,114 @@ export const useInvalidateGit = () => {
   const qc = useQueryClient();
   return (path: string, also?: string) => {
     for (const p of also ? [path, also] : [path]) {
-      const views = ["changes", "diff", "branch", "branches", "stashes", "log", "worktrees"];
+      const views = [
+        "changes",
+        "diff",
+        "branch",
+        "branches",
+        "stashes",
+        "log",
+        "worktrees",
+        "conflicts",
+        "mergeState",
+        "conflictStages",
+      ];
       for (const key of views) {
         qc.invalidateQueries({ queryKey: ["git", key, p] });
       }
     }
   };
+};
+
+/** Paths left conflicted by an in-progress merge. Reflects disk, so it is never
+ *  served stale — a resolve outside this hook must show up immediately. */
+export const useGitConflicts = (path: string) =>
+  useQuery({
+    queryKey: gitKeys.conflicts(path),
+    queryFn: () => invoke<string[]>("git_conflicts", { path }),
+    staleTime: 0,
+  });
+
+/** Whether MERGE_HEAD exists — i.e. a merge is waiting to be finished. */
+export const useGitMergeState = (path: string) =>
+  useQuery({
+    queryKey: gitKeys.mergeState(path),
+    queryFn: () => invoke<boolean>("git_merge_state", { path }),
+    staleTime: 0,
+  });
+
+/** base/ours/theirs/merged for one conflicted file. `file` null → disabled. */
+export const useGitConflictStages = (path: string, file: string | null) =>
+  useQuery({
+    queryKey: gitKeys.conflictStages(path, file ?? ""),
+    queryFn: () =>
+      invoke<ConflictStages>("git_conflict_stages", { path, file }),
+    enabled: !!file,
+    staleTime: 0,
+  });
+
+// GitLab reads go over the network, so they carry a longer staleTime than the
+// local git views. A missing token surfaces as a query error, not a crash —
+// hence `retry: false` throughout.
+export const gitlabKeys = {
+  token: () => ["gitlab", "token"] as const,
+  mrs: (path: string, state: MrState) =>
+    ["gitlab", "mrs", path, state] as const,
+  mr: (path: string, iid: number) => ["gitlab", "mr", path, iid] as const,
+  diff: (path: string, iid: number) => ["gitlab", "diff", path, iid] as const,
+  notes: (path: string, iid: number) => ["gitlab", "notes", path, iid] as const,
+};
+
+/** Whether a personal access token is stored in the OS keychain. */
+export const useGitlabToken = () =>
+  useQuery({
+    queryKey: gitlabKeys.token(),
+    queryFn: () => invoke<boolean>("gitlab_has_token"),
+    staleTime: Infinity,
+    retry: false,
+  });
+
+/** `path` null → disabled; the project's git remote picks the GitLab project. */
+export const useGitlabMrs = (path: string | null, state: MrState) =>
+  useQuery({
+    queryKey: gitlabKeys.mrs(path ?? "", state),
+    queryFn: () => invoke<MergeRequest[]>("gitlab_mrs", { path, state }),
+    enabled: !!path,
+    staleTime: 30_000,
+    retry: false,
+  });
+
+export const useGitlabMr = (path: string | null, iid: number | null) =>
+  useQuery({
+    queryKey: gitlabKeys.mr(path ?? "", iid ?? 0),
+    queryFn: () => invoke<MergeRequestDetail>("gitlab_mr", { path, iid }),
+    enabled: !!path && iid !== null,
+    staleTime: 30_000,
+    retry: false,
+  });
+
+export const useGitlabMrDiff = (path: string | null, iid: number | null) =>
+  useQuery({
+    queryKey: gitlabKeys.diff(path ?? "", iid ?? 0),
+    queryFn: () => invoke<MrDiffFile[]>("gitlab_mr_diff", { path, iid }),
+    enabled: !!path && iid !== null,
+    staleTime: 30_000,
+    retry: false,
+  });
+
+export const useGitlabMrNotes = (path: string | null, iid: number | null) =>
+  useQuery({
+    queryKey: gitlabKeys.notes(path ?? "", iid ?? 0),
+    queryFn: () => invoke<MrNote[]>("gitlab_mr_notes", { path, iid }),
+    enabled: !!path && iid !== null,
+    staleTime: 30_000,
+    retry: false,
+  });
+
+/** Refetch every GitLab view — after saving/clearing a token or acting on an MR.
+ *  Takes the client directly so non-hook callers (mutation handlers) can use it. */
+export const invalidateGitlab = (qc: QueryClient) => {
+  qc.invalidateQueries({ queryKey: ["gitlab"] });
 };
 
 // Editor file-tree + buffer reads, keyed by absolute path.

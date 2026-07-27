@@ -4,6 +4,7 @@ import {
   FileCode,
   ChevronRight,
   GitBranch as GitBranchIcon,
+  GitPullRequest,
   SlashSquare,
   Terminal,
 } from "lucide-react";
@@ -28,6 +29,7 @@ interface ContextBarProps {
   /** Session ids in the active project — for the working-tree change count. */
   sessionIds: string[];
   changesOpen: boolean;
+  mrsOpen: boolean;
   devOpen: boolean;
   /** Running dev servers in this project — badge on the Dev output toggle. */
   devCount: number;
@@ -42,6 +44,7 @@ interface ContextBarProps {
   onRefreshThreads: () => void;
   onResumeThread: (thread: Thread) => void;
   onToggleChanges: () => void;
+  onToggleMrs: () => void;
   onOpenEditor: () => void;
   onOpenUsage: () => void;
   onOpenSlash: () => void;
@@ -59,6 +62,7 @@ export function ContextBar({
   devRunning,
   sessionIds,
   changesOpen,
+  mrsOpen,
   devOpen,
   devCount,
   onToggleDev,
@@ -71,6 +75,7 @@ export function ContextBar({
   onRefreshThreads,
   onResumeThread,
   onToggleChanges,
+  onToggleMrs,
   onOpenEditor,
   onOpenUsage,
   onOpenSlash,
@@ -221,6 +226,17 @@ export function ContextBar({
                 {changesCount}
               </span>
             )}
+          </Button>
+        )}
+        {activeProject && (
+          <Button
+            variant={mrsOpen ? "secondary" : "ghost"}
+            size="sm"
+            onClick={onToggleMrs}
+            title="Merge requests"
+          >
+            <GitPullRequest className="size-3.5" />
+            MRs
           </Button>
         )}
       </div>

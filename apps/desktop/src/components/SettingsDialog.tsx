@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Dialog,
   DialogContent,
@@ -11,7 +13,11 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { checkForUpdates } from "@/lib/update";
-import { useOpenRouterModels } from "@/lib/queries";
+import {
+  invalidateGitlab,
+  useGitlabToken,
+  useOpenRouterModels,
+} from "@/lib/queries";
 import { Field, Toggle } from "@/components/SettingsFields";
 import type { Settings } from "@/lib/settings";
 
@@ -41,10 +47,25 @@ export function SettingsDialog({
   const [checking, setChecking] = useState(false);
   const isClaude = settings.agentCommand.startsWith("claude");
   const models = useOpenRouterModels(open).data ?? [];
+  const qc = useQueryClient();
+  const hasGitlabToken = useGitlabToken().data ?? false;
+  // Held only until Save hands it to the keychain, then wiped.
+  const [gitlabToken, setGitlabToken] = useState("");
 
   useEffect(() => {
     getVersion().then(setVersion).catch(() => {});
   }, []);
+
+  async function onSaveGitlabToken() {
+    await invoke("gitlab_set_token", { token: gitlabToken.trim() });
+    setGitlabToken("");
+    invalidateGitlab(qc);
+  }
+
+  async function onClearGitlabToken() {
+    await invoke("gitlab_clear_token");
+    invalidateGitlab(qc);
+  }
 
   async function onCheckUpdates() {
     setChecking(true);
@@ -303,6 +324,60 @@ export function SettingsDialog({
                       onChange={(e) =>
                         onUpdate({ dokployApiKey: e.target.value })
                       }
+                      spellCheck={false}
+                    />
+                  </Field>
+                </div>
+              </div>
+
+              <div className="border-t pt-4">
+                <div className="mb-3 text-sm font-semibold">GitLab</div>
+                <div className="grid gap-4">
+                  <Field
+                    label="Personal access token"
+                    hint="Needs the read_api scope. gitlab.com only. Stored in the OS keychain, never on disk."
+                  >
+                    {hasGitlabToken ? (
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-9 flex-1 items-center rounded-md border border-input px-3 text-sm text-muted-foreground">
+                          •••••••• Connected
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={onClearGitlabToken}
+                        >
+                          Disconnect
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="password"
+                          value={gitlabToken}
+                          onChange={(e) => setGitlabToken(e.target.value)}
+                          placeholder="glpat-…"
+                          spellCheck={false}
+                          autoComplete="off"
+                        />
+                        <Button
+                          size="sm"
+                          onClick={onSaveGitlabToken}
+                          disabled={!gitlabToken.trim()}
+                        >
+                          Save
+                        </Button>
+                      </div>
+                    )}
+                  </Field>
+                  <Field
+                    label="Remote"
+                    hint="Git remote used to fetch and check out MR branches."
+                  >
+                    <Input
+                      value={settings.gitlabRemote}
+                      onChange={(e) => onUpdate({ gitlabRemote: e.target.value })}
+                      placeholder="origin"
                       spellCheck={false}
                     />
                   </Field>

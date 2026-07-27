@@ -247,10 +247,10 @@ function SessionList({
             }}
             className={cn(
               "group flex cursor-grab items-center gap-2 rounded px-2 py-1.5 text-sm active:cursor-grabbing",
-              // Only the session on screen gets the filled+ringed treatment;
+              // Only the session on screen gets the filled treatment;
               // hover stays deliberately fainter so it can't be mistaken for it.
               active
-                ? "bg-accent font-medium text-foreground ring-1 ring-primary/40"
+                ? "bg-accent font-medium text-foreground"
                 : "text-muted-foreground hover:bg-secondary/40",
               dragId === s.id && "opacity-40",
               overId === s.id && "ring-1 ring-primary/60"

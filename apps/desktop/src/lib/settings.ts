@@ -28,6 +28,9 @@ export interface Settings {
   dokployUrl: string;
   /** Dokploy API key (sent as x-api-key). */
   dokployApiKey: string;
+  /** Git remote used for GitLab fetch/checkout. The token itself lives in the
+   *  OS keychain, never here. */
+  gitlabRemote: string;
   /** OpenRouter API key for generating commit messages. */
   openRouterApiKey: string;
   /** OpenRouter model slug, e.g. anthropic/claude-3.5-haiku. */
@@ -59,6 +62,7 @@ export const DEFAULT_SETTINGS: Settings = {
   compactSession: false,
   dokployUrl: "",
   dokployApiKey: "",
+  gitlabRemote: "origin",
   openRouterApiKey: "",
   openRouterModel: "",
   notifyOnDone: true,

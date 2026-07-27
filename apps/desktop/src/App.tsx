@@ -8,6 +8,7 @@ import { ProjectSettingsPane } from "@/components/ProjectSettingsPane";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { AgentPanel } from "@/components/AgentPanel";
 import { ChangesPanel } from "@/components/ChangesPanel";
+import { MergeRequestsPanel } from "@/components/MergeRequestsPanel";
 import { NotificationPanel } from "@/components/NotificationPanel";
 import { DevPanel } from "@/components/DevPanel";
 import { ContextBar } from "@/components/ContextBar";
@@ -30,6 +31,11 @@ import { useShortcuts } from "@/hooks/useShortcuts";
 import { useLaunchUpdateCheck } from "@/hooks/useLaunchUpdateCheck";
 
 // CodeMirror is a big chunk; only sessions that open the editor pay for it.
+// Three CodeMirror instances plus the merge machinery — only pay for it when a
+// merge actually stops on conflicts.
+const ConflictView = lazy(() =>
+  import("@/components/ConflictView").then((m) => ({ default: m.ConflictView }))
+);
 const EditorPane = lazy(() =>
   import("@/components/EditorPane").then((m) => ({ default: m.EditorPane }))
 );
@@ -41,6 +47,8 @@ function App() {
   const [devOpen, setDevOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
+  const [mrsOpen, setMrsOpen] = useState(false);
+  const [conflictOpen, setConflictOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -167,6 +175,17 @@ function App() {
   const agent = activeSession?.kind === "agent" ? activeSession : firstAgent;
   // The chat session slash commands run in — the active tab when it's a chat.
   const activeChatId = activeSession?.kind === "chat" ? activeSession.id : null;
+  const chatSend = useAgentStore((s) =>
+    activeChatId ? s.senders[activeChatId] : undefined
+  );
+  // Conflict resolution hands its prompt to the active chat session, the same
+  // path the slash panel uses.
+  const askClaude = chatSend
+    ? (prompt: string) => {
+        chatSend(prompt);
+        setConflictOpen(false);
+      }
+    : undefined;
   const projectSessionIds = useMemo(
     () => projectSessions.map((s) => s.id),
     [projectSessions]
@@ -213,6 +232,8 @@ function App() {
           devRunning={projectSessions.some((s) => s.kind === "dev")}
           sessionIds={projectSessionIds}
           changesOpen={changesOpen}
+          mrsOpen={mrsOpen}
+          onToggleMrs={() => setMrsOpen((v) => !v)}
           devOpen={devOpen}
           devCount={devCount}
           onToggleDev={() => setDevOpen((v) => !v)}
@@ -288,6 +309,18 @@ function App() {
                 </Suspense>
               </div>
             )}
+            {activeProject && conflictOpen && (
+              <div className="absolute inset-1 overflow-hidden rounded-md border bg-background">
+                <Suspense fallback={null}>
+                  <ConflictView
+                    key={activeProject.path}
+                    path={activeProject.path}
+                    onDone={() => setConflictOpen(false)}
+                    onAskClaude={askClaude}
+                  />
+                </Suspense>
+              </div>
+            )}
             {!revealed && (
               <div className="canvas-lit absolute inset-0">
                 <WelcomeScreen
@@ -328,6 +361,14 @@ function App() {
                 onRemoveWorktree={ws.removeWorktree}
               />
             </div>
+          )}
+          {activeProject && mrsOpen && (
+            <MergeRequestsPanel
+              open={mrsOpen}
+              path={activeProject.path}
+              onClose={() => setMrsOpen(false)}
+              onConflicts={() => setConflictOpen(true)}
+            />
           )}
           {activeProject && projectSettingsOpen && (
             <SidePanel

@@ -6,6 +6,7 @@ mod error;
 mod files;
 mod fs_walk;
 mod git;
+mod gitlab;
 mod hooks;
 mod icon;
 mod openrouter;
@@ -94,6 +95,22 @@ pub fn run() {
             git::git_stash_list,
             git::git_stash_apply,
             git::git_stash_drop,
+            git::git_fetch,
+            git::git_checkout_remote,
+            git::git_merge,
+            git::git_conflicts,
+            git::git_conflict_stages,
+            git::git_resolve,
+            git::git_merge_abort,
+            git::git_merge_continue,
+            git::git_merge_state,
+            gitlab::gitlab_set_token,
+            gitlab::gitlab_has_token,
+            gitlab::gitlab_clear_token,
+            gitlab::gitlab_mrs,
+            gitlab::gitlab_mr,
+            gitlab::gitlab_mr_diff,
+            gitlab::gitlab_mr_notes,
             usage::read_usage,
             usage::usage_summary,
             threads::list_threads,
