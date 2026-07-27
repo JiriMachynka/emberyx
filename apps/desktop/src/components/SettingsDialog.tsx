@@ -183,6 +183,15 @@ export function SettingsDialog({
               </Toggle>
 
               <Toggle
+                checked={settings.autoOpenDevPanel}
+                onChange={(v) => onUpdate({ autoOpenDevPanel: v })}
+                title="Auto-open dev panel on run"
+              >
+                Reveal the dev output panel whenever a dev, build, or start run
+                begins.
+              </Toggle>
+
+              <Toggle
                 checked={settings.notifyOnDone}
                 onChange={(v) => onUpdate({ notifyOnDone: v })}
                 title="Notify when a task finishes"

@@ -1090,6 +1090,53 @@ pub async fn git_merge_state(path: String) -> Result<bool> {
     .map_err(|e| e.to_string())??)
 }
 
+/// `remote.origin.url` for the repo at `cwd`, if it has one.
+fn remote_url(cwd: &str) -> Option<String> {
+    let out = Command::new("git")
+        .args(["-C", cwd, "config", "--get", "remote.origin.url"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!s.is_empty()).then_some(s)
+}
+
+/// Bare, lowercased host of a git remote URL (`github.com`,
+/// `gitlab.example.com`, …). Handles `scheme://host/…` and scp-form
+/// `git@host:owner/repo`, stripping any credentials and port.
+fn parse_remote_host(raw: &str) -> Option<String> {
+    let s = raw.trim().trim_end_matches('/');
+    let authority = if let Some(idx) = s.find("://") {
+        s[idx + 3..].split('/').next()?
+    } else {
+        s.split(':').next()?
+    };
+    let host = authority.rsplit('@').next()?;
+    let host = host.split(':').next()?;
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+/// Classify the origin remote's host as `"github" | "gitlab" | "other"`.
+/// Returns `"other"` when there is no remote or the host is neither. A
+/// self-hosted GitLab on a custom domain reads as `"other"` — known limitation.
+#[tauri::command]
+pub fn git_remote_host(path: String) -> Result<String> {
+    let host = match remote_url(&path).as_deref().and_then(parse_remote_host) {
+        Some(h) => h,
+        None => return Ok("other".into()),
+    };
+    let kind = if host.contains("github") {
+        "github"
+    } else if host.contains("gitlab") {
+        "gitlab"
+    } else {
+        "other"
+    };
+    Ok(kind.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1194,6 +1241,30 @@ mod tests {
         // Degenerate input must not panic.
         assert_eq!(unquote_path("\""), "\"");
         assert_eq!(unquote_path(""), "");
+    }
+
+    #[test]
+    fn parses_the_remote_host() {
+        assert_eq!(
+            parse_remote_host("https://github.com/owner/repo.git").as_deref(),
+            Some("github.com")
+        );
+        // scp-form.
+        assert_eq!(
+            parse_remote_host("git@github.com:owner/repo.git").as_deref(),
+            Some("github.com")
+        );
+        // Nested groups + credentials + port.
+        assert_eq!(
+            parse_remote_host("https://user@gitlab.com:443/group/sub/repo.git").as_deref(),
+            Some("gitlab.com")
+        );
+        // Self-hosted host survives verbatim (classified as "other" upstream).
+        assert_eq!(
+            parse_remote_host("git@gitlab.example.com:g/r.git").as_deref(),
+            Some("gitlab.example.com")
+        );
+        assert_eq!(parse_remote_host(""), None);
     }
 
     #[test]

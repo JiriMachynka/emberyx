@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAgentStore, type SubagentActivity } from "@/lib/agentStore";
+import type { SessionStatus } from "@/types";
 import {
   classifyFailure,
   issueTitle,
@@ -59,6 +60,18 @@ export type ChatStatus =
   | "awaiting_answer"
   | "error"
   | "exited";
+
+/** Chat status → the sidebar's coarse session status (drives its dot colour). */
+const SESSION_STATUS: Record<ChatStatus, SessionStatus> = {
+  idle: "idle",
+  thinking: "working",
+  streaming: "working",
+  tool: "working",
+  awaiting_permission: "waiting",
+  awaiting_answer: "waiting",
+  error: "idle",
+  exited: "idle",
+};
 
 export type PermissionDecision = "allow_once" | "allow_always" | "deny";
 
@@ -344,6 +357,14 @@ export function useAgentChat({
   const endOpenSubagents = useAgentStore((st) => st.endOpenSubagents);
   const pushNotification = useAgentStore((st) => st.pushNotification);
   const reportAccountIssue = useAgentStore((st) => st.reportAccountIssue);
+  const setSessionStatus = useAgentStore((st) => st.setStatus);
+
+  // Mirror the chat's live status into the global store so the sidebar dot can
+  // turn orange while Claude works. Reset to idle on unmount.
+  useEffect(() => {
+    setSessionStatus(emberyxSessionId, SESSION_STATUS[status]);
+    return () => setSessionStatus(emberyxSessionId, "idle");
+  }, [status, emberyxSessionId, setSessionStatus]);
   const clearAccountIssue = useAgentStore((st) => st.clearAccountIssue);
 
   // Turns typed while the agent was busy, oldest first, plus its rendered count.

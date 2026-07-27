@@ -17,6 +17,10 @@ pub struct PackageInfo {
     pub path: String,
     /// Full command to run, e.g. "bun run dev".
     pub dev_command: String,
+    /// Build command (root/package "build" script), if one exists.
+    pub build_command: Option<String>,
+    /// Command to run the built app ("start"/"preview"/"serve"), if one exists.
+    pub start_command: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -30,9 +34,18 @@ pub struct WorkspaceInfo {
     pub packages: Vec<PackageInfo>,
     /// Command to run everything at once (root "dev" script), if one exists.
     pub all_command: Option<String>,
+    /// Root "build" script, if one exists.
+    pub build_command: Option<String>,
+    /// Root command to run the built app ("start"/"preview"/"serve"), if any.
+    pub start_command: Option<String>,
+    /// True when the project looks like a Python project with no JS dev script,
+    /// so the frontend can still offer a Dev button.
+    pub is_python: bool,
 }
 
-const DEV_SCRIPTS: [&str; 3] = ["dev", "start", "serve"];
+const DEV_SCRIPTS: [&str; 3] = ["dev", "serve", "start"];
+const BUILD_SCRIPTS: [&str; 1] = ["build"];
+const START_SCRIPTS: [&str; 3] = ["start", "preview", "serve"];
 
 fn detect_package_manager(root: &Path) -> String {
     if root.join("bun.lock").exists() || root.join("bun.lockb").exists() {
@@ -53,13 +66,18 @@ fn read_json(path: &Path) -> Option<Value> {
     serde_json::from_str(&text).ok()
 }
 
-/// Pick the first present dev-ish script name from a package.json.
-fn pick_dev_script(pkg: &Value) -> Option<String> {
+/// Pick the first present script name from `names` in a package.json.
+fn pick_script(pkg: &Value, names: &[&str]) -> Option<String> {
     let scripts = pkg.get("scripts")?.as_object()?;
-    DEV_SCRIPTS
+    names
         .iter()
         .find(|s| scripts.contains_key(**s))
         .map(|s| s.to_string())
+}
+
+/// Pick the first present dev-ish script name from a package.json.
+fn pick_dev_script(pkg: &Value) -> Option<String> {
+    pick_script(pkg, &DEV_SCRIPTS)
 }
 
 fn run_command(pm: &str, script: &str) -> String {
@@ -151,6 +169,8 @@ fn package_from_dir(root: &Path, dir: &Path, pm: &str) -> Option<PackageInfo> {
         rel_path: if rel_path.is_empty() { ".".into() } else { rel_path },
         path: dir.to_string_lossy().to_string(),
         dev_command: run_command(pm, &script),
+        build_command: pick_script(&pkg, &BUILD_SCRIPTS).map(|s| run_command(pm, &s)),
+        start_command: pick_script(&pkg, &START_SCRIPTS).map(|s| run_command(pm, &s)),
     })
 }
 
@@ -207,6 +227,35 @@ pub fn scan(root_str: &str) -> Result<WorkspaceInfo> {
         }
     }
 
+    // No JS dev script anywhere — fall back to lightweight Python detection so
+    // the project stays runnable.
+    let mut is_python = false;
+    if packages.is_empty() {
+        let has_manage = root.join("manage.py").exists();
+        is_python = has_manage
+            || root.join("pyproject.toml").exists()
+            || root.join("requirements.txt").exists()
+            || root.join("main.py").exists()
+            || root.join("app.py").exists();
+        // Django is the only shape with a canonical dev command; everything else
+        // is left for the frontend to prompt for.
+        if has_manage {
+            let name = root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("app")
+                .to_string();
+            packages.push(PackageInfo {
+                name,
+                rel_path: ".".into(),
+                path: root.to_string_lossy().to_string(),
+                dev_command: "python manage.py runserver".into(),
+                build_command: None,
+                start_command: None,
+            });
+        }
+    }
+
     packages.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
     // "All" command = root dev script, if present.
@@ -214,12 +263,23 @@ pub fn scan(root_str: &str) -> Result<WorkspaceInfo> {
         .as_ref()
         .and_then(pick_dev_script)
         .map(|s| run_command(&pm, &s));
+    let build_command = root_pkg
+        .as_ref()
+        .and_then(|p| pick_script(p, &BUILD_SCRIPTS))
+        .map(|s| run_command(&pm, &s));
+    let start_command = root_pkg
+        .as_ref()
+        .and_then(|p| pick_script(p, &START_SCRIPTS))
+        .map(|s| run_command(&pm, &s));
 
     Ok(WorkspaceInfo {
         kind,
         package_manager: pm,
         packages,
         all_command,
+        build_command,
+        start_command,
+        is_python,
     })
 }
 
@@ -320,6 +380,57 @@ mod tests {
         assert_eq!(info.packages[0].name, "solo");
         assert_eq!(info.packages[0].rel_path, ".");
         assert_eq!(info.packages[0].dev_command, "npm run dev");
+        assert!(!info.is_python);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn surfaces_build_and_start_commands() {
+        let root = std::env::temp_dir().join("emberyx_test_buildstart");
+        let _ = std::fs::remove_dir_all(&root);
+
+        write(&root.join("bun.lock"), "");
+        write(
+            &root.join("package.json"),
+            r#"{"name":"solo","scripts":{"dev":"vite","build":"vite build","preview":"vite preview"}}"#,
+        );
+
+        let info = scan(root.to_str().unwrap()).unwrap();
+        assert_eq!(info.build_command.as_deref(), Some("bun run build"));
+        assert_eq!(info.start_command.as_deref(), Some("bun run preview"));
+        assert_eq!(info.packages[0].build_command.as_deref(), Some("bun run build"));
+        assert_eq!(info.packages[0].start_command.as_deref(), Some("bun run preview"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn detects_django_python_project() {
+        let root = std::env::temp_dir().join("emberyx_test_django");
+        let _ = std::fs::remove_dir_all(&root);
+
+        write(&root.join("manage.py"), "# django");
+        write(&root.join("requirements.txt"), "django\n");
+
+        let info = scan(root.to_str().unwrap()).unwrap();
+        assert!(info.is_python);
+        assert_eq!(info.packages.len(), 1);
+        assert_eq!(info.packages[0].dev_command, "python manage.py runserver");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn detects_python_without_fabricating_a_command() {
+        let root = std::env::temp_dir().join("emberyx_test_pyreqs");
+        let _ = std::fs::remove_dir_all(&root);
+
+        write(&root.join("requirements.txt"), "fastapi\n");
+
+        let info = scan(root.to_str().unwrap()).unwrap();
+        assert!(info.is_python);
+        assert!(info.packages.is_empty());
 
         let _ = std::fs::remove_dir_all(&root);
     }

@@ -1,4 +1,12 @@
-import { Play, ChevronDown, Layers, Square, Pencil } from "lucide-react";
+import {
+  Play,
+  ChevronDown,
+  Layers,
+  Square,
+  Pencil,
+  Hammer,
+  Rocket,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -15,9 +23,17 @@ interface DevMenuProps {
   running: boolean;
   /** Per-project custom dev command; overrides detection when set. */
   customCommand: string;
+  /** Effective build command (override or detected); empty = nothing to run. */
+  buildCommand: string;
+  /** Effective start command for the built app; empty = nothing to run. */
+  startCommand: string;
+  /** Python project with no JS packages — the custom command is the only way in. */
+  isPython: boolean;
   /** Opens the project settings pane, which owns editing the dev command. */
   onEditCustom: () => void;
   onRunCustom: () => void;
+  onRunBuild: () => void;
+  onRunStart: () => void;
   onRunPackage: (pkg: PackageInfo) => void;
   onRunAll: () => void;
   onStop: () => void;
@@ -27,8 +43,13 @@ export function DevMenu({
   workspace,
   running,
   customCommand,
+  buildCommand,
+  startCommand,
+  isPython,
   onEditCustom,
   onRunCustom,
+  onRunBuild,
+  onRunStart,
   onRunPackage,
   onRunAll,
   onStop,
@@ -36,6 +57,8 @@ export function DevMenu({
   const packages = workspace?.packages ?? [];
   const isMonorepo = packages.length > 1;
   const hasCustom = customCommand.trim().length > 0;
+  const hasBuild = buildCommand.trim().length > 0;
+  const hasStart = startCommand.trim().length > 0;
 
   if (running) {
     return (
@@ -61,7 +84,9 @@ export function DevMenu({
       ? packages[0].devCommand
       : isMonorepo
         ? workspace?.allCommand ?? "Run all packages"
-        : "No dev script found — set a custom command";
+        : isPython
+          ? "Set a custom dev command for this Python project"
+          : "No dev script found — set a custom command";
 
   return (
     <div className="flex items-center">
@@ -94,6 +119,33 @@ export function DevMenu({
             {hasCustom && (
               <span className="max-w-[7rem] truncate text-xs text-muted-foreground">
                 {customCommand}
+              </span>
+            )}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            disabled={!hasBuild}
+            onSelect={() => onRunBuild()}
+            title={hasBuild ? buildCommand : undefined}
+          >
+            <Hammer className="opacity-60" />
+            <span className="flex-1">Build</span>
+            {hasBuild && (
+              <span className="max-w-[7rem] truncate text-xs text-muted-foreground">
+                {buildCommand}
+              </span>
+            )}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={!hasStart}
+            onSelect={() => onRunStart()}
+            title={hasStart ? startCommand : undefined}
+          >
+            <Rocket className="opacity-60" />
+            <span className="flex-1">Start built app</span>
+            {hasStart && (
+              <span className="max-w-[7rem] truncate text-xs text-muted-foreground">
+                {startCommand}
               </span>
             )}
           </DropdownMenuItem>

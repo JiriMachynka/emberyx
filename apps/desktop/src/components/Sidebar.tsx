@@ -62,6 +62,16 @@ const SessionStatusDot = memo(function SessionStatusDot({ id }: { id: string }) 
   return <StatusDot status={status} />;
 });
 
+/** Leading bullet for a chat session: orange/amber while Claude works,
+ *  otherwise a static green dot. */
+const ChatStatusBullet = memo(function ChatStatusBullet({ id }: { id: string }) {
+  const status = useAgentStore((s) => statusOf(s.statuses, id));
+  if (status === "working" || status === "waiting") {
+    return <StatusDot status={status} />;
+  }
+  return <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />;
+});
+
 /** Rolled-up status for a project row: working if any of its agents is,
  *  otherwise the first agent's own status. */
 function ProjectStatusDot({
@@ -258,6 +268,8 @@ function SessionList({
           >
             {s.kind === "agent" ? (
               <Bot className="size-4 shrink-0 opacity-70" />
+            ) : s.kind === "chat" ? (
+              <ChatStatusBullet id={s.id} />
             ) : (
               <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
             )}

@@ -104,6 +104,7 @@ pub fn run() {
             git::git_merge_abort,
             git::git_merge_continue,
             git::git_merge_state,
+            git::git_remote_host,
             gitlab::gitlab_set_token,
             gitlab::gitlab_has_token,
             gitlab::gitlab_clear_token,

@@ -8,18 +8,23 @@ import {
   History,
   MessageSquare,
   Plus,
+  RotateCw,
+  ScrollText,
   Search,
   Settings,
+  SlashSquare,
   Terminal,
 } from "lucide-react";
 import { projectLabel } from "@/lib/worktree";
-import type { Project, Session, Thread } from "@/types";
+import type { DokployService, Project, Session, Thread } from "@/types";
 
 interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   sessions: Session[];
   projects: Project[];
+  activeProject: Project | null;
+  claudeAgent: boolean;
   chatUi: boolean;
   onSelectSession: (projectId: string, sessionId: string) => void;
   onResumeThread: (projectId: string, path: string, thread: Thread) => void;
@@ -30,6 +35,9 @@ interface CommandPaletteProps {
   onSearch: () => void;
   onOpenUsage: () => void;
   onOpenNotifications: () => void;
+  onOpenSlash: () => void;
+  onRedeployDokploy: (service: DokployService) => void;
+  onViewDokployLogs: (service: DokployService) => void;
 }
 
 /** ⌘K launcher: fuzzy-search open sessions + recent threads, or run a quick
@@ -39,6 +47,8 @@ export function CommandPalette({
   onOpenChange,
   sessions,
   projects,
+  activeProject,
+  claudeAgent,
   chatUi,
   onSelectSession,
   onResumeThread,
@@ -49,6 +59,9 @@ export function CommandPalette({
   onSearch,
   onOpenUsage,
   onOpenNotifications,
+  onOpenSlash,
+  onRedeployDokploy,
+  onViewDokployLogs,
 }: CommandPaletteProps) {
   const run = (fn: () => void) => {
     onOpenChange(false);
@@ -117,6 +130,12 @@ export function CommandPalette({
                   <Search className="size-4 text-muted-foreground" />
                   Search in project
                 </Item>
+                {activeProject && claudeAgent && (
+                  <Item value="action slash commands" onSelect={() => run(onOpenSlash)}>
+                    <SlashSquare className="size-4 text-muted-foreground" />
+                    Commands
+                  </Item>
+                )}
                 <Item
                   value="action notifications"
                   onSelect={() => run(onOpenNotifications)}
@@ -133,6 +152,42 @@ export function CommandPalette({
                   Settings
                 </Item>
               </Command.Group>
+
+              {activeProject?.dokploy && (
+                <Command.Group heading="Dokploy">
+                  {activeProject.dokploy.services.flatMap((s) => {
+                    const deployable =
+                      s.id !== null && (s.kind === "application" || s.kind === "compose");
+                    const loggable = s.id !== null && s.kind === "application";
+                    const items: React.ReactElement[] = [];
+                    if (deployable) {
+                      items.push(
+                        <Item
+                          key={`redeploy ${s.name}`}
+                          value={`dokploy redeploy ${s.name}`}
+                          onSelect={() => run(() => onRedeployDokploy(s))}
+                        >
+                          <RotateCw className="size-4 text-muted-foreground" />
+                          Dokploy: Redeploy {s.name}
+                        </Item>
+                      );
+                    }
+                    if (loggable) {
+                      items.push(
+                        <Item
+                          key={`logs ${s.name}`}
+                          value={`dokploy logs ${s.name}`}
+                          onSelect={() => run(() => onViewDokployLogs(s))}
+                        >
+                          <ScrollText className="size-4 text-muted-foreground" />
+                          Dokploy: Logs {s.name}
+                        </Item>
+                      );
+                    }
+                    return items;
+                  })}
+                </Command.Group>
+              )}
 
               {openSessions.length > 0 && (
                 <Command.Group heading="Open sessions">
