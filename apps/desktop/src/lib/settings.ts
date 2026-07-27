@@ -24,6 +24,8 @@ export interface Settings {
   resumeLatestThread: boolean;
   /** Keep every open project's session list expanded, not just the active one. */
   expandAllProjects: boolean;
+  /** Open the dev output panel automatically when a dev/build/start run starts. */
+  autoOpenDevPanel: boolean;
   /** Launch Claude compact (collapsed tool output). Off = full (--verbose). */
   compactSession: boolean;
   /** Dokploy server base URL, e.g. https://dokploy.example.com. */
@@ -62,6 +64,7 @@ export const DEFAULT_SETTINGS: Settings = {
   model: "",
   resumeLatestThread: false,
   expandAllProjects: false,
+  autoOpenDevPanel: false,
   compactSession: false,
   dokployUrl: "",
   dokployApiKey: "",

@@ -39,6 +39,7 @@ export const gitKeys = {
   diff: (path: string, file: string, untracked: boolean, staged: boolean) =>
     ["git", "diff", path, file, untracked, staged] as const,
   branch: (path: string) => ["git", "branch", path] as const,
+  remoteHost: (path: string) => ["git", "remoteHost", path] as const,
   branches: (path: string) => ["git", "branches", path] as const,
   stashes: (path: string) => ["git", "stashes", path] as const,
   worktrees: (path: string) => ["git", "worktrees", path] as const,
@@ -111,6 +112,16 @@ export const useGitBranch = (path: string) =>
     queryKey: gitKeys.branch(path),
     // Throws when the dir isn't a repo / has no commits — data stays undefined.
     queryFn: () => invoke<GitBranch>("git_branch", { path }),
+  });
+
+export type GitRemoteHost = "github" | "gitlab" | "other";
+
+/** Classifies the origin remote's host. Effectively immutable for a checkout. */
+export const useGitRemoteHost = (path: string) =>
+  useQuery({
+    queryKey: gitKeys.remoteHost(path),
+    queryFn: () => invoke<GitRemoteHost>("git_remote_host", { path }),
+    staleTime: Infinity,
   });
 
 export const useGitBranches = (path: string, enabled: boolean) =>

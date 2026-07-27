@@ -3,6 +3,8 @@ export interface PackageInfo {
   relPath: string;
   path: string;
   devCommand: string;
+  buildCommand?: string;
+  startCommand?: string;
 }
 
 export interface WorkspaceInfo {
@@ -10,6 +12,9 @@ export interface WorkspaceInfo {
   packageManager: "bun" | "pnpm" | "yarn" | "npm";
   packages: PackageInfo[];
   allCommand: string | null;
+  buildCommand?: string;
+  startCommand?: string;
+  isPython: boolean;
 }
 
 /** A terminal session shown as a tab. */

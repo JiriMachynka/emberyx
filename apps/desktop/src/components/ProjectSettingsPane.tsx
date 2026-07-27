@@ -11,6 +11,16 @@ interface ProjectSettingsPaneProps {
   /** Per-project custom dev command; overrides workspace detection when set. */
   devCommand: string;
   onSetDevCommand: (command: string) => void;
+  /** Raw build-command override; blank falls back to the detected default. */
+  buildCommand: string;
+  onSetBuildCommand: (command: string) => void;
+  /** Detected build command, shown as the input placeholder. */
+  detectedBuildCommand: string;
+  /** Raw start-command override; blank falls back to the detected default. */
+  startCommand: string;
+  onSetStartCommand: (command: string) => void;
+  /** Detected start command, shown as the input placeholder. */
+  detectedStartCommand: string;
   onRefreshDokploy: () => void;
   onOpenWorktree: (path: string, repoRoot: string, branch: string) => void;
   onRemoveWorktree: (
@@ -28,17 +38,33 @@ export function ProjectSettingsPane({
   project,
   devCommand,
   onSetDevCommand,
+  buildCommand,
+  onSetBuildCommand,
+  detectedBuildCommand,
+  startCommand,
+  onSetStartCommand,
+  detectedStartCommand,
   onRefreshDokploy,
   onOpenWorktree,
   onRemoveWorktree,
   dokployConfigured,
 }: ProjectSettingsPaneProps) {
   const [draft, setDraft] = useState(devCommand);
+  const [buildDraft, setBuildDraft] = useState(buildCommand);
+  const [startDraft, setStartDraft] = useState(startCommand);
   const dokploy = project.dokploy;
   const worktree = project.worktree;
 
   const commit = () => {
     if (draft !== devCommand) onSetDevCommand(draft);
+  };
+
+  const commitBuild = () => {
+    if (buildDraft !== buildCommand) onSetBuildCommand(buildDraft);
+  };
+
+  const commitStart = () => {
+    if (startDraft !== startCommand) onSetStartCommand(startDraft);
   };
 
   return (
@@ -57,6 +83,36 @@ export function ProjectSettingsPane({
               if (e.key === "Enter") commit();
             }}
             placeholder="e.g. turbo run dev --filter=web"
+            spellCheck={false}
+          />
+        </Field>
+        <Field
+          label="Build command"
+          hint="Runs at the project root. Leave blank to fall back to the detected build script."
+        >
+          <Input
+            value={buildDraft}
+            onChange={(e) => setBuildDraft(e.target.value)}
+            onBlur={commitBuild}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitBuild();
+            }}
+            placeholder={detectedBuildCommand || "e.g. bun run build"}
+            spellCheck={false}
+          />
+        </Field>
+        <Field
+          label="Start built app command"
+          hint="Runs the built app at the project root. Leave blank to fall back to the detected start script."
+        >
+          <Input
+            value={startDraft}
+            onChange={(e) => setStartDraft(e.target.value)}
+            onBlur={commitStart}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitStart();
+            }}
+            placeholder={detectedStartCommand || "e.g. bun run start"}
             spellCheck={false}
           />
         </Field>

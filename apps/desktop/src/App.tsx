@@ -93,6 +93,13 @@ function App() {
     dokploy,
   } = ws;
   const dev = useDevServers(activeProject, ws.addDev);
+  // Every dev-run entry point opens the output panel when the setting is on.
+  const runDev = <A extends unknown[]>(run: (...args: A) => void) => {
+    return (...args: A) => {
+      run(...args);
+      if (settings.autoOpenDevPanel) setDevOpen(true);
+    };
+  };
   const unread = useAgentStore(selectUnreadCount);
   const markNotificationsRead = useAgentStore((s) => s.markNotificationsRead);
 
@@ -238,10 +245,15 @@ function App() {
           devCount={devCount}
           onToggleDev={() => setDevOpen((v) => !v)}
           customDevCommand={dev.customCommand}
+          buildDevCommand={dev.buildCommand}
+          startDevCommand={dev.startCommand}
+          devIsPython={dev.isPython}
           onOpenProjectSettings={openProjectSettings}
-          onRunCustomDev={dev.runCustom}
-          onRunPackage={dev.runPackage}
-          onRunAll={dev.runAll}
+          onRunCustomDev={runDev(dev.runCustom)}
+          onRunBuild={runDev(dev.runBuild)}
+          onRunStart={runDev(dev.runStart)}
+          onRunPackage={runDev(dev.runPackage)}
+          onRunAll={runDev(dev.runAll)}
           onStopDev={() => {
             if (activeProjectId) ws.stopAllDev(activeProjectId);
           }}
@@ -251,17 +263,9 @@ function App() {
           onResumeThread={ws.resumeThread}
           onToggleChanges={toggleChanges}
           onOpenUsage={() => setUsageOpen(true)}
-          onOpenSlash={() => setSlashOpen(true)}
           onOpenEditor={() => {
             if (editorOpen) setEditorOpen(false);
             else openEditor();
-          }}
-          onRefreshDokploy={() => {
-            if (activeProject) dokploy.refresh(activeProject.id, activeProject.path);
-          }}
-          onRedeployDokploy={dokploy.redeploy}
-          onViewDokployLogs={(service) => {
-            if (activeProject) dokploy.viewLogs(activeProject, service);
           }}
         />
 
@@ -387,6 +391,12 @@ function App() {
                 project={activeProject}
                 devCommand={dev.customCommand}
                 onSetDevCommand={dev.setCustomCommand}
+                buildCommand={dev.buildCommandOverride}
+                onSetBuildCommand={dev.setBuildCommand}
+                detectedBuildCommand={dev.detectedBuildCommand}
+                startCommand={dev.startCommandOverride}
+                onSetStartCommand={dev.setStartCommand}
+                detectedStartCommand={dev.detectedStartCommand}
                 onRefreshDokploy={() =>
                   dokploy.refresh(activeProject.id, activeProject.path)
                 }
@@ -420,6 +430,8 @@ function App() {
         onOpenChange={setPaletteOpen}
         sessions={sessions}
         projects={projects}
+        activeProject={activeProject}
+        claudeAgent={isClaudeAgent(settings.agentCommand)}
         chatUi={settings.agentUi === "chat"}
         onSelectSession={ws.activateSession}
         onResumeThread={ws.resumeThreadIn}
@@ -430,6 +442,11 @@ function App() {
         onSearch={openSearch}
         onOpenUsage={() => setUsageOpen(true)}
         onOpenNotifications={toggleNotifications}
+        onOpenSlash={() => setSlashOpen(true)}
+        onRedeployDokploy={dokploy.redeploy}
+        onViewDokployLogs={(service) => {
+          if (activeProject) dokploy.viewLogs(activeProject, service);
+        }}
       />
 
       {usageOpen && <UsagePanel onClose={() => setUsageOpen(false)} />}
