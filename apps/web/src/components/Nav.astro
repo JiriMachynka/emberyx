@@ -7,11 +7,11 @@ const releases = `${repo}/releases/latest`;
   <nav
     class="mx-auto flex h-14 max-w-5xl items-center justify-between rounded-none border border-transparent px-5"
   >
-    <a href="/" class="text-sm font-medium">Emberyx</a>
+    <a href={import.meta.env.BASE_URL} class="text-sm font-medium">Emberyx</a>
 
     <div class="flex items-center gap-7 text-sm text-ash">
       <a href="#features" class="hidden transition-colors hover:text-white sm:inline">Features</a>
-      <a href="/docs" class="hidden transition-colors hover:text-white sm:inline">Docs</a>
+      <a href={`${import.meta.env.BASE_URL}docs`} class="hidden transition-colors hover:text-white sm:inline">Docs</a>
       <a href={repo} class="transition-colors hover:text-white">GitHub</a>
       <a href={releases} class="text-white transition-colors hover:text-ember-soft">
         Download&nbsp;<span class="text-ash-dim">↓</span>
