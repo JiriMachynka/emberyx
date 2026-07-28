@@ -332,6 +332,9 @@ export function useAgentChat({
     curOutput: 0,
     active: false,
   });
+  // Running total across every turn this session (prior turns, hydrated from
+  // the transcript on resume, plus each completed live turn added on top).
+  const sessionUsageRef = useRef({ input: 0, output: 0 });
   const [ready, setReady] = useState(false);
   // Bumped by `restart` to re-run the spawn effect for the same target.
   const [attempt, setAttempt] = useState(0);
@@ -416,8 +419,9 @@ export function useAgentChat({
 
   const publishTurnUsage = useCallback(() => {
     const t = turnUsageRef.current;
-    const inputTokens = t.inputDone + t.curInput;
-    const outputTokens = t.outputDone + t.curOutput;
+    const s = sessionUsageRef.current;
+    const inputTokens = s.input + t.inputDone + t.curInput;
+    const outputTokens = s.output + t.outputDone + t.curOutput;
     // Nothing counted yet — leave the badge as it was rather than showing 0.
     if (!inputTokens && !outputTokens) return;
     setUsage((u) =>
@@ -733,17 +737,19 @@ export function useAgentChat({
 
       if (type === "result") {
         const t = turnUsageRef.current;
+        const s = sessionUsageRef.current;
         const ru = msg.usage as Record<string, number> | undefined;
-        // `result` is authoritative; fall back to the live tally when a run ends
-        // without one (errors, aborts). Read before the reset below, since the
-        // state updater runs later.
-        const inputTokens = ru?.input_tokens ?? (t.inputDone + t.curInput || undefined);
-        const outputTokens = ru?.output_tokens ?? (t.outputDone + t.curOutput || undefined);
+        // `result` only carries this turn's tokens; fold them into the running
+        // session total instead of replacing it. Falls back to the live tally
+        // when a run ends without a usage object (errors, aborts). Read before
+        // the reset below, since the state updater runs later.
+        s.input += ru?.input_tokens ?? t.inputDone + t.curInput;
+        s.output += ru?.output_tokens ?? t.outputDone + t.curOutput;
         setUsage((u) => ({
           ...u,
           costUsd: msg.total_cost_usd as number | undefined,
-          inputTokens,
-          outputTokens,
+          inputTokens: s.input,
+          outputTokens: s.output,
         }));
         // `result` is authoritative — drop the tally a queued frame would restate.
         usageDirtyRef.current = false;
@@ -821,11 +827,16 @@ export function useAgentChat({
         const hist = parseTranscript(text);
         if (hist.length) setMessages((prev) => (prev.length ? prev : hist));
         const hu = parseTranscriptUsage(text);
-        setUsage((prev) =>
-          prev.model || prev.costUsd != null || prev.outputTokens != null
-            ? prev
-            : hu
-        );
+        setUsage((prev) => {
+          if (prev.model || prev.costUsd != null || prev.outputTokens != null) {
+            return prev;
+          }
+          sessionUsageRef.current = {
+            input: hu.inputTokens ?? 0,
+            output: hu.outputTokens ?? 0,
+          };
+          return hu;
+        });
       } catch (e) {
         console.error("[emberyx] read_thread failed", e);
       }

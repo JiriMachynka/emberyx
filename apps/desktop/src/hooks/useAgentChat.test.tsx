@@ -923,7 +923,7 @@ describe("useAgentChat live usage", () => {
     expect(result.current.usage).toMatchObject({ inputTokens: 350, outputTokens: 42 });
   });
 
-  it("starts a fresh tally for the next turn after a result", async () => {
+  it("adds the next turn's live tally onto the running session total after a result", async () => {
     const { result, emit } = await mount();
     emit({
       type: "stream_event",
@@ -938,7 +938,7 @@ describe("useAgentChat live usage", () => {
       event: { type: "message_start", message: { usage: { input_tokens: 7 } } },
     });
     await frame();
-    expect(result.current.usage).toMatchObject({ inputTokens: 7, outputTokens: 0 });
+    expect(result.current.usage).toMatchObject({ inputTokens: 107, outputTokens: 40 });
   });
 
   it("keeps the live tally when a result carries no usage", async () => {
