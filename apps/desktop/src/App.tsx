@@ -29,6 +29,7 @@ import { useWorkspace } from "@/hooks/useWorkspace";
 import { useDevServers } from "@/hooks/useDevServers";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { useLaunchUpdateCheck } from "@/hooks/useLaunchUpdateCheck";
+import { usePricingRefresh } from "@/hooks/usePricingRefresh";
 
 // CodeMirror is a big chunk; only sessions that open the editor pay for it.
 // Three CodeMirror instances plus the merge machinery — only pay for it when a
@@ -184,6 +185,7 @@ function App() {
     onSearch: openSearch,
   });
   useLaunchUpdateCheck();
+  usePricingRefresh();
 
   // The context bar reflects the active tab when it's an agent, else the first
   // agent — so multiple resumed threads each drive it when focused.

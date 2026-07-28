@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { costOf, formatTokens, totalTokens, type Usage } from "@/lib/pricing";
 
 const usage = (patch: Partial<Usage> = {}): Usage => ({
@@ -53,6 +53,66 @@ describe("costOf", () => {
     const read = costOf(usage({ cacheRead: 1_000_000 }));
     const write = costOf(usage({ cacheCreation: 1_000_000 }));
     expect(write).toBeGreaterThan(read);
+  });
+});
+
+describe("refreshPricing", () => {
+  const CACHE_KEY = "emberyx.pricing.litellm.v1";
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.clear();
+    vi.resetModules();
+  });
+
+  it("hydrates live rates from the LiteLLM catalog and prefers them over the fallback table", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          "claude-sonnet-4-5": {
+            input_cost_per_token: 0.000004,
+            output_cost_per_token: 0.00002,
+            cache_read_input_token_cost: 0.0000004,
+            cache_creation_input_token_cost: 0.000005,
+          },
+          "gpt-4o": { input_cost_per_token: 0.0000025, output_cost_per_token: 0.00001 },
+        }),
+      })
+    );
+    const mod = await import("@/lib/pricing");
+    await mod.refreshPricing();
+    const cost = mod.costOf(
+      usage({ input: 1_000_000, model: "claude-sonnet-4-5" })
+    );
+    // Live rate ($4/M) overrides the fallback table's $3/M for sonnet.
+    expect(cost).toBeCloseTo(4, 10);
+  });
+
+  it("skips the network call when the cache is still fresh", async () => {
+    localStorage.setItem(
+      CACHE_KEY,
+      JSON.stringify({ fetchedAt: Date.now(), rates: {} })
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const mod = await import("@/lib/pricing");
+    await mod.refreshPricing();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back silently when the fetch fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    const mod = await import("@/lib/pricing");
+    await expect(mod.refreshPricing()).resolves.toBeUndefined();
+    const cost = mod.costOf(usage({ input: 1_000_000, model: "claude-opus-4-8" }));
+    expect(cost).toBeCloseTo(15, 10);
   });
 });
 
