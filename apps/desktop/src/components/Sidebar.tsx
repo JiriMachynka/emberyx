@@ -1,5 +1,8 @@
 import { memo, useState } from "react";
-import { Plus, PanelLeftClose, PanelLeftOpen, Settings, SlidersHorizontal, Bot, FolderOpen, GitBranch, Bell } from "lucide-react";
+import { Plus, PanelLeftClose, PanelLeftOpen, Settings, Bot, FolderOpen, GitBranch, Bell } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { basename } from "@/lib/path";
 import { projectLabel, projectTitle } from "@/lib/worktree";
@@ -7,6 +10,14 @@ import { statusOf } from "@/lib/status";
 import { StatusDot } from "@/components/StatusDot";
 import { TabCloseButton } from "@/components/TabCloseButton";
 import { useAgentStore } from "@/lib/agentStore";
+import { useGitBranches, useInvalidateGit } from "@/lib/queries";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
 import type { Project, Session } from "@/types";
 
 interface SidebarProps {
@@ -26,7 +37,6 @@ interface SidebarProps {
   onMoveSession: (projectId: string, from: string, to: string) => void;
   onNewAgent: () => void;
   onOpenSettings: () => void;
-  onOpenProjectSettings: () => void;
   notificationCount: number;
   onOpenNotifications: () => void;
 }
@@ -175,10 +185,11 @@ function Tree(props: SidebarProps) {
                 </span>
               )}
               {p.worktree && (
-                <span className="flex min-w-0 max-w-20 shrink items-center gap-1 rounded bg-background/60 px-1 py-px text-xs text-muted-foreground">
-                  <GitBranch className="size-3 shrink-0" />
-                  <span className="truncate">{p.worktree.branch}</span>
-                </span>
+                <BranchBadge
+                  project={p}
+                  branch={p.worktree.branch}
+                  sessionsFor={sessionsFor}
+                />
               )}
               <TabCloseButton
                 active={active}
@@ -212,6 +223,68 @@ function Tree(props: SidebarProps) {
         Open project
       </button>
     </div>
+  );
+}
+
+/** Branch badge next to a project row: click to checkout another local
+ *  branch. Branches only load once the menu opens. Guards the checkout when
+ *  a chat/agent session in the project is still working. */
+function BranchBadge({
+  project,
+  branch,
+  sessionsFor,
+}: {
+  project: Project;
+  branch: string;
+  sessionsFor: (id: string) => Session[];
+}) {
+  const [open, setOpen] = useState(false);
+  const branchesQuery = useGitBranches(project.path, open);
+  const branches = branchesQuery.data ?? [];
+  const invalidateGit = useInvalidateGit();
+
+  async function checkout(name: string) {
+    if (name === branch) return;
+    const statuses = useAgentStore.getState().statuses;
+    const busy = sessionsFor(project.id).some(
+      (s) => statuses[s.id] === "working" || statuses[s.id] === "waiting"
+    );
+    if (busy) {
+      const ok = await ask(
+        `A chat is in progress in "${projectLabel(project)}". Switch to branch "${name}" anyway?`,
+        { title: "Switch branch", kind: "warning" }
+      );
+      if (!ok) return;
+    }
+    try {
+      await invoke<string>("git_checkout", { path: project.path, branch: name, create: false });
+      invalidateGit(project.path);
+    } catch (e) {
+      toast.error("Checkout failed", { description: String(e) });
+    }
+  }
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <span
+          onClick={(e) => e.stopPropagation()}
+          className="flex min-w-0 max-w-20 shrink cursor-pointer items-center gap-1 rounded bg-background/60 px-1 py-px text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title={`On branch ${branch} — click to switch`}
+        >
+          <GitBranch className="size-3 shrink-0" />
+          <span className="truncate">{branch}</span>
+        </span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-80 w-56 overflow-auto">
+        <DropdownMenuLabel>Checkout</DropdownMenuLabel>
+        {branches.map((b) => (
+          <DropdownMenuItem key={b} disabled={b === branch} onSelect={() => checkout(b)}>
+            <span className="truncate">{b}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -290,10 +363,7 @@ function SessionList({
 }
 
 /** Project-scoped actions for the active project. */
-function ActionRow({
-  onNewAgent,
-  onOpenProjectSettings,
-}: SidebarProps & { project: Project }) {
+function ActionRow({ onNewAgent }: SidebarProps & { project: Project }) {
   return (
     <div className="ml-3 mt-1 flex flex-wrap items-center gap-1 pl-1.5">
       <button
@@ -303,14 +373,6 @@ function ActionRow({
       >
         <Plus className="size-4" />
         Agent
-      </button>
-      <button
-        onClick={onOpenProjectSettings}
-        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title="Project settings"
-      >
-        <SlidersHorizontal className="size-4" />
-        Settings
       </button>
     </div>
   );

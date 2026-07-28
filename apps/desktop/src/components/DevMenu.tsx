@@ -6,6 +6,7 @@ import {
   Pencil,
   Hammer,
   Rocket,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,7 +17,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import type { PackageInfo, WorkspaceInfo } from "@/types";
+import type { PackageInfo, PublishablePackage, WorkspaceInfo } from "@/types";
 
 interface DevMenuProps {
   workspace: WorkspaceInfo | null;
@@ -36,6 +37,7 @@ interface DevMenuProps {
   onRunStart: () => void;
   onRunPackage: (pkg: PackageInfo) => void;
   onRunAll: () => void;
+  onPublishPackage: (pkg: PublishablePackage) => void;
   onStop: () => void;
 }
 
@@ -52,9 +54,11 @@ export function DevMenu({
   onRunStart,
   onRunPackage,
   onRunAll,
+  onPublishPackage,
   onStop,
 }: DevMenuProps) {
   const packages = workspace?.packages ?? [];
+  const publishable = workspace?.publishable ?? [];
   const isMonorepo = packages.length > 1;
   const hasCustom = customCommand.trim().length > 0;
   const hasBuild = buildCommand.trim().length > 0;
@@ -171,6 +175,26 @@ export function DevMenu({
                   <span className="flex-1 truncate">{pkg.name}</span>
                   <span className="text-xs text-muted-foreground">
                     {pkg.relPath}
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </>
+          )}
+          {publishable.length > 0 && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>
+                {publishable.length} publishable
+              </DropdownMenuLabel>
+              {publishable.map((pkg) => (
+                <DropdownMenuItem
+                  key={pkg.path}
+                  onSelect={() => onPublishPackage(pkg)}
+                >
+                  <Upload className="opacity-60" />
+                  <span className="flex-1 truncate">{pkg.name}</span>
+                  <span className="text-xs text-muted-foreground">
+                    v{pkg.version}
                   </span>
                 </DropdownMenuItem>
               ))}

@@ -5,6 +5,7 @@ import {
   ChevronRight,
   GitBranch as GitBranchIcon,
   GitPullRequest,
+  SlidersHorizontal,
   Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -17,7 +18,7 @@ import { basename } from "@/lib/path";
 import { costOf, totalTokens, formatTokens } from "@/lib/pricing";
 import { useGitBranch, useGitRemoteHost } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
-import type { PackageInfo, Project, Session, Thread } from "@/types";
+import type { PackageInfo, Project, PublishablePackage, Session, Thread } from "@/types";
 
 interface ContextBarProps {
   activeProject: Project | null;
@@ -44,6 +45,7 @@ interface ContextBarProps {
   onRunStart: () => void;
   onRunPackage: (pkg: PackageInfo) => void;
   onRunAll: () => void;
+  onPublishPackage: (pkg: PublishablePackage) => void;
   onStopDev: () => void;
   onRefreshThreads: () => void;
   onResumeThread: (thread: Thread) => void;
@@ -76,6 +78,7 @@ export function ContextBar({
   onRunStart,
   onRunPackage,
   onRunAll,
+  onPublishPackage,
   onStopDev,
   onRefreshThreads,
   onResumeThread,
@@ -107,6 +110,15 @@ export function ContextBar({
   return (
     <header className="flex h-10 shrink-0 items-center justify-between border-b px-3">
       <div className="flex min-w-0 items-center gap-2 text-xs">
+        {activeProject && (
+          <button
+            onClick={onOpenProjectSettings}
+            className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            title="Project settings"
+          >
+            <SlidersHorizontal className="size-3.5" />
+          </button>
+        )}
         {activeProject && claudeAgent && (
           <ThreadMenu
             threads={activeProject.threads}
@@ -182,6 +194,7 @@ export function ContextBar({
             onRunStart={onRunStart}
             onRunPackage={onRunPackage}
             onRunAll={onRunAll}
+            onPublishPackage={onPublishPackage}
             onStop={onStopDev}
           />
         )}

@@ -1,11 +1,12 @@
 import { useState } from "react";
+import { ask } from "@tauri-apps/plugin-dialog";
 import {
   getProjectConfigs,
   setProjectDevCommand,
   setProjectBuildCommand,
   setProjectStartCommand,
 } from "@/lib/projectConfig";
-import type { PackageInfo, Project } from "@/types";
+import type { PackageInfo, Project, PublishablePackage } from "@/types";
 
 /**
  * Starting dev servers for the active project: the workspace's detected
@@ -70,6 +71,18 @@ export function useDevServers(
     addDev(activeProject.id, pkg.name, pkg.path, pkg.devCommand);
   }
 
+  // Publishing hits a real registry and can't be undone — confirm first.
+  async function publishPackage(pkg: PublishablePackage) {
+    if (!activeProject) return;
+    const pm = ws?.packageManager ?? "npm";
+    const ok = await ask(
+      `Publish ${pkg.name}@${pkg.version} to the registry?\n\nThis runs "${pm} publish" in ${pkg.relPath} and cannot be undone.`,
+      { title: "Publish package", kind: "warning" }
+    );
+    if (!ok) return;
+    addDev(activeProject.id, `publish:${pkg.name}`, pkg.path, `${pm} publish`);
+  }
+
   function runAll() {
     const ws = activeProject?.workspace;
     if (!activeProject || !ws) return;
@@ -99,5 +112,6 @@ export function useDevServers(
     runStart,
     runPackage,
     runAll,
+    publishPackage,
   };
 }

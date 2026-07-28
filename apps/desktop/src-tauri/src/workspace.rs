@@ -23,6 +23,18 @@ pub struct PackageInfo {
     pub start_command: Option<String>,
 }
 
+/// A package that looks publishable to a registry: has a name and version,
+/// and isn't marked `"private": true`. Independent of whether it also has a
+/// dev script — a library package usually won't.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishablePackage {
+    pub name: String,
+    pub version: String,
+    pub rel_path: String,
+    pub path: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceInfo {
@@ -32,6 +44,8 @@ pub struct WorkspaceInfo {
     pub package_manager: String,
     /// Runnable packages.
     pub packages: Vec<PackageInfo>,
+    /// Packages with a name + version and not `private` — candidates to ship.
+    pub publishable: Vec<PublishablePackage>,
     /// Command to run everything at once (root "dev" script), if one exists.
     pub all_command: Option<String>,
     /// Root "build" script, if one exists.
@@ -174,6 +188,29 @@ fn package_from_dir(root: &Path, dir: &Path, pm: &str) -> Option<PackageInfo> {
     })
 }
 
+/// A package.json is publishable when it has a name and version and isn't
+/// explicitly marked private.
+fn publishable_from_dir(root: &Path, dir: &Path) -> Option<PublishablePackage> {
+    let pkg = read_json(&dir.join("package.json"))?;
+    if pkg.get("private").and_then(|v| v.as_bool()) == Some(true) {
+        return None;
+    }
+    let name = pkg.get("name")?.as_str()?.to_string();
+    let version = pkg.get("version")?.as_str()?.to_string();
+    let rel_path = dir
+        .strip_prefix(root)
+        .ok()
+        .and_then(|p| p.to_str())
+        .unwrap_or(".")
+        .to_string();
+    Some(PublishablePackage {
+        name,
+        version,
+        rel_path: if rel_path.is_empty() { ".".into() } else { rel_path },
+        path: dir.to_string_lossy().to_string(),
+    })
+}
+
 pub fn scan(root_str: &str) -> Result<WorkspaceInfo> {
     let root = PathBuf::from(root_str);
     if !root.is_dir() {
@@ -206,12 +243,16 @@ pub fn scan(root_str: &str) -> Result<WorkspaceInfo> {
 
     // Expand packages.
     let mut packages: Vec<PackageInfo> = vec![];
+    let mut publishable: Vec<PublishablePackage> = vec![];
     let mut seen = std::collections::HashSet::new();
     for pattern in &globs {
         for dir in expand_glob(&root, pattern) {
             if seen.insert(dir.clone()) {
                 if let Some(info) = package_from_dir(&root, &dir, &pm) {
                     packages.push(info);
+                }
+                if let Some(info) = publishable_from_dir(&root, &dir) {
+                    publishable.push(info);
                 }
             }
         }
@@ -226,6 +267,15 @@ pub fn scan(root_str: &str) -> Result<WorkspaceInfo> {
             packages.push(info);
         }
     }
+    if publishable.is_empty() {
+        if let Some(info) = root_pkg
+            .as_ref()
+            .and_then(|_| publishable_from_dir(&root, &root))
+        {
+            publishable.push(info);
+        }
+    }
+    publishable.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
     // No JS dev script anywhere — fall back to lightweight Python detection so
     // the project stays runnable.
@@ -276,6 +326,7 @@ pub fn scan(root_str: &str) -> Result<WorkspaceInfo> {
         kind,
         package_manager: pm,
         packages,
+        publishable,
         all_command,
         build_command,
         start_command,
@@ -401,6 +452,42 @@ mod tests {
         assert_eq!(info.start_command.as_deref(), Some("bun run preview"));
         assert_eq!(info.packages[0].build_command.as_deref(), Some("bun run build"));
         assert_eq!(info.packages[0].start_command.as_deref(), Some("bun run preview"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn detects_publishable_packages() {
+        let root = std::env::temp_dir().join("emberyx_test_publishable");
+        let _ = std::fs::remove_dir_all(&root);
+
+        write(&root.join("turbo.json"), "{}");
+        write(
+            &root.join("package.json"),
+            r#"{"name":"repo","private":true,"workspaces":["apps/*","packages/*"]}"#,
+        );
+        // Runnable app, not publishable (no version).
+        write(
+            &root.join("apps/web/package.json"),
+            r#"{"name":"web","scripts":{"dev":"vite"}}"#,
+        );
+        // A library: no dev script (so absent from `packages`), but publishable.
+        write(
+            &root.join("packages/ui/package.json"),
+            r#"{"name":"@repo/ui","version":"1.2.0","scripts":{"build":"tsc"}}"#,
+        );
+        // Explicitly private — excluded even though it has a version.
+        write(
+            &root.join("packages/internal/package.json"),
+            r#"{"name":"@repo/internal","version":"0.0.1","private":true}"#,
+        );
+
+        let info = scan(root.to_str().unwrap()).unwrap();
+        assert_eq!(info.packages.len(), 1); // only `web` is runnable
+        assert_eq!(info.publishable.len(), 1);
+        assert_eq!(info.publishable[0].name, "@repo/ui");
+        assert_eq!(info.publishable[0].version, "1.2.0");
+        assert_eq!(info.publishable[0].rel_path, "packages/ui");
 
         let _ = std::fs::remove_dir_all(&root);
     }

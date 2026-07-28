@@ -7,10 +7,19 @@ export interface PackageInfo {
   startCommand?: string;
 }
 
+/** A package with a name + version, not marked private — a ship candidate. */
+export interface PublishablePackage {
+  name: string;
+  version: string;
+  relPath: string;
+  path: string;
+}
+
 export interface WorkspaceInfo {
   kind: "turbo" | "pnpm" | "npm" | "single";
   packageManager: "bun" | "pnpm" | "yarn" | "npm";
   packages: PackageInfo[];
+  publishable: PublishablePackage[];
   allCommand: string | null;
   buildCommand?: string;
   startCommand?: string;

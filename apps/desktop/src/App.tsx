@@ -92,6 +92,16 @@ function App() {
     recents,
     dokploy,
   } = ws;
+
+  // Project-scoped panels close when switching projects, so a panel opened
+  // for one project doesn't linger empty over the next.
+  useEffect(() => {
+    setChangesOpen(false);
+    setDevOpen(false);
+    setMrsOpen(false);
+    setProjectSettingsOpen(false);
+  }, [activeProjectId]);
+
   const dev = useDevServers(activeProject, ws.addDev);
   // Every dev-run entry point opens the output panel when the setting is on.
   const runDev = <A extends unknown[]>(run: (...args: A) => void) => {
@@ -225,7 +235,6 @@ function App() {
           onMoveSession={ws.moveSession}
           onNewAgent={ws.newAgent}
           onOpenSettings={() => setSettingsOpen(true)}
-          onOpenProjectSettings={openProjectSettings}
           notificationCount={unread}
           onOpenNotifications={toggleNotifications}
         />
@@ -254,6 +263,7 @@ function App() {
           onRunStart={runDev(dev.runStart)}
           onRunPackage={runDev(dev.runPackage)}
           onRunAll={runDev(dev.runAll)}
+          onPublishPackage={runDev(dev.publishPackage)}
           onStopDev={() => {
             if (activeProjectId) ws.stopAllDev(activeProjectId);
           }}
