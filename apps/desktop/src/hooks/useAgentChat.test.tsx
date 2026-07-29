@@ -119,6 +119,24 @@ describe("useAgentChat lifecycle", () => {
     expect(result.current.status).toBe("exited");
   });
 
+  it("surfaces the stderr tail as the exit reason on a non-zero exit", async () => {
+    const { result, channel } = await mount();
+    act(() => channel.onmessage!({ type: "stderr", data: "warming up\n" }));
+    act(() => channel.onmessage!({ type: "stderr", data: "Error: could not read credentials\n" }));
+    act(() => channel.onmessage!({ type: "exit", data: 1 }));
+    expect(result.current.status).toBe("exited");
+    expect(result.current.exitReason).toBe("Error: could not read credentials");
+  });
+
+  it("clears the exit reason on restart", async () => {
+    const { result, channel } = await mount();
+    act(() => channel.onmessage!({ type: "stderr", data: "boom\n" }));
+    act(() => channel.onmessage!({ type: "exit", data: 1 }));
+    expect(result.current.exitReason).toBe("boom");
+    act(() => result.current.restart());
+    expect(result.current.exitReason).toBeNull();
+  });
+
   it("surfaces a failed spawn as an error", async () => {
     invoke.mockImplementation((command: string) =>
       command === "agent_spawn"

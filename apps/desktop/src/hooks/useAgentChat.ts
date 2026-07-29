@@ -338,6 +338,9 @@ export function useAgentChat({
   const [ready, setReady] = useState(false);
   // Bumped by `restart` to re-run the spawn effect for the same target.
   const [attempt, setAttempt] = useState(0);
+  // Why the process died, when it wasn't a known account issue — the tail of its
+  // stderr. A bare "Session ended" is a dead end; this says what to fix.
+  const [exitReason, setExitReason] = useState<string | null>(null);
   const [pendingPermission, setPendingPermission] =
     useState<PendingPermission | null>(null);
   // Mirror of pendingPermission for reads inside callbacks without stale closures.
@@ -877,7 +880,14 @@ export function useAgentChat({
         setPending(null);
         setPendingAsk(null);
         // A crash often says why only on stderr, and never reaches `result`.
-        if (ev.data !== 0) checkStderr();
+        if (ev.data !== 0) {
+          checkStderr();
+          // Show the reason unless it was already routed to an account notice.
+          if (!announced) {
+            const lines = stderr.trim().split("\n").filter(Boolean);
+            setExitReason(lines[lines.length - 1] ?? null);
+          }
+        }
       }
     };
 
@@ -937,6 +947,7 @@ export function useAgentChat({
     setStatus("idle");
     setPending(null);
     setPendingAsk(null);
+    setExitReason(null);
     setAttempt((n) => n + 1);
   }, [setPending]);
 
@@ -1146,6 +1157,7 @@ export function useAgentChat({
     queued,
     stop,
     restart,
+    exitReason,
     rewind,
     pendingPermission,
     respond,
