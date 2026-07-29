@@ -212,7 +212,12 @@ export function CodeEditor({
 function themeFor(fontFamily: string, fontSize: number): Extension {
   return EditorView.theme({
     "&": { height: "100%", fontSize: `${fontSize}px`, backgroundColor: "transparent" },
-    ".cm-scroller": { fontFamily, lineHeight: "1.6" },
+    ".cm-scroller": {
+      fontFamily,
+      lineHeight: "1.6",
+      fontVariantLigatures: "contextual",
+      fontFeatureSettings: '"liga" 1, "calt" 1',
+    },
     ".cm-gutters": { backgroundColor: "transparent", border: "none" },
     ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "rgba(255,255,255,0.04)" },
   });

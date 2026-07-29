@@ -1,16 +1,16 @@
 import {
   CircleDollarSign,
-  FileDiff,
-  FileCode,
   ChevronRight,
   GitBranch as GitBranchIcon,
   GitPullRequest,
+  PanelRight,
   SlidersHorizontal,
   Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/StatusDot";
-import { DevMenu } from "@/components/DevMenu";
+import { ActionsMenu } from "@/components/ActionsMenu";
+import type { ProjectAction } from "@/lib/actions";
 import { ThreadMenu } from "@/components/ThreadMenu";
 import { cn } from "@/lib/utils";
 import { STATUS_META, statusOf } from "@/lib/status";
@@ -18,40 +18,30 @@ import { basename } from "@/lib/path";
 import { costOf, totalTokens, formatTokens } from "@/lib/pricing";
 import { useGitBranch, useGitRemoteHost } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
-import type { PackageInfo, Project, PublishablePackage, Session, Thread } from "@/types";
+import type { Project, Session, Thread } from "@/types";
 
 interface ContextBarProps {
   activeProject: Project | null;
   agent: Session | undefined;
   claudeAgent: boolean;
   devRunning: boolean;
-  /** Session ids in the active project — for the working-tree change count. */
-  sessionIds: string[];
-  changesOpen: boolean;
   mrsOpen: boolean;
   devOpen: boolean;
-  /** Running dev servers in this project — badge on the Dev output toggle. */
+  /** Running action output in this project — badge on the Output toggle. */
   devCount: number;
   onToggleDev: () => void;
-  customDevCommand: string;
-  /** Effective build/start commands (override or detected) for the Dev menu. */
-  buildDevCommand: string;
-  startDevCommand: string;
-  devIsPython: boolean;
-  /** Opens the project settings pane, where the dev command is edited. */
+  /** Opens the project settings pane. */
   onOpenProjectSettings: () => void;
-  onRunCustomDev: () => void;
-  onRunBuild: () => void;
-  onRunStart: () => void;
-  onRunPackage: (pkg: PackageInfo) => void;
-  onRunAll: () => void;
-  onPublishPackage: (pkg: PublishablePackage) => void;
+  actions: ProjectAction[];
+  onRunAction: (action: ProjectAction) => void;
+  onEditAction: (action: ProjectAction) => void;
+  onAddAction: () => void;
   onStopDev: () => void;
   onRefreshThreads: () => void;
   onResumeThread: (thread: Thread) => void;
-  onToggleChanges: () => void;
   onToggleMrs: () => void;
-  onOpenEditor: () => void;
+  surfaceOpen: boolean;
+  onToggleSurface: () => void;
   onOpenUsage: () => void;
 }
 
@@ -62,29 +52,21 @@ export function ContextBar({
   agent,
   claudeAgent,
   devRunning,
-  sessionIds,
-  changesOpen,
   mrsOpen,
   devOpen,
   devCount,
   onToggleDev,
-  customDevCommand,
-  buildDevCommand,
-  startDevCommand,
-  devIsPython,
   onOpenProjectSettings,
-  onRunCustomDev,
-  onRunBuild,
-  onRunStart,
-  onRunPackage,
-  onRunAll,
-  onPublishPackage,
+  actions,
+  onRunAction,
+  onEditAction,
+  onAddAction,
   onStopDev,
   onRefreshThreads,
   onResumeThread,
-  onToggleChanges,
   onToggleMrs,
-  onOpenEditor,
+  surfaceOpen,
+  onToggleSurface,
   onOpenUsage,
 }: ContextBarProps) {
   const branchQuery = useGitBranch(activeProject?.path ?? "");
@@ -99,13 +81,6 @@ export function ContextBar({
   const agentUsage = useAgentStore((s) =>
     agent ? s.usages[agent.id] : undefined
   );
-  // Summing per-session counts keeps this O(sessions) per store update; the old
-  // scan of the whole change feed ran on every streaming event.
-  const changesCount = useAgentStore((s) => {
-    let n = 0;
-    for (const id of sessionIds) n += s.changeCounts[id] ?? 0;
-    return n;
-  });
 
   return (
     <header className="flex h-10 shrink-0 items-center justify-between border-b px-3">
@@ -181,20 +156,12 @@ export function ContextBar({
           )}
         </button>
         {activeProject && (
-          <DevMenu
-            workspace={activeProject.workspace}
+          <ActionsMenu
+            actions={actions}
             running={devRunning}
-            customCommand={customDevCommand}
-            buildCommand={buildDevCommand}
-            startCommand={startDevCommand}
-            isPython={devIsPython}
-            onEditCustom={onOpenProjectSettings}
-            onRunCustom={onRunCustomDev}
-            onRunBuild={onRunBuild}
-            onRunStart={onRunStart}
-            onRunPackage={onRunPackage}
-            onRunAll={onRunAll}
-            onPublishPackage={onPublishPackage}
+            onRun={onRunAction}
+            onEdit={onEditAction}
+            onAdd={onAddAction}
             onStop={onStopDev}
           />
         )}
@@ -203,35 +170,13 @@ export function ContextBar({
             variant={devOpen ? "secondary" : "ghost"}
             size="sm"
             onClick={onToggleDev}
-            title="Dev server output"
+            title="Action output"
           >
             <Terminal className="size-3.5" />
-            Dev
+            Output
             <span className="rounded bg-emerald-500/20 px-1 text-[10px] text-emerald-400">
               {devCount}
             </span>
-          </Button>
-        )}
-        {activeProject && (
-          <Button variant="ghost" size="sm" onClick={onOpenEditor} title="Files">
-            <FileCode className="size-3.5" />
-            Files
-          </Button>
-        )}
-        {activeProject && (
-          <Button
-            variant={changesOpen ? "secondary" : "ghost"}
-            size="sm"
-            onClick={onToggleChanges}
-            title="Changes"
-          >
-            <FileDiff className="size-3.5" />
-            Changes
-            {changesCount > 0 && (
-              <span className="rounded bg-primary/20 px-1 text-[10px] text-primary">
-                {changesCount}
-              </span>
-            )}
           </Button>
         )}
         {activeProject && remoteHost === "gitlab" && (
@@ -243,6 +188,16 @@ export function ContextBar({
           >
             <GitPullRequest className="size-3.5" />
             MRs
+          </Button>
+        )}
+        {activeProject && (
+          <Button
+            variant={surfaceOpen ? "secondary" : "ghost"}
+            size="icon"
+            onClick={onToggleSurface}
+            title="Open a surface"
+          >
+            <PanelRight className="size-3.5" />
           </Button>
         )}
       </div>

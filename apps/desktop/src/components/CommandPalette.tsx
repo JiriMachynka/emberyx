@@ -3,6 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   Bell,
   CircleDollarSign,
+  FileCode,
   FileDiff,
   FolderOpen,
   History,
@@ -31,6 +32,7 @@ interface CommandPaletteProps {
   onNewAgent: () => void;
   onPickProject: () => void;
   onOpenSettings: () => void;
+  onOpenEditor: () => void;
   onToggleChanges: () => void;
   onSearch: () => void;
   onOpenUsage: () => void;
@@ -55,6 +57,7 @@ export function CommandPalette({
   onNewAgent,
   onPickProject,
   onOpenSettings,
+  onOpenEditor,
   onToggleChanges,
   onSearch,
   onOpenUsage,
@@ -122,6 +125,12 @@ export function CommandPalette({
                   <FolderOpen className="size-4 text-muted-foreground" />
                   Open project…
                 </Item>
+                {activeProject && (
+                  <Item value="action files editor" onSelect={() => run(onOpenEditor)}>
+                    <FileCode className="size-4 text-muted-foreground" />
+                    Files
+                  </Item>
+                )}
                 <Item value="action toggle changes" onSelect={() => run(onToggleChanges)}>
                   <FileDiff className="size-4 text-muted-foreground" />
                   Toggle changes

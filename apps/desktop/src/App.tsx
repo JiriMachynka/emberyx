@@ -6,7 +6,6 @@ import { SessionPanes } from "@/components/SessionPanes";
 import { SidePanel } from "@/components/SidePanel";
 import { ProjectSettingsPane } from "@/components/ProjectSettingsPane";
 import { SettingsDialog } from "@/components/SettingsDialog";
-import { AgentPanel } from "@/components/AgentPanel";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { MergeRequestsPanel } from "@/components/MergeRequestsPanel";
 import { NotificationPanel } from "@/components/NotificationPanel";
@@ -27,6 +26,9 @@ import { requestSearch } from "@/lib/searchRequest";
 import { projectLabel } from "@/lib/worktree";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { useDevServers } from "@/hooks/useDevServers";
+import { useProjectActions } from "@/hooks/useProjectActions";
+import { ActionDialog } from "@/components/ActionDialog";
+import { getStoredActions, type ProjectAction } from "@/lib/actions";
 import { useShortcuts } from "@/hooks/useShortcuts";
 import { useLaunchUpdateCheck } from "@/hooks/useLaunchUpdateCheck";
 import { usePricingRefresh } from "@/hooks/usePricingRefresh";
@@ -40,11 +42,13 @@ const ConflictView = lazy(() =>
 const EditorPane = lazy(() =>
   import("@/components/EditorPane").then((m) => ({ default: m.EditorPane }))
 );
+const SurfacePanel = lazy(() => import("@/components/SurfacePanel"));
 
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
+  const [surfaceOpen, setSurfaceOpen] = useState(false);
   const [devOpen, setDevOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
@@ -68,9 +72,45 @@ function App() {
     }, 200);
   };
 
+  // Only one right-hand panel is visible at a time — opening any closes the rest.
+  const closeRightPanels = () => {
+    setSurfaceOpen(false);
+    setDevOpen(false);
+    setMrsOpen(false);
+    setProjectSettingsOpen(false);
+    if (changesOpen) closeChanges();
+  };
+
   const toggleChanges = () => {
     if (changesOpen) closeChanges();
-    else setChangesOpen(true);
+    else {
+      closeRightPanels();
+      setChangesOpen(true);
+    }
+  };
+
+  const toggleSurface = () => {
+    if (surfaceOpen) setSurfaceOpen(false);
+    else {
+      closeRightPanels();
+      setSurfaceOpen(true);
+    }
+  };
+
+  const toggleDev = () => {
+    if (devOpen) setDevOpen(false);
+    else {
+      closeRightPanels();
+      setDevOpen(true);
+    }
+  };
+
+  const toggleMrs = () => {
+    if (mrsOpen) setMrsOpen(false);
+    else {
+      closeRightPanels();
+      setMrsOpen(true);
+    }
   };
 
   function toggleSidebar() {
@@ -104,12 +144,30 @@ function App() {
   }, [activeProjectId]);
 
   const dev = useDevServers(activeProject, ws.addDev);
-  // Every dev-run entry point opens the output panel when the setting is on.
-  const runDev = <A extends unknown[]>(run: (...args: A) => void) => {
-    return (...args: A) => {
-      run(...args);
-      if (settings.autoOpenDevPanel) setDevOpen(true);
-    };
+  const projectActions = useProjectActions(activeProject);
+  const [actionEdit, setActionEdit] = useState<{
+    action: ProjectAction | null;
+  } | null>(null);
+  // Run an action's command as an output session; reveal the panel on the setting.
+  const runAction = (a: ProjectAction) => {
+    if (!activeProject) return;
+    ws.addDev(activeProject.id, a.name, activeProject.path, a.command);
+    if (settings.autoOpenDevPanel) {
+      closeRightPanels();
+      setDevOpen(true);
+    }
+  };
+  // Open a new worktree, then fire the source project's run-on-create actions.
+  const openWorktreeAndRun = async (
+    path: string,
+    repoRoot: string,
+    branch: string
+  ) => {
+    const id = await ws.openWorktree(path, repoRoot, branch);
+    const auto = (getStoredActions(repoRoot) ?? []).filter(
+      (a) => a.runOnWorktreeCreate
+    );
+    for (const a of auto) ws.addDev(id, a.name, path, a.command);
   };
   const unread = useAgentStore(selectUnreadCount);
   const markNotificationsRead = useAgentStore((s) => s.markNotificationsRead);
@@ -151,6 +209,7 @@ function App() {
 
   const openProjectSettings = () => {
     if (!activeProject) return;
+    closeRightPanels();
     setProjectSettingsOpen(true);
   };
 
@@ -236,6 +295,7 @@ function App() {
           onCloseSession={ws.closeSession}
           onMoveSession={ws.moveSession}
           onNewAgent={ws.newAgent}
+          onOpenSearch={() => setPaletteOpen(true)}
           onOpenSettings={() => setSettingsOpen(true)}
           notificationCount={unread}
           onOpenNotifications={toggleNotifications}
@@ -248,24 +308,16 @@ function App() {
           agent={agent}
           claudeAgent={isClaudeAgent(settings.agentCommand)}
           devRunning={projectSessions.some((s) => s.kind === "dev")}
-          sessionIds={projectSessionIds}
-          changesOpen={changesOpen}
           mrsOpen={mrsOpen}
-          onToggleMrs={() => setMrsOpen((v) => !v)}
+          onToggleMrs={toggleMrs}
           devOpen={devOpen}
           devCount={devCount}
-          onToggleDev={() => setDevOpen((v) => !v)}
-          customDevCommand={dev.customCommand}
-          buildDevCommand={dev.buildCommand}
-          startDevCommand={dev.startCommand}
-          devIsPython={dev.isPython}
+          onToggleDev={toggleDev}
           onOpenProjectSettings={openProjectSettings}
-          onRunCustomDev={runDev(dev.runCustom)}
-          onRunBuild={runDev(dev.runBuild)}
-          onRunStart={runDev(dev.runStart)}
-          onRunPackage={runDev(dev.runPackage)}
-          onRunAll={runDev(dev.runAll)}
-          onPublishPackage={runDev(dev.publishPackage)}
+          actions={projectActions.actions}
+          onRunAction={runAction}
+          onEditAction={(a) => setActionEdit({ action: a })}
+          onAddAction={() => setActionEdit({ action: null })}
           onStopDev={() => {
             if (activeProjectId) ws.stopAllDev(activeProjectId);
           }}
@@ -273,12 +325,9 @@ function App() {
             if (activeProject) ws.refreshThreads(activeProject.id, activeProject.path);
           }}
           onResumeThread={ws.resumeThread}
-          onToggleChanges={toggleChanges}
+          surfaceOpen={surfaceOpen}
+          onToggleSurface={toggleSurface}
           onOpenUsage={() => setUsageOpen(true)}
-          onOpenEditor={() => {
-            if (editorOpen) setEditorOpen(false);
-            else openEditor();
-          }}
         />
 
         <AccountBanner onLogin={activeProject ? startLogin : undefined} />
@@ -359,6 +408,22 @@ function App() {
             onStop={ws.closeSession}
             onClose={() => setDevOpen(false)}
           />
+          {activeProject && surfaceOpen && (
+            <Suspense fallback={null}>
+              <SurfacePanel
+                projectPath={activeProject.path}
+                fontFamily={settings.fontFamily}
+                fontSize={settings.fontSize}
+                scrollback={settings.scrollback}
+                onClose={() => setSurfaceOpen(false)}
+                sessionIds={projectSessionIds}
+                openRouterApiKey={settings.openRouterApiKey}
+                openRouterModel={settings.openRouterModel}
+                onOpenWorktree={openWorktreeAndRun}
+                onRemoveWorktree={ws.removeWorktree}
+              />
+            </Suspense>
+          )}
           {activeProject && (changesOpen || changesClosing) && (
             <div
               className={cn(
@@ -374,7 +439,7 @@ function App() {
                 openRouterApiKey={settings.openRouterApiKey}
                 openRouterModel={settings.openRouterModel}
                 onClose={closeChanges}
-                onOpenWorktree={ws.openWorktree}
+                onOpenWorktree={openWorktreeAndRun}
                 onRemoveWorktree={ws.removeWorktree}
               />
             </div>
@@ -412,7 +477,7 @@ function App() {
                 onRefreshDokploy={() =>
                   dokploy.refresh(activeProject.id, activeProject.path)
                 }
-                onOpenWorktree={ws.openWorktree}
+                onOpenWorktree={openWorktreeAndRun}
                 onRemoveWorktree={ws.removeWorktree}
                 dokployConfigured={Boolean(
                   settings.dokployUrl && settings.dokployApiKey
@@ -426,7 +491,6 @@ function App() {
               onSelect={jumpToSession}
             />
           )}
-          <AgentPanel />
           {slashOpen && (
             <SlashCommandsPanel
               onClose={() => setSlashOpen(false)}
@@ -450,6 +514,7 @@ function App() {
         onNewAgent={ws.newAgent}
         onPickProject={ws.pickProject}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenEditor={openEditor}
         onToggleChanges={toggleChanges}
         onSearch={openSearch}
         onOpenUsage={() => setUsageOpen(true)}
@@ -468,6 +533,14 @@ function App() {
         onOpenChange={setSettingsOpen}
         settings={settings}
         onUpdate={updateSettings}
+      />
+
+      <ActionDialog
+        open={actionEdit !== null}
+        onOpenChange={(o) => !o && setActionEdit(null)}
+        action={actionEdit?.action ?? null}
+        onSave={projectActions.upsertAction}
+        onDelete={projectActions.removeAction}
       />
 
       <Toaster theme="dark" position="bottom-right" richColors closeButton />

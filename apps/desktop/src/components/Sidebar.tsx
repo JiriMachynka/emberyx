@@ -1,12 +1,12 @@
 import { memo, useState } from "react";
-import { Plus, PanelLeftClose, PanelLeftOpen, Settings, Bot, FolderOpen, GitBranch, Bell } from "lucide-react";
+import { Plus, PanelLeftClose, PanelLeftOpen, Settings, Bot, FolderOpen, GitBranch, Bell, Search } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { basename } from "@/lib/path";
 import { projectLabel, projectTitle } from "@/lib/worktree";
-import { statusOf } from "@/lib/status";
+import { statusOf, STATUS_META } from "@/lib/status";
 import { StatusDot } from "@/components/StatusDot";
 import { TabCloseButton } from "@/components/TabCloseButton";
 import { useAgentStore } from "@/lib/agentStore";
@@ -36,6 +36,7 @@ interface SidebarProps {
   onCloseSession: (id: string) => void;
   onMoveSession: (projectId: string, from: string, to: string) => void;
   onNewAgent: () => void;
+  onOpenSearch: () => void;
   onOpenSettings: () => void;
   notificationCount: number;
   onOpenNotifications: () => void;
@@ -70,6 +71,24 @@ const SessionStatusDot = memo(function SessionStatusDot({ id }: { id: string }) 
   const status = useAgentStore((s) => statusOf(s.statuses, id));
   if (status === "idle") return null;
   return <StatusDot status={status} />;
+});
+
+/** Text status ("working" / "needs you") beside a session row, subscribed on
+ *  its own like the dot. Hidden while idle. */
+const SessionStatusLabel = memo(function SessionStatusLabel({ id }: { id: string }) {
+  const status = useAgentStore((s) => statusOf(s.statuses, id));
+  if (status === "idle") return null;
+  const meta = STATUS_META[status];
+  return (
+    <span
+      className={cn(
+        "shrink-0 text-[10px] font-medium uppercase tracking-wide",
+        meta.text
+      )}
+    >
+      {meta.label}
+    </span>
+  );
 });
 
 /** Leading bullet for a chat session: orange/amber while Claude works,
@@ -144,10 +163,35 @@ function Tree(props: SidebarProps) {
     onSelectProject,
     onCloseProject,
     onPickProject,
+    onOpenSearch,
   } = props;
 
   return (
     <div className="px-1.5">
+      <button
+        onClick={onOpenSearch}
+        className="mb-1.5 flex w-full items-center gap-2 rounded-md border border-input bg-secondary px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <Search className="size-3.5" />
+        <span className="flex-1 text-left">Search</span>
+        <kbd className="rounded bg-background/60 px-1 text-[10px] tabular-nums">
+          ⌘K
+        </kbd>
+      </button>
+
+      <div className="mb-0.5 flex items-center justify-between px-2 pt-1">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          Projects
+        </span>
+        <button
+          onClick={onPickProject}
+          className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title="Open project (⌘O)"
+        >
+          <Plus className="size-3.5" />
+        </button>
+      </div>
+
       {projects.map((p) => {
         const active = p.id === activeProjectId;
         const pSessions = sessionsFor(p.id);
@@ -303,10 +347,14 @@ function SessionList({
 }) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+
+  const LIMIT = 8;
+  const shown = showAll ? sessions : sessions.slice(0, LIMIT);
 
   return (
     <ul className="ml-3 mt-0.5 border-l pl-1.5">
-      {sessions.map((s) => {
+      {shown.map((s) => {
         const active = s.id === activeId;
         return (
           <li
@@ -346,6 +394,9 @@ function SessionList({
             ) : (
               <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
             )}
+            {(s.kind === "agent" || s.kind === "chat") && (
+              <SessionStatusLabel id={s.id} />
+            )}
             <span className="flex-1 truncate">
               {s.kind === "dev" ? `dev:${s.label}` : s.label}
             </span>
@@ -358,6 +409,16 @@ function SessionList({
           </li>
         );
       })}
+      {sessions.length > LIMIT && (
+        <li>
+          <button
+            onClick={() => setShowAll((v) => !v)}
+            className="px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {showAll ? "Show less" : `Show ${sessions.length - LIMIT} more`}
+          </button>
+        </li>
+      )}
     </ul>
   );
 }

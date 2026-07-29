@@ -41,6 +41,10 @@ export interface ChatMessage {
   streaming: boolean;
   /** Images the user attached to this turn (user messages only). */
   images?: ChatImage[];
+  /** Assistant messages only: wall-clock start (message_start) and turn end
+   *  (result), used to render the "Worked for Ns" turn summary. */
+  startedAt?: number;
+  endedAt?: number;
 }
 
 /** A pasted image, base64-encoded for a stream-json image content block. */
@@ -113,6 +117,9 @@ export interface ChatUsage {
   costUsd?: number;
   inputTokens?: number;
   outputTokens?: number;
+  /** Latest turn's full prompt size (input + cache read + cache creation) —
+   *  i.e. how full the context window is right now, not the session total. */
+  contextTokens?: number;
   model?: string;
 }
 
@@ -590,6 +597,7 @@ export function useAgentChat({
             thinking: "",
             tools: [],
             streaming: true,
+            startedAt: Date.now(),
           };
           blockToolRef.current = {};
           const message = ev.message as Record<string, unknown> | undefined;
@@ -604,6 +612,15 @@ export function useAgentChat({
           const mu = message?.usage as Record<string, number> | undefined;
           t.curInput = mu?.input_tokens ?? 0;
           t.curOutput = mu?.output_tokens ?? 0;
+          // Context occupancy is the whole prompt fed to the model — cached
+          // reads dominate a long thread, so input_tokens alone understates it.
+          const ctx =
+            (mu?.input_tokens ?? 0) +
+            (mu?.cache_read_input_tokens ?? 0) +
+            (mu?.cache_creation_input_tokens ?? 0);
+          if (ctx) {
+            setUsage((u) => (u.contextTokens === ctx ? u : { ...u, contextTokens: ctx }));
+          }
           scheduleUsage();
           setStatus("thinking");
         } else if (evType === "content_block_start") {
@@ -792,6 +809,18 @@ export function useAgentChat({
           // A completed turn is the only proof the account works again.
           clearAccountIssue();
         }
+        // Stamp the turn's end on its last assistant message so the transcript
+        // can show "Worked for Ns".
+        setMessages((prev) => {
+          for (let i = prev.length - 1; i >= 0; i--) {
+            if (prev[i].role === "assistant" && prev[i].endedAt == null) {
+              const copy = prev.slice();
+              copy[i] = { ...copy[i], endedAt: Date.now() };
+              return copy;
+            }
+          }
+          return prev;
+        });
         // The turn is over — resolve any background runs still marked open,
         // since they never get a per-completion signal.
         endOpenSubagents(emberyxSessionId);

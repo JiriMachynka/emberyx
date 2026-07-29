@@ -2,6 +2,15 @@ import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  Bell,
+  ChevronDown,
+  ChevronUp,
+  Info,
+  Plug,
+  SlidersHorizontal,
+  Type,
+} from "lucide-react";
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -11,6 +20,13 @@ import {
 import { getVersion } from "@tauri-apps/api/app";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { checkForUpdates } from "@/lib/update";
 import {
@@ -19,6 +35,7 @@ import {
   useOpenRouterModels,
 } from "@/lib/queries";
 import { Field, Toggle } from "@/components/SettingsFields";
+import type { LucideIcon } from "lucide-react";
 import type { Settings } from "@/lib/settings";
 
 interface SettingsDialogProps {
@@ -28,12 +45,14 @@ interface SettingsDialogProps {
   onUpdate: (patch: Partial<Settings>) => void;
 }
 
-type Tab = "general" | "terminal" | "integrations";
+type Tab = "general" | "notifications" | "appearance" | "integrations" | "about";
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "general", label: "General" },
-  { id: "terminal", label: "Appearance" },
-  { id: "integrations", label: "Integrations" },
+const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
+  { id: "general", label: "General", icon: SlidersHorizontal },
+  { id: "notifications", label: "Notifications", icon: Bell },
+  { id: "appearance", label: "Appearance", icon: Type },
+  { id: "integrations", label: "Integrations", icon: Plug },
+  { id: "about", label: "About", icon: Info },
 ];
 
 export function SettingsDialog({
@@ -78,7 +97,7 @@ export function SettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
@@ -87,356 +106,486 @@ export function SettingsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex gap-1 border-b">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              className={cn(
-                "-mb-px border-b-2 px-2.5 py-1.5 text-sm font-medium transition-colors",
-                tab === t.id
-                  ? "border-primary text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="grid min-h-80 content-start gap-4">
-          {tab === "general" && (
-            <>
-              <Field
-                label="Agent interface"
-                hint="Chat shows a rich message UI; Terminal runs the raw Claude Code TUI."
+        <div className="flex h-[60vh] min-h-96 gap-5">
+          <nav className="flex w-44 shrink-0 flex-col gap-0.5 border-r pr-2">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={cn(
+                  "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors",
+                  tab === t.id
+                    ? "bg-secondary text-foreground"
+                    : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                )}
               >
-                <select
-                  value={settings.agentUi}
-                  onChange={(e) =>
-                    onUpdate({
-                      agentUi: e.target.value as "chat" | "terminal",
-                    })
-                  }
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  <option value="chat">Chat UI</option>
-                  <option value="terminal">Terminal</option>
-                </select>
-              </Field>
+                <t.icon className="size-4 shrink-0" />
+                {t.label}
+              </button>
+            ))}
+          </nav>
 
-              <Field
-                label="Agent command"
-                hint="Run on project open, e.g. claude or codex"
-              >
-                <Input
-                  value={settings.agentCommand}
-                  onChange={(e) => onUpdate({ agentCommand: e.target.value })}
-                  spellCheck={false}
-                />
-              </Field>
-
-              {isClaude && (
-                <Toggle
-                  checked={settings.dangerouslySkipPermissions}
-                  onChange={(v) => onUpdate({ dangerouslySkipPermissions: v })}
-                  title="Skip permission prompts"
-                >
-                  Launch Claude with{" "}
-                  <code className="text-[11px]">
-                    --dangerously-skip-permissions
-                  </code>
-                  . The agent won't ask before running commands or edits.
-                </Toggle>
-              )}
-
-              {isClaude && (
-                <Toggle
-                  checked={settings.resumeLatestThread}
-                  onChange={(v) => onUpdate({ resumeLatestThread: v })}
-                  title="Resume latest thread on open"
-                >
-                  Opening a project reopens the most recently worked-on thread.
-                  Off launches a brand-new agent each time.
-                </Toggle>
-              )}
-
-              {isClaude && (
-                <Toggle
-                  checked={settings.compactSession}
-                  onChange={(v) => onUpdate({ compactSession: v })}
-                  title="Compact session"
-                >
-                  Keep tool output collapsed. Off (default) runs a full session
-                  with <code className="text-[11px]">--verbose</code>, expanding
-                  tool output inline.
-                </Toggle>
-              )}
-
-              <Toggle
-                checked={settings.expandAllProjects}
-                onChange={(v) => onUpdate({ expandAllProjects: v })}
-                title="Expand every project"
-              >
-                When on, the sidebar keeps each project's own sessions listed,
-                not just the active project's.
-              </Toggle>
-
-              <Toggle
-                checked={settings.autoOpenDevPanel}
-                onChange={(v) => onUpdate({ autoOpenDevPanel: v })}
-                title="Auto-open dev panel on run"
-              >
-                Reveal the dev output panel whenever a dev, build, or start run
-                begins.
-              </Toggle>
-
-              <Toggle
-                checked={settings.notifyOnDone}
-                onChange={(v) => onUpdate({ notifyOnDone: v })}
-                title="Notify when a task finishes"
-              >
-                Raise a notification once a run completes.
-              </Toggle>
-
-              <Toggle
-                checked={settings.notifyOnError}
-                onChange={(v) => onUpdate({ notifyOnError: v })}
-                title="Notify on errors"
-              >
-                Raise a notification when a run fails.
-              </Toggle>
-
-              <Toggle
-                checked={settings.notifyOnAccountIssue}
-                onChange={(v) => onUpdate({ notifyOnAccountIssue: v })}
-                title="Notify on account issues"
-              >
-                Raise a notification when the usage limit is hit or the login
-                expires.
-              </Toggle>
-
-              <Toggle
-                checked={settings.notifyOnlyWhenUnfocused}
-                onChange={(v) => onUpdate({ notifyOnlyWhenUnfocused: v })}
-                title="Only when app is unfocused"
-              >
-                Stay quiet while Emberyx is the focused window.
-              </Toggle>
-
-              <Toggle
-                checked={settings.notifySound}
-                onChange={(v) => onUpdate({ notifySound: v })}
-                title="Play sound"
-              >
-                Play a chime alongside each notification.
-              </Toggle>
-
-              <div className="flex items-center justify-between border-t pt-4">
-                <div className="text-sm">
-                  <div className="font-medium">Updates</div>
-                  <div className="text-xs text-muted-foreground">
-                    {version ? `Emberyx v${version}` : "Emberyx"}
-                  </div>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={onCheckUpdates}
-                  disabled={checking}
-                >
-                  {checking ? "Checking…" : "Check for updates"}
-                </Button>
-              </div>
-            </>
-          )}
-
-          {tab === "terminal" && (
-            <>
-              <Field label="Font family">
-                <Input
-                  value={settings.fontFamily}
-                  onChange={(e) => onUpdate({ fontFamily: e.target.value })}
-                  spellCheck={false}
-                />
-              </Field>
-
-              <Field label="Editor font family">
-                <Input
-                  value={settings.editorFontFamily}
-                  onChange={(e) => onUpdate({ editorFontFamily: e.target.value })}
-                  spellCheck={false}
-                />
-              </Field>
-
-              <div className="grid grid-cols-3 gap-4">
-                <Field label="Terminal font">
-                  <Input
-                    type="number"
-                    min={8}
-                    max={32}
-                    value={settings.fontSize}
-                    onChange={(e) =>
-                      onUpdate({ fontSize: Number(e.target.value) || 13 })
-                    }
-                  />
-                </Field>
-
-                <Field label="Editor font">
-                  <Input
-                    type="number"
-                    min={8}
-                    max={32}
-                    value={settings.editorFontSize}
-                    onChange={(e) =>
-                      onUpdate({ editorFontSize: Number(e.target.value) || 13 })
-                    }
-                  />
-                </Field>
-
-                <Field label="Scrollback">
-                  <Input
-                    type="number"
-                    min={100}
-                    max={100000}
-                    step={100}
-                    value={settings.scrollback}
-                    onChange={(e) =>
-                      onUpdate({ scrollback: Number(e.target.value) || 1000 })
-                    }
-                  />
-                </Field>
-              </div>
-            </>
-          )}
-
-          {tab === "integrations" && (
-            <>
-              <div>
-                <div className="mb-3 text-sm font-semibold">Dokploy</div>
-                <div className="grid gap-4">
+          <div className="min-w-0 flex-1 overflow-y-auto px-1.5">
+            <div className="grid content-start gap-4 py-0.5">
+              {tab === "general" && (
+                <>
                   <Field
-                    label="Server URL"
-                    hint="Projects are matched to Dokploy services by git remote."
+                    label="Agent interface"
+                    hint="Chat shows a rich message UI; Terminal runs the raw Claude Code TUI."
                   >
-                    <Input
-                      value={settings.dokployUrl}
-                      onChange={(e) => onUpdate({ dokployUrl: e.target.value })}
-                      placeholder="https://dokploy.example.com"
-                      spellCheck={false}
-                    />
-                  </Field>
-                  <Field label="API key" hint="Sent as the x-api-key header.">
-                    <Input
-                      type="password"
-                      value={settings.dokployApiKey}
-                      onChange={(e) =>
-                        onUpdate({ dokployApiKey: e.target.value })
+                    <Select
+                      value={settings.agentUi}
+                      onValueChange={(v) =>
+                        onUpdate({ agentUi: v as "chat" | "terminal" })
                       }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="chat">Chat UI</SelectItem>
+                        <SelectItem value="terminal">Terminal</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+
+                  <Field
+                    label="Agent command"
+                    hint="Run on project open, e.g. claude or codex"
+                  >
+                    <Input
+                      value={settings.agentCommand}
+                      onChange={(e) => onUpdate({ agentCommand: e.target.value })}
                       spellCheck={false}
                     />
                   </Field>
-                </div>
-              </div>
 
-              <div className="border-t pt-4">
-                <div className="mb-3 text-sm font-semibold">GitLab</div>
-                <div className="grid gap-4">
-                  <Field
-                    label="Personal access token"
-                    hint="Needs the read_api scope. gitlab.com only. Stored in the OS keychain, never on disk."
+                  {isClaude && (
+                    <Toggle
+                      checked={settings.dangerouslySkipPermissions}
+                      onChange={(v) =>
+                        onUpdate({ dangerouslySkipPermissions: v })
+                      }
+                      title="Skip permission prompts"
+                    >
+                      Launch Claude with{" "}
+                      <code className="text-[11px]">
+                        --dangerously-skip-permissions
+                      </code>
+                      . The agent won't ask before running commands or edits.
+                    </Toggle>
+                  )}
+
+                  {isClaude && (
+                    <Toggle
+                      checked={settings.resumeLatestThread}
+                      onChange={(v) => onUpdate({ resumeLatestThread: v })}
+                      title="Resume latest thread on open"
+                    >
+                      Opening a project reopens the most recently worked-on
+                      thread. Off launches a brand-new agent each time.
+                    </Toggle>
+                  )}
+
+                  {isClaude && (
+                    <Toggle
+                      checked={settings.compactSession}
+                      onChange={(v) => onUpdate({ compactSession: v })}
+                      title="Compact session"
+                    >
+                      Keep tool output collapsed. Off (default) runs a full
+                      session with <code className="text-[11px]">--verbose</code>
+                      , expanding tool output inline.
+                    </Toggle>
+                  )}
+
+                  <Toggle
+                    checked={settings.expandAllProjects}
+                    onChange={(v) => onUpdate({ expandAllProjects: v })}
+                    title="Expand every project"
                   >
-                    {hasGitlabToken ? (
-                      <div className="flex items-center gap-2">
-                        <span className="flex h-9 flex-1 items-center rounded-md border border-input px-3 text-sm text-muted-foreground">
-                          •••••••• Connected
-                        </span>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={onClearGitlabToken}
-                        >
-                          Disconnect
-                        </Button>
+                    When on, the sidebar keeps each project's own sessions
+                    listed, not just the active project's.
+                  </Toggle>
+
+                  <Toggle
+                    checked={settings.autoOpenDevPanel}
+                    onChange={(v) => onUpdate({ autoOpenDevPanel: v })}
+                    title="Auto-open dev panel on run"
+                  >
+                    Reveal the dev output panel whenever a dev, build, or start
+                    run begins.
+                  </Toggle>
+                </>
+              )}
+
+              {tab === "notifications" && (
+                <>
+                  <Toggle
+                    checked={settings.notifyOnDone}
+                    onChange={(v) => onUpdate({ notifyOnDone: v })}
+                    title="Notify when a task finishes"
+                  >
+                    Raise a notification once a run completes.
+                  </Toggle>
+
+                  <Toggle
+                    checked={settings.notifyOnError}
+                    onChange={(v) => onUpdate({ notifyOnError: v })}
+                    title="Notify on errors"
+                  >
+                    Raise a notification when a run fails.
+                  </Toggle>
+
+                  <Toggle
+                    checked={settings.notifyOnAccountIssue}
+                    onChange={(v) => onUpdate({ notifyOnAccountIssue: v })}
+                    title="Notify on account issues"
+                  >
+                    Raise a notification when the usage limit is hit or the login
+                    expires.
+                  </Toggle>
+
+                  <Toggle
+                    checked={settings.notifyOnlyWhenUnfocused}
+                    onChange={(v) => onUpdate({ notifyOnlyWhenUnfocused: v })}
+                    title="Only when app is unfocused"
+                  >
+                    Stay quiet while Emberyx is the focused window.
+                  </Toggle>
+
+                  <Toggle
+                    checked={settings.notifySound}
+                    onChange={(v) => onUpdate({ notifySound: v })}
+                    title="Play sound"
+                  >
+                    Play a chime alongside each notification.
+                  </Toggle>
+                </>
+              )}
+
+              {tab === "appearance" && (
+                <>
+                  <div>
+                    <div className="mb-3 text-sm font-semibold">Interface</div>
+                    <div className="grid gap-4">
+                      <Field
+                        label="Font family"
+                        hint="Used by the chat and terminal panes."
+                      >
+                        <FontSelect
+                          value={settings.fontFamily}
+                          onChange={(v) => onUpdate({ fontFamily: v })}
+                        />
+                      </Field>
+                      <div className="grid grid-cols-2 gap-4">
+                        <Field label="Font size">
+                          <NumberStepper
+                            value={settings.fontSize}
+                            min={8}
+                            max={32}
+                            onChange={(n) => onUpdate({ fontSize: n })}
+                          />
+                        </Field>
+                        <Field label="Scrollback">
+                          <NumberStepper
+                            value={settings.scrollback}
+                            min={100}
+                            max={100000}
+                            step={100}
+                            onChange={(n) => onUpdate({ scrollback: n })}
+                          />
+                        </Field>
                       </div>
-                    ) : (
-                      <div className="flex items-center gap-2">
+                    </div>
+                  </div>
+
+                  <div className="border-t pt-4">
+                    <div className="mb-3 text-sm font-semibold">Editor</div>
+                    <div className="grid gap-4">
+                      <Field
+                        label="Font family"
+                        hint="Used by the code editor."
+                      >
+                        <FontSelect
+                          value={settings.editorFontFamily}
+                          onChange={(v) => onUpdate({ editorFontFamily: v })}
+                        />
+                      </Field>
+                      <div className="grid grid-cols-2 gap-4">
+                        <Field label="Font size">
+                          <NumberStepper
+                            value={settings.editorFontSize}
+                            min={8}
+                            max={32}
+                            onChange={(n) => onUpdate({ editorFontSize: n })}
+                          />
+                        </Field>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {tab === "integrations" && (
+                <>
+                  <div>
+                    <div className="mb-3 text-sm font-semibold">Dokploy</div>
+                    <div className="grid gap-4">
+                      <Field
+                        label="Server URL"
+                        hint="Projects are matched to Dokploy services by git remote."
+                      >
+                        <Input
+                          value={settings.dokployUrl}
+                          onChange={(e) =>
+                            onUpdate({ dokployUrl: e.target.value })
+                          }
+                          placeholder="https://dokploy.example.com"
+                          spellCheck={false}
+                        />
+                      </Field>
+                      <Field label="API key" hint="Sent as the x-api-key header.">
                         <Input
                           type="password"
-                          value={gitlabToken}
-                          onChange={(e) => setGitlabToken(e.target.value)}
-                          placeholder="glpat-…"
+                          value={settings.dokployApiKey}
+                          onChange={(e) =>
+                            onUpdate({ dokployApiKey: e.target.value })
+                          }
                           spellCheck={false}
-                          autoComplete="off"
                         />
-                        <Button
-                          size="sm"
-                          onClick={onSaveGitlabToken}
-                          disabled={!gitlabToken.trim()}
-                        >
-                          Save
-                        </Button>
-                      </div>
-                    )}
-                  </Field>
-                  <Field
-                    label="Remote"
-                    hint="Git remote used to fetch and check out MR branches."
-                  >
-                    <Input
-                      value={settings.gitlabRemote}
-                      onChange={(e) => onUpdate({ gitlabRemote: e.target.value })}
-                      placeholder="origin"
-                      spellCheck={false}
-                    />
-                  </Field>
-                </div>
-              </div>
+                      </Field>
+                    </div>
+                  </div>
 
-              <div className="border-t pt-4">
-                <div className="mb-3 text-sm font-semibold">OpenRouter</div>
-                <div className="grid gap-4">
-                  <Field
-                    label="API key"
-                    hint="Enables the Generate button on the commit box to draft messages from your diff."
+                  <div className="border-t pt-4">
+                    <div className="mb-3 text-sm font-semibold">GitLab</div>
+                    <div className="grid gap-4">
+                      <Field
+                        label="Personal access token"
+                        hint="Needs the read_api scope. gitlab.com only. Stored in the OS keychain, never on disk."
+                      >
+                        {hasGitlabToken ? (
+                          <div className="flex items-center gap-2">
+                            <span className="flex h-9 flex-1 items-center rounded-md border border-input px-3 text-sm text-muted-foreground">
+                              •••••••• Connected
+                            </span>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={onClearGitlabToken}
+                            >
+                              Disconnect
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="password"
+                              value={gitlabToken}
+                              onChange={(e) => setGitlabToken(e.target.value)}
+                              placeholder="glpat-…"
+                              spellCheck={false}
+                              autoComplete="off"
+                            />
+                            <Button
+                              size="sm"
+                              onClick={onSaveGitlabToken}
+                              disabled={!gitlabToken.trim()}
+                            >
+                              Save
+                            </Button>
+                          </div>
+                        )}
+                      </Field>
+                      <Field
+                        label="Remote"
+                        hint="Git remote used to fetch and check out MR branches."
+                      >
+                        <Input
+                          value={settings.gitlabRemote}
+                          onChange={(e) =>
+                            onUpdate({ gitlabRemote: e.target.value })
+                          }
+                          placeholder="origin"
+                          spellCheck={false}
+                        />
+                      </Field>
+                    </div>
+                  </div>
+
+                  <div className="border-t pt-4">
+                    <div className="mb-3 text-sm font-semibold">OpenRouter</div>
+                    <div className="grid gap-4">
+                      <Field
+                        label="API key"
+                        hint="Enables the Generate button on the commit box to draft messages from your diff."
+                      >
+                        <Input
+                          type="password"
+                          value={settings.openRouterApiKey}
+                          onChange={(e) =>
+                            onUpdate({ openRouterApiKey: e.target.value })
+                          }
+                          placeholder="sk-or-…"
+                          spellCheck={false}
+                        />
+                      </Field>
+                      <Field
+                        label="Model"
+                        hint="OpenRouter model slug. Defaults to google/gemini-3.5-flash."
+                      >
+                        <Input
+                          list="openrouter-models"
+                          value={settings.openRouterModel}
+                          onChange={(e) =>
+                            onUpdate({ openRouterModel: e.target.value })
+                          }
+                          placeholder="google/gemini-3.5-flash"
+                          spellCheck={false}
+                        />
+                        <datalist id="openrouter-models">
+                          {models.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.name}
+                            </option>
+                          ))}
+                        </datalist>
+                      </Field>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {tab === "about" && (
+                <div className="flex items-center justify-between">
+                  <div className="text-sm">
+                    <div className="font-medium">Updates</div>
+                    <div className="text-xs text-muted-foreground">
+                      {version ? `Emberyx v${version}` : "Emberyx"}
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onCheckUpdates}
+                    disabled={checking}
                   >
-                    <Input
-                      type="password"
-                      value={settings.openRouterApiKey}
-                      onChange={(e) =>
-                        onUpdate({ openRouterApiKey: e.target.value })
-                      }
-                      placeholder="sk-or-…"
-                      spellCheck={false}
-                    />
-                  </Field>
-                  <Field
-                    label="Model"
-                    hint="OpenRouter model slug. Defaults to google/gemini-3.5-flash."
-                  >
-                    <Input
-                      list="openrouter-models"
-                      value={settings.openRouterModel}
-                      onChange={(e) =>
-                        onUpdate({ openRouterModel: e.target.value })
-                      }
-                      placeholder="google/gemini-3.5-flash"
-                      spellCheck={false}
-                    />
-                    <datalist id="openrouter-models">
-                      {models.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.name}
-                        </option>
-                      ))}
-                    </datalist>
-                  </Field>
+                    {checking ? "Checking…" : "Check for updates"}
+                  </Button>
                 </div>
-              </div>
-            </>
-          )}
+              )}
+            </div>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Popular monospace families. Values are full font stacks; the first two match
+ *  the shipped defaults so the current setting selects cleanly. */
+const FONT_OPTIONS: { label: string; value: string }[] = [
+  { label: "Geist Mono", value: '"Geist Mono Variable", ui-monospace, Menlo, monospace' },
+  {
+    label: "JetBrains Mono",
+    value:
+      '"JetBrains Mono Variable", "Geist Mono Variable", ui-monospace, Menlo, monospace',
+  },
+  { label: "SF Mono", value: '"SF Mono", ui-monospace, Menlo, monospace' },
+  { label: "Menlo", value: "Menlo, ui-monospace, monospace" },
+  { label: "Monaco", value: "Monaco, ui-monospace, monospace" },
+  { label: "Fira Code", value: '"Fira Code", ui-monospace, monospace' },
+  { label: "Cascadia Code", value: '"Cascadia Code", ui-monospace, monospace' },
+  { label: "Source Code Pro", value: '"Source Code Pro", ui-monospace, monospace' },
+  { label: "System monospace", value: "ui-monospace, monospace" },
+];
+
+/** Font-family picker: each option previews in its own family. An unrecognised
+ *  stored stack shows up as a "Custom" entry so it still round-trips. */
+function FontSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const known = FONT_OPTIONS.some((f) => f.value === value);
+  const options = known ? FONT_OPTIONS : [{ label: "Custom", value }, ...FONT_OPTIONS];
+  return (
+    <Select value={value} onValueChange={onChange}>
+      <SelectTrigger>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((f) => (
+          <SelectItem
+            key={f.value}
+            value={f.value}
+            preview={
+              <span
+                style={{
+                  fontFamily: f.value,
+                  fontFeatureSettings: '"liga" 1, "calt" 1',
+                }}
+              >
+                AaBbCc 0123 {"=> {}"}
+              </span>
+            }
+          >
+            <span style={{ fontFamily: f.value }}>{f.label}</span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+/** Number field with visible custom steppers — the native spinner arrows are
+ *  near-invisible on the dark surface. */
+function NumberStepper({
+  value,
+  onChange,
+  min,
+  max,
+  step = 1,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  min: number;
+  max: number;
+  step?: number;
+}) {
+  const clamp = (n: number) => Math.min(max, Math.max(min, n));
+  return (
+    <div className="relative">
+      <Input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(clamp(Number(e.target.value) || min))}
+        className="pr-8 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+      />
+      <div className="absolute right-1 top-1/2 flex -translate-y-1/2 flex-col">
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={() => onChange(clamp(value + step))}
+          className="flex h-3.5 items-center rounded-sm px-0.5 text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ChevronUp className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={() => onChange(clamp(value - step))}
+          className="flex h-3.5 items-center rounded-sm px-0.5 text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ChevronDown className="size-3.5" />
+        </button>
+      </div>
+    </div>
   );
 }

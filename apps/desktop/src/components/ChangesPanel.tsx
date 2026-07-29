@@ -221,6 +221,8 @@ interface ChangesPanelProps {
   onClose: () => void;
   onOpenWorktree: (path: string, repoRoot: string, branch: string) => void;
   onRemoveWorktree: (worktreePath: string, repoRoot: string) => void | Promise<void>;
+  /** Render inside the surface panel rather than as its own right aside. */
+  embedded?: boolean;
 }
 
 export function ChangesPanel({
@@ -231,6 +233,7 @@ export function ChangesPanel({
   onClose,
   onOpenWorktree,
   onRemoveWorktree,
+  embedded,
 }: ChangesPanelProps) {
   const [tab, setTab] = useState<"git" | "agent">("git");
   const [fileListHeight, setFileListHeight] = useState(208);
@@ -401,6 +404,7 @@ export function ChangesPanel({
     <SidePanel
       storageKey="changes"
       flushHeader
+      embedded={embedded}
       onClose={onClose}
       header={
         <div className="flex items-center">
@@ -444,7 +448,7 @@ export function ChangesPanel({
           ) : (
             <>
               <div
-                className="shrink-0 overflow-auto border-b"
+                className="shrink-0 overflow-auto border-b pr-1.5"
                 style={{ height: fileListHeight }}
               >
                 {stagedFiles.length > 0 && (

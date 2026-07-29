@@ -3,11 +3,16 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
+  ChevronDown,
   ChevronsUpDown,
+  ClipboardList,
   Clock,
   Coins,
+  Hammer,
+  Lock,
   Sparkles,
   Square,
+  Unlock,
   X,
 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
@@ -193,6 +198,155 @@ const ModelPicker = memo(function ModelPicker({
   );
 });
 
+/** Thin vertical rule between composer control chips. */
+const ChipDivider = () => <span className="h-3.5 w-px shrink-0 bg-border" />;
+
+/** Trigger styling shared by the access/mode chips — matches ModelPicker. */
+const chipTrigger =
+  "flex items-center gap-1.5 rounded font-medium text-foreground outline-none transition-colors hover:text-primary";
+
+/** Approval posture: Full access (`--dangerously-skip-permissions`) vs
+ *  Supervised (edits/commands raise a permission prompt). */
+const AccessChip = memo(function AccessChip({
+  fullAccess,
+  onChange,
+}: {
+  fullAccess: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger className={chipTrigger}>
+        {fullAccess ? (
+          <Unlock className="size-3.5 shrink-0 text-primary" />
+        ) : (
+          <Lock className="size-3.5 shrink-0 opacity-70" />
+        )}
+        <span>{fullAccess ? "Full access" : "Supervised"}</span>
+        <ChevronDown className="size-3 shrink-0 opacity-50" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-44">
+        <DropdownMenuItem onSelect={() => onChange(false)} className="justify-between gap-4">
+          Supervised
+          {!fullAccess && <Check className="size-3.5" />}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onChange(true)} className="justify-between gap-4">
+          Full access
+          {fullAccess && <Check className="size-3.5" />}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+});
+
+/** Interaction mode: Build (agent edits) vs Plan (`--permission-mode plan`,
+ *  read-only until you approve the plan). */
+const ModeChip = memo(function ModeChip({
+  planMode,
+  onChange,
+}: {
+  planMode: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger className={chipTrigger}>
+        {planMode ? (
+          <ClipboardList className="size-3.5 shrink-0 text-primary" />
+        ) : (
+          <Hammer className="size-3.5 shrink-0 opacity-70" />
+        )}
+        <span>{planMode ? "Plan" : "Build"}</span>
+        <ChevronDown className="size-3 shrink-0 opacity-50" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-36">
+        <DropdownMenuItem onSelect={() => onChange(false)} className="justify-between gap-4">
+          Build
+          {!planMode && <Check className="size-3.5" />}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onChange(true)} className="justify-between gap-4">
+          Plan
+          {planMode && <Check className="size-3.5" />}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+});
+
+/** Context-window size by model alias — everything is 200k except the 1M
+ *  Sonnet variant. */
+const contextWindowFor = (model: string): number =>
+  model.includes("[1m]") ? 1_000_000 : 200_000;
+
+/** Compact token count: 135k, 1m. */
+const fmtTokens = (n: number): string =>
+  n >= 1_000_000
+    ? `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}m`
+    : `${Math.round(n / 1000)}k`;
+
+const RING = 2 * Math.PI * 8; // r=8 circumference
+
+/** Ring gauge beside the send button; its popover shows how full the context
+ *  window is. Kept its own memo so typing never re-renders the SVG. */
+const ContextMeter = memo(function ContextMeter({
+  contextTokens,
+  model,
+}: {
+  contextTokens?: number;
+  model: string;
+}) {
+  const max = contextWindowFor(model);
+  const used = contextTokens ?? 0;
+  const pct = Math.min(100, Math.round((used / max) * 100));
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        title="Context window"
+        className="grid size-8 place-items-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground"
+      >
+        <svg viewBox="0 0 20 20" className="size-5 -rotate-90">
+          <circle
+            cx="10"
+            cy="10"
+            r="8"
+            fill="none"
+            strokeWidth="2"
+            className="stroke-muted-foreground/25"
+          />
+          <circle
+            cx="10"
+            cy="10"
+            r="8"
+            fill="none"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeDasharray={RING}
+            strokeDashoffset={RING * (1 - pct / 100)}
+            className="stroke-primary transition-[stroke-dashoffset]"
+          />
+        </svg>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="end" className="w-64 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-medium text-foreground">Context Window</span>
+          <span className="font-mono text-xs tabular-nums text-muted-foreground">
+            {pct}% · {fmtTokens(used)}/{fmtTokens(max)}
+          </span>
+        </div>
+        <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full rounded-full bg-primary transition-[width]"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Claude automatically compacts its context when needed.
+        </p>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+});
+
 interface UsageFooterProps {
   /** Turns typed while busy and not yet sent. */
   queued: number;
@@ -200,6 +354,10 @@ interface UsageFooterProps {
   /** Selected `--model` alias; "" = default. */
   model: string;
   onModelChange: (model: string) => void;
+  fullAccess: boolean;
+  onFullAccessChange: (v: boolean) => void;
+  planMode: boolean;
+  onPlanModeChange: (v: boolean) => void;
 }
 
 /** Token/cost telemetry restated on every message_delta. Split out so that
@@ -210,6 +368,10 @@ const UsageFooter = memo(function UsageFooter({
   usage,
   model,
   onModelChange,
+  fullAccess,
+  onFullAccessChange,
+  planMode,
+  onPlanModeChange,
 }: UsageFooterProps) {
   return (
     <div className="flex min-w-0 items-center gap-2.5 text-xs text-muted-foreground">
@@ -220,6 +382,10 @@ const UsageFooter = memo(function UsageFooter({
         </span>
       )}
       <ModelPicker model={model} usage={usage} onModelChange={onModelChange} />
+      <ChipDivider />
+      <AccessChip fullAccess={fullAccess} onChange={onFullAccessChange} />
+      <ChipDivider />
+      <ModeChip planMode={planMode} onChange={onPlanModeChange} />
       {(usage.inputTokens != null ||
         usage.outputTokens != null ||
         usage.costUsd != null) && (
@@ -262,6 +428,12 @@ interface ChatComposerProps {
   /** Selected `--model` alias for this session; "" = default. */
   model: string;
   onModelChange: (model: string) => void;
+  /** Full access = `--dangerously-skip-permissions`; off = Supervised. */
+  fullAccess: boolean;
+  onFullAccessChange: (v: boolean) => void;
+  /** Plan mode = `--permission-mode plan`; off = Build. */
+  planMode: boolean;
+  onPlanModeChange: (v: boolean) => void;
   onSend: (text: string, images: ChatImage[]) => void;
   onStop: () => void;
   /** Un-send the newest in-flight turn; returns its text/images to restore. */
@@ -285,6 +457,10 @@ export const ChatComposer = memo(function ChatComposer({
   usage,
   model,
   onModelChange,
+  fullAccess,
+  onFullAccessChange,
+  planMode,
+  onPlanModeChange,
   onSend,
   onStop,
   onRewind,
@@ -472,7 +648,7 @@ export const ChatComposer = memo(function ChatComposer({
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
         className={cn(
-          "overflow-hidden rounded-xl border border-input bg-card shadow-sm transition-colors focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40",
+          "glass-composer overflow-hidden rounded-xl border border-input transition-colors focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40",
           dragging && "border-ring ring-1 ring-ring/50"
         )}
       >
@@ -558,6 +734,12 @@ export const ChatComposer = memo(function ChatComposer({
                 return;
               }
             }
+            // Swallow any otherwise-unhandled Esc so it can't reach the OS and
+            // exit fullscreen / unmaximize the window.
+            if (e.key === "Escape") {
+              e.preventDefault();
+              return;
+            }
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               submit();
@@ -582,14 +764,19 @@ export const ChatComposer = memo(function ChatComposer({
             usage={usage}
             model={model}
             onModelChange={onModelChange}
+            fullAccess={fullAccess}
+            onFullAccessChange={onFullAccessChange}
+            planMode={planMode}
+            onPlanModeChange={onPlanModeChange}
           />
           <div className="flex shrink-0 items-center gap-1.5">
+            <ContextMeter contextTokens={usage.contextTokens} model={model} />
             {busy && (
               <button
                 type="button"
                 onClick={onStop}
                 title="Stop"
-                className="grid size-8 place-items-center rounded-lg bg-card text-foreground transition-colors hover:bg-muted"
+                className="grid size-8 place-items-center rounded-full bg-card text-foreground transition-colors hover:bg-muted"
               >
                 <Square className="size-3.5 fill-current" />
               </button>
@@ -599,7 +786,7 @@ export const ChatComposer = memo(function ChatComposer({
               onClick={submit}
               title={busy ? "Queue message" : "Send"}
               disabled={(!input.trim() && images.length === 0) || !ready || exited}
-              className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
+              className="grid size-8 place-items-center rounded-full bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
             >
               <ArrowUp className="size-4" />
             </button>

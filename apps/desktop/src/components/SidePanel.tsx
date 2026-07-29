@@ -16,6 +16,9 @@ interface SidePanelProps {
   open?: boolean;
   /** Padding-less header for panels whose header holds flush tab buttons. */
   flushHeader?: boolean;
+  /** Render inside another panel: no aside/border/resize/close, just the header
+   *  row + body filling the host. The host owns the frame. */
+  embedded?: boolean;
   children: React.ReactNode;
 }
 
@@ -31,9 +34,27 @@ export function SidePanel({
   onClose,
   open = true,
   flushHeader = false,
+  embedded = false,
   children,
 }: SidePanelProps) {
   const [width, setWidth] = useState(() => getPanelWidth(storageKey));
+
+  if (embedded) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <header
+          className={cn(
+            "flex h-11 shrink-0 items-center justify-between gap-2 border-b pr-2",
+            flushHeader ? "pl-1" : "pl-3"
+          )}
+        >
+          {header}
+          {actions && <div className="flex items-center gap-1">{actions}</div>}
+        </header>
+        {children}
+      </div>
+    );
+  }
 
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -59,6 +80,7 @@ export function SidePanel({
       style={{ width }}
       className={cn(
         "relative flex shrink-0 flex-col border-l bg-card",
+        "animate-in fade-in slide-in-from-right-2 duration-200 ease-out",
         !open && "hidden"
       )}
     >

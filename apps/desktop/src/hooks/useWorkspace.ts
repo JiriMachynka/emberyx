@@ -211,9 +211,11 @@ export function useWorkspace(settings: Settings) {
     // Skip the Dokploy network probe for a hidden pre-warmed project; it runs
     // when the user actually reveals it.
     if (!prewarm) dokploy.refresh(id, path);
+    return id;
   }
 
-  /** Open a git worktree as its own project, labelled by its branch. */
+  /** Open a git worktree as its own project, labelled by its branch. Returns
+   *  the new project's id so callers can seed it (e.g. run-on-create actions). */
   function openWorktree(path: string, repoRoot: string, branch: string) {
     return openProjectAt(path, { worktree: { repoRoot, branch } });
   }

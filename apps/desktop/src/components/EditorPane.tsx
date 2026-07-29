@@ -14,6 +14,15 @@ import { useFileBuffers } from "@/hooks/useFileBuffers";
 import { useCodeNavigation } from "@/hooks/useCodeNavigation";
 import { useSymbolHover } from "@/hooks/useSymbolHover";
 
+const TREE_MIN = 180;
+const TREE_MAX = 480;
+const TREE_KEY = "emberyx.editor.tree.width";
+
+const initialTreeWidth = (): number => {
+  const v = Number(localStorage.getItem(TREE_KEY));
+  return v >= TREE_MIN && v <= TREE_MAX ? v : 256;
+};
+
 interface EditorPaneProps {
   projectPath: string;
   fontFamily: string;
@@ -41,7 +50,26 @@ export function EditorPane({
   );
   const [searchFocus, setSearchFocus] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [treeWidth, setTreeWidth] = useState(initialTreeWidth);
   const editorRef = useRef<EditorHandle | null>(null);
+
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = treeWidth;
+    let last = startW;
+    const onMove = (ev: MouseEvent) => {
+      last = Math.min(TREE_MAX, Math.max(TREE_MIN, startW + ev.clientX - startX));
+      setTreeWidth(last);
+    };
+    const onUp = () => {
+      localStorage.setItem(TREE_KEY, String(last));
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   const files = useFileBuffers(projectPath);
   const { selected, text, dirty, dirtyPaths, saving, save, edit } = files;
@@ -92,7 +120,10 @@ export function EditorPane({
 
   return (
     <div className="relative flex h-full min-h-0 w-full overflow-hidden">
-      <div className="flex w-64 shrink-0 flex-col border-r">
+      <div
+        className="relative flex shrink-0 flex-col border-r"
+        style={{ width: treeWidth }}
+      >
         <div className="flex h-9 shrink-0 items-center gap-1 border-b px-1">
           <SideTab active={side === "files"} onClick={() => setSide("files")}>
             Files
@@ -101,6 +132,11 @@ export function EditorPane({
             Search
           </SideTab>
         </div>
+        <div
+          onMouseDown={startResize}
+          className="absolute -right-1 top-0 z-10 h-full w-2 cursor-col-resize"
+          title="Drag to resize"
+        />
         {side === "files" ? (
           <div className="min-h-0 flex-1 overflow-auto py-1">
             <FileTree

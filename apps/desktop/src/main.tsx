@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import { queryClient } from "@/lib/queries";
-import "@fontsource-variable/geist";
+import "@fontsource-variable/dm-sans";
 import "@fontsource-variable/geist-mono";
 import "@fontsource-variable/jetbrains-mono";
 import "./index.css";

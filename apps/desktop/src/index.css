@@ -2,6 +2,14 @@
 @import "tw-animate-css";
 @import "highlight.js/styles/github-dark.css";
 
+/* Icons-only Nerd Font, appended to the terminal's font stack so powerline
+   prompts (Starship/p10k) render their glyphs whatever base font is chosen. */
+@font-face {
+  font-family: "Symbols Nerd Font";
+  src: url("/fonts/SymbolsNerdFontMono-Regular.ttf") format("truetype");
+  font-display: swap;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -31,31 +39,32 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* Dark only — Emberyx is a terminal-first app. Greys are warm-tinted (hue ~60,
-   low chroma) so the whole surface reads "ember" rather than neutral slate. */
+/* Dark only — Emberyx is a terminal-first app. Base is true-black neutral;
+   surfaces are white-alpha translucency layered over it. The single ember
+   (orange, hue 52) accent is the only chroma — it carries the brand. */
 :root {
   --radius: 0.625rem;
-  --background: oklch(0.15 0.006 60);
-  --foreground: oklch(0.97 0.004 70);
-  --card: oklch(0.186 0.008 58);
-  --card-foreground: oklch(0.97 0.004 70);
-  --popover: oklch(0.198 0.009 56);
-  --popover-foreground: oklch(0.97 0.004 70);
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.97 0 0);
+  --card: oklch(0.17 0 0);
+  --card-foreground: oklch(0.97 0 0);
+  --popover: oklch(0.185 0 0);
+  --popover-foreground: oklch(0.97 0 0);
   --primary: oklch(0.73 0.163 52);
   --primary-foreground: oklch(0.16 0.012 55);
-  --secondary: oklch(0.255 0.01 58);
-  --secondary-foreground: oklch(0.97 0.004 70);
-  --muted: oklch(0.255 0.01 58);
-  --muted-foreground: oklch(0.705 0.019 68);
-  --accent: oklch(0.3 0.014 55);
-  --accent-foreground: oklch(0.98 0.004 70);
+  --secondary: oklch(1 0 0 / 4%);
+  --secondary-foreground: oklch(0.97 0 0);
+  --muted: oklch(1 0 0 / 4%);
+  --muted-foreground: oklch(0.65 0 0);
+  --accent: oklch(1 0 0 / 8%);
+  --accent-foreground: oklch(0.98 0 0);
   --destructive: oklch(0.62 0.2 25);
-  --border: oklch(0.83 0.04 65 / 9%);
-  --input: oklch(0.85 0.04 65 / 14%);
+  --border: oklch(1 0 0 / 8%);
+  --input: oklch(1 0 0 / 12%);
   --ring: oklch(0.73 0.163 52);
   /* Sidebar sits a touch below the canvas; terminal canvas is the darkest. */
-  --sidebar: oklch(0.134 0.006 60);
-  --canvas: oklch(0.122 0.005 55);
+  --sidebar: oklch(0.13 0 0);
+  --canvas: oklch(0.12 0 0);
   /* Ember accent glow, reused by .ember-glow and status dots. */
   --glow: oklch(0.73 0.163 52 / 0.5);
 }
@@ -64,6 +73,15 @@
   * {
     border-color: var(--border);
     outline-color: color-mix(in oklch, var(--ring) 50%, transparent);
+  }
+  /* Coding ligatures (=>, !=, ===) for fonts that ship them — JetBrains Mono,
+     Fira Code, Cascadia. No-op for fonts without them. */
+  code,
+  pre,
+  kbd,
+  samp {
+    font-variant-ligatures: contextual;
+    font-feature-settings: "liga" 1, "calt" 1;
   }
   html,
   body,
@@ -74,7 +92,7 @@
   body {
     background-color: var(--background);
     color: var(--foreground);
-    font-family: "Geist Variable", ui-sans-serif, system-ui, -apple-system,
+    font-family: "DM Sans Variable", ui-sans-serif, system-ui, -apple-system,
       sans-serif;
     overflow: hidden;
   }
@@ -91,6 +109,16 @@
     );
     box-shadow:
       inset 0 1px 0 0 oklch(1 0 0 / 6%),
+      0 1px 2px 0 oklch(0 0 0 / 35%);
+  }
+
+  /* Lifted glass surface for the chat composer: translucent card over the
+     canvas, backdrop blur, and a bright white top-edge highlight. */
+  .glass-composer {
+    background-color: color-mix(in oklch, var(--card) 80%, transparent);
+    backdrop-filter: blur(12px) saturate(1.4);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 8%),
       0 1px 2px 0 oklch(0 0 0 / 35%);
   }
 
@@ -214,13 +242,13 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in oklch, var(--muted-foreground) 30%, transparent);
+  background: color-mix(in oklch, var(--muted-foreground) 18%, transparent);
   border-radius: 9999px;
-  border: 2px solid transparent;
+  border: 3px solid transparent;
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  background: color-mix(in oklch, var(--muted-foreground) 34%, transparent);
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-corner {
@@ -228,6 +256,6 @@
 }
 * {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in oklch, var(--muted-foreground) 30%, transparent)
+  scrollbar-color: color-mix(in oklch, var(--muted-foreground) 18%, transparent)
     transparent;
 }

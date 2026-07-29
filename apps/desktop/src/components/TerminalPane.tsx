@@ -41,6 +41,10 @@ interface TerminalPaneProps {
   active: boolean;
 }
 
+/** Append the bundled icons-only Nerd Font so powerline/Starship prompts show
+ *  their glyphs regardless of the user's chosen base font. */
+const withNerd = (family: string) => `${family}, "Symbols Nerd Font"`;
+
 function TerminalPaneImpl({
   sessionId,
   cwd,
@@ -64,7 +68,7 @@ function TerminalPaneImpl({
     if (!container) return;
 
     const term = new Terminal({
-      fontFamily: initialConfig.current.fontFamily,
+      fontFamily: withNerd(initialConfig.current.fontFamily),
       fontSize: initialConfig.current.fontSize,
       scrollback: initialConfig.current.scrollback,
       cursorBlink: true,
@@ -95,6 +99,18 @@ function TerminalPaneImpl({
     } catch {
       /* container not sized yet */
     }
+
+    // The bundled Nerd Font loads lazily; once it's ready, rebuild the glyph
+    // atlas so powerline/Starship icons aren't tofu on first paint.
+    void document.fonts
+      .load(`${initialConfig.current.fontSize}px "Symbols Nerd Font"`)
+      .then(() => {
+        try {
+          term.clearTextureAtlas();
+        } catch {
+          /* renderer without a texture atlas */
+        }
+      });
 
     let ptyId: number | null = null;
     let disposed = false;
@@ -234,7 +250,7 @@ function TerminalPaneImpl({
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
-    term.options.fontFamily = fontFamily;
+    term.options.fontFamily = withNerd(fontFamily);
     term.options.fontSize = fontSize;
     term.options.scrollback = scrollback;
     try {
