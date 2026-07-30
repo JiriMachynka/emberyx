@@ -1,18 +1,54 @@
 @import "tailwindcss";
 
+/* Display face — self-hosted, bundled by Vite (base path handled automatically). */
+@font-face {
+  font-family: "Clash Display";
+  src: url("./fonts/ClashDisplay-600.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Clash Display";
+  src: url("./fonts/ClashDisplay-700.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme {
-  --color-ink: #140b06;
-  --color-ink-soft: #1a0f08;
-  --color-ink-card: #21140b;
+  /* Base — deeper, warmer, more contrast than the old palette. */
+  --color-ink: #0f0906;
+  --color-ink-soft: #17100a;
+  --color-ink-card: #1e150d;
   --color-line: #3a2617;
-  --color-line-soft: #281a10;
-  --color-ash: #a2938a;
+  --color-line-soft: #241810;
+
+  /* Text */
+  --color-ash: #b3a49a;
   --color-ash-dim: #7a6a5f;
+  --color-fg: #f4f1ee;
+
+  /* Accent — the one ember. */
   --color-ember: #ff6a2b;
   --color-ember-soft: #ff9d5c;
+  --color-ember-deep: #d64e18;
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", monospace;
+  /* Status only — never decoration. */
+  --color-signal: #34d399;
+  --color-danger: #ff6a6a;
+
+  /* Type */
+  --font-display: "Clash Display", "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", monospace;
+
+  /* Fluid editorial scale */
+  --text-hero: clamp(2.75rem, 7vw, 5.5rem);
+  --text-h2: clamp(1.75rem, 4vw, 2.75rem);
+
+  /* Motion */
+  --ease-out-quint: cubic-bezier(0.2, 0, 0, 1);
 }
 
 html {
@@ -23,34 +59,105 @@ html {
 
 body {
   font-family: var(--font-sans);
-  color: #e7e7ea;
+  color: var(--color-fg);
   background-color: var(--color-ink);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
+/* ---- Type primitives -------------------------------------------------- */
+
+/* Big editorial display — Clash, tight, heavy. Hero + section headers. */
+.display {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  word-spacing: 0.08em;
+  line-height: 0.98;
+  text-wrap: balance;
+}
+.t-hero {
+  font-size: var(--text-hero);
+}
+.t-h2 {
+  font-size: var(--text-h2);
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+p {
+  text-wrap: pretty;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-ash-dim);
+}
+
+/* ---- Buttons ---------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  padding: 0.65rem 1.15rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition:
+    background-color 150ms var(--ease-out-quint),
+    border-color 150ms var(--ease-out-quint),
+    transform 150ms var(--ease-out-quint);
+}
+.btn:active {
+  transform: scale(0.97);
+}
+.btn-primary {
+  background-color: var(--color-ember);
+  color: var(--color-ink);
+}
+.btn-primary:hover {
+  background-color: var(--color-ember-soft);
+}
+.btn-ghost {
+  border: 1px solid var(--color-line);
+  color: var(--color-fg);
+}
+.btn-ghost:hover {
+  border-color: rgba(179, 164, 154, 0.28);
+  background-color: var(--color-ink-card);
+}
+
+/* ---- Surfaces & texture ---------------------------------------------- */
+
 /* Faint blueprint grid — technical texture, not a glow blob. */
 .grid-bg {
   background-image:
-    radial-gradient(70% 55% at 50% 0%, rgba(255, 106, 43, 0.14), transparent 70%),
-    linear-gradient(to right, rgba(255, 157, 92, 0.035) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 157, 92, 0.035) 1px, transparent 1px);
+    radial-gradient(70% 55% at 50% 0%, rgba(255, 106, 43, 0.16), transparent 70%),
+    linear-gradient(to right, rgba(255, 157, 92, 0.09) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 157, 92, 0.09) 1px, transparent 1px);
   background-size: 100% 100%, 64px 64px, 64px 64px;
-  mask-image: linear-gradient(to bottom, black, transparent 90%);
+  mask-image: linear-gradient(to bottom, black, transparent 92%);
 }
 
 /* Sticky nav detaches into a warm frosted pill once you leave the hero. */
 #site-nav {
-  transition: padding-top 300ms ease;
+  transition: padding-top 300ms var(--ease-out-quint);
 }
 #site-nav > nav {
   transition:
-    max-width 300ms ease,
-    height 300ms ease,
-    border-radius 300ms ease,
-    border-color 300ms ease,
-    background-color 300ms ease,
-    box-shadow 300ms ease;
+    max-width 300ms var(--ease-out-quint),
+    height 300ms var(--ease-out-quint),
+    border-radius 300ms var(--ease-out-quint),
+    border-color 300ms var(--ease-out-quint),
+    background-color 300ms var(--ease-out-quint),
+    box-shadow 300ms var(--ease-out-quint);
 }
 #site-nav.is-scrolled {
   padding-top: 0.65rem;
@@ -60,29 +167,31 @@ body {
   height: 3rem;
   border-radius: 9999px;
   border-color: var(--color-line-soft);
-  background-color: rgba(20, 11, 6, 0.72);
+  background-color: rgba(15, 9, 6, 0.72);
   backdrop-filter: saturate(140%) blur(12px);
   -webkit-backdrop-filter: saturate(140%) blur(12px);
-  box-shadow: 0 1px 0 0 rgba(255, 106, 43, 0.06), 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+  box-shadow:
+    0 1px 0 0 rgba(255, 106, 43, 0.07),
+    0 8px 24px -12px rgba(0, 0, 0, 0.75);
 }
 
 /* Surface material: top-lit gradient + lit edge + elevation, so cards aren't flat fills. */
 .card {
   border: 1px solid var(--color-line);
-  border-radius: 0.75rem;
+  border-radius: 0.875rem;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.022), transparent 45%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 45%),
     var(--color-ink-card);
   box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.04),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.045),
     0 8px 20px -14px rgba(0, 0, 0, 0.9);
   transition:
-    border-color 200ms ease,
-    box-shadow 200ms ease,
-    transform 200ms ease;
+    border-color 200ms var(--ease-out-quint),
+    box-shadow 200ms var(--ease-out-quint),
+    transform 200ms var(--ease-out-quint);
 }
 .card:hover {
-  border-color: rgba(162, 147, 138, 0.28);
+  border-color: rgba(179, 164, 154, 0.28);
   box-shadow:
     inset 0 1px 0 0 rgba(255, 255, 255, 0.06),
     0 14px 30px -16px rgba(0, 0, 0, 0.95);
@@ -99,24 +208,26 @@ body {
 
 /* Warm ambient light behind the mockup — kills the flat black void around it. */
 .mockup-glow {
-  background: radial-gradient(58% 52% at 50% 42%, rgba(255, 106, 43, 0.18), transparent 72%);
+  background: radial-gradient(58% 52% at 50% 42%, rgba(255, 106, 43, 0.2), transparent 72%);
   filter: blur(48px);
 }
 
-h1,
-h2,
-h3 {
-  text-wrap: balance;
+/* ---- Scroll reveal ---------------------------------------------------- */
+.reveal {
+  opacity: 0;
+  transform: translateY(0.5rem);
+  transition:
+    opacity 220ms var(--ease-out-quint),
+    transform 220ms var(--ease-out-quint);
 }
-
-p {
-  text-wrap: pretty;
+.reveal.is-in {
+  opacity: 1;
+  transform: none;
 }
-
-.eyebrow {
-  font-family: var(--font-mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--color-ash-dim);
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
 }

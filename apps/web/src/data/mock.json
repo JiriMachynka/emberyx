@@ -1,22 +1,35 @@
 {
+  "search": "Search",
   "projects": [
     {
       "name": "novacart",
+      "initial": "N",
+      "tint": "#ff6a2b",
       "badge": "turbo",
+      "active": true,
+      "showAgent": true,
       "sessions": [
         { "label": "Checkout double-charge", "state": "running", "active": true },
         { "label": "Stripe webhook retries", "state": "idle" },
         { "label": "Cart totals refactor", "state": "idle" }
       ]
+    },
+    {
+      "name": "api-service",
+      "initial": "A",
+      "tint": "#3b82f6",
+      "sessions": [{ "label": "Rate-limit tuning", "state": "idle" }]
+    },
+    {
+      "name": "landing",
+      "initial": "L",
+      "tint": "#30a46c",
+      "sessions": [{ "label": "Hero copy pass", "state": "idle" }]
     }
   ],
   "topbar": {
     "project": "novacart",
-    "branch": "main",
-    "deploy": "Dokploy",
-    "threads": "Threads",
-    "dev": "Dev",
-    "actions": ["Commands", "Files", "Changes"]
+    "branch": "main"
   },
   "transcript": [
     {
@@ -41,8 +54,15 @@
   "composer": {
     "placeholder": "Message Claude…",
     "model": "Opus 5",
+    "access": "Full access",
+    "mode": "Build",
     "tokensIn": "2,226",
     "tokensOut": "6",
     "cost": "$4.39"
-  }
+  },
+  "surfaces": [
+    { "key": "terminal", "name": "Terminal", "desc": "Start a shell in this workspace." },
+    { "key": "files", "name": "Files", "desc": "Browse and read workspace files." },
+    { "key": "diff", "name": "Diff", "desc": "Review, stage and commit changes." }
+  ]
 }

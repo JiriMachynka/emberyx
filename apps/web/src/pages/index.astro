@@ -15,30 +15,30 @@ const releases = `${repo}/releases/latest`;
     <!-- HERO -->
     <section class="relative overflow-hidden border-b border-line-soft">
       <div class="grid-bg pointer-events-none absolute inset-0"></div>
-      <div class="relative mx-auto max-w-5xl px-5 py-20 lg:py-24">
-        <div class="mx-auto max-w-2xl text-center">
-          <h1 class="text-4xl font-semibold leading-[1.08] tracking-tight sm:text-5xl">
-            One window for every<br class="hidden sm:block" />
-            Claude Code session.
+      <div class="relative mx-auto max-w-6xl px-5 pb-16 pt-24 lg:pb-24 lg:pt-32">
+        <div class="mx-auto max-w-3xl text-center">
+          <h1 class="display t-hero text-fg">
+            One window for<br class="hidden sm:block" />
+            every session.
           </h1>
 
-          <p class="mx-auto mt-5 max-w-md text-lg leading-relaxed text-ash">
-            Emberyx is a native cockpit for AI coding agents. Integrated
-            terminals, thread resume, inline git, and a live token &amp; cost
-            meter — across all your projects at once.
+          <p class="mx-auto mt-7 max-w-xl text-lg leading-relaxed text-ash">
+            Emberyx drives Claude Code across all your projects at once —
+            integrated terminals, thread resume, inline git, and a live token
+            &amp; cost meter, in one native window.
           </p>
 
-          <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
-            <a
-              href={releases}
-              class="rounded-md bg-ember px-5 py-2.5 text-sm font-medium text-ink transition-[background-color,transform] duration-150 hover:bg-ember-soft active:scale-95"
-            >
+          <div class="mt-9 flex flex-wrap items-center justify-center gap-3">
+            <a href={releases} class="btn btn-primary">
               Download for macOS
+            </a>
+            <a href={repo} class="btn btn-ghost">
+              View source
             </a>
           </div>
         </div>
 
-        <div class="relative mt-16">
+        <div class="relative mt-16 lg:mt-20">
           <div class="mockup-glow pointer-events-none absolute -inset-8"></div>
           <div class="relative">
             <AppMockup />
@@ -48,15 +48,18 @@ const releases = `${repo}/releases/latest`;
     </section>
 
     <!-- FEATURES -->
-    <section id="features" class="mx-auto max-w-5xl px-5 py-20">
-      <div class="flex items-baseline justify-between border-b border-line pb-5">
-        <h2 class="text-2xl font-semibold tracking-tight">What's inside</h2>
+    <section id="features" class="reveal mx-auto max-w-6xl px-5 py-28 md:py-36">
+      <div class="max-w-2xl">
+        <p class="eyebrow">What's inside</p>
+        <h2 class="display t-h2 mt-4 text-fg">
+          Everything the agent needs, one surface.
+        </h2>
       </div>
 
-      <div class="mt-8 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
+      <div class="mt-12 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-6">
         <!-- Multi-project cockpit (wide, mini terminal) -->
         <div class="card p-6 sm:col-span-2 lg:col-span-4">
-          <h3 class="font-medium text-white">Multi-project cockpit</h3>
+          <h3 class="font-medium text-fg">Multi-project cockpit</h3>
           <p class="mt-1.5 max-w-md text-sm leading-relaxed text-ash">
             Tab through every project. Each gets its own integrated PTY
             terminals — no window juggling.
@@ -68,40 +71,61 @@ const releases = `${repo}/releases/latest`;
               <span class="px-1.5 py-0.5 text-[10px] text-ash-dim">landing</span>
             </div>
             <p class="text-ash"><span class="text-ember-soft">❯</span> claude</p>
-            <p class="text-emerald-300">● session ready — 3 projects attached</p>
+            <p class="text-signal">● session ready — 3 projects attached</p>
+            <p class="mt-1 text-ash-dim">attached: novacart · api-service · landing</p>
+            <p class="text-ash"><span class="text-ember-soft">❯</span> switch novacart <span class="text-ash-dim">⌘1</span></p>
+            <p class="text-ash-dim">▸ 3 PTY terminals · 1 dev server running</p>
           </div>
         </div>
 
         <!-- Token & cost meter -->
         <div class="card p-6 sm:col-span-1 lg:col-span-2">
-          <h3 class="font-medium text-white">Token &amp; cost meter</h3>
+          <h3 class="font-medium text-fg">Token &amp; cost meter</h3>
           <p class="mt-1.5 text-sm leading-relaxed text-ash">
             Live tokens and dollar cost per session.
           </p>
-          <p class="mt-5 font-mono text-2xl font-semibold tabular-nums text-white">
+          <p class="mt-5 font-mono text-2xl font-semibold tabular-nums text-fg">
             $0.62<span class="text-sm font-normal text-ash-dim">/hr</span>
           </p>
           <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-line">
             <div class="h-full w-2/3 rounded-full bg-ember"></div>
           </div>
           <p class="mt-2 font-mono text-[11px] tabular-nums text-ash-dim">128k tokens · $12.40 today</p>
+          <div class="mt-4 flex items-center gap-2 border-t border-line-soft pt-3 font-mono text-[10px] text-ash-dim">
+            <span>4 sessions</span>
+            <span>·</span>
+            <span>Opus 5</span>
+            <span class="ml-auto flex items-center gap-1.5 text-signal"><span class="h-1.5 w-1.5 rounded-full bg-signal"></span>under budget</span>
+          </div>
         </div>
 
         <!-- Thread resume -->
         <div class="card p-6 sm:col-span-1 lg:col-span-2">
-          <h3 class="font-medium text-white">Thread resume</h3>
+          <h3 class="font-medium text-fg">Thread resume</h3>
           <p class="mt-1.5 text-sm leading-relaxed text-ash">
             Reopen any past thread instantly — prefetched and cached, so there's
             no wait.
           </p>
-          <p class="mt-5 font-mono text-[11px] text-ash-dim">
-            <span class="text-ember-soft">❯</span> claude --resume
-          </p>
+          <div class="mt-5 space-y-1.5 font-mono text-[11px] leading-relaxed">
+            <p class="text-ash-dim"><span class="text-ember-soft">❯</span> claude --resume</p>
+            <div class="flex items-center justify-between text-ash">
+              <span class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-signal"></span>Checkout double-charge</span>
+              <span class="text-ash-dim">2m</span>
+            </div>
+            <div class="flex items-center justify-between text-ash">
+              <span class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-ash-dim"></span>Stripe webhook retries</span>
+              <span class="text-ash-dim">1h</span>
+            </div>
+            <div class="flex items-center justify-between text-ash">
+              <span class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-ash-dim"></span>Cart totals refactor</span>
+              <span class="text-ash-dim">3h</span>
+            </div>
+          </div>
         </div>
 
         <!-- Inline git (wide, mini diff) -->
         <div class="card p-6 sm:col-span-2 lg:col-span-4">
-          <h3 class="font-medium text-white">Inline git</h3>
+          <h3 class="font-medium text-fg">Inline git</h3>
           <p class="mt-1.5 max-w-md text-sm leading-relaxed text-ash">
             Read diffs with syntax highlighting and commit — without ever leaving
             the window.
@@ -109,8 +133,8 @@ const releases = `${repo}/releases/latest`;
           <div class="mt-5 overflow-hidden rounded-lg border border-line-soft bg-ink font-mono text-[11px] leading-relaxed">
             <div class="border-b border-line-soft px-3 py-1.5 text-ash-dim">lib/pricing.ts</div>
             <div class="px-3 py-2">
-              <p class="text-emerald-400">+&nbsp;&nbsp;const total = net + tax(region)</p>
-              <p class="text-[#ff6a6a]">−&nbsp;&nbsp;const total = net</p>
+              <p class="text-signal">+&nbsp;&nbsp;const total = net + tax(region)</p>
+              <p class="text-danger">−&nbsp;&nbsp;const total = net</p>
               <p class="text-ash">&nbsp;&nbsp;&nbsp;return round(total)</p>
             </div>
           </div>
@@ -118,32 +142,32 @@ const releases = `${repo}/releases/latest`;
 
         <!-- Session tabs -->
         <div class="card p-6 sm:col-span-1 lg:col-span-2">
-          <h3 class="font-medium text-white">Session tabs</h3>
+          <h3 class="font-medium text-fg">Session tabs</h3>
           <p class="mt-1.5 text-sm leading-relaxed text-ash">
             Several agent sessions side by side; a banner flags the one that
             needs you.
           </p>
           <div class="mt-5 flex flex-wrap gap-x-3 gap-y-1.5 font-mono text-[11px] text-ash-dim">
             <span class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-ember"></span>main</span>
-            <span class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>tests</span>
+            <span class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-signal"></span>tests</span>
             <span class="flex items-center gap-1.5"><span class="h-1.5 w-1.5 rounded-full bg-ash/40"></span>refactor</span>
           </div>
         </div>
 
         <!-- Dokploy status -->
         <div class="card p-6 sm:col-span-1 lg:col-span-2">
-          <h3 class="font-medium text-white">Dokploy status</h3>
+          <h3 class="font-medium text-fg">Dokploy status</h3>
           <p class="mt-1.5 text-sm leading-relaxed text-ash">
             Deployment health for the current project, matched by git remote.
           </p>
           <div class="mt-5 inline-flex items-center gap-1.5 rounded-md border border-line-soft px-2.5 py-1 font-mono text-[11px] text-ash">
-            <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span> Dokploy · running
+            <span class="h-1.5 w-1.5 rounded-full bg-signal"></span> Dokploy · running
           </div>
         </div>
 
         <!-- Signed updates -->
         <div class="card p-6 sm:col-span-2 lg:col-span-2">
-          <h3 class="font-medium text-white">Signed auto-updates</h3>
+          <h3 class="font-medium text-fg">Signed auto-updates</h3>
           <p class="mt-1.5 text-sm leading-relaxed text-ash">
             Updates land in-app over a signed channel. Install once — you never
             reinstall.
@@ -158,27 +182,20 @@ const releases = `${repo}/releases/latest`;
     <!-- DOWNLOAD -->
     <section id="download" class="border-t border-line-soft">
       <div
-        class="mx-auto flex max-w-5xl flex-col items-start justify-between gap-8 px-5 py-16 sm:flex-row sm:items-center"
+        class="reveal mx-auto flex max-w-6xl flex-col items-start justify-between gap-10 px-5 py-24 md:flex-row md:items-end"
       >
-        <div>
-          <h2 class="text-2xl font-semibold tracking-tight">
-            Light the cockpit.
-          </h2>
-          <p class="mt-2 max-w-sm text-ash">
+        <div class="max-w-xl">
+          <p class="eyebrow">Get Emberyx</p>
+          <h2 class="display t-h2 mt-4 text-fg">Light the cockpit.</h2>
+          <p class="mt-4 max-w-sm text-ash">
             Grab the latest signed build. It keeps itself current from there.
           </p>
         </div>
         <div class="flex shrink-0 flex-wrap gap-3">
-          <a
-            href={releases}
-            class="rounded-md bg-ember px-5 py-2.5 text-sm font-medium text-ink transition-[background-color,transform] duration-150 hover:bg-ember-soft active:scale-95"
-          >
+          <a href={releases} class="btn btn-primary">
             Download for macOS
           </a>
-          <a
-            href={`${import.meta.env.BASE_URL}docs`}
-            class="rounded-md border border-line px-5 py-2.5 text-sm font-medium text-white transition-[background-color,border-color,transform] duration-150 hover:border-ash/25 hover:bg-ink-card active:scale-95"
-          >
+          <a href={`${import.meta.env.BASE_URL}docs`} class="btn btn-ghost">
             Docs
           </a>
         </div>

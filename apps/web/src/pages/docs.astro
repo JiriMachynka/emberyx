@@ -68,7 +68,7 @@ const shortcuts = [
           {nav.map(([id, label]) => (
             <a
               href={`#${id}`}
-              class="-ml-px block border-l border-transparent py-1.5 pl-4 text-sm text-ash transition-colors hover:border-ember hover:text-white"
+              class="-ml-px block border-l border-transparent py-1.5 pl-4 text-sm text-ash transition-colors hover:border-ember hover:text-fg"
             >
               {label}
             </a>
@@ -80,7 +80,7 @@ const shortcuts = [
       <div class="min-w-0 max-w-2xl">
         <header>
           <p class="eyebrow">Documentation</p>
-          <h1 class="mt-3 text-4xl font-semibold leading-[1.08] tracking-tight sm:text-[2.75rem]">
+          <h1 class="display t-h2 mt-3">
             Using Emberyx
           </h1>
           <p class="mt-4 text-lg leading-relaxed text-ash">
@@ -90,12 +90,12 @@ const shortcuts = [
         </header>
 
         <!-- requirements -->
-        <section id="requirements" class="mt-16 scroll-mt-20">
-          <h2 class="border-b border-line pb-3 text-lg font-semibold tracking-tight">Requirements</h2>
+        <section id="requirements" class="reveal mt-16 scroll-mt-20">
+          <h2 class="display t-h2 border-b border-line pb-3">Requirements</h2>
           <dl class="mt-5 space-y-4">
             {requirements.map(([term, desc]) => (
               <div class="grid gap-1 sm:grid-cols-[9rem_1fr] sm:gap-5">
-                <dt class="font-medium text-white">{term}</dt>
+                <dt class="font-medium text-fg">{term}</dt>
                 <dd class="text-sm leading-relaxed text-ash" set:html={desc} />
               </div>
             ))}
@@ -103,15 +103,15 @@ const shortcuts = [
         </section>
 
         <!-- getting started -->
-        <section id="start" class="mt-16 scroll-mt-20">
-          <h2 class="border-b border-line pb-3 text-lg font-semibold tracking-tight">Getting started</h2>
+        <section id="start" class="reveal mt-16 scroll-mt-20">
+          <h2 class="display t-h2 border-b border-line pb-3">Getting started</h2>
           <ol class="mt-6 space-y-7">
             {steps.map(([title, body], i) => (
               <li class="relative pl-11">
                 <span class="absolute left-0 top-0 flex h-7 w-7 items-center justify-center rounded-full border border-line bg-ink-card font-mono text-xs text-ember">
                   {i + 1}
                 </span>
-                <h3 class="font-medium text-white">{title}</h3>
+                <h3 class="font-medium text-fg">{title}</h3>
                 <p class="mt-1 text-sm leading-relaxed text-ash" set:html={body} />
               </li>
             ))}
@@ -119,12 +119,12 @@ const shortcuts = [
         </section>
 
         <!-- features -->
-        <section id="features" class="mt-16 scroll-mt-20">
-          <h2 class="border-b border-line pb-3 text-lg font-semibold tracking-tight">Features</h2>
+        <section id="features" class="reveal mt-16 scroll-mt-20">
+          <h2 class="display t-h2 border-b border-line pb-3">Features</h2>
           <dl class="mt-2 divide-y divide-line-soft">
             {features.map(([term, desc]) => (
               <div class="grid gap-1 py-4 sm:grid-cols-[11rem_1fr] sm:gap-5">
-                <dt class="font-medium text-white">{term}</dt>
+                <dt class="font-medium text-fg">{term}</dt>
                 <dd class="text-sm leading-relaxed text-ash" set:html={desc} />
               </div>
             ))}
@@ -132,8 +132,8 @@ const shortcuts = [
         </section>
 
         <!-- settings -->
-        <section id="settings" class="mt-16 scroll-mt-20">
-          <h2 class="border-b border-line pb-3 text-lg font-semibold tracking-tight">Settings</h2>
+        <section id="settings" class="reveal mt-16 scroll-mt-20">
+          <h2 class="display t-h2 border-b border-line pb-3">Settings</h2>
           <p class="mt-4 text-sm leading-relaxed text-ash">
             Open the gear icon. Changes apply to terminals you open next; font changes apply live.
           </p>
@@ -141,7 +141,7 @@ const shortcuts = [
             {settings.map(([name, def, desc]) => (
               <div class="py-4">
                 <div class="flex items-baseline justify-between gap-4">
-                  <dt class="font-medium text-white">{name}</dt>
+                  <dt class="font-medium text-fg">{name}</dt>
                   <code class="shrink-0 font-mono text-xs text-ash-dim">{def}</code>
                 </div>
                 <dd class="mt-1 text-sm leading-relaxed text-ash" set:html={desc} />
@@ -151,12 +151,12 @@ const shortcuts = [
         </section>
 
         <!-- shortcuts -->
-        <section id="shortcuts" class="mt-16 scroll-mt-20">
-          <h2 class="border-b border-line pb-3 text-lg font-semibold tracking-tight">Shortcuts</h2>
+        <section id="shortcuts" class="reveal mt-16 scroll-mt-20">
+          <h2 class="display t-h2 border-b border-line pb-3">Shortcuts</h2>
           <div class="mt-5 flex flex-wrap gap-2.5">
             {shortcuts.map(([key, label]) => (
               <div class="flex items-center gap-2.5 rounded-lg border border-line-soft bg-ink-card px-3.5 py-2">
-                <kbd class="font-mono text-xs text-white">{key}</kbd>
+                <kbd class="font-mono text-xs text-fg">{key}</kbd>
                 <span class="text-sm text-ash">{label}</span>
               </div>
             ))}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getPanelWidth, setPanelWidth, PANEL_MIN_WIDTH } from "@/lib/panels";
@@ -38,6 +38,7 @@ export function SidePanel({
   children,
 }: SidePanelProps) {
   const [width, setWidth] = useState(() => getPanelWidth(storageKey));
+  const asideRef = useRef<HTMLElement>(null);
 
   if (embedded) {
     return (
@@ -60,15 +61,28 @@ export function SidePanel({
     e.preventDefault();
     const startX = e.clientX;
     const startW = width;
+    const aside = asideRef.current;
     let latest = startW;
+    let frame = 0;
+
+    if (aside) aside.style.willChange = "width";
+
+    const paint = () => {
+      frame = 0;
+      if (aside) aside.style.width = `${latest}px`;
+    };
     const onMove = (ev: MouseEvent) => {
       const max = Math.round(window.innerWidth * 0.75);
       latest = Math.min(max, Math.max(PANEL_MIN_WIDTH, startW + startX - ev.clientX));
-      setWidth(latest);
+      // Coalesce many mousemove events into one width write per frame.
+      if (!frame) frame = requestAnimationFrame(paint);
     };
     const onUp = () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      if (frame) cancelAnimationFrame(frame);
+      if (aside) aside.style.willChange = "";
+      setWidth(latest); // sync React state to the imperatively-driven width
       setPanelWidth(storageKey, latest);
     };
     window.addEventListener("mousemove", onMove);
@@ -77,6 +91,7 @@ export function SidePanel({
 
   return (
     <aside
+      ref={asideRef}
       style={{ width }}
       className={cn(
         "relative flex shrink-0 flex-col border-l bg-card",
