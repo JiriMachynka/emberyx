@@ -28,6 +28,7 @@ import {
 import { MentionMenu } from "@/components/MentionMenu";
 import { SlashMenu } from "@/components/SlashMenu";
 import { fuzzyFilter } from "@/lib/fuzzy";
+import { contextWindowFor } from "@/lib/pricing";
 import { applyMention, mentionAt, type Mention } from "@/lib/mentions";
 import { applySlash, filterCommands, slashAt, type SlashToken } from "@/lib/slash";
 import { useProjectFiles, useSlashCommands } from "@/lib/queries";
@@ -273,10 +274,14 @@ const ModeChip = memo(function ModeChip({
   );
 });
 
-/** Context-window size by model alias — everything is 200k except the 1M
- *  Sonnet variant. */
-const contextWindowFor = (model: string): number =>
-  model.includes("[1m]") ? 1_000_000 : 200_000;
+/** Context-window size for the running session. The `[1m]` alias opts into the
+ *  1M beta explicitly; otherwise use the model the CLI actually resolved (the
+ *  alias may be "" or a family name the catalog doesn't know) and fall back to
+ *  the 200k every Claude model has at minimum. */
+const resolveContextWindow = (model: string, resolved?: string): number => {
+  if (model.includes("[1m]")) return 1_000_000;
+  return contextWindowFor(resolved || model) ?? 200_000;
+};
 
 /** Compact token count: 135k, 1m. */
 const fmtTokens = (n: number): string =>
@@ -291,11 +296,13 @@ const RING = 2 * Math.PI * 8; // r=8 circumference
 const ContextMeter = memo(function ContextMeter({
   contextTokens,
   model,
+  resolved,
 }: {
   contextTokens?: number;
   model: string;
+  resolved?: string;
 }) {
-  const max = contextWindowFor(model);
+  const max = resolveContextWindow(model, resolved);
   const used = contextTokens ?? 0;
   const pct = Math.min(100, Math.round((used / max) * 100));
   return (
@@ -770,7 +777,11 @@ export const ChatComposer = memo(function ChatComposer({
             onPlanModeChange={onPlanModeChange}
           />
           <div className="flex shrink-0 items-center gap-1.5">
-            <ContextMeter contextTokens={usage.contextTokens} model={model} />
+            <ContextMeter
+              contextTokens={usage.contextTokens}
+              model={model}
+              resolved={usage.model}
+            />
             {busy && (
               <button
                 type="button"

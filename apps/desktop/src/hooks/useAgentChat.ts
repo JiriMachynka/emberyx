@@ -388,6 +388,9 @@ export function useAgentChat({
   statusRef.current = status;
 
   const idRef = useRef<number | null>(null);
+  // Set while an exit is the user's own doing (stop/rewind). Interrupting makes
+  // the headless CLI exit, and "Session ended." is the wrong story for that.
+  const interruptedRef = useRef(false);
   const sessionRef = useRef<string | undefined>(resume);
   // The assistant message currently being streamed, plus block-index → tool map.
   const draftRef = useRef<ChatMessage | null>(null);
@@ -886,6 +889,7 @@ export function useAgentChat({
     // classified, and only the first hit per spawn is announced.
     let stderr = "";
     let announced = false;
+    interruptedRef.current = false;
     const checkStderr = () => {
       if (announced) return;
       const issue = classifyFailure(stderr, "stderr");
@@ -903,11 +907,19 @@ export function useAgentChat({
         stderr = (stderr + ev.data).slice(-STDERR_CAP);
         checkStderr();
       } else if (ev.type === "exit") {
-        setStatus("exited");
         // Nothing is left to answer them: a prompt outliving its process would
         // replace the composer permanently.
         setPending(null);
         setPendingAsk(null);
+        if (interruptedRef.current) {
+          // The user asked for this. Stay idle and quietly respawn against the
+          // same thread id so the transcript stays live and sendable.
+          interruptedRef.current = false;
+          setStatus("idle");
+          setAttempt((n) => n + 1);
+          return;
+        }
+        setStatus("exited");
         // A crash often says why only on stderr, and never reaches `result`.
         if (ev.data !== 0) {
           checkStderr();
@@ -973,6 +985,7 @@ export function useAgentChat({
   // Respawn the same thread in place. A dead session used to be recoverable only
   // by opening a new chat, which loses the transcript the user was reading.
   const restart = useCallback(() => {
+    interruptedRef.current = false;
     setStatus("idle");
     setPending(null);
     setPendingAsk(null);
@@ -980,34 +993,44 @@ export function useAgentChat({
     setAttempt((n) => n + 1);
   }, [setPending]);
 
-  // Stop the current turn via a real `interrupt` control_request — aborts the
-  // turn but keeps the process/session alive so the user can continue.
-  const stop = useCallback(() => {
+  // Abort the current turn with a real `interrupt` control_request. Some CLI
+  // versions keep the process alive, others exit — either way the exit is ours,
+  // so flag it and the exit handler respawns instead of showing a dead end.
+  const interrupt = useCallback(() => {
     const id = idRef.current;
-    if (id === null) return;
-    // No further tokens are coming — publish what the frame still owed.
-    flushPending();
-    const line = JSON.stringify({
-      type: "control_request",
-      request_id: crypto.randomUUID(),
-      request: { subtype: "interrupt" },
-    });
-    void invoke("agent_send", { id, message: line });
+    if (id !== null) {
+      interruptedRef.current = true;
+      const line = JSON.stringify({
+        type: "control_request",
+        request_id: crypto.randomUUID(),
+        request: { subtype: "interrupt" },
+      });
+      void invoke("agent_send", { id, message: line });
+    }
     setPending(null);
     setStatus("idle");
-  }, [setPending, flushPending]);
+  }, [setPending]);
 
-  // Un-send the most recent pending turn and hand its text/images back so the
-  // composer can restore them for editing. If the turn is still queued it's just
-  // dropped; if it's the active run it's interrupted. No-op once idle, so it
-  // never eats a finished exchange.
+  // Stop the current turn, keeping everything it already produced.
+  const stop = useCallback(() => {
+    if (idRef.current === null) return;
+    // No further tokens are coming — publish what the frame still owed.
+    flushPending();
+    interrupt();
+  }, [interrupt, flushPending]);
+
+  // Stop the newest turn. A turn that never produced anything is un-sent — it
+  // leaves the transcript and its text/images are handed back for the composer
+  // to restore. Once the assistant has said or done something that reply is
+  // worth keeping, so this degrades to a plain stop and returns null. No-op once
+  // idle, so it never eats a finished exchange.
   const rewind = useCallback((): { text: string; images?: ChatImage[] } | null => {
     if (!BUSY_STATUS.has(statusRef.current) && queueRef.current.length === 0) {
       return null;
     }
-    // A queued frame would re-append the draft after the slice below.
-    cancelFrame();
-    draftDirtyRef.current = false;
+    // No further tokens are coming — publish what the frame still owed, so the
+    // "produced nothing" test below sees the last partial frame too.
+    flushPending();
     const msgs = messagesRef.current;
     const idx = msgs.map((m) => m.role).lastIndexOf("user");
     if (idx === -1) return null;
@@ -1017,23 +1040,18 @@ export function useAgentChat({
       // Newest turn never left the queue — discard it, leave the active run.
       queueRef.current.pop();
       setQueued(queueRef.current.length);
-    } else {
-      // Newest turn is the active run — interrupt it, same wire as stop().
-      const id = idRef.current;
-      if (id !== null) {
-        const line = JSON.stringify({
-          type: "control_request",
-          request_id: crypto.randomUUID(),
-          request: { subtype: "interrupt" },
-        });
-        void invoke("agent_send", { id, message: line });
-      }
-      setPending(null);
-      setStatus("idle");
+      setMessages(msgs.slice(0, idx));
+      return restored;
     }
+
+    const draft = draftRef.current;
+    const produced =
+      !!draft && (!!draft.text || !!draft.thinking || draft.tools.length > 0);
+    interrupt();
+    if (produced) return null;
     setMessages(msgs.slice(0, idx));
     return restored;
-  }, [setPending, cancelFrame]);
+  }, [interrupt, flushPending]);
 
   // Answer a pending can_use_tool prompt: allow (once/always) or deny.
   const respond = useCallback(
@@ -1126,6 +1144,8 @@ export function useAgentChat({
       const id = idRef.current;
       const hasImages = !!images && images.length > 0;
       if (id === null || (!text.trim() && !hasImages)) return;
+      // A new turn outlives the last interrupt; a later exit is a real failure.
+      interruptedRef.current = false;
       setMessages((prev) => [
         ...prev,
         {

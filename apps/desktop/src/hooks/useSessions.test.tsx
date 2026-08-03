@@ -30,6 +30,22 @@ describe("useSessions", () => {
     expect(result.current.activeByProject.a).toBe(agentId);
   });
 
+  it("drops an exited dev session without moving the project's focus", () => {
+    const { result } = renderHook(() => useSessions());
+    let agentId = "";
+    act(() => {
+      agentId = result.current.startAgent("a", "/a", "claude");
+      result.current.addDev("a", "dev", "/a", "bun dev");
+    });
+    const dev = result.current.sessionsFor("a").find((s) => s.kind === "dev")!;
+
+    act(() => result.current.closeSession(dev.id));
+    expect(result.current.sessionsFor("a").some((s) => s.kind === "dev")).toBe(
+      false
+    );
+    expect(result.current.activeByProject.a).toBe(agentId);
+  });
+
   it("drops a closed project's sessions and its focus", () => {
     const { result } = renderHook(() => useSessions());
     act(() => {

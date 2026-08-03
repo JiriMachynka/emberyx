@@ -9,6 +9,7 @@ mod git;
 mod gitlab;
 mod hooks;
 mod icon;
+mod menu;
 mod openrouter;
 mod pty;
 mod search;
@@ -36,6 +37,8 @@ pub fn run() {
     }
 
     let app = builder
+        .menu(menu::build)
+        .on_menu_event(menu::on_event)
         .manage(PtyManager::new())
         .manage(AgentManager::new())
         .manage(usage::UsageCache::default())

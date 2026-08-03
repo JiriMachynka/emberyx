@@ -49,6 +49,9 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [surfaceOpen, setSurfaceOpen] = useState(false);
+  // Lazily mounted on first open, then kept mounted and merely hidden — the
+  // terminals inside own live shells that closing must not kill.
+  const [surfaceMounted, setSurfaceMounted] = useState(false);
   const [devOpen, setDevOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
@@ -93,6 +96,7 @@ function App() {
     if (surfaceOpen) setSurfaceOpen(false);
     else {
       closeRightPanels();
+      setSurfaceMounted(true);
       setSurfaceOpen(true);
     }
   };
@@ -242,6 +246,7 @@ function App() {
     onToggleSidebar: toggleSidebar,
     onCommandPalette: () => setPaletteOpen((v) => !v),
     onSearch: openSearch,
+    onCloseTab: () => activeId && ws.closeSession(activeId),
   });
   useLaunchUpdateCheck();
   usePricingRefresh();
@@ -406,12 +411,15 @@ function App() {
             fontSize={settings.fontSize}
             scrollback={settings.scrollback}
             onStop={ws.closeSession}
+            onExit={ws.closeSession}
             onClose={() => setDevOpen(false)}
           />
-          {activeProject && surfaceOpen && (
+          {/* Always mounted once opened: its terminals own live shells. */}
+          {activeProject && surfaceMounted && (
             <Suspense fallback={null}>
               <SurfacePanel
                 projectPath={activeProject.path}
+                open={surfaceOpen}
                 fontFamily={settings.fontFamily}
                 fontSize={settings.fontSize}
                 scrollback={settings.scrollback}

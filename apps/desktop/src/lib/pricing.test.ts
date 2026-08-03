@@ -1,5 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { costOf, formatTokens, totalTokens, type Usage } from "@/lib/pricing";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  contextWindowFor,
+  costOf,
+  formatTokens,
+  refreshPricing,
+  totalTokens,
+  type Usage,
+} from "@/lib/pricing";
 
 const usage = (patch: Partial<Usage> = {}): Usage => ({
   input: 0,
@@ -57,7 +64,7 @@ describe("costOf", () => {
 });
 
 describe("refreshPricing", () => {
-  const CACHE_KEY = "emberyx.pricing.litellm.v1";
+  const CACHE_KEY = "emberyx.pricing.litellm.v2";
 
   beforeEach(() => {
     localStorage.clear();
@@ -113,6 +120,51 @@ describe("refreshPricing", () => {
     await expect(mod.refreshPricing()).resolves.toBeUndefined();
     const cost = mod.costOf(usage({ input: 1_000_000, model: "claude-opus-4-8" }));
     expect(cost).toBeCloseTo(15, 10);
+  });
+});
+
+// No vi.resetModules here: Bun's runner doesn't implement it, and this suite
+// runs under both. One catalog is loaded up front and every case reads it.
+describe("contextWindowFor", () => {
+  const realFetch = globalThis.fetch;
+
+  beforeAll(async () => {
+    localStorage.clear();
+    globalThis.fetch = (async () => ({
+      ok: true,
+      json: async () => ({
+        "claude-sonnet-4-5": {
+          input_cost_per_token: 0.000003,
+          output_cost_per_token: 0.000015,
+          max_input_tokens: 1_000_000,
+        },
+        "claude-opus-4-8": {
+          input_cost_per_token: 0.000015,
+          output_cost_per_token: 0.000075,
+          max_input_tokens: 200_000,
+        },
+      }),
+    })) as unknown as typeof fetch;
+    await refreshPricing();
+  });
+
+  afterAll(() => {
+    globalThis.fetch = realFetch;
+    localStorage.clear();
+  });
+
+  it("reads the window from the LiteLLM catalog", () => {
+    expect(contextWindowFor("claude-sonnet-4-5")).toBe(1_000_000);
+    expect(contextWindowFor("claude-opus-4-8")).toBe(200_000);
+  });
+
+  it("matches dated model ids against the catalog key", () => {
+    expect(contextWindowFor("claude-sonnet-4-5-20250929")).toBe(1_000_000);
+  });
+
+  it("is undefined for an unknown model or an empty id", () => {
+    expect(contextWindowFor("")).toBeUndefined();
+    expect(contextWindowFor("some-other-model")).toBeUndefined();
   });
 });
 

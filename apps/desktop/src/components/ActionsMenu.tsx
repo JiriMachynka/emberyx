@@ -7,6 +7,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 import type { ProjectAction } from "@/lib/actions";
 
 interface ActionsMenuProps {
@@ -38,9 +39,19 @@ export function ActionsMenu({
       )}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" title="Run an action">
-            <Play className="size-3.5" />
-            Run
+          <Button
+            variant={running ? "secondary" : "ghost"}
+            size="sm"
+            title={running ? "An action is running" : "Run an action"}
+          >
+            {running ? (
+              <span className="size-1.5 shrink-0 animate-ember-pulse rounded-full bg-primary" />
+            ) : (
+              <Play className="size-3.5" />
+            )}
+            <span className={cn(running && "text-primary")}>
+              {running ? "Running" : "Run"}
+            </span>
             <ChevronDown className="size-3 opacity-60" />
           </Button>
         </DropdownMenuTrigger>

@@ -1,14 +1,19 @@
 import { useEffect, useRef } from "react";
+import { listen } from "@tauri-apps/api/event";
 
 /** Global keyboard shortcuts: ⌘K command palette, ⌘O open project, ⌘T new
  *  agent tab, ⌘B toggle sidebar, ⇧⌘F project search. Subscribed once; a ref
- *  keeps the handlers current without re-registering each render. */
+ *  keeps the handlers current without re-registering each render.
+ *
+ *  ⌘W is not here: it belongs to the app menu ("Close Tab"), because AppKit
+ *  consumes menu key equivalents before the webview sees them. */
 export function useShortcuts(handlers: {
   onOpen: () => void;
   onNewAgent: () => void;
   onToggleSidebar: () => void;
   onCommandPalette: () => void;
   onSearch: () => void;
+  onCloseTab: () => void;
 }) {
   const ref = useRef(handlers);
   ref.current = handlers;
@@ -37,5 +42,12 @@ export function useShortcuts(handlers: {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen("close-tab", () => ref.current.onCloseTab());
+    return () => {
+      void unlisten.then((f) => f());
+    };
   }, []);
 }

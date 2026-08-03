@@ -28,18 +28,20 @@ const DEFAULT_RATE = FALLBACK_RATES[0].rate;
 
 const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
-const CACHE_KEY = "emberyx.pricing.litellm.v1";
+const CACHE_KEY = "emberyx.pricing.litellm.v2";
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface PricingCache {
   fetchedAt: number;
   rates: Record<string, Rate>;
+  contexts: Record<string, number>;
 }
 
 // Populated synchronously from localStorage at load, then kept fresh by
-// `refreshPricing()`. `undefined` model keys are lowercased Claude model ids
-// as they appear in the LiteLLM catalog (e.g. "claude-opus-4-1").
+// `refreshPricing()`. Keys are lowercased Claude model ids as they appear in
+// the LiteLLM catalog (e.g. "claude-opus-4-1").
 let liveRates: Record<string, Rate> | undefined = readCache()?.rates;
+let liveContexts: Record<string, number> | undefined = readCache()?.contexts;
 
 function readCache(): PricingCache | undefined {
   try {
@@ -51,26 +53,32 @@ function readCache(): PricingCache | undefined {
   }
 }
 
-function liveRateFor(model: string): Rate | undefined {
-  if (!liveRates) return undefined;
+// Longest matching key wins — LiteLLM has both "claude-3-5-sonnet" and
+// "claude-3-5-sonnet-20241022"-style keys; prefer the most specific.
+function lookup<T>(table: Record<string, T> | undefined, model: string): T | undefined {
+  if (!table) return undefined;
   const m = model.toLowerCase();
-  if (liveRates[m]) return liveRates[m];
-  // Longest matching key wins — LiteLLM has both "claude-3-5-sonnet" and
-  // "claude-3-5-sonnet-20241022"-style keys; prefer the most specific.
-  let best: { key: string; rate: Rate } | undefined;
-  for (const [key, rate] of Object.entries(liveRates)) {
+  if (table[m]) return table[m];
+  let best: { key: string; value: T } | undefined;
+  for (const [key, value] of Object.entries(table)) {
     if ((m.includes(key) || key.includes(m)) && (!best || key.length > best.key.length)) {
-      best = { key, rate };
+      best = { key, value };
     }
   }
-  return best?.rate;
+  return best?.value;
 }
 
 function rateFor(model: string): Rate {
   const m = model.toLowerCase();
   return (
-    liveRateFor(m) ?? FALLBACK_RATES.find((r) => m.includes(r.match))?.rate ?? DEFAULT_RATE
+    lookup(liveRates, m) ?? FALLBACK_RATES.find((r) => m.includes(r.match))?.rate ?? DEFAULT_RATE
   );
+}
+
+/** The model's context window in tokens, from the LiteLLM catalog. Undefined
+ *  when the catalog has not been fetched or the model is unknown. */
+export function contextWindowFor(model: string): number | undefined {
+  return model ? lookup(liveContexts, model) : undefined;
 }
 
 /** Per-token USD field names as they appear in the LiteLLM pricing catalog. */
@@ -79,6 +87,7 @@ interface LiteLlmEntry {
   output_cost_per_token?: number;
   cache_read_input_token_cost?: number;
   cache_creation_input_token_cost?: number;
+  max_input_tokens?: number;
 }
 
 /** Fetch the LiteLLM pricing catalog and cache Claude rates locally. Skips
@@ -93,8 +102,10 @@ export async function refreshPricing(): Promise<void> {
     if (!res.ok) return;
     const catalog = (await res.json()) as Record<string, LiteLlmEntry>;
     const rates: Record<string, Rate> = {};
+    const contexts: Record<string, number> = {};
     for (const [key, entry] of Object.entries(catalog)) {
       if (!key.toLowerCase().includes("claude")) continue;
+      if (entry.max_input_tokens) contexts[key.toLowerCase()] = entry.max_input_tokens;
       if (entry.input_cost_per_token == null || entry.output_cost_per_token == null) continue;
       rates[key.toLowerCase()] = {
         input: entry.input_cost_per_token * 1_000_000,
@@ -105,7 +116,8 @@ export async function refreshPricing(): Promise<void> {
     }
     if (!Object.keys(rates).length) return;
     liveRates = rates;
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ fetchedAt: Date.now(), rates }));
+    liveContexts = contexts;
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ fetchedAt: Date.now(), rates, contexts }));
   } catch {
     // Offline or the catalog moved — fallback table carries on.
   }

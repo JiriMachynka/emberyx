@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, FileDiff, Files, SquareTerminal } from "lucide-react";
 import { SidePanel } from "@/components/SidePanel";
 import { TerminalPane } from "@/components/TerminalPane";
@@ -24,6 +24,8 @@ const SURFACE_LABEL: Record<Surface, string> = {
 
 interface SurfacePanelProps {
   projectPath: string;
+  /** Hidden rather than unmounted when false — the shells inside keep running. */
+  open: boolean;
   fontFamily: string;
   fontSize: number;
   scrollback: number;
@@ -44,6 +46,7 @@ interface SurfacePanelProps {
  *  the existing standalone panels. */
 export default function SurfacePanel({
   projectPath,
+  open,
   fontFamily,
   fontSize,
   scrollback,
@@ -55,6 +58,15 @@ export default function SurfacePanel({
   onRemoveWorktree,
 }: SurfacePanelProps) {
   const [surface, setSurface] = useState<Surface | null>(null);
+  // Every project whose terminal has been opened. Their panes stay mounted for
+  // the app's lifetime, so leaving the surface — or the project — never kills
+  // the shell or whatever it's running.
+  const [termProjects, setTermProjects] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (surface !== "terminal") return;
+    setTermProjects((p) => (p.includes(projectPath) ? p : [...p, projectPath]));
+  }, [surface, projectPath]);
 
   const header = surface ? (
     <button
@@ -69,44 +81,62 @@ export default function SurfacePanel({
   );
 
   return (
-    <SidePanel storageKey="surface" onClose={onClose} header={header}>
-      {surface === null ? (
+    <SidePanel storageKey="surface" open={open} onClose={onClose} header={header}>
+      {surface === null && (
         <div className="flex min-h-0 flex-1 animate-in fade-in duration-200">
           <Picker onPick={setSurface} />
         </div>
-      ) : (
+      )}
+
+      {/* Terminals are never unmounted, only hidden — unmounting kills the PTY. */}
+      {termProjects.map((path) => (
         <div
-          key={`${projectPath}:${surface}`}
+          key={path}
+          className={cn(
+            "relative flex min-h-0 flex-1 flex-col",
+            surface === "terminal" && path === projectPath ? "" : "hidden"
+          )}
+        >
+          <TerminalPane
+            sessionId={`surface-term:${path}`}
+            cwd={path}
+            fontFamily={fontFamily}
+            fontSize={fontSize}
+            scrollback={scrollback}
+            active={open && surface === "terminal" && path === projectPath}
+          />
+        </div>
+      ))}
+
+      {open && surface === "files" && (
+        <div
+          key={projectPath}
           className="relative flex min-h-0 flex-1 animate-in flex-col fade-in duration-200"
         >
-          {surface === "terminal" ? (
-            <TerminalPane
-              sessionId={`surface-term:${projectPath}`}
-              cwd={projectPath}
-              fontFamily={fontFamily}
-              fontSize={fontSize}
-              scrollback={scrollback}
-              active
-            />
-          ) : surface === "files" ? (
-            <EditorPane
-              projectPath={projectPath}
-              fontFamily={fontFamily}
-              fontSize={fontSize}
-              active
-            />
-          ) : (
-            <ChangesPanel
-              embedded
-              projectPath={projectPath}
-              sessionIds={sessionIds}
-              openRouterApiKey={openRouterApiKey}
-              openRouterModel={openRouterModel}
-              onClose={() => setSurface(null)}
-              onOpenWorktree={onOpenWorktree}
-              onRemoveWorktree={onRemoveWorktree}
-            />
-          )}
+          <EditorPane
+            projectPath={projectPath}
+            fontFamily={fontFamily}
+            fontSize={fontSize}
+            active
+          />
+        </div>
+      )}
+
+      {open && surface === "diff" && (
+        <div
+          key={projectPath}
+          className="relative flex min-h-0 flex-1 animate-in flex-col fade-in duration-200"
+        >
+          <ChangesPanel
+            embedded
+            projectPath={projectPath}
+            sessionIds={sessionIds}
+            openRouterApiKey={openRouterApiKey}
+            openRouterModel={openRouterModel}
+            onClose={() => setSurface(null)}
+            onOpenWorktree={onOpenWorktree}
+            onRemoveWorktree={onRemoveWorktree}
+          />
         </div>
       )}
     </SidePanel>

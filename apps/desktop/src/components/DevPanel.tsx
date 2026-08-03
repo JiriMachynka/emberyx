@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Square, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { TerminalPane } from "@/components/TerminalPane";
@@ -16,6 +16,8 @@ interface DevPanelProps {
   fontSize: number;
   scrollback: number;
   onStop: (id: string) => void;
+  /** A server that exited on its own — drop it so "running" stops lying. */
+  onExit: (id: string) => void;
   onClose: () => void;
 }
 
@@ -29,11 +31,18 @@ export function DevPanel({
   fontSize,
   scrollback,
   onStop,
+  onExit,
   onClose,
 }: DevPanelProps) {
   const mine = sessions.filter((s) => s.projectId === projectId);
   const [selected, setSelected] = useState<string | null>(null);
   const active = mine.find((s) => s.id === selected) ?? mine[0];
+
+  // TerminalPane is memoised on primitive props; a fresh arrow per render would
+  // defeat that, so the callback identity is pinned and the ref carries updates.
+  const onExitRef = useRef(onExit);
+  onExitRef.current = onExit;
+  const handleExit = useCallback((id: string) => onExitRef.current(id), []);
 
   // Follow the newest server when the current selection stops.
   useEffect(() => {
@@ -100,6 +109,7 @@ export function DevPanel({
               fontSize={fontSize}
               scrollback={scrollback}
               active={false}
+              onExit={handleExit}
             />
           </div>
         ))}

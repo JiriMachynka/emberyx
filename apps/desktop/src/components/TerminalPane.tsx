@@ -39,6 +39,9 @@ interface TerminalPaneProps {
   scrollback: number;
   /** Whether this pane is the visible/active tab (drives keyboard focus). */
   active: boolean;
+  /** Called with this pane's sessionId when the PTY exits on its own, so the
+   *  owner can drop a session that is no longer running. */
+  onExit?: (sessionId: string) => void;
 }
 
 /** Append the bundled icons-only Nerd Font so powerline/Starship prompts show
@@ -54,6 +57,7 @@ function TerminalPaneImpl({
   fontSize,
   scrollback,
   active,
+  onExit,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -62,6 +66,11 @@ function TerminalPaneImpl({
   // Font/scrollback config captured once; live updates handled by a second
   // effect so changing them never restarts the shell.
   const initialConfig = useRef({ fontFamily, fontSize, scrollback });
+
+  // Held in a ref so a caller's changing callback identity never lands in the
+  // shell effect's deps — that would respawn the PTY.
+  const onExitRef = useRef(onExit);
+  onExitRef.current = onExit;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -144,7 +153,12 @@ function TerminalPaneImpl({
         const bytes = base64ToBytes(msg.data);
         term.write(bytes);
         detect(bytes);
-      } else term.write("\r\n\x1b[90m[process exited]\x1b[0m\r\n");
+      } else {
+        term.write("\r\n\x1b[90m[process exited]\x1b[0m\r\n");
+        // Only a self-terminating process reports upward; an exit caused by our
+        // own unmount kill would drop a session the owner is already removing.
+        if (!disposed) onExitRef.current?.(sessionId);
+      }
     };
 
     // Replay any persisted scrollback first, then start the live session so

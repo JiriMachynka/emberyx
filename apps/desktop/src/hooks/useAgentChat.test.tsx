@@ -119,6 +119,37 @@ describe("useAgentChat lifecycle", () => {
     expect(result.current.status).toBe("exited");
   });
 
+  it("respawns instead of ending the session when the user interrupted", async () => {
+    const { result, emit, channel } = await mount();
+    emit({ type: "system", subtype: "init", session_id: "sess-live" });
+
+    act(() => result.current.send("go"));
+    act(() => result.current.stop());
+    act(() => channel.onmessage!({ type: "exit", data: 0 }));
+
+    expect(result.current.status).not.toBe("exited");
+    expect(result.current.exitReason).toBeNull();
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(sentTo("agent_spawn")).toHaveLength(2);
+    expect(sentTo("agent_spawn")[1][1]).toMatchObject({ resume: "sess-live" });
+    // The transcript the user was reading survives the respawn.
+    expect(result.current.messages.map((m) => m.text)).toEqual(["go"]);
+  });
+
+  it("still ends the session on an exit the user did not ask for", async () => {
+    const { result, emit, channel } = await mount();
+    emit({ type: "system", subtype: "init", session_id: "sess-live" });
+
+    act(() => result.current.send("go"));
+    act(() => result.current.stop());
+    act(() => channel.onmessage!({ type: "exit", data: 0 }));
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    const next = channels[channels.length - 1];
+    act(() => next.onmessage!({ type: "exit", data: 1 }));
+    expect(result.current.status).toBe("exited");
+  });
+
   it("surfaces the stderr tail as the exit reason on a non-zero exit", async () => {
     const { result, channel } = await mount();
     act(() => channel.onmessage!({ type: "stderr", data: "warming up\n" }));
@@ -710,6 +741,51 @@ describe("useAgentChat rewind", () => {
     expect(result.current.messages.map((m) => m.text)).toEqual(["first"]);
     // The active run keeps going — no interrupt was sent.
     expect(sentLines().some((l) => l.request?.subtype === "interrupt")).toBe(false);
+  });
+
+  it("keeps a turn that already produced content and reports it wasn't undone", async () => {
+    const { result, emit } = await mount();
+
+    act(() => result.current.send("keep me"));
+    emit({ type: "stream_event", event: { type: "message_start", message: {} } });
+    emit({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "half an ans" },
+      },
+    });
+
+    let restored: unknown = "unset";
+    act(() => {
+      restored = result.current.rewind();
+    });
+
+    expect(restored).toBeNull();
+    expect(result.current.messages.map((m) => m.text)).toEqual([
+      "keep me",
+      "half an ans",
+    ]);
+    expect(result.current.status).toBe("idle");
+    expect(sentLines().some((l) => l.request?.subtype === "interrupt")).toBe(true);
+  });
+
+  it("un-sends a turn whose reply produced nothing yet", async () => {
+    const { result, emit } = await mount();
+
+    act(() => result.current.send("undo me"));
+    // The turn started but no text, thinking or tool block ever arrived.
+    emit({ type: "stream_event", event: { type: "message_start", message: {} } });
+
+    let restored: unknown = "unset";
+    act(() => {
+      restored = result.current.rewind();
+    });
+
+    expect(restored).toEqual({ text: "undo me", images: undefined });
+    expect(result.current.messages).toHaveLength(0);
+    expect(result.current.status).toBe("idle");
   });
 
   it("is a no-op once the run is idle", async () => {
