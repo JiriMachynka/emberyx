@@ -18,12 +18,12 @@ export function TabCloseButton({
         onClose();
       }}
       className={cn(
-        "rounded p-0.5 transition-opacity hover:bg-accent",
+        "rounded p-1 transition hover:bg-destructive/15 hover:text-destructive",
         active ? "opacity-100" : "opacity-0 group-hover:opacity-100"
       )}
       title={title}
     >
-      <X className="size-3" />
+      <X className="size-3.5" />
     </button>
   );
 }

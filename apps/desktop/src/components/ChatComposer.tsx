@@ -573,6 +573,10 @@ export const ChatComposer = memo(function ChatComposer({
     requestAnimationFrame(() => {
       el.focus();
       el.setSelectionRange(next.caret, next.caret);
+      // The auto-resize effect writes the height a frame later, which undoes
+      // the scroll-to-caret this just did — re-assert it afterwards, or a
+      // completion that lands past the max-height sits out of view.
+      requestAnimationFrame(() => el.setSelectionRange(next.caret, next.caret));
     });
   };
 
@@ -763,7 +767,11 @@ export const ChatComposer = memo(function ChatComposer({
           }
           disabled={!ready || exited}
           rows={1}
-          className="max-h-40 min-h-16 resize-none overflow-y-auto border-0 bg-transparent px-3.5 pb-1 pt-3 shadow-none focus-visible:ring-0"
+          // `block` overrides the shadcn base's `flex`: as a flex container the
+          // textarea's inner editor gets a min-content floor, so one long
+          // unbreakable token (an @path mention) pushes the line wider than the
+          // box instead of wrapping. `break-words` wraps the token itself.
+          className="block max-h-40 min-h-16 resize-none overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent px-3.5 pb-1 pt-3 shadow-none focus-visible:ring-0"
         />
         <div className="flex items-center justify-between gap-2 px-2.5 pb-2 pt-1">
           <UsageFooter

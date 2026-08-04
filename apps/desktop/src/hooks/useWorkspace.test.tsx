@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { DEFAULT_SETTINGS } from "@/lib/settings";
@@ -51,6 +51,23 @@ describe("useWorkspace launch restore", () => {
     expect(
       result.current.projects.find((p) => p.path === "/wt")?.worktree
     ).toEqual(WT);
+  });
+
+  // The default surface is chat, so a guard that only looks for kind "agent"
+  // sees no primary session and starts a second one on every reopen.
+  it("does not open a second primary session when reopening a project that already has one", async () => {
+    saveOpenProjects([{ path: "/a", worktree: null }], "/a");
+
+    const { result } = renderHook(() => useWorkspace(DEFAULT_SETTINGS));
+
+    await waitFor(() => expect(result.current.projects).toHaveLength(1));
+    const id = result.current.projects[0].id;
+    await waitFor(() => expect(result.current.sessionsFor(id)).toHaveLength(1));
+
+    await act(() => result.current.openProjectAt("/a"));
+
+    expect(result.current.projects).toHaveLength(1);
+    expect(result.current.sessionsFor(id)).toHaveLength(1);
   });
 
   it("pre-warms the most recent project behind the welcome screen when nothing is stored", async () => {

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   contextWindowFor,
   costOf,
@@ -65,66 +65,66 @@ describe("costOf", () => {
 
 describe("refreshPricing", () => {
   const CACHE_KEY = "emberyx.pricing.litellm.v2";
+  const realFetch = globalThis.fetch;
+
+  // No vi.resetModules / vi.stubGlobal: Bun's runner implements neither, and
+  // this suite has to pass under both runners. The module's live rates are
+  // shared across cases, so each case hydrates the state it asserts on.
+  let calls = 0;
+  const stubFetch = (impl: () => Promise<unknown>) => {
+    calls = 0;
+    globalThis.fetch = (() => {
+      calls += 1;
+      return impl();
+    }) as unknown as typeof fetch;
+  };
 
   beforeEach(() => {
     localStorage.clear();
-    vi.resetModules();
   });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
+    globalThis.fetch = realFetch;
     localStorage.clear();
-    vi.resetModules();
   });
 
   it("hydrates live rates from the LiteLLM catalog and prefers them over the fallback table", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          "claude-sonnet-4-5": {
-            input_cost_per_token: 0.000004,
-            output_cost_per_token: 0.00002,
-            cache_read_input_token_cost: 0.0000004,
-            cache_creation_input_token_cost: 0.000005,
-          },
-          "gpt-4o": { input_cost_per_token: 0.0000025, output_cost_per_token: 0.00001 },
-        }),
-      })
-    );
-    const mod = await import("@/lib/pricing");
-    await mod.refreshPricing();
-    const cost = mod.costOf(
-      usage({ input: 1_000_000, model: "claude-sonnet-4-5" })
-    );
+    stubFetch(async () => ({
+      ok: true,
+      json: async () => ({
+        "claude-sonnet-4-5": {
+          input_cost_per_token: 0.000004,
+          output_cost_per_token: 0.00002,
+          cache_read_input_token_cost: 0.0000004,
+          cache_creation_input_token_cost: 0.000005,
+        },
+        "gpt-4o": { input_cost_per_token: 0.0000025, output_cost_per_token: 0.00001 },
+      }),
+    }));
+    await refreshPricing();
     // Live rate ($4/M) overrides the fallback table's $3/M for sonnet.
-    expect(cost).toBeCloseTo(4, 10);
+    expect(costOf(usage({ input: 1_000_000, model: "claude-sonnet-4-5" }))).toBeCloseTo(4, 10);
   });
 
   it("skips the network call when the cache is still fresh", async () => {
     localStorage.setItem(
       CACHE_KEY,
-      JSON.stringify({ fetchedAt: Date.now(), rates: {} })
+      JSON.stringify({ fetchedAt: Date.now(), rates: {}, contexts: {} })
     );
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const mod = await import("@/lib/pricing");
-    await mod.refreshPricing();
-    expect(fetchMock).not.toHaveBeenCalled();
+    stubFetch(async () => ({ ok: true, json: async () => ({}) }));
+    await refreshPricing();
+    expect(calls).toBe(0);
   });
 
   it("falls back silently when the fetch fails", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
-    const mod = await import("@/lib/pricing");
-    await expect(mod.refreshPricing()).resolves.toBeUndefined();
-    const cost = mod.costOf(usage({ input: 1_000_000, model: "claude-opus-4-8" }));
-    expect(cost).toBeCloseTo(15, 10);
+    stubFetch(() => Promise.reject(new Error("offline")));
+    await expect(refreshPricing()).resolves.toBeUndefined();
+    expect(calls).toBe(1);
+    // No live opus rate was ever hydrated, so the fallback table answers.
+    expect(costOf(usage({ input: 1_000_000, model: "claude-opus-4-8" }))).toBeCloseTo(15, 10);
   });
 });
 
-// No vi.resetModules here: Bun's runner doesn't implement it, and this suite
-// runs under both. One catalog is loaded up front and every case reads it.
 describe("contextWindowFor", () => {
   const realFetch = globalThis.fetch;
 

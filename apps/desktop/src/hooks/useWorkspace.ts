@@ -10,7 +10,7 @@ import { useProjects } from "@/hooks/useProjects";
 import { useSessions } from "@/hooks/useSessions";
 import { useAgentEvents } from "@/hooks/useAgentEvents";
 import { useDokploy } from "@/hooks/useDokploy";
-import type { Thread, WorkspaceInfo } from "@/types";
+import type { Session, Thread, WorkspaceInfo } from "@/types";
 
 /** Thread titles are truncated to this in tab labels. */
 const LABEL_MAX = 24;
@@ -25,6 +25,11 @@ const labelFor = (thread: Thread) =>
  * that changes which project or thread is live — opening, pre-warming,
  * resuming, spawning agents, and tearing down. App renders what this returns.
  */
+/** A project's primary Claude session, whichever surface it runs on — the
+ *  `agentUi` setting decides between a terminal ("agent") and a chat pane
+ *  ("chat"), and guards that only look for one silently miss the other. */
+const isPrimaryAgent = (s: Session) => s.kind === "agent" || s.kind === "chat";
+
 export function useWorkspace(settings: Settings) {
   const [recents, setRecents] = useState<string[]>(getRecents);
   // The most-recent project is pre-warmed (its agent booted) hidden behind the
@@ -189,10 +194,7 @@ export function useWorkspace(settings: Settings) {
     else setRecents(addRecent(path));
     // Fresh project, or a reopened one whose agent tab had been closed. Skip
     // when the in-flight pre-warm will start the agent itself.
-    if (
-      !matchedPrewarm &&
-      (isNew || !sessionsFor(id).some((s) => s.kind === "agent"))
-    ) {
+    if (!matchedPrewarm && (isNew || !sessionsFor(id).some(isPrimaryAgent))) {
       await startPrimaryAgent(id, path);
     }
     if (isNew) {
@@ -266,7 +268,7 @@ export function useWorkspace(settings: Settings) {
     const statuses = useAgentStore.getState().statuses;
     const busy = sessionsFor(id).some(
       (s) =>
-        s.kind === "agent" &&
+        isPrimaryAgent(s) &&
         (statuses[s.id] === "working" || statuses[s.id] === "waiting")
     );
     if (busy) {

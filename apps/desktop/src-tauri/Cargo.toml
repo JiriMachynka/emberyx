@@ -1,6 +1,6 @@
 [package]
 name = "emberyx"
-version = "0.1.26"
+version = "0.1.27"
 description = "Desktop cockpit for AI coding agents — run Claude Code across projects in integrated terminals."
 authors = ["Jiri Machynka <machynka.j@gmail.com>"]
 edition = "2021"
@@ -26,6 +26,8 @@ tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 portable-pty = "0.8"
+# Signalling a PTY's foreground process group when stopping a dev server.
+libc = "0.2"
 base64 = "0.22"
 glob = "0.3"
 regex = "1"

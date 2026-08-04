@@ -101,6 +101,11 @@ export function ContextBar({
             onResume={onResumeThread}
           />
         )}
+        {activeProject?.workspace && (
+          <span className="shrink-0 rounded bg-background/60 px-1 py-px text-muted-foreground">
+            {activeProject.workspace.kind}
+          </span>
+        )}
         {activeProject && (
           <span className="truncate font-medium text-muted-foreground">
             {basename(activeProject.path)}

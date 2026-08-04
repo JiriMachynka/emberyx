@@ -1,5 +1,5 @@
 import { memo, useState } from "react";
-import { Plus, PanelLeftClose, PanelLeftOpen, Settings, Bot, FolderOpen, GitBranch, Bell, Search } from "lucide-react";
+import { Plus, SquarePen, PanelLeftClose, PanelLeftOpen, Settings, Bot, FolderOpen, GitBranch, Bell, Search } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -163,6 +163,7 @@ function Tree(props: SidebarProps) {
     onSelectProject,
     onCloseProject,
     onPickProject,
+    onNewAgent,
     onOpenSearch,
   } = props;
 
@@ -223,17 +224,26 @@ function Tree(props: SidebarProps) {
               <span className="flex-1 truncate font-medium">
                 {projectLabel(p)}
               </span>
-              {active && p.workspace && (
-                <span className="rounded bg-background/60 px-1 py-px text-xs text-muted-foreground">
-                  {p.workspace.kind}
-                </span>
-              )}
               {p.worktree && (
                 <BranchBadge
                   project={p}
                   branch={p.worktree.branch}
                   sessionsFor={sessionsFor}
                 />
+              )}
+              {/* Active project only: newAgent targets whatever is active, so
+                  offering it on another row would open the tab elsewhere. */}
+              {active && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onNewAgent();
+                  }}
+                  className="rounded p-1 transition hover:bg-accent hover:text-foreground"
+                  title="New agent tab (⌘T)"
+                >
+                  <SquarePen className="size-3.5" />
+                </button>
               )}
               <TabCloseButton
                 active={active}
@@ -253,7 +263,6 @@ function Tree(props: SidebarProps) {
                 projectId={p.id}
               />
             )}
-            {active && <ActionRow {...props} project={p} />}
           </div>
         );
       })}
@@ -420,22 +429,6 @@ function SessionList({
         </li>
       )}
     </ul>
-  );
-}
-
-/** Project-scoped actions for the active project. */
-function ActionRow({ onNewAgent }: SidebarProps & { project: Project }) {
-  return (
-    <div className="ml-3 mt-1 flex flex-wrap items-center gap-1 pl-1.5">
-      <button
-        onClick={onNewAgent}
-        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title="New agent tab (⌘T)"
-      >
-        <Plus className="size-4" />
-        Agent
-      </button>
-    </div>
   );
 }
 
