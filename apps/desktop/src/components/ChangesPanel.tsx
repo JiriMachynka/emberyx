@@ -13,13 +13,21 @@ import {
   Minus,
   Undo2,
   History,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
+import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { basename } from "@/lib/path";
 import { parseDiff, hunkPatch } from "@/lib/hunks";
 import { highlightCode, langFromPath } from "@/lib/highlight";
-import { useGitChanges, useGitFileDiff, useInvalidateGit } from "@/lib/queries";
+import {
+  useGitChanges,
+  useGitCommitDiff,
+  useGitFileDiff,
+  useInvalidateGit,
+} from "@/lib/queries";
+import { RecentCommits } from "@/components/RecentCommits";
 import { useAgentStore } from "@/lib/agentStore";
 import type { Change } from "@/lib/changes";
 import type { GitFile } from "@/types";
@@ -266,6 +274,19 @@ export function ChangesPanel({
   const gitDiff = diffQuery.data ?? "";
   const invalidateGit = useInvalidateGit();
 
+  // A file picked out of the commit timeline. When set, the diff pane shows the
+  // read-only commit diff instead of the working-tree diff.
+  const [commitPick, setCommitPick] = useState<{
+    sha: string;
+    file: string;
+    subject: string;
+  } | null>(null);
+  const commitDiffQuery = useGitCommitDiff(
+    projectPath,
+    commitPick?.sha ?? null,
+    commitPick?.file ?? null
+  );
+
   // Commit state.
   const [commitMsg, setCommitMsg] = useState("");
   const [committing, setCommitting] = useState(false);
@@ -467,7 +488,10 @@ export function ChangesPanel({
                           file={f}
                           staged
                           selected={gitSel?.path === f.path && gitSel.staged}
-                          onSelect={() => setGitSel({ path: f.path, staged: true })}
+                          onSelect={() => {
+                            setCommitPick(null);
+                            setGitSel({ path: f.path, staged: true });
+                          }}
                           onToggle={() => void unstage([f.path])}
                           onHistory={() => setHistoryFile(f.path)}
                         />
@@ -491,7 +515,10 @@ export function ChangesPanel({
                           file={f}
                           staged={false}
                           selected={gitSel?.path === f.path && !gitSel.staged}
-                          onSelect={() => setGitSel({ path: f.path, staged: false })}
+                          onSelect={() => {
+                            setCommitPick(null);
+                            setGitSel({ path: f.path, staged: false });
+                          }}
                           onToggle={() => void stage([f.path])}
                           onDiscard={() => void discardFile(f)}
                           onHistory={f.untracked ? undefined : () => setHistoryFile(f.path)}
@@ -557,8 +584,34 @@ export function ChangesPanel({
                   </div>
                 </div>
               )}
+              <RecentCommits
+                projectPath={projectPath}
+                onPickCommitFile={(sha, file, subject) =>
+                  setCommitPick({ sha, file, subject })
+                }
+              />
               <div className="min-h-0 flex-1 overflow-auto">
-                {gitSel ? (
+                {commitPick ? (
+                  <>
+                    <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-card px-3 py-1 text-[11px] text-muted-foreground">
+                      <span className="truncate">
+                        {basename(commitPick.file)} · {commitPick.sha.slice(0, 7)}
+                      </span>
+                      <button
+                        onClick={() => setCommitPick(null)}
+                        title="Back to working tree"
+                        className="ml-auto shrink-0 rounded p-0.5 hover:bg-accent hover:text-foreground"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </div>
+                    <UnifiedDiff
+                      text={commitDiffQuery.data ?? ""}
+                      lang={langFromPath(commitPick.file)}
+                      file={commitPick.file}
+                    />
+                  </>
+                ) : gitSel ? (
                   <>
                     <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-card px-3 py-1 text-[11px] text-muted-foreground">
                       <span className="truncate">{gitSel.path}</span>
@@ -749,6 +802,7 @@ function GitFileRow({
         >
           {file.untracked ? "U" : file.status.trim() || "M"}
         </span>
+        <FileTypeIcon path={file.path} />
         <span className="flex-1 truncate">{file.path}</span>
       </button>
       {onHistory && (

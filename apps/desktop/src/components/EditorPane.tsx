@@ -3,7 +3,8 @@ import { ArrowLeft, History, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { basename } from "@/lib/path";
 import { FileFinder } from "@/components/FileFinder";
-import { FileTree, FileTypeIcon } from "@/components/editor/FileTree";
+import { FileTree } from "@/components/editor/FileTree";
+import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { CodeEditor, type EditorHandle } from "@/components/editor/CodeEditor";
 import { SearchPanel } from "@/components/editor/SearchPanel";
 import { onSearchRequest, takeSearchRequest } from "@/lib/searchRequest";
@@ -168,7 +169,7 @@ export function EditorPane({
                 <ArrowLeft className="size-3.5" />
               </button>
             )}
-            {selected && <FileTypeIcon name={basename(selected)} />}
+            {selected && <FileTypeIcon path={selected} />}
             <span className="truncate">
               {selected ? selected.replace(projectPath + "/", "") : "No file open"}
             </span>

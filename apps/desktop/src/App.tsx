@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster } from "sonner";
 import { SlidersHorizontal } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -25,6 +25,7 @@ import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
 import { requestSearch } from "@/lib/searchRequest";
 import { projectLabel } from "@/lib/worktree";
 import { useWorkspace } from "@/hooks/useWorkspace";
+import type { Session } from "@/types";
 import { useDevServers } from "@/hooks/useDevServers";
 import { useProjectActions } from "@/hooks/useProjectActions";
 import { ActionDialog } from "@/components/ActionDialog";
@@ -137,6 +138,25 @@ function App() {
     recents,
     dokploy,
   } = ws;
+
+  // ChatPanes are memoized, so their callbacks must keep a stable identity
+  // across a session switch or the memo can't short-circuit. updateSettings and
+  // the ws.* helpers are recreated every render, so route through refs.
+  const modelChangeRef = useRef(updateSettings);
+  modelChangeRef.current = updateSettings;
+  const onModelChange = useCallback(
+    (model: string) => modelChangeRef.current({ model }),
+    []
+  );
+  const titledRef = useRef<(session: Session, title: string) => void>(() => {});
+  titledRef.current = (session, title) => {
+    ws.renameSession(session.id, title);
+    ws.refreshThreads(session.projectId, session.cwd, true);
+  };
+  const onTitled = useCallback(
+    (session: Session, title: string) => titledRef.current(session, title),
+    []
+  );
 
   // Project-scoped panels close when switching projects, so a panel opened
   // for one project doesn't linger empty over the next.
@@ -354,11 +374,8 @@ function App() {
               sessions={sessions}
               activeId={activeId}
               settings={settings}
-              onModelChange={(model) => updateSettings({ model })}
-              onTitled={(session, title) => {
-                ws.renameSession(session.id, title);
-                ws.refreshThreads(session.projectId, session.cwd, true);
-              }}
+              onModelChange={onModelChange}
+              onTitled={onTitled}
             />
             {/* The editor is an overlay, not a tab: it covers the active pane
                 while open and keeps its buffers when hidden. */}

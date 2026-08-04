@@ -5,6 +5,7 @@ import type {
   GitBranch,
   GitCommit,
   GitFile,
+  GitLogEntry,
   GitRepoRoot,
   GitStash,
   GitWorktree,
@@ -53,6 +54,10 @@ export const gitKeys = {
     ["git", "show", path, sha, file] as const,
   pickaxe: (path: string, file: string, term: string) =>
     ["git", "pickaxe", path, file, term] as const,
+  commits: (path: string, limit: number) =>
+    ["git", "commits", path, limit] as const,
+  commitDiff: (path: string, sha: string, file: string) =>
+    ["git", "commitDiff", path, sha, file] as const,
 };
 
 export const useGitChanges = (path: string) =>
@@ -105,6 +110,28 @@ export const useGitPickaxe = (path: string, file: string | null, term: string) =
     queryFn: () => invoke<string[]>("git_pickaxe", { path, file, term }),
     enabled: !!file && term.trim().length > 0,
     staleTime: 30_000,
+  });
+
+/** Repo-wide commit timeline; grow `limit` to page in older commits. */
+export const useGitLog = (path: string, limit: number) =>
+  useQuery({
+    queryKey: gitKeys.commits(path, limit),
+    queryFn: () => invoke<GitLogEntry[]>("git_log", { path, limit }),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+
+/** The diff one commit introduced to one file. */
+export const useGitCommitDiff = (
+  path: string,
+  sha: string | null,
+  file: string | null
+) =>
+  useQuery({
+    queryKey: gitKeys.commitDiff(path, sha ?? "", file ?? ""),
+    queryFn: () => invoke<string>("git_commit_diff", { path, sha, file }),
+    enabled: !!sha && !!file,
+    staleTime: Infinity,
   });
 
 export const useGitBranch = (path: string) =>
@@ -167,6 +194,8 @@ export const useInvalidateGit = () => {
         "branches",
         "stashes",
         "log",
+        "commits",
+        "commitDiff",
         "worktrees",
         "conflicts",
         "mergeState",

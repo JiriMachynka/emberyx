@@ -1,15 +1,9 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight, Folder, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fileIcon } from "@/lib/fileIcon";
+import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { useDirEntries } from "@/lib/queries";
 import type { DirEntry } from "@/types";
-
-/** The extension-derived icon for a file name, at the tree's sizing. */
-export function FileTypeIcon({ name }: { name: string }) {
-  const { Icon, className } = fileIcon(name);
-  return <Icon className={cn("size-3.5 shrink-0", className)} />;
-}
 
 function Row({
   depth,
@@ -94,7 +88,7 @@ function TreeDir({
               active={e.path === selected}
               onClick={() => onSelect(e.path)}
             >
-              <FileTypeIcon name={e.name} />
+              <FileTypeIcon path={e.name} />
               <span className="truncate">{e.name}</span>
               {dirtyPaths.has(e.path) && (
                 <span className="size-1.5 shrink-0 rounded-full bg-primary" />

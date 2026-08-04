@@ -165,6 +165,25 @@ export interface GitCommit {
   oldPath: string | null;
 }
 
+/** One changed file in a commit, from `git log --name-status`. */
+export interface GitCommitFile {
+  status: string;
+  path: string;
+  oldPath: string | null;
+}
+
+/** One commit in the repo-wide history timeline. */
+export interface GitLogEntry {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  author: string;
+  relativeDate: string;
+  parents: string[];
+  refs: string[];
+  files: GitCommitFile[];
+}
+
 /** One day of token usage for a project/model pair. */
 export interface UsageRow {
   date: string;

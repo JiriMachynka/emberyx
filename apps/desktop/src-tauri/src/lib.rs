@@ -81,6 +81,8 @@ pub fn run() {
             git::git_apply,
             git::git_file_log,
             git::git_show_file,
+            git::git_log,
+            git::git_commit_diff,
             git::git_pickaxe,
             git::git_branch,
             git::git_branches,

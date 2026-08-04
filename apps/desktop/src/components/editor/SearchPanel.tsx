@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { CaseSensitive, ChevronDown, ChevronRight, Regex, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { basename, dirname } from "@/lib/path";
-import { fileIcon } from "@/lib/fileIcon";
+import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { useSearchText } from "@/lib/queries";
 import type { SearchFile } from "@/types";
 
@@ -120,7 +120,6 @@ function FileGroup({
   onToggle: () => void;
   onOpenHit: (relPath: string, line: number) => void;
 }) {
-  const { Icon, className } = fileIcon(basename(file.path));
   const dir = dirname(file.path);
   return (
     <div>
@@ -134,7 +133,7 @@ function FileGroup({
         ) : (
           <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
         )}
-        <Icon className={cn("size-3.5 shrink-0", className)} />
+        <FileTypeIcon path={file.path} />
         <span className="truncate">{basename(file.path)}</span>
         {dir !== file.path && (
           <span className="truncate text-muted-foreground">{dir}</span>

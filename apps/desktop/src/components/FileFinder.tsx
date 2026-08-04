@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { basename, dirname } from "@/lib/path";
-import { fileIcon } from "@/lib/fileIcon";
+import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { fuzzyFilter, type FuzzyHit } from "@/lib/fuzzy";
 import { useProjectFiles } from "@/lib/queries";
 
@@ -93,7 +93,6 @@ export function FileFinder({ projectPath, onPick, onClose }: FileFinderProps) {
             </div>
           ) : (
             hits.map((hit, i) => {
-              const { Icon, className } = fileIcon(basename(hit.value));
               const dir = dirname(hit.value);
               const nameAt = hit.value.length - basename(hit.value).length;
               return (
@@ -111,7 +110,7 @@ export function FileFinder({ projectPath, onPick, onClose }: FileFinderProps) {
                     hit === active && "bg-accent"
                   )}
                 >
-                  <Icon className={cn("size-3.5 shrink-0", className)} />
+                  <FileTypeIcon path={hit.value} />
                   <span className="shrink-0 truncate">
                     <Highlighted hit={hit} start={nameAt} />
                   </span>

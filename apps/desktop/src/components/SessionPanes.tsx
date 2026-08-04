@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { TerminalPane } from "@/components/TerminalPane";
 import { ChatPane } from "@/components/ChatPane";
 import { DokployLogsPane } from "@/components/DokployLogsPane";
@@ -32,47 +33,77 @@ export function SessionPanes({
       {sessions
         .filter((s) => s.kind !== "dev")
         .map((s) => (
-          <div
+          <SessionPaneRow
             key={s.id}
-            className={cn("absolute inset-1", s.id === activeId ? "" : "hidden")}
-          >
-            {s.kind === "chat" ? (
-              <ChatPane
-                sessionId={s.id}
-                cwd={s.cwd}
-                resume={s.resume}
-                active={s.id === activeId}
-                fontFamily={settings.fontFamily}
-                fontSize={settings.fontSize}
-                skipPermissions={settings.dangerouslySkipPermissions}
-                model={settings.model}
-                onModelChange={onModelChange}
-                onTitled={(title) => onTitled(s, title)}
-              />
-            ) : s.kind === "dokploy-logs" ? (
-              <DokployLogsPane
-                sessionId={s.id}
-                url={settings.dokployUrl}
-                apiKey={settings.dokployApiKey}
-                service={s.dokployLog!}
-                active={s.id === activeId}
-                fontFamily={settings.fontFamily}
-                fontSize={settings.fontSize}
-              />
-            ) : s.kind === "agent" || s.kind === "dev" ? (
-              <TerminalPane
-                sessionId={s.id}
-                cwd={s.cwd}
-                command={s.command}
-                persistKey={s.persistKey}
-                fontFamily={settings.fontFamily}
-                fontSize={settings.fontSize}
-                scrollback={settings.scrollback}
-                active={s.id === activeId}
-              />
-            ) : null}
-          </div>
+            session={s}
+            activeId={activeId}
+            settings={settings}
+            onModelChange={onModelChange}
+            onTitled={onTitled}
+          />
         ))}
     </>
+  );
+}
+
+/** One mounted pane. Extracted so its per-session `onTitled` can be stabilized
+ *  with `useCallback` (a hook can't run inside the `.map` above) — without it a
+ *  fresh closure each render would defeat ChatPane's memo. */
+function SessionPaneRow({
+  session,
+  activeId,
+  settings,
+  onModelChange,
+  onTitled,
+}: {
+  session: Session;
+  activeId: string | null;
+  settings: Settings;
+  onModelChange: (model: string) => void;
+  onTitled: (session: Session, title: string) => void;
+}) {
+  const active = session.id === activeId;
+  const handleTitled = useCallback(
+    (title: string) => onTitled(session, title),
+    [session, onTitled]
+  );
+  return (
+    <div className={cn("absolute inset-1", active ? "" : "hidden")}>
+      {session.kind === "chat" ? (
+        <ChatPane
+          sessionId={session.id}
+          cwd={session.cwd}
+          resume={session.resume}
+          active={active}
+          fontFamily={settings.fontFamily}
+          fontSize={settings.fontSize}
+          skipPermissions={settings.dangerouslySkipPermissions}
+          model={settings.model}
+          onModelChange={onModelChange}
+          onTitled={handleTitled}
+        />
+      ) : session.kind === "dokploy-logs" ? (
+        <DokployLogsPane
+          sessionId={session.id}
+          url={settings.dokployUrl}
+          apiKey={settings.dokployApiKey}
+          service={session.dokployLog!}
+          active={active}
+          fontFamily={settings.fontFamily}
+          fontSize={settings.fontSize}
+        />
+      ) : session.kind === "agent" || session.kind === "dev" ? (
+        <TerminalPane
+          sessionId={session.id}
+          cwd={session.cwd}
+          command={session.command}
+          persistKey={session.persistKey}
+          fontFamily={settings.fontFamily}
+          fontSize={settings.fontSize}
+          scrollback={settings.scrollback}
+          active={active}
+        />
+      ) : null}
+    </div>
   );
 }

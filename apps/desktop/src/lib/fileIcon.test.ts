@@ -1,42 +1,49 @@
 import { describe, expect, it } from "vitest";
-import { fileIcon } from "@/lib/fileIcon";
+import { fileIconName } from "@/lib/fileIcon";
 
-describe("fileIcon", () => {
-  it("gives the TypeScript family one shared accent", () => {
-    const ts = fileIcon("App.tsx");
-    for (const name of ["a.ts", "a.mts", "a.cts", "a.tsx"]) {
-      expect(fileIcon(name)).toEqual(ts);
-    }
+describe("fileIconName", () => {
+  it("resolves by extension", () => {
+    expect(fileIconName("a.ts")).toBe("typescript");
+    expect(fileIconName("App.tsx")).toBe("react_ts");
+    expect(fileIconName("src/main.rs")).toBe("rust");
+    expect(fileIconName("a.astro")).toBe("astro");
   });
 
-  it("distinguishes languages by color", () => {
-    expect(fileIcon("a.ts").className).not.toBe(fileIcon("a.js").className);
-    expect(fileIcon("a.rs").className).not.toBe(fileIcon("a.py").className);
+  it("prefers the longest compound extension", () => {
+    // "foo.d.ts" must try "d.ts" before falling through to "ts".
+    expect(fileIconName("foo.d.ts")).toBe("typescript-def");
+    expect(fileIconName("foo.ts")).toBe("typescript");
   });
 
-  it("matches the extension case-insensitively", () => {
-    expect(fileIcon("README.MD")).toEqual(fileIcon("readme.md"));
+  it("lets an exact file name beat its extension", () => {
+    expect(fileIconName("package.json")).toBe("nodejs");
+    expect(fileIconName("a.json")).toBe("json");
+    expect(fileIconName("pnpm-lock.yaml")).toBe("pnpm");
+    expect(fileIconName("a.yaml")).toBe("yaml");
   });
 
-  it("resolves on the last segment of a multi-dot name", () => {
-    expect(fileIcon("vite.config.ts")).toEqual(fileIcon("a.ts"));
+  it("lets a directory suffix beat the file name", () => {
+    expect(fileIconName(".config/babel-plugin-macrosrc.js")).toBe("babel");
+    expect(fileIconName("repo/.config/babel-plugin-macrosrc.js")).toBe("babel");
+    expect(fileIconName("babel-plugin-macrosrc.js")).toBe("javascript");
   });
 
-  it("treats every .env variant as an env file", () => {
-    const env = fileIcon(".env");
-    expect(fileIcon(".env.local")).toEqual(env);
-    expect(fileIcon(".env.production")).toEqual(env);
+  it("matches case-insensitively", () => {
+    expect(fileIconName("README.MD")).toBe(fileIconName("readme.md"));
+    expect(fileIconName("Dockerfile")).toBe("docker");
   });
 
-  it("lets whole-name matches beat the fallback", () => {
-    // ".gitignore" has no usable extension, so only the by-name table saves it.
-    expect(fileIcon(".gitignore")).not.toEqual(fileIcon("unknown.zzz"));
-    expect(fileIcon("Dockerfile")).not.toEqual(fileIcon("LICENSE"));
+  it("normalizes Windows separators", () => {
+    expect(fileIconName(".config\\babel-plugin-macrosrc.js")).toBe("babel");
   });
 
-  it("falls back for an unknown extension and for no extension", () => {
-    const fallback = fileIcon("unknown.zzz");
-    expect(fileIcon("LICENSE")).toEqual(fallback);
-    expect(fileIcon("")).toEqual(fallback);
+  it("resolves names with no usable extension", () => {
+    expect(fileIconName(".gitignore")).toBe("git");
+    expect(fileIconName("LICENSE")).toBe("license");
+  });
+
+  it("falls back for unknown and empty names", () => {
+    expect(fileIconName("unknown.zzz")).toBe("file");
+    expect(fileIconName("")).toBe("file");
   });
 });
