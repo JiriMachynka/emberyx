@@ -1,5 +1,6 @@
 mod agent;
 mod ask;
+mod codex;
 mod defs;
 mod dokploy;
 mod error;
@@ -19,6 +20,7 @@ mod usage;
 mod workspace;
 
 use agent::AgentManager;
+use codex::CodexManager;
 use pty::PtyManager;
 use tauri::Manager;
 
@@ -41,6 +43,7 @@ pub fn run() {
         .on_menu_event(menu::on_event)
         .manage(PtyManager::new())
         .manage(AgentManager::new())
+        .manage(CodexManager::new())
         .manage(usage::UsageCache::default())
         .manage(usage::SummaryCache::default())
         .setup(|app| {
@@ -59,6 +62,21 @@ pub fn run() {
             agent::agent_send,
             agent::agent_kill,
             agent::title_thread,
+            codex::codex_spawn,
+            codex::codex_kill,
+            codex::codex_request,
+            codex::codex_respond,
+            codex::codex_thread_start,
+            codex::codex_thread_resume,
+            codex::codex_thread_fork,
+            codex::codex_thread_list,
+            codex::codex_thread_compact,
+            codex::codex_turn_start,
+            codex::codex_turn_steer,
+            codex::codex_turn_interrupt,
+            codex::codex_hooks_list,
+            codex::codex_rate_limits,
+            codex::codex_usage,
             ask::answer_ask,
             workspace::scan_workspace,
             files::list_dir,
@@ -135,6 +153,7 @@ pub fn run() {
     app.run(|app_handle, event| {
         if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
             app_handle.state::<AgentManager>().kill_all();
+            app_handle.state::<CodexManager>().kill_all();
             app_handle.state::<PtyManager>().kill_all();
         }
     });
