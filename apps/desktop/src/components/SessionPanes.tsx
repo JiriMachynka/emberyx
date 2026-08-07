@@ -74,6 +74,7 @@ function SessionPaneRow({
           sessionId={session.id}
           cwd={session.cwd}
           resume={session.resume}
+          backend={session.backend ?? "claude"}
           active={active}
           fontFamily={settings.fontFamily}
           fontSize={settings.fontSize}
@@ -101,6 +102,7 @@ function SessionPaneRow({
           fontFamily={settings.fontFamily}
           fontSize={settings.fontSize}
           scrollback={settings.scrollback}
+          backend={session.backend}
           active={active}
         />
       ) : null}

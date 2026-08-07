@@ -25,7 +25,8 @@ interface CommandPaletteProps {
   sessions: Session[];
   projects: Project[];
   activeProject: Project | null;
-  claudeAgent: boolean;
+  /** This backend exposes slash commands. */
+  slashCommands: boolean;
   chatUi: boolean;
   onSelectSession: (projectId: string, sessionId: string) => void;
   onResumeThread: (projectId: string, path: string, thread: Thread) => void;
@@ -50,7 +51,7 @@ export function CommandPalette({
   sessions,
   projects,
   activeProject,
-  claudeAgent,
+  slashCommands,
   chatUi,
   onSelectSession,
   onResumeThread,
@@ -139,7 +140,7 @@ export function CommandPalette({
                   <Search className="size-4 text-muted-foreground" />
                   Search in project
                 </Item>
-                {activeProject && claudeAgent && (
+                {activeProject && slashCommands && (
                   <Item value="action slash commands" onSelect={() => run(onOpenSlash)}>
                     <SlashSquare className="size-4 text-muted-foreground" />
                     Commands

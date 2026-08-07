@@ -1,7 +1,11 @@
+import { isAgentBackend, type AgentBackend } from "@/lib/agentBackend";
+
 const KEY = "emberyx.projectConfig";
 
 /** Per-project settings, keyed by the project's absolute path. */
 export interface ProjectConfig {
+  /** Agent CLI this project drives; unset follows the global default. */
+  backend?: AgentBackend;
   /** Custom dev command; overrides workspace detection when set. */
   devCommand?: string;
   /** Custom build command; overrides workspace detection when set. */
@@ -55,4 +59,27 @@ export function setProjectBuildCommand(path: string, command: string): Store {
 /** Set (or clear, when blank) a project's custom start command. */
 export function setProjectStartCommand(path: string, command: string): Store {
   return setProjectField(path, "startCommand", command);
+}
+
+/** Pin a project to a backend, or clear the pin with null. */
+export function setProjectBackend(
+  path: string,
+  backend: AgentBackend | null
+): Store {
+  const store = getProjectConfigs();
+  if (backend) {
+    store[path] = { ...store[path], backend };
+  } else if (store[path]) {
+    delete store[path].backend;
+    if (Object.keys(store[path]).length === 0) delete store[path];
+  }
+  localStorage.setItem(KEY, JSON.stringify(store));
+  return store;
+}
+
+/** The backend a project runs, falling back to the global default. Reads
+ *  storage directly so callbacks outliving a render can resolve it. */
+export function projectBackend(path: string, fallback: AgentBackend): AgentBackend {
+  const stored = getProjectConfigs()[path]?.backend;
+  return isAgentBackend(stored) ? stored : fallback;
 }

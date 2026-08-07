@@ -6,6 +6,7 @@ import { useSlashCommands } from "@/lib/queries";
 import { filterCommands } from "@/lib/slash";
 import { mergeCommands } from "@/lib/builtinCommands";
 import { useAgentStore } from "@/lib/agentStore";
+import type { AgentBackend } from "@/lib/agentBackend";
 import { cn } from "@/lib/utils";
 
 interface SlashCommandsPanelProps {
@@ -14,18 +15,25 @@ interface SlashCommandsPanelProps {
   cwd: string | null;
   /** Active chat session, or null when the active tab isn't a chat. */
   activeChatId: string | null;
+  /** Whose built-ins to list alongside the scanned command files. */
+  backend: AgentBackend;
 }
 
 /** Browsable list of every slash command — built-in, project, user, plugin.
  *  Clicking one runs it immediately in the active chat session. */
-export function SlashCommandsPanel({ onClose, cwd, activeChatId }: SlashCommandsPanelProps) {
+export function SlashCommandsPanel({
+  onClose,
+  cwd,
+  activeChatId,
+  backend,
+}: SlashCommandsPanelProps) {
   const [query, setQuery] = useState("");
   const { data, isLoading } = useSlashCommands(cwd ?? "", !!cwd);
   const send = useAgentStore((s) => (activeChatId ? s.senders[activeChatId] : undefined));
 
   const commands = useMemo(
-    () => filterCommands(mergeCommands(data ?? []), query, 200),
-    [data, query]
+    () => filterCommands(mergeCommands(data ?? [], backend), query, 200),
+    [data, query, backend]
   );
 
   const run = (name: string) => {

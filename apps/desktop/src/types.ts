@@ -1,3 +1,5 @@
+import type { AgentBackend } from "@/lib/agentBackend";
+
 export interface PackageInfo {
   name: string;
   relPath: string;
@@ -34,6 +36,8 @@ export interface Session {
   cwd: string;
   command?: string;
   kind: "agent" | "dev" | "chat" | "dokploy-logs";
+  /** Agent CLI this session drives (agent + chat kinds). */
+  backend?: AgentBackend;
   /** Stable key for cross-restart scrollback restore; only the project's
    *  primary agent sets it, so secondary/dev panes never share its log. */
   persistKey?: string;

@@ -23,7 +23,10 @@ import type { Project, Session, Thread } from "@/types";
 interface ContextBarProps {
   activeProject: Project | null;
   agent: Session | undefined;
-  claudeAgent: boolean;
+  /** This backend lists resumable threads. */
+  threads: boolean;
+  /** Token counts and cost are reported for this backend. */
+  usage: boolean;
   devRunning: boolean;
   mrsOpen: boolean;
   devOpen: boolean;
@@ -50,7 +53,8 @@ interface ContextBarProps {
 export function ContextBar({
   activeProject,
   agent,
-  claudeAgent,
+  threads,
+  usage,
   devRunning,
   mrsOpen,
   devOpen,
@@ -94,7 +98,7 @@ export function ContextBar({
             <SlidersHorizontal className="size-3.5" />
           </button>
         )}
-        {activeProject && claudeAgent && (
+        {activeProject && threads && (
           <ThreadMenu
             threads={activeProject.threads}
             onOpen={onRefreshThreads}
@@ -144,14 +148,14 @@ export function ContextBar({
           onClick={onOpenUsage}
           className="flex items-center gap-1 rounded px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
           title={
-            agentUsage && agentUsage.messages > 0
+            usage && agentUsage && agentUsage.messages > 0
               ? `${agentUsage.input.toLocaleString()} in · ${agentUsage.output.toLocaleString()} out · ${agentUsage.cacheRead.toLocaleString()} cache read · ${agentUsage.cacheCreation.toLocaleString()} cache write${
                   agentUsage.model ? ` · ${agentUsage.model}` : ""
                 }\nClick for usage across all projects`
               : "Usage & cost across all projects"
           }
         >
-          {agentUsage && agentUsage.messages > 0 ? (
+          {usage && agentUsage && agentUsage.messages > 0 ? (
             <>
               {formatTokens(totalTokens(agentUsage))} tok
               <span className="opacity-40">·</span>${costOf(agentUsage).toFixed(2)}

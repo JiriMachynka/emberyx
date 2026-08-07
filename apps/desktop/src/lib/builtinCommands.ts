@@ -1,9 +1,10 @@
+import type { AgentBackend } from "@/lib/agentBackend";
 import type { SlashCommand } from "@/types";
 
 /** Claude Code's built-in slash commands. The Rust scan only finds project /
  *  user / plugin command files, so these are listed by hand to complete the
  *  picker. Custom commands with the same name take precedence when merged. */
-export const BUILTIN_COMMANDS: SlashCommand[] = [
+const CLAUDE_BUILTIN_COMMANDS: SlashCommand[] = [
   { name: "clear", description: "Clear conversation history and free up context", source: "built-in" },
   { name: "compact", description: "Summarize the conversation to reclaim context", source: "built-in" },
   { name: "cost", description: "Show token usage and cost for this session", source: "built-in" },
@@ -31,11 +32,19 @@ export const BUILTIN_COMMANDS: SlashCommand[] = [
   { name: "release-notes", description: "Show release notes", source: "built-in" },
 ];
 
+/** The backend's own built-ins. Only Claude's are hand-listed; anything else
+ *  shows what the scan found and nothing invented. */
+export const builtinCommandsFor = (backend: AgentBackend): SlashCommand[] =>
+  backend === "claude" ? CLAUDE_BUILTIN_COMMANDS : [];
+
 /** Built-ins plus fetched commands, deduped by name — a custom command wins over
  *  a built-in with the same name. */
-export const mergeCommands = (fetched: SlashCommand[]): SlashCommand[] => {
+export const mergeCommands = (
+  fetched: SlashCommand[],
+  backend: AgentBackend = "claude"
+): SlashCommand[] => {
   const byName = new Map<string, SlashCommand>();
-  for (const cmd of BUILTIN_COMMANDS) byName.set(cmd.name, cmd);
+  for (const cmd of builtinCommandsFor(backend)) byName.set(cmd.name, cmd);
   for (const cmd of fetched) byName.set(cmd.name, cmd);
   return [...byName.values()];
 };

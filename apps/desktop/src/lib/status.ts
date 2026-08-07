@@ -1,8 +1,10 @@
 import { classify } from "@/lib/accountState";
+import { capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
 import type { SessionStatus } from "@/types";
 
 /**
- * Map a Claude Code hook event name to an agent status.
+ * Map a Claude Code hook event name to an agent status. The event names are
+ * Claude's, so a backend that doesn't drive the hook server yields no status.
  *
  * @param message the Notification hook's own message, when there is one. A
  * usage limit or a lost login also arrives as a Notification, and neither is
@@ -11,14 +13,16 @@ import type { SessionStatus } from "@/types";
  */
 export function statusForEvent(
   event: string,
-  message?: string
+  message?: string,
+  backend: AgentBackend = "claude"
 ): SessionStatus | null {
+  if (!capabilitiesOf(backend).hookStatus) return null;
   switch (event) {
     case "UserPromptSubmit":
     case "SubagentStop":
       return "working";
     case "Notification":
-      return message && classify(message) ? null : "waiting";
+      return message && classify(message, backend) ? null : "waiting";
     case "Stop":
       return "idle";
     default:

@@ -40,6 +40,14 @@ describe("statusForEvent", () => {
     expect(statusForEvent("PostToolUse")).toBeNull();
     expect(statusForEvent("")).toBeNull();
   });
+
+  // The event names are Claude's; a backend that never drives the hook server
+  // must not have its sessions moved by one.
+  it("carries no status for a backend without hook status", () => {
+    expect(statusForEvent("UserPromptSubmit", undefined, "codex")).toBeNull();
+    expect(statusForEvent("Stop", undefined, "codex")).toBeNull();
+    expect(statusForEvent("Notification", "", "codex")).toBeNull();
+  });
 });
 
 describe("statusOf", () => {

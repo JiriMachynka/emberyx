@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import type { AgentBackend } from "@/lib/agentBackend";
 import type { Session } from "@/types";
 
 /**
@@ -24,12 +25,13 @@ export function useSessions() {
     cwd: string,
     command: string,
     label = "agent",
-    persistKey?: string
+    persistKey?: string,
+    backend: AgentBackend = "claude"
   ): string {
     const id = nextId();
     setSessions((s) => [
       ...s,
-      { id, projectId, label, cwd, command, kind: "agent", persistKey },
+      { id, projectId, label, cwd, command, kind: "agent", backend, persistKey },
     ]);
     setActive(projectId, id);
     return id;
@@ -40,12 +42,13 @@ export function useSessions() {
     projectId: string,
     cwd: string,
     resume?: string,
-    label = "chat"
+    label = "chat",
+    backend: AgentBackend = "claude"
   ): string {
     const id = nextId();
     setSessions((s) => [
       ...s,
-      { id, projectId, label, cwd, kind: "chat", resume },
+      { id, projectId, label, cwd, kind: "chat", backend, resume },
     ]);
     setActive(projectId, id);
     return id;

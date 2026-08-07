@@ -6,12 +6,19 @@
  *
  * The CLI's wording is not a stable contract — patterns live here alone so a
  * change is a one-file fix, and anything unmatched is logged in dev.
+ *
+ * The patterns are Claude's wording alone, so every entry point takes the
+ * backend and other backends classify as nothing rather than as a bad guess.
  */
+
+import { BACKEND_LABEL, type AgentBackend } from "@/lib/agentBackend";
 
 export type AccountIssueKind = "rate_limit" | "logged_out";
 
 export interface AccountIssue {
   kind: AccountIssueKind;
+  /** Backend whose CLI produced the line — the banner names it. */
+  backend: AgentBackend;
   /** The CLI's own line, trimmed — shown verbatim so we never lie about why. */
   message: string;
   /** Epoch ms when the window reopens, when the CLI gave one. */
@@ -98,7 +105,11 @@ const matchedLine = (text: string, { re, weak }: Pattern): string | null => {
  * Returns the account issue this output proves, or null. Callers feed anything
  * the CLI produced — stderr, a `result` message, terminal bytes.
  */
-export function classify(raw: string): AccountIssue | null {
+export function classify(
+  raw: string,
+  backend: AgentBackend = "claude"
+): AccountIssue | null {
+  if (backend !== "claude") return null;
   const text = stripAnsi(raw);
   if (!text.trim()) return null;
 
@@ -106,11 +117,13 @@ export function classify(raw: string): AccountIssue | null {
   // logging in is the only action that helps either way.
   for (const pattern of LOGGED_OUT) {
     const message = matchedLine(text, pattern);
-    if (message) return { kind: "logged_out", message };
+    if (message) return { kind: "logged_out", backend, message };
   }
   for (const pattern of RATE_LIMITED) {
     const message = matchedLine(text, pattern);
-    if (message) return { kind: "rate_limit", message, ...parseReset(text) };
+    if (message) {
+      return { kind: "rate_limit", backend, message, ...parseReset(text) };
+    }
   }
   return null;
 }
@@ -119,8 +132,12 @@ export function classify(raw: string): AccountIssue | null {
  * Classify, and in dev leave a breadcrumb when a failure produced text we
  * didn't recognise — that log is how the pattern lists get tuned.
  */
-export function classifyFailure(raw: string, source: string): AccountIssue | null {
-  const issue = classify(raw);
+export function classifyFailure(
+  raw: string,
+  source: string,
+  backend: AgentBackend = "claude"
+): AccountIssue | null {
+  const issue = classify(raw, backend);
   if (!issue && import.meta.env.DEV && raw.trim()) {
     console.debug(`[emberyx] unclassified ${source} failure:`, raw.trim().slice(0, 500));
   }
@@ -129,7 +146,9 @@ export function classifyFailure(raw: string, source: string): AccountIssue | nul
 
 /** Human label for the banner and notifications. */
 export const issueTitle = (issue: AccountIssue): string =>
-  issue.kind === "logged_out" ? "Signed out of Claude" : "Claude usage limit reached";
+  issue.kind === "logged_out"
+    ? `Signed out of ${BACKEND_LABEL[issue.backend]}`
+    : `${BACKEND_LABEL[issue.backend]} usage limit reached`;
 
 /** Trailing "resets …" clause, when the CLI told us one. */
 export function resetLabel(issue: AccountIssue): string | null {

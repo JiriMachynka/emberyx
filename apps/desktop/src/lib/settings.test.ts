@@ -1,20 +1,34 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { DEFAULT_SETTINGS, isClaudeAgent, useSettings } from "@/lib/settings";
+import { DEFAULT_SETTINGS, loadSettings, useSettings } from "@/lib/settings";
 
 beforeEach(() => {
   localStorage.clear();
 });
 
-describe("isClaudeAgent", () => {
-  it("recognizes claude and its flag variants", () => {
-    expect(isClaudeAgent("claude")).toBe(true);
-    expect(isClaudeAgent("claude --resume")).toBe(true);
+describe("agentBackend migration", () => {
+  const store = (settings: object) =>
+    localStorage.setItem("emberyx.settings", JSON.stringify(settings));
+
+  it("defaults to claude with nothing stored", () => {
+    expect(loadSettings().agentBackend).toBe("claude");
   });
 
-  it("rejects other agents", () => {
-    expect(isClaudeAgent("codex")).toBe(false);
-    expect(isClaudeAgent("bun run claude")).toBe(false);
+  it("infers the backend from a command stored before backends existed", () => {
+    store({ agentCommand: "claude --resume" });
+    expect(loadSettings().agentBackend).toBe("claude");
+    store({ agentCommand: "codex" });
+    expect(loadSettings().agentBackend).toBe("codex");
+    // The old test was a bare startsWith, so a wrapper never counted as Claude.
+    store({ agentCommand: "bun run claude" });
+    expect(loadSettings().agentBackend).toBe("codex");
+  });
+
+  it("keeps an explicitly stored backend, and ignores a bogus one", () => {
+    store({ agentCommand: "claude", agentBackend: "codex" });
+    expect(loadSettings().agentBackend).toBe("codex");
+    store({ agentCommand: "codex", agentBackend: "gemini" });
+    expect(loadSettings().agentBackend).toBe("codex");
   });
 });
 

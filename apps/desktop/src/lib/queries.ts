@@ -60,11 +60,45 @@ export const gitKeys = {
     ["git", "commitDiff", path, sha, file] as const,
 };
 
-export const useGitChanges = (path: string) =>
+export const useGitChanges = (path: string, enabled = true) =>
   useQuery({
     queryKey: gitKeys.changes(path),
     queryFn: () => invoke<GitFile[]>("git_changes", { path }),
+    enabled,
   });
+
+const fileDiff = (path: string, file: GitFile, staged: boolean) =>
+  queryClient.fetchQuery({
+    queryKey: gitKeys.diff(path, file.path, file.untracked, staged),
+    queryFn: () =>
+      invoke<string>("git_file_diff", {
+        path,
+        file: file.path,
+        untracked: file.untracked,
+        staged,
+      }),
+  });
+
+/** The whole working tree's diff, per file, staged parts included. Goes through
+ *  the same cache entries the changes panel fills, so an open panel pays once. */
+export const fetchWorkingDiff = async (path: string): Promise<string> => {
+  const files = await queryClient.fetchQuery({
+    queryKey: gitKeys.changes(path),
+    queryFn: () => invoke<GitFile[]>("git_changes", { path }),
+  });
+  const parts = await Promise.all(
+    files.map(async (f) => {
+      // The index column is blank for a purely unstaged edit; anything else
+      // means part of the change only shows under `--cached`.
+      const staged =
+        !f.untracked && f.status[0] !== " " ? await fileDiff(path, f, true) : "";
+      const unstaged = await fileDiff(path, f, false);
+      const body = [staged, unstaged].map((d) => d.trim()).filter(Boolean).join("\n");
+      return body ? `--- ${f.path}\n${body}` : "";
+    })
+  );
+  return parts.filter(Boolean).join("\n\n");
+};
 
 // `file` null → disabled; the key includes the file so a fast A→B selection
 // can't land A's diff under B's selection (the stale query is dropped).

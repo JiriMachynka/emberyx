@@ -9,6 +9,7 @@ import {
   resetLabel,
   type AccountIssue,
 } from "@/lib/accountState";
+import type { AgentBackend } from "@/lib/agentBackend";
 import { describeTool } from "@/lib/toolDisplay";
 import { notifyNative } from "@/hooks/useAgentEvents";
 import { loadSettings } from "@/lib/settings";
@@ -62,17 +63,19 @@ export type ChatStatus =
   | "tool"
   | "awaiting_permission"
   | "awaiting_answer"
+  | "retrying"
   | "error"
   | "exited";
 
 /** Chat status → the sidebar's coarse session status (drives its dot colour). */
-const SESSION_STATUS: Record<ChatStatus, SessionStatus> = {
+export const SESSION_STATUS: Record<ChatStatus, SessionStatus> = {
   idle: "idle",
   thinking: "working",
   streaming: "working",
   tool: "working",
   awaiting_permission: "waiting",
   awaiting_answer: "waiting",
+  retrying: "working",
   error: "idle",
   exited: "idle",
 };
@@ -120,6 +123,8 @@ export interface ChatUsage {
   /** Latest turn's full prompt size (input + cache read + cache creation) —
    *  i.e. how full the context window is right now, not the session total. */
   contextTokens?: number;
+  /** Model's total context window, when the backend reports it. */
+  contextWindow?: number;
   model?: string;
 }
 
@@ -127,6 +132,9 @@ interface Options {
   cwd: string;
   /** Emberyx session id (for hook correlation). */
   emberyxSessionId: string;
+  /** Agent CLI this chat drives. Only Claude has a transport today, so this
+   *  only decides how a failure's wording is read. */
+  backend?: AgentBackend;
   /** Claude session id to resume; omit to start fresh. */
   resume?: string;
   permissionMode?: string;
@@ -136,6 +144,9 @@ interface Options {
   model?: string;
   /** Called with the generated title once a fresh chat has been auto-titled. */
   onTitled?: (title: string) => void;
+  /** False while a session of another backend owns this pane — the hook still
+   *  runs (rules of hooks) but spawns nothing and touches no shared state. */
+  enabled?: boolean;
 }
 
 let counter = 0;
@@ -316,11 +327,13 @@ function newMessage(
 export function useAgentChat({
   cwd,
   emberyxSessionId,
+  backend = "claude",
   resume,
   permissionMode = "acceptEdits",
   skipPermissions = false,
   model = "",
   onTitled,
+  enabled = true,
 }: Options) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // Mirror for reads inside callbacks (rewind) without stale closures or making
@@ -375,9 +388,10 @@ export function useAgentChat({
   // Mirror the chat's live status into the global store so the sidebar dot can
   // turn orange while Claude works. Reset to idle on unmount.
   useEffect(() => {
+    if (!enabled) return;
     setSessionStatus(emberyxSessionId, SESSION_STATUS[status]);
     return () => setSessionStatus(emberyxSessionId, "idle");
-  }, [status, emberyxSessionId, setSessionStatus]);
+  }, [enabled, status, emberyxSessionId, setSessionStatus]);
   const clearAccountIssue = useAgentStore((st) => st.clearAccountIssue);
 
   // Turns typed while the agent was busy, oldest first, plus its rendered count.
@@ -789,7 +803,7 @@ export function useAgentChat({
         // Only the failure is announced here; the Stop hook covers success.
         if (failed) {
           const detail = typeof msg.result === "string" ? msg.result : "";
-          const issue = classifyFailure(detail, "result");
+          const issue = classifyFailure(detail, "result", backend);
           if (issue) {
             announceIssue(issue);
           } else {
@@ -850,7 +864,7 @@ export function useAgentChat({
   // --resume never replays them). Only fills when the list is still empty so it
   // can't clobber freshly streamed messages.
   useEffect(() => {
-    if (!resume) return;
+    if (!enabled || !resume) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -879,10 +893,11 @@ export function useAgentChat({
     return () => {
       cancelled = true;
     };
-  }, [resume, cwd]);
+  }, [enabled, resume, cwd]);
 
   // Spawn the process once per (cwd, resume) target.
   useEffect(() => {
+    if (!enabled) return;
     let disposed = false;
     const channel = new Channel<AgentEvent>();
     // Chunks arrive split mid-line, so the buffer — not the chunk — is what gets
@@ -892,7 +907,7 @@ export function useAgentChat({
     interruptedRef.current = false;
     const checkStderr = () => {
       if (announced) return;
-      const issue = classifyFailure(stderr, "stderr");
+      const issue = classifyFailure(stderr, "stderr", backend);
       if (!issue) return;
       announced = true;
       announceIssue(issue);
@@ -970,6 +985,7 @@ export function useAgentChat({
       }
     };
   }, [
+    enabled,
     cwd,
     resume,
     permissionMode,
@@ -1093,6 +1109,7 @@ export function useAgentChat({
   // `ask_user` questions arrive as a Tauri event (the tool call blocks in Rust,
   // not on the stream-json wire), tagged with the session that asked.
   useEffect(() => {
+    if (!enabled) return;
     const unlisten = listen<PendingAsk & { session: string }>("ask-user", (ev) => {
       if (ev.payload.session !== emberyxSessionId) return;
       setPendingAsk(ev.payload);
@@ -1101,7 +1118,7 @@ export function useAgentChat({
     return () => {
       void unlisten.then((off) => off());
     };
-  }, [emberyxSessionId]);
+  }, [enabled, emberyxSessionId]);
 
   /** Hand a choice back to the blocked tool call. */
   const answerAsk = useCallback((answer: string) => {

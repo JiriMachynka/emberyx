@@ -45,11 +45,14 @@ describe("costOf", () => {
     expect(costOf({ ...u, model: "claude-haiku-4-5-20251001" })).toBeCloseTo(1, 10);
   });
 
-  it("falls back to opus rates for an unknown model", () => {
-    expect(costOf(usage({ input: 1_000_000, model: "some-other-llm" }))).toBeCloseTo(
-      15,
-      10
-    );
+  it("falls back to opus rates for an unknown claude model", () => {
+    expect(
+      costOf(usage({ input: 1_000_000, model: "claude-something-new" }))
+    ).toBeCloseTo(15, 10);
+  });
+
+  it("prices a model from another backend at nothing rather than at opus", () => {
+    expect(costOf(usage({ input: 1_000_000, model: "gpt-5-codex" }))).toBe(0);
   });
 
   it("costs nothing when no tokens were used", () => {

@@ -3,7 +3,12 @@ import { addRecent, getRecents } from "@/lib/recents";
 import { getOpenProjects, saveOpenProjects } from "@/lib/openProjects";
 import { PANEL_MIN_WIDTH, getPanelWidth, setPanelWidth } from "@/lib/panels";
 import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
-import { getProjectConfigs, setProjectDevCommand } from "@/lib/projectConfig";
+import {
+  getProjectConfigs,
+  projectBackend,
+  setProjectBackend,
+  setProjectDevCommand,
+} from "@/lib/projectConfig";
 
 beforeEach(() => {
   localStorage.clear();
@@ -152,5 +157,34 @@ describe("project config", () => {
     expect(JSON.parse(localStorage.getItem("emberyx.projectConfig")!)).toEqual({
       "/a": { devCommand: "bun run dev" },
     });
+  });
+
+  it("pins a backend per project and falls back to the global default", () => {
+    expect(projectBackend("/a", "claude")).toBe("claude");
+    setProjectBackend("/a", "codex");
+    expect(projectBackend("/a", "claude")).toBe("codex");
+    expect(projectBackend("/b", "claude")).toBe("claude");
+  });
+
+  it("clears the pin without losing the project's other fields", () => {
+    setProjectDevCommand("/a", "bun run dev");
+    setProjectBackend("/a", "codex");
+    expect(setProjectBackend("/a", null)).toEqual({
+      "/a": { devCommand: "bun run dev" },
+    });
+    expect(projectBackend("/a", "claude")).toBe("claude");
+  });
+
+  it("drops the entry when the pin was all it held", () => {
+    setProjectBackend("/a", "codex");
+    expect(setProjectBackend("/a", null)).toEqual({});
+  });
+
+  it("ignores a backend a newer build wrote and this one doesn't know", () => {
+    localStorage.setItem(
+      "emberyx.projectConfig",
+      JSON.stringify({ "/a": { backend: "gemini" } })
+    );
+    expect(projectBackend("/a", "claude")).toBe("claude");
   });
 });

@@ -5,6 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { classify, stripAnsi } from "@/lib/accountState";
+import type { AgentBackend } from "@/lib/agentBackend";
 import { useAgentStore } from "@/lib/agentStore";
 import "@xterm/xterm/css/xterm.css";
 
@@ -37,6 +38,8 @@ interface TerminalPaneProps {
   fontFamily: string;
   fontSize: number;
   scrollback: number;
+  /** Agent CLI running in this pane; decides how its output is classified. */
+  backend?: AgentBackend;
   /** Whether this pane is the visible/active tab (drives keyboard focus). */
   active: boolean;
   /** Called with this pane's sessionId when the PTY exits on its own, so the
@@ -56,6 +59,7 @@ function TerminalPaneImpl({
   fontFamily,
   fontSize,
   scrollback,
+  backend = "claude",
   active,
   onExit,
 }: TerminalPaneProps) {
@@ -139,7 +143,7 @@ function TerminalPaneImpl({
       tail = (tail + chunk).slice(-TAIL_LIMIT);
       if (tail === lastTail) return;
       lastTail = tail;
-      const issue = classify(tail);
+      const issue = classify(tail, backend);
       if (!issue) return;
       useAgentStore.getState().reportAccountIssue(sessionId, issue);
       // Drop the matched window so the same message can't keep re-firing as it

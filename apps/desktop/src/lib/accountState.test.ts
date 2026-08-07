@@ -13,6 +13,7 @@ describe("classify — logged out", () => {
     const issue = classify("Invalid API key · Please run /login");
     expect(issue).toEqual({
       kind: "logged_out",
+      backend: "claude",
       message: "Invalid API key · Please run /login",
     });
   });
@@ -140,7 +141,11 @@ describe("classify — reset parsing", () => {
 
   it("sets neither field when the CLI gave no reset", () => {
     const issue = classify("Claude usage limit reached.");
-    expect(issue).toEqual({ kind: "rate_limit", message: "Claude usage limit reached." });
+    expect(issue).toEqual({
+      kind: "rate_limit",
+      backend: "claude",
+      message: "Claude usage limit reached.",
+    });
   });
 
   it("stops the human capture at a sentence end and caps it at 40 chars", () => {
@@ -208,10 +213,24 @@ describe("matchingLine", () => {
   });
 });
 
+describe("classify — backend gating", () => {
+  // The patterns are Claude's wording; another CLI's output must not be read
+  // through them.
+  it("classifies nothing for a backend it has no patterns for", () => {
+    expect(classify("Invalid API key · Please run /login", "codex")).toBeNull();
+    expect(classify("usage limit reached", "codex")).toBeNull();
+  });
+
+  it("stamps the issue with the backend that produced it", () => {
+    expect(classify("usage limit reached", "claude")?.backend).toBe("claude");
+  });
+});
+
 describe("issueTitle", () => {
   it("labels both kinds", () => {
-    expect(issueTitle({ kind: "logged_out", message: "x" })).toBe("Signed out of Claude");
-    expect(issueTitle({ kind: "rate_limit", message: "x" })).toBe("Claude usage limit reached");
+    expect(issueTitle({ kind: "logged_out", backend: "claude", message: "x" })).toBe("Signed out of Claude");
+    expect(issueTitle({ kind: "rate_limit", backend: "claude", message: "x" })).toBe("Claude usage limit reached");
+    expect(issueTitle({ kind: "logged_out", backend: "codex", message: "x" })).toBe("Signed out of Codex");
   });
 });
 
@@ -219,28 +238,28 @@ describe("resetLabel", () => {
   const at = Date.UTC(2024, 3, 5, 18, 30);
 
   it("formats an epoch in the host locale/timezone", () => {
-    const issue: AccountIssue = { kind: "rate_limit", message: "x", resetAt: at };
+    const issue: AccountIssue = { kind: "rate_limit", backend: "claude", message: "x", resetAt: at };
     const expected = new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
     expect(resetLabel(issue)).toBe(`Resets ${expected}`);
     expect(resetLabel(issue)).toMatch(/^Resets \d{1,2}:\d{2}/);
   });
 
   it("prefers the epoch over the human wording when both are present", () => {
-    const label = resetLabel({ kind: "rate_limit", message: "x", resetAt: at, resetText: "3pm" });
+    const label = resetLabel({ kind: "rate_limit", backend: "claude", message: "x", resetAt: at, resetText: "3pm" });
     expect(label).not.toBe("Resets 3pm");
   });
 
   it("passes through the CLI wording when there is no epoch", () => {
-    expect(resetLabel({ kind: "rate_limit", message: "x", resetText: "3pm (Europe/Prague)" })).toBe(
+    expect(resetLabel({ kind: "rate_limit", backend: "claude", message: "x", resetText: "3pm (Europe/Prague)" })).toBe(
       "Resets 3pm (Europe/Prague)",
     );
   });
 
   it("returns null when the CLI gave nothing, including epoch 0", () => {
-    expect(resetLabel({ kind: "rate_limit", message: "x" })).toBeNull();
-    expect(resetLabel({ kind: "logged_out", message: "x" })).toBeNull();
+    expect(resetLabel({ kind: "rate_limit", backend: "claude", message: "x" })).toBeNull();
+    expect(resetLabel({ kind: "logged_out", backend: "claude", message: "x" })).toBeNull();
     // 0 is a real (if absurd) epoch — the `!= null` guard keeps it.
-    expect(resetLabel({ kind: "rate_limit", message: "x", resetAt: 0 })).toMatch(/^Resets /);
+    expect(resetLabel({ kind: "rate_limit", backend: "claude", message: "x", resetAt: 0 })).toMatch(/^Resets /);
   });
 });
 

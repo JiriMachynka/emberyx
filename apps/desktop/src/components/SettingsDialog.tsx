@@ -35,6 +35,12 @@ import {
   useOpenRouterModels,
 } from "@/lib/queries";
 import { Field, Toggle } from "@/components/SettingsFields";
+import {
+  AGENT_BACKENDS,
+  BACKEND_LABEL,
+  capabilitiesOf,
+  isAgentBackend,
+} from "@/lib/agentBackend";
 import type { LucideIcon } from "lucide-react";
 import type { Settings } from "@/lib/settings";
 
@@ -64,7 +70,7 @@ export function SettingsDialog({
   const [tab, setTab] = useState<Tab>("general");
   const [version, setVersion] = useState("");
   const [checking, setChecking] = useState(false);
-  const isClaude = settings.agentCommand.startsWith("claude");
+  const capabilities = capabilitiesOf(settings.agentBackend);
   const models = useOpenRouterModels(open).data ?? [];
   const qc = useQueryClient();
   const hasGitlabToken = useGitlabToken().data ?? false;
@@ -150,6 +156,29 @@ export function SettingsDialog({
                   </Field>
 
                   <Field
+                    label="Agent backend"
+                    hint="Which CLI the command drives. Projects can pin their own in the project's Settings tab."
+                  >
+                    <Select
+                      value={settings.agentBackend}
+                      onValueChange={(v) => {
+                        if (isAgentBackend(v)) onUpdate({ agentBackend: v });
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {AGENT_BACKENDS.map((b) => (
+                          <SelectItem key={b} value={b}>
+                            {BACKEND_LABEL[b]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+
+                  <Field
                     label="Agent command"
                     hint="Run on project open, e.g. claude or codex"
                   >
@@ -160,7 +189,7 @@ export function SettingsDialog({
                     />
                   </Field>
 
-                  {isClaude && (
+                  {capabilities.permissions && (
                     <Toggle
                       checked={settings.dangerouslySkipPermissions}
                       onChange={(v) =>
@@ -176,7 +205,7 @@ export function SettingsDialog({
                     </Toggle>
                   )}
 
-                  {isClaude && (
+                  {capabilities.threads && (
                     <Toggle
                       checked={settings.resumeLatestThread}
                       onChange={(v) => onUpdate({ resumeLatestThread: v })}
@@ -187,7 +216,9 @@ export function SettingsDialog({
                     </Toggle>
                   )}
 
-                  {isClaude && (
+                  {/* --verbose is Claude's own flag; buildAgentCommand emits
+                      it for no one else. */}
+                  {settings.agentBackend === "claude" && (
                     <Toggle
                       checked={settings.compactSession}
                       onChange={(v) => onUpdate({ compactSession: v })}

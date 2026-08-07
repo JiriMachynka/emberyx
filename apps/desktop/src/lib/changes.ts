@@ -12,6 +12,10 @@ export interface Change {
 
 let changeCounter = 0;
 
+/** Next change id. Shared so every producer draws from one sequence — ids are
+ *  the feed's React keys. */
+export const nextChangeId = () => ++changeCounter;
+
 /**
  * Parse a PostToolUse hook payload into a file change, or null if the event
  * isn't a file edit we can diff.

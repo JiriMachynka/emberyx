@@ -23,8 +23,11 @@ const FALLBACK_RATES: { match: string; rate: Rate }[] = [
   { match: "sonnet", rate: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } },
   { match: "haiku", rate: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 } },
 ];
-// Fall back to Opus rates (the priciest) when the model is unknown.
+// Fall back to Opus rates (the priciest) when a Claude model is unknown.
 const DEFAULT_RATE = FALLBACK_RATES[0].rate;
+// A model from another backend isn't in the catalog and isn't priced here;
+// quoting Claude's rates for it would invent a number.
+const UNPRICED_RATE: Rate = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -70,9 +73,10 @@ function lookup<T>(table: Record<string, T> | undefined, model: string): T | und
 
 function rateFor(model: string): Rate {
   const m = model.toLowerCase();
-  return (
-    lookup(liveRates, m) ?? FALLBACK_RATES.find((r) => m.includes(r.match))?.rate ?? DEFAULT_RATE
-  );
+  const known =
+    lookup(liveRates, m) ?? FALLBACK_RATES.find((r) => m.includes(r.match))?.rate;
+  if (known) return known;
+  return m === "" || m.includes("claude") ? DEFAULT_RATE : UNPRICED_RATE;
 }
 
 /** The model's context window in tokens, from the LiteLLM catalog. Undefined

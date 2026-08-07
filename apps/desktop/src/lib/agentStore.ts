@@ -60,6 +60,13 @@ export interface SubagentRun {
   turnEndedAt?: number;
 }
 
+/** Push a message from one chat session into the other backend's chat. */
+export type HandoffFn = (
+  sourceSessionId: string,
+  text: string,
+  withDiff: boolean
+) => void;
+
 /**
  * Live agent telemetry, updated at streaming frequency from the hook listener.
  * Kept in a store (not App state) so status/usage/change updates re-render only
@@ -79,6 +86,16 @@ interface AgentState {
   /** Each live chat session's `send`, so panels outside the pane can dispatch a
    *  turn (e.g. running a slash command) into the active session. */
   senders: Record<string, (text: string, images?: ChatImage[]) => void>;
+  /** Text waiting to be dropped into a session's composer. Held here rather
+   *  than pushed at a `send`, because a handoff can target a chat that hasn't
+   *  mounted yet — it picks its draft up when it does. */
+  drafts: Record<string, string>;
+  setDraft: (id: string, text: string) => void;
+  clearDraft: (id: string) => void;
+  /** Hand a chat message to the other backend's chat in the same project.
+   *  Installed by the workspace, which owns the session list. */
+  handoff: HandoffFn | null;
+  setHandoff: (fn: HandoffFn) => void;
   selectAgent: (id: string | null) => void;
   registerSender: (
     id: string,
@@ -126,7 +143,17 @@ export const useAgentStore = create<AgentState>()((set) => ({
   subagents: {},
   selectedAgent: null,
   senders: {},
+  drafts: {},
+  handoff: null,
   notifications: loadNotifications(),
+  setDraft: (id, text) => set((s) => ({ drafts: { ...s.drafts, [id]: text } })),
+  clearDraft: (id) =>
+    set((s) => {
+      if (!(id in s.drafts)) return s;
+      const { [id]: _, ...rest } = s.drafts;
+      return { drafts: rest };
+    }),
+  setHandoff: (fn) => set({ handoff: fn }),
   selectAgent: (id) => set({ selectedAgent: id }),
   registerSender: (id, fn) =>
     set((s) => ({ senders: { ...s.senders, [id]: fn } })),
@@ -237,6 +264,9 @@ export const useAgentStore = create<AgentState>()((set) => ({
         ),
         senders: Object.fromEntries(
           Object.entries(s.senders).filter(([id]) => !drop.has(id))
+        ),
+        drafts: Object.fromEntries(
+          Object.entries(s.drafts).filter(([id]) => !drop.has(id))
         ),
       };
     }),

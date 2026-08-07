@@ -112,7 +112,10 @@ export function useAgentEvents(
       // The hook path is the only signal a terminal session gives us, so an
       // account block has to be recognised here too — it reads as a plain
       // Notification otherwise.
-      const issue = message ? classify(message) : null;
+      // Hooks only ever fire for a backend that drives the hook server, but the
+      // session it names decides how its wording is read.
+      const backend = resolveRef.current(payload.session)?.backend ?? "claude";
+      const issue = message ? classify(message, backend) : null;
       if (issue) {
         const s = resolveRef.current(payload.session);
         store.reportAccountIssue(payload.session, issue);
@@ -132,7 +135,7 @@ export function useAgentEvents(
         return;
       }
 
-      const status = statusForEvent(payload.event, message);
+      const status = statusForEvent(payload.event, message, backend);
       if (!status) return;
       store.setStatus(payload.session, status);
 

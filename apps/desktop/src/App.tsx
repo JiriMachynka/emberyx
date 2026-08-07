@@ -19,7 +19,7 @@ import { WelcomeScreen } from "@/components/WelcomeScreen";
 import { AttentionBanner } from "@/components/AttentionBanner";
 import { AccountBanner } from "@/components/AccountBanner";
 import { cn } from "@/lib/utils";
-import { useSettings, isClaudeAgent } from "@/lib/settings";
+import { useSettings } from "@/lib/settings";
 import { useAgentStore, selectUnreadCount } from "@/lib/agentStore";
 import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
 import { requestSearch } from "@/lib/searchRequest";
@@ -27,6 +27,7 @@ import { projectLabel } from "@/lib/worktree";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import type { Session } from "@/types";
 import { useDevServers } from "@/hooks/useDevServers";
+import { useAgentBackend } from "@/hooks/useAgentBackend";
 import { useProjectActions } from "@/hooks/useProjectActions";
 import { ActionDialog } from "@/components/ActionDialog";
 import { getStoredActions, type ProjectAction } from "@/lib/actions";
@@ -167,6 +168,8 @@ function App() {
     setProjectSettingsOpen(false);
   }, [activeProjectId]);
 
+  const agentBackend = useAgentBackend(activeProject, settings.agentBackend);
+  const capabilities = agentBackend.capabilities;
   const dev = useDevServers(activeProject, ws.addDev);
   const projectActions = useProjectActions(activeProject);
   const [actionEdit, setActionEdit] = useState<{
@@ -225,10 +228,18 @@ function App() {
   // absolute path still resolves.
   const startLogin = () => {
     if (!activeProject) return;
-    const bin = isClaudeAgent(settings.agentCommand)
-      ? settings.agentCommand.split(" ")[0]
-      : "claude";
-    ws.startAgent(activeProject.id, activeProject.path, `${bin} auth login`, "login");
+    const bin =
+      agentBackend.backend === "claude"
+        ? settings.agentCommand.split(" ")[0]
+        : "claude";
+    ws.startAgent(
+      activeProject.id,
+      activeProject.path,
+      `${bin} auth login`,
+      "login",
+      undefined,
+      "claude"
+    );
   };
 
   const openProjectSettings = () => {
@@ -331,7 +342,8 @@ function App() {
         <ContextBar
           activeProject={activeProject}
           agent={agent}
-          claudeAgent={isClaudeAgent(settings.agentCommand)}
+          threads={capabilities.threads}
+          usage={capabilities.usage}
           devRunning={projectSessions.some((s) => s.kind === "dev")}
           mrsOpen={mrsOpen}
           onToggleMrs={toggleMrs}
@@ -491,6 +503,9 @@ function App() {
               <ProjectSettingsPane
                 key={activeProject.id}
                 project={activeProject}
+                backend={agentBackend.pinned}
+                onSetBackend={agentBackend.setBackend}
+                defaultBackend={settings.agentBackend}
                 devCommand={dev.customCommand}
                 onSetDevCommand={dev.setCustomCommand}
                 buildCommand={dev.buildCommandOverride}
@@ -521,6 +536,7 @@ function App() {
               onClose={() => setSlashOpen(false)}
               cwd={activeProject?.path ?? null}
               activeChatId={activeChatId}
+              backend={agentBackend.backend}
             />
           )}
         </div>
@@ -532,7 +548,7 @@ function App() {
         sessions={sessions}
         projects={projects}
         activeProject={activeProject}
-        claudeAgent={isClaudeAgent(settings.agentCommand)}
+        slashCommands={capabilities.slashCommands}
         chatUi={settings.agentUi === "chat"}
         onSelectSession={ws.activateSession}
         onResumeThread={ws.resumeThreadIn}

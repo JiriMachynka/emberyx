@@ -2,12 +2,30 @@ import { useState } from "react";
 import { GitBranch, RotateCw } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Field } from "@/components/SettingsFields";
+import {
+  AGENT_BACKENDS,
+  BACKEND_LABEL,
+  isAgentBackend,
+  type AgentBackend,
+} from "@/lib/agentBackend";
 import { basename } from "@/lib/path";
 import type { Project } from "@/types";
 
 interface ProjectSettingsPaneProps {
   project: Project;
+  /** Backend pinned to this project; unset follows the global default. */
+  backend: AgentBackend | undefined;
+  onSetBackend: (backend: AgentBackend | null) => void;
+  /** Global default, shown as the "follow" option's label. */
+  defaultBackend: AgentBackend;
   /** Per-project custom dev command; overrides workspace detection when set. */
   devCommand: string;
   onSetDevCommand: (command: string) => void;
@@ -34,8 +52,14 @@ interface ProjectSettingsPaneProps {
 /** Per-project configuration collected in one place: the dev command, the
  *  matched Dokploy deployment, and the git worktree this project sits in.
  *  Reads only what the caller already holds — no fetching on mount. */
+/** Sentinel for "no pin" — Radix Select can't hold an empty string value. */
+const FOLLOW_DEFAULT = "default";
+
 export function ProjectSettingsPane({
   project,
+  backend,
+  onSetBackend,
+  defaultBackend,
   devCommand,
   onSetDevCommand,
   buildCommand,
@@ -70,6 +94,30 @@ export function ProjectSettingsPane({
   return (
     <div className="grid min-h-0 flex-1 content-start gap-6 overflow-auto p-4">
       <section className="grid gap-3">
+        <div className="text-sm font-semibold">Agent</div>
+        <Field label="Backend">
+          <Select
+            value={backend ?? FOLLOW_DEFAULT}
+            onValueChange={(v) => onSetBackend(isAgentBackend(v) ? v : null)}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={FOLLOW_DEFAULT}>
+                Default ({BACKEND_LABEL[defaultBackend]})
+              </SelectItem>
+              {AGENT_BACKENDS.map((b) => (
+                <SelectItem key={b} value={b}>
+                  {BACKEND_LABEL[b]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      </section>
+
+      <section className="grid gap-3 border-t pt-4">
         <div className="text-sm font-semibold">Dev command</div>
         <Field
           label="Custom command"

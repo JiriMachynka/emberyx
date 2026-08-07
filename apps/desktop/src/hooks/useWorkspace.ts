@@ -2,7 +2,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { open, ask } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { isClaudeAgent, type Settings } from "@/lib/settings";
+import { type Settings } from "@/lib/settings";
+import {
+  BACKEND_LABEL,
+  capabilitiesOf,
+  type AgentBackend,
+} from "@/lib/agentBackend";
+import { listCodexThreads } from "@/lib/codex/transport";
+import { projectBackend } from "@/lib/projectConfig";
+import {
+  buildHandoffPayload,
+  findHandoffTarget,
+  otherBackend,
+} from "@/lib/handoff";
+import { fetchWorkingDiff } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
 import { getRecents, addRecent, removeRecent } from "@/lib/recents";
 import { getOpenProjects, saveOpenProjects } from "@/lib/openProjects";
@@ -14,6 +27,15 @@ import type { Session, Thread, WorkspaceInfo } from "@/types";
 
 /** Thread titles are truncated to this in tab labels. */
 const LABEL_MAX = 24;
+
+/** Each backend keeps its own conversation store: Claude's transcripts on
+ *  disk, Codex's in its app-server. */
+const listThreads = (backend: AgentBackend, cwd: string): Promise<Thread[]> =>
+  backend === "codex" ? listCodexThreads(cwd) : invoke<Thread[]>("list_threads", { cwd });
+
+/** The CLI argument that resumes a thread in a terminal session. */
+const resumeArg = (backend: AgentBackend, id: string) =>
+  backend === "codex" ? `resume ${id}` : `--resume ${id}`;
 
 const labelFor = (thread: Thread) =>
   thread.title.length > LABEL_MAX
@@ -51,10 +73,11 @@ export function useWorkspace(settings: Settings) {
     closeProject,
   } = useProjects();
 
-  // Latest projects list for async guards: a superseded pre-warm must not
-  // resurrect a torn-down project's session after its list_threads resolves.
-  const projectsRef = useRef(projects);
-  projectsRef.current = projects;
+  // Projects removed while an open was still in flight. A superseded pre-warm
+  // must not resurrect one (which would orphan a PTY). Recorded rather than
+  // read off `projects`, which a freshly opened project hasn't rendered into
+  // yet — how long an async open takes decided the answer otherwise.
+  const torndownRef = useRef(new Set<string>());
 
   const sessionApi = useSessions();
   const {
@@ -95,11 +118,15 @@ export function useWorkspace(settings: Settings) {
     ? activeByProject[uiActiveProjectId] ?? null
     : null;
 
-  /** Build the agent launch command, injecting hooks + any extra flags. */
-  function buildAgentCommand(extra?: string): string {
+  /** The backend a project runs — its own pin, else the global default. */
+  const backendFor = (path: string) => projectBackend(path, settings.agentBackend);
+
+  /** Build the agent launch command, injecting hooks + any extra flags. Flags
+   *  are Claude Code's own CLI surface, so only Claude gets them. */
+  function buildAgentCommand(path: string, extra?: string): string {
     const base = settings.agentCommand;
     const flags: string[] = [];
-    if (isClaudeAgent(base)) {
+    if (backendFor(path) === "claude") {
       if (hookSettings) flags.push(`--settings "${hookSettings}"`);
       if (settings.dangerouslySkipPermissions) {
         flags.push("--dangerously-skip-permissions");
@@ -115,7 +142,9 @@ export function useWorkspace(settings: Settings) {
    *  silent (pre-warm), failures stay in the console — no toast for a project
    *  the user hasn't opened yet. */
   function refreshThreads(projectId: string, path: string, silent = false) {
-    invoke<Thread[]>("list_threads", { cwd: path })
+    const backend = backendFor(path);
+    if (!capabilitiesOf(backend).threads) return;
+    listThreads(backend, path)
       .then((t) => setThreads(projectId, t))
       .catch((e) => {
         console.error("list_threads failed:", e);
@@ -129,24 +158,30 @@ export function useWorkspace(settings: Settings) {
    *  under the project path either way. */
   async function startPrimaryAgent(id: string, path: string) {
     const chat = settings.agentUi === "chat";
-    // Chat is always Claude, so agentCommand only gates the terminal path.
+    const backend = backendFor(path);
+    // Chat always resumes when it can; the terminal only on the setting.
     const resumeLatest =
-      chat || (settings.resumeLatestThread && isClaudeAgent(settings.agentCommand));
+      capabilitiesOf(backend).threads && (chat || settings.resumeLatestThread);
     if (resumeLatest) {
       try {
-        const threads = await invoke<Thread[]>("list_threads", { cwd: path });
-        // A superseded pre-warm may have been torn down while we awaited; don't
-        // resurrect its session (which would orphan a PTY).
-        if (!projectsRef.current.some((p) => p.id === id)) return;
+        const threads = await listThreads(backend, path);
+        if (torndownRef.current.has(id)) return;
         setThreads(id, threads);
         const latest = [...threads].sort((a, b) => b.modified - a.modified)[0];
         if (latest) {
           const label = labelFor(latest);
           if (chat) {
-            startChat(id, path, latest.id, label);
+            startChat(id, path, latest.id, label, backend);
             return;
           }
-          startAgent(id, path, buildAgentCommand(`--resume ${latest.id}`), label, path);
+          startAgent(
+            id,
+            path,
+            buildAgentCommand(path, resumeArg(backend, latest.id)),
+            label,
+            path,
+            backend
+          );
           return;
         }
       } catch (e) {
@@ -155,14 +190,15 @@ export function useWorkspace(settings: Settings) {
       }
     }
     if (chat) {
-      startChat(id, path);
+      startChat(id, path, undefined, undefined, backend);
       return;
     }
-    startAgent(id, path, buildAgentCommand(), "agent", path);
+    startAgent(id, path, buildAgentCommand(path), "agent", path, backend);
   }
 
   /** Remove a project and all its sessions (kills their PTYs). */
   function teardownProject(id: string) {
+    torndownRef.current.add(id);
     const ids = sessionsFor(id).map((s) => s.id);
     closeProjectSessions(id);
     useAgentStore.getState().clearSessions(ids);
@@ -229,17 +265,68 @@ export function useWorkspace(settings: Settings) {
     setActive(projectId, sessionId);
   }
 
+  /** Move a chat message to the other backend, in the same project: reuse that
+   *  project's chat on the target backend or open one, prefill its composer,
+   *  and focus it. Prefilled, never sent — the user still presses enter. */
+  async function handoffFrom(sourceId: string, text: string, withDiff: boolean) {
+    const source = sessions.find((s) => s.id === sourceId);
+    if (!source) return;
+    const from = source.backend ?? "claude";
+    const target = otherBackend(from);
+    const existing = findHandoffTarget(sessions, source.projectId, target);
+    const id =
+      existing?.id ??
+      startChat(
+        source.projectId,
+        source.cwd,
+        undefined,
+        BACKEND_LABEL[target].toLowerCase(),
+        target
+      );
+    let diff: string | undefined;
+    if (withDiff) {
+      try {
+        diff = await fetchWorkingDiff(source.cwd);
+      } catch (e) {
+        console.error("git diff for handoff failed:", e);
+        toast.error("Couldn't read the working tree", { description: String(e) });
+      }
+    }
+    useAgentStore.getState().setDraft(id, buildHandoffPayload(from, text, diff));
+    setRevealed(true);
+    setActiveProjectId(source.projectId);
+    setActive(source.projectId, id);
+  }
+
+  // The chat panes reach the handoff through the store rather than a prop —
+  // they're memoized, and this closure is new on every render.
+  const handoffRef = useRef(handoffFrom);
+  handoffRef.current = handoffFrom;
+  useEffect(() => {
+    useAgentStore
+      .getState()
+      .setHandoff((id, text, withDiff) => void handoffRef.current(id, text, withDiff));
+  }, []);
+
   /** Resume a Claude Code thread in a new tab of the given project, revealing
    *  and focusing it. Uses the default surface (chat / terminal). */
   function resumeThreadIn(projectId: string, path: string, thread: Thread) {
     setRevealed(true);
     setActiveProjectId(projectId);
     const label = labelFor(thread);
+    const backend = backendFor(path);
     if (settings.agentUi === "chat") {
-      startChat(projectId, path, thread.id, label);
+      startChat(projectId, path, thread.id, label, backend);
       return;
     }
-    startAgent(projectId, path, buildAgentCommand(`--resume ${thread.id}`), label);
+    startAgent(
+      projectId,
+      path,
+      buildAgentCommand(path, resumeArg(backend, thread.id)),
+      label,
+      undefined,
+      backend
+    );
   }
 
   /** Resume a thread in the active project (ContextBar / Threads menu). */
@@ -256,11 +343,13 @@ export function useWorkspace(settings: Settings) {
   /** Spawn a fresh agent tab in the active project, using the default surface. */
   function newAgent() {
     if (!activeProject) return;
+    const { id, path } = activeProject;
+    const backend = backendFor(path);
     if (settings.agentUi === "chat") {
-      startChat(activeProject.id, activeProject.path);
+      startChat(id, path, undefined, undefined, backend);
       return;
     }
-    startAgent(activeProject.id, activeProject.path, buildAgentCommand());
+    startAgent(id, path, buildAgentCommand(path), undefined, undefined, backend);
   }
 
   /** Returns false when the user declines to close a project with a live agent. */
@@ -351,7 +440,9 @@ export function useWorkspace(settings: Settings) {
       return;
     }
     const recent = recents[0];
-    if (recent && isClaudeAgent(settings.agentCommand)) {
+    // Pre-warming only buys anything when opening would otherwise wait on a
+    // thread list; a backend without threads boots straight away.
+    if (recent && capabilitiesOf(backendFor(recent)).threads) {
       void openProjectAt(recent, { prewarm: true });
     }
     // Launch-only; openProjectAt/settings are stable enough for a one-shot.

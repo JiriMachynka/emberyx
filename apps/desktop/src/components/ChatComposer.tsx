@@ -29,6 +29,11 @@ import { MentionMenu } from "@/components/MentionMenu";
 import { SlashMenu } from "@/components/SlashMenu";
 import { fuzzyFilter } from "@/lib/fuzzy";
 import { contextWindowFor } from "@/lib/pricing";
+import {
+  BACKEND_LABEL,
+  capabilitiesOf,
+  type AgentBackend,
+} from "@/lib/agentBackend";
 import { applyMention, mentionAt, type Mention } from "@/lib/mentions";
 import { applySlash, filterCommands, slashAt, type SlashToken } from "@/lib/slash";
 import { useProjectFiles, useSlashCommands } from "@/lib/queries";
@@ -97,7 +102,7 @@ const prettyModel = (id: string): string => {
 /** Model families, each expanding to a "Latest" alias plus pinned versions.
  *  Values are passed straight to `claude --model` (aliases or full ids);
  *  "" (Default) lets the CLI resolve the model. */
-const MODEL_GROUPS: { label: string; options: { value: string; label: string }[] }[] = [
+const CLAUDE_MODEL_GROUPS: { label: string; options: { value: string; label: string }[] }[] = [
   {
     label: "Opus",
     options: [
@@ -128,8 +133,13 @@ const MODEL_GROUPS: { label: string; options: { value: string; label: string }[]
 
 /** Human label for a stored value: the pinned name, or the family name for a
  *  bare "Latest" alias. Falls back to prettyModel for anything unknown. */
+/** A backend's own model list. Only Claude's is hand-listed; anything else
+ *  leaves the choice to its CLI. */
+const modelGroupsFor = (backend: AgentBackend) =>
+  backend === "claude" ? CLAUDE_MODEL_GROUPS : [];
+
 const modelLabel = (value: string): string => {
-  for (const g of MODEL_GROUPS) {
+  for (const g of CLAUDE_MODEL_GROUPS) {
     const o = g.options.find((x) => x.value === value);
     if (o) return o.label === "Latest" ? g.label : o.label;
   }
@@ -139,6 +149,7 @@ const modelLabel = (value: string): string => {
 interface ModelPickerProps {
   /** Selected `--model` value for this session; "" = default. */
   model: string;
+  backend: AgentBackend;
   usage: ChatUsage;
   onModelChange: (model: string) => void;
 }
@@ -148,6 +159,7 @@ interface ModelPickerProps {
  *  Families open a submenu of pinned versions. */
 const ModelPicker = memo(function ModelPicker({
   model,
+  backend,
   usage,
   onModelChange,
 }: ModelPickerProps) {
@@ -172,7 +184,7 @@ const ModelPicker = memo(function ModelPicker({
           {usage.model ? `Default (${prettyModel(usage.model)})` : "Default"}
           {model === "" && <Check className="size-3.5" />}
         </DropdownMenuItem>
-        {MODEL_GROUPS.map((g) => {
+        {modelGroupsFor(backend).map((g) => {
           const active = g.options.some((o) => o.value === model);
           return (
             <DropdownMenuSub key={g.label}>
@@ -278,9 +290,16 @@ const ModeChip = memo(function ModeChip({
  *  1M beta explicitly; otherwise use the model the CLI actually resolved (the
  *  alias may be "" or a family name the catalog doesn't know) and fall back to
  *  the 200k every Claude model has at minimum. */
-const resolveContextWindow = (model: string, resolved?: string): number => {
+const resolveContextWindow = (
+  model: string,
+  backend: AgentBackend,
+  resolved?: string
+): number => {
   if (model.includes("[1m]")) return 1_000_000;
-  return contextWindowFor(resolved || model) ?? 200_000;
+  const known = contextWindowFor(resolved || model);
+  if (known) return known;
+  // 200k is Claude's floor, not a universal one.
+  return backend === "claude" ? 200_000 : 0;
 };
 
 /** Compact token count: 135k, 1m. */
@@ -296,13 +315,15 @@ const RING = 2 * Math.PI * 8; // r=8 circumference
 const ContextMeter = memo(function ContextMeter({
   contextTokens,
   model,
+  backend,
   resolved,
 }: {
   contextTokens?: number;
   model: string;
+  backend: AgentBackend;
   resolved?: string;
 }) {
-  const max = resolveContextWindow(model, resolved);
+  const max = resolveContextWindow(model, backend, resolved);
   const used = contextTokens ?? 0;
   const pct = Math.min(100, Math.round((used / max) * 100));
   return (
@@ -357,6 +378,7 @@ const ContextMeter = memo(function ContextMeter({
 interface UsageFooterProps {
   /** Turns typed while busy and not yet sent. */
   queued: number;
+  backend: AgentBackend;
   usage: ChatUsage;
   /** Selected `--model` alias; "" = default. */
   model: string;
@@ -372,6 +394,7 @@ interface UsageFooterProps {
  *  draft state, not the usage) skips it. */
 const UsageFooter = memo(function UsageFooter({
   queued,
+  backend,
   usage,
   model,
   onModelChange,
@@ -388,14 +411,28 @@ const UsageFooter = memo(function UsageFooter({
           {queued} queued
         </span>
       )}
-      <ModelPicker model={model} usage={usage} onModelChange={onModelChange} />
-      <ChipDivider />
-      <AccessChip fullAccess={fullAccess} onChange={onFullAccessChange} />
-      <ChipDivider />
-      <ModeChip planMode={planMode} onChange={onPlanModeChange} />
-      {(usage.inputTokens != null ||
-        usage.outputTokens != null ||
-        usage.costUsd != null) && (
+      {capabilitiesOf(backend).modelPicker && (
+        <>
+          <ModelPicker
+            model={model}
+            backend={backend}
+            usage={usage}
+            onModelChange={onModelChange}
+          />
+          <ChipDivider />
+        </>
+      )}
+      {capabilitiesOf(backend).permissions && (
+        <>
+          <AccessChip fullAccess={fullAccess} onChange={onFullAccessChange} />
+          <ChipDivider />
+          <ModeChip planMode={planMode} onChange={onPlanModeChange} />
+        </>
+      )}
+      {capabilitiesOf(backend).usage &&
+        (usage.inputTokens != null ||
+          usage.outputTokens != null ||
+          usage.costUsd != null) && (
         <span className="flex items-center gap-2 font-mono tabular-nums">
           {usage.inputTokens != null && (
             <span className="flex items-center gap-0.5">
@@ -423,6 +460,8 @@ const UsageFooter = memo(function UsageFooter({
 interface ChatComposerProps {
   /** Project root — the corpus for `@` file references. */
   cwd: string;
+  /** Agent CLI this chat drives; gates the Claude-only chips and menus. */
+  backend: AgentBackend;
   /** Focus the textarea when this pane becomes the visible tab. */
   active: boolean;
   ready: boolean;
@@ -441,6 +480,9 @@ interface ChatComposerProps {
   /** Plan mode = `--permission-mode plan`; off = Build. */
   planMode: boolean;
   onPlanModeChange: (v: boolean) => void;
+  /** Text handed to this chat from elsewhere, to drop into the box unsent. */
+  draft?: string;
+  onDraftConsumed: () => void;
   onSend: (text: string, images: ChatImage[]) => void;
   onStop: () => void;
   /** Un-send the newest in-flight turn; returns its text/images to restore. */
@@ -456,6 +498,7 @@ interface ChatComposerProps {
  */
 export const ChatComposer = memo(function ChatComposer({
   cwd,
+  backend,
   active,
   ready,
   busy,
@@ -468,6 +511,8 @@ export const ChatComposer = memo(function ChatComposer({
   onFullAccessChange,
   planMode,
   onPlanModeChange,
+  draft,
+  onDraftConsumed,
   onSend,
   onStop,
   onRewind,
@@ -494,7 +539,8 @@ export const ChatComposer = memo(function ChatComposer({
     [filesQuery.data, mention]
   );
 
-  const commandsQuery = useSlashCommands(cwd, slash !== null);
+  const slashCommands = capabilitiesOf(backend).slashCommands;
+  const commandsQuery = useSlashCommands(cwd, slashCommands && slash !== null);
   const commandHits = useMemo(
     () =>
       slash
@@ -509,6 +555,15 @@ export const ChatComposer = memo(function ChatComposer({
   useEffect(() => {
     if (active) inputRef.current?.focus();
   }, [active]);
+
+  // A handed-off message lands here rather than being sent, so the user reads
+  // it before committing. Anything already typed is kept above it.
+  useEffect(() => {
+    if (draft === undefined) return;
+    setInput((prev) => (prev.trim() ? `${prev}\n\n${draft}` : draft));
+    onDraftConsumed();
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [draft, onDraftConsumed]);
 
   // Grow the composer with its content, capped by max-h-40 (then it scrolls).
   // Measuring forces a reflow, so coalesce a burst of keystrokes into one frame,
@@ -560,7 +615,7 @@ export const ChatComposer = memo(function ChatComposer({
    *  token the caret is actually in. */
   const syncMenus = (el: HTMLTextAreaElement) => {
     setMention(mentionAt(el.value, el.selectionStart));
-    setSlash(slashAt(el.value, el.selectionStart));
+    setSlash(slashCommands ? slashAt(el.value, el.selectionStart) : null);
     setMenuIndex(0);
   };
 
@@ -763,7 +818,7 @@ export const ChatComposer = memo(function ChatComposer({
                 ? "Starting agent…"
                 : busy
                   ? "Queue a message…"
-                  : "Message Claude…"
+                  : `Message ${BACKEND_LABEL[backend]}…`
           }
           disabled={!ready || exited}
           rows={1}
@@ -776,6 +831,7 @@ export const ChatComposer = memo(function ChatComposer({
         <div className="flex items-center justify-between gap-2 px-2.5 pb-2 pt-1">
           <UsageFooter
             queued={queued}
+            backend={backend}
             usage={usage}
             model={model}
             onModelChange={onModelChange}
@@ -785,11 +841,14 @@ export const ChatComposer = memo(function ChatComposer({
             onPlanModeChange={onPlanModeChange}
           />
           <div className="flex shrink-0 items-center gap-1.5">
-            <ContextMeter
-              contextTokens={usage.contextTokens}
-              model={model}
-              resolved={usage.model}
-            />
+            {capabilitiesOf(backend).usage && (
+              <ContextMeter
+                contextTokens={usage.contextTokens}
+                model={model}
+                backend={backend}
+                resolved={usage.model}
+              />
+            )}
             {busy && (
               <button
                 type="button"

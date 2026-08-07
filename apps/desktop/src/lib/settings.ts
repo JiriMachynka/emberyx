@@ -1,8 +1,16 @@
 import { useState } from "react";
+import {
+  backendFromCommand,
+  isAgentBackend,
+  type AgentBackend,
+} from "@/lib/agentBackend";
 
 export interface Settings {
   /** Which agent surface opens with a project: rich chat UI or the raw terminal. */
   agentUi: "chat" | "terminal";
+  /** Which agent CLI the command drives, and so which features are offered.
+   *  Projects may override it; this is the default for new ones. */
+  agentBackend: AgentBackend;
   /** Base agent command run on project open. */
   agentCommand: string;
   /** Terminal + chat font-family stack. */
@@ -53,6 +61,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   agentUi: "chat",
+  agentBackend: "claude",
   agentCommand: "claude",
   fontFamily: '"Geist Mono Variable", ui-monospace, Menlo, monospace',
   editorFontFamily:
@@ -78,11 +87,6 @@ export const DEFAULT_SETTINGS: Settings = {
   notifySound: false,
 };
 
-/** Whether an agent command drives Claude Code (enables thread/usage UI). */
-export function isClaudeAgent(cmd: string): boolean {
-  return cmd.startsWith("claude");
-}
-
 const KEY = "emberyx.settings";
 
 /** Reads the stored settings. Exported for callbacks that outlive a render and
@@ -90,7 +94,14 @@ const KEY = "emberyx.settings";
 export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
-    return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : DEFAULT_SETTINGS;
+    if (!raw) return DEFAULT_SETTINGS;
+    const stored = JSON.parse(raw) as Partial<Settings>;
+    const merged = { ...DEFAULT_SETTINGS, ...stored };
+    // Settings written before the backend was explicit only recorded the
+    // command; keep those users on exactly the surface they had.
+    return isAgentBackend(stored.agentBackend)
+      ? merged
+      : { ...merged, agentBackend: backendFromCommand(merged.agentCommand) };
   } catch {
     return DEFAULT_SETTINGS;
   }
