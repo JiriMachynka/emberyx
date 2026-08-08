@@ -25,6 +25,8 @@ export interface AgentCapabilities {
   subagents: boolean;
   /** The model can be chosen per session. */
   modelPicker: boolean;
+  /** The session can be put in a read-only planning mode. */
+  planMode: boolean;
   /** A message sent mid-turn steers the running turn instead of queueing. */
   steering: boolean;
 }
@@ -48,10 +50,13 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     slashCommands: true,
     subagents: true,
     modelPicker: true,
+    planMode: true,
     steering: true,
   },
   // Codex has no hook server, no `/` commands, and reports subagent work as
-  // ordinary items rather than its own transcript.
+  // ordinary items rather than its own transcript. Its plan mode is a
+  // collaboration mode, and every method that reads or sets one is refused
+  // unless the app-server handshake asks for `experimentalApi`.
   codex: {
     threads: true,
     usage: true,
@@ -61,6 +66,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     slashCommands: false,
     subagents: false,
     modelPicker: true,
+    planMode: false,
     steering: true,
   },
 };

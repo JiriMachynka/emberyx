@@ -36,9 +36,10 @@ import {
   capabilitiesOf,
   type AgentBackend,
 } from "@/lib/agentBackend";
+import { codexModelGroups, type ModelGroup } from "@/lib/codex/models";
 import { applyMention, mentionAt, type Mention } from "@/lib/mentions";
 import { applySlash, filterCommands, slashAt, type SlashToken } from "@/lib/slash";
-import { useProjectFiles, useSlashCommands } from "@/lib/queries";
+import { useCodexModels, useProjectFiles, useSlashCommands } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import type { ChatImage, ChatQuota, ChatUsage } from "@/hooks/useAgentChat";
 
@@ -104,7 +105,7 @@ const prettyModel = (id: string): string => {
 /** Model families, each expanding to a "Latest" alias plus pinned versions.
  *  Values are passed straight to `claude --model` (aliases or full ids);
  *  "" (Default) lets the CLI resolve the model. */
-const CLAUDE_MODEL_GROUPS: { label: string; options: { value: string; label: string }[] }[] = [
+const CLAUDE_MODEL_GROUPS: ModelGroup[] = [
   {
     label: "Opus",
     options: [
@@ -135,15 +136,10 @@ const CLAUDE_MODEL_GROUPS: { label: string; options: { value: string; label: str
 
 /** Human label for a stored value: the pinned name, or the family name for a
  *  bare "Latest" alias. Falls back to prettyModel for anything unknown. */
-/** A backend's own model list. Only Claude's is hand-listed; anything else
- *  leaves the choice to its CLI. */
-const modelGroupsFor = (backend: AgentBackend) =>
-  backend === "claude" ? CLAUDE_MODEL_GROUPS : [];
-
-const modelLabel = (value: string): string => {
-  for (const g of CLAUDE_MODEL_GROUPS) {
+const modelLabel = (value: string, groups: ModelGroup[]): string => {
+  for (const g of groups) {
     const o = g.options.find((x) => x.value === value);
-    if (o) return o.label === "Latest" ? g.label : o.label;
+    if (o) return o.chip ?? (o.label === "Latest" ? g.label : o.label);
   }
   return prettyModel(value);
 };
@@ -152,6 +148,8 @@ interface ModelPickerProps {
   /** Selected `--model` value for this session; "" = default. */
   model: string;
   backend: AgentBackend;
+  /** Project root — a Codex catalog lookup needs one to open an app-server. */
+  cwd: string;
   usage: ChatUsage;
   onModelChange: (model: string) => void;
 }
@@ -162,15 +160,24 @@ interface ModelPickerProps {
 const ModelPicker = memo(function ModelPicker({
   model,
   backend,
+  cwd,
   usage,
   onModelChange,
 }: ModelPickerProps) {
+  const codex = backend === "codex";
+  // Claude's list is hand-written; Codex's comes from its own catalog, so the
+  // menu shows only "Default" until that lands rather than delaying first paint.
+  const codexModels = useCodexModels(cwd, codex);
+  const groups = useMemo(
+    () => (codex ? codexModelGroups(codexModels.data ?? []) : CLAUDE_MODEL_GROUPS),
+    [codex, codexModels.data]
+  );
   const label =
     model === ""
       ? usage.model
         ? prettyModel(usage.model)
         : "Default"
-      : modelLabel(model);
+      : modelLabel(model, groups);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className="flex items-center gap-1.5 rounded font-medium text-foreground outline-none transition-colors hover:text-primary">
@@ -186,7 +193,7 @@ const ModelPicker = memo(function ModelPicker({
           {usage.model ? `Default (${prettyModel(usage.model)})` : "Default"}
           {model === "" && <Check className="size-3.5" />}
         </DropdownMenuItem>
-        {modelGroupsFor(backend).map((g) => {
+        {groups.map((g) => {
           const active = g.options.some((o) => o.value === model);
           return (
             <DropdownMenuSub key={g.label}>
@@ -295,8 +302,13 @@ const ModeChip = memo(function ModeChip({
 const resolveContextWindow = (
   model: string,
   backend: AgentBackend,
-  resolved?: string
+  resolved?: string,
+  reported?: number
 ): number => {
+  // A window the backend states beats anything inferred from the model id.
+  // Codex sends one per turn; the LiteLLM catalog only knows Claude keys, so
+  // without this a Codex ring divides by zero and reads as permanently full.
+  if (reported && reported > 0) return reported;
   if (model.includes("[1m]")) return 1_000_000;
   const known = contextWindowFor(resolved || model);
   if (known) return known;
@@ -319,15 +331,17 @@ const ContextMeter = memo(function ContextMeter({
   model,
   backend,
   resolved,
+  contextWindow,
 }: {
   contextTokens?: number;
   model: string;
   backend: AgentBackend;
   resolved?: string;
+  contextWindow?: number;
 }) {
-  const max = resolveContextWindow(model, backend, resolved);
+  const max = resolveContextWindow(model, backend, resolved, contextWindow);
   const used = contextTokens ?? 0;
-  const pct = Math.min(100, Math.round((used / max) * 100));
+  const pct = max > 0 ? Math.min(100, Math.round((used / max) * 100)) : 0;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -360,7 +374,7 @@ const ContextMeter = memo(function ContextMeter({
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm font-medium text-foreground">Context Window</span>
           <span className="font-mono text-xs tabular-nums text-muted-foreground">
-            {pct}% · {fmtTokens(used)}/{fmtTokens(max)}
+            {max > 0 ? `${pct}% · ${fmtTokens(used)}/${fmtTokens(max)}` : fmtTokens(used)}
           </span>
         </div>
         <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
@@ -370,7 +384,8 @@ const ContextMeter = memo(function ContextMeter({
           />
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          Claude automatically compacts its context when needed.
+          {backend === "claude" ? "Claude" : "Codex"} automatically compacts its
+          context when needed.
         </p>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -431,6 +446,7 @@ interface UsageFooterProps {
   /** Turns typed while busy and not yet sent. */
   queued: number;
   backend: AgentBackend;
+  cwd: string;
   usage: ChatUsage;
   /** Selected `--model` alias; "" = default. */
   model: string;
@@ -447,6 +463,7 @@ interface UsageFooterProps {
 const UsageFooter = memo(function UsageFooter({
   queued,
   backend,
+  cwd,
   usage,
   model,
   onModelChange,
@@ -468,6 +485,7 @@ const UsageFooter = memo(function UsageFooter({
           <ModelPicker
             model={model}
             backend={backend}
+            cwd={cwd}
             usage={usage}
             onModelChange={onModelChange}
           />
@@ -475,8 +493,10 @@ const UsageFooter = memo(function UsageFooter({
         </>
       )}
       {capabilitiesOf(backend).permissions && (
+        <AccessChip fullAccess={fullAccess} onChange={onFullAccessChange} />
+      )}
+      {capabilitiesOf(backend).planMode && (
         <>
-          <AccessChip fullAccess={fullAccess} onChange={onFullAccessChange} />
           <ChipDivider />
           <ModeChip planMode={planMode} onChange={onPlanModeChange} />
         </>
@@ -884,6 +904,7 @@ export const ChatComposer = memo(function ChatComposer({
           <UsageFooter
             queued={queued}
             backend={backend}
+            cwd={cwd}
             usage={usage}
             model={model}
             onModelChange={onModelChange}
@@ -900,6 +921,7 @@ export const ChatComposer = memo(function ChatComposer({
                   model={model}
                   backend={backend}
                   resolved={usage.model}
+                  contextWindow={usage.contextWindow}
                 />
                 {usage.quota && <QuotaChip quota={usage.quota} />}
               </>

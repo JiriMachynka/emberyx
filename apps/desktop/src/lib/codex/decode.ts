@@ -245,8 +245,26 @@ export const decodeModels = (result: unknown): CodexModel[] => {
     if (!isRecord(m)) return [];
     const id = str(m.id);
     if (id === undefined) return [];
-    return [{ id, displayName: str(m.displayName) ?? id, hidden: m.hidden === true }];
+    return [
+      {
+        id,
+        displayName: str(m.displayName) ?? id,
+        hidden: m.hidden === true,
+        reasoningEfforts: list(m.supportedReasoningEfforts).flatMap((e) => {
+          const effort = isRecord(e) ? str(e.reasoningEffort) : undefined;
+          return effort === undefined ? [] : [effort];
+        }),
+        defaultReasoningEffort: str(m.defaultReasoningEffort) ?? "",
+      },
+    ];
   });
+};
+
+/** The assistant text an `item/completed` frame carries, when it is one. */
+export const decodeAgentMessage = (params: unknown): string | null => {
+  if (!isRecord(params) || !isRecord(params.item)) return null;
+  if (params.item.type !== "agentMessage") return null;
+  return str(params.item.text) ?? null;
 };
 
 export const decodeQuestions = (params: unknown): ToolUserInputQuestion[] => {

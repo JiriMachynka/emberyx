@@ -140,6 +140,9 @@ export interface CodexModel {
   id: string;
   displayName: string;
   hidden: boolean;
+  /** Reasoning efforts the catalog allows for this model, in its own order. */
+  reasoningEfforts: string[];
+  defaultReasoningEffort: string;
 }
 
 // --- server -> client requests ---------------------------------------------

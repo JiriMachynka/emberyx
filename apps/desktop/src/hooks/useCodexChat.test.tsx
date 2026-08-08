@@ -400,3 +400,107 @@ describe("useCodexChat sending", () => {
     expect(result.current.messages).toHaveLength(0);
   });
 });
+
+// Codex splits the choice Claude puts in one flag: the id opens the thread,
+// the effort rides each turn.
+describe("useCodexChat model and reasoning effort", () => {
+  it("opens the thread on the model id alone", async () => {
+    await mount({ model: "gpt-5.6-luna:high" });
+    expect(sentTo("codex_thread_start")[0][1]).toMatchObject({
+      params: { model: "gpt-5.6-luna" },
+    });
+  });
+
+  it("puts the effort on the turn", async () => {
+    const { result } = await mount({ model: "gpt-5.6-luna:high" });
+    act(() => result.current.send("go"));
+    expect(sentTo("codex_turn_start")[0][1]).toEqual({
+      id: 7,
+      params: {
+        threadId: "t1",
+        input: [{ type: "text", text: "go", text_elements: [] }],
+        effort: "high",
+      },
+    });
+  });
+
+  it("omits the effort entirely when none was chosen", async () => {
+    const { result } = await mount({ model: "gpt-5.6-luna" });
+    act(() => result.current.send("go"));
+    expect(sentTo("codex_turn_start")[0][1]).toEqual({
+      id: 7,
+      params: {
+        threadId: "t1",
+        input: [{ type: "text", text: "go", text_elements: [] }],
+      },
+    });
+  });
+});
+
+describe("useCodexChat auto-titling", () => {
+  /** Settle the throwaway titling app-server: its frames land on its own
+   *  channel, never the session's. */
+  const answerTitle = async (title: string) => {
+    await waitFor(() => expect(channels).toHaveLength(2));
+    const channel = channels[1];
+    act(() => {
+      channel.onmessage!({
+        type: "notification",
+        data: {
+          method: "item/completed",
+          params: { item: { type: "agentMessage", text: title } },
+        },
+      });
+      channel.onmessage!({
+        type: "notification",
+        data: { method: "turn/completed", params: { turn: { id: "x" } } },
+      });
+    });
+  };
+
+  it("names the thread in Codex's own store once the first turn settles", async () => {
+    const onTitled = vi.fn();
+    const { result, notify } = await mount({ onTitled });
+    act(() => result.current.send("fix the flaky login test"));
+    notify("turn/started", { turn: { id: "u1" } });
+    notify("turn/completed", { turn: { id: "u1", status: "completed" } });
+
+    await answerTitle("Fix Flaky CI Login Test");
+    await waitFor(() =>
+      expect(sentTo("codex_request")).toContainEqual([
+        "codex_request",
+        {
+          id: 7,
+          method: "thread/name/set",
+          params: { threadId: "t1", name: "Fix Flaky CI Login Test" },
+        },
+      ])
+    );
+    expect(onTitled).toHaveBeenCalledWith("Fix Flaky CI Login Test");
+  });
+
+  it("titles on a thread of its own, read-only and ephemeral", async () => {
+    const { result, notify } = await mount();
+    act(() => result.current.send("fix the flaky login test"));
+    notify("turn/completed", { turn: { id: "u1", status: "completed" } });
+    await waitFor(() => expect(sentTo("codex_thread_start")).toHaveLength(2));
+    expect(sentTo("codex_thread_start")[1][1]).toMatchObject({
+      params: {
+        ephemeral: true,
+        approvalPolicy: "never",
+        sandbox: "read-only",
+      },
+    });
+    await answerTitle("A Title");
+  });
+
+  it("leaves a resumed thread's name alone", async () => {
+    const onTitled = vi.fn();
+    const { result, notify } = await mount({ resume: "old-thread", onTitled });
+    act(() => result.current.send("carry on"));
+    notify("turn/completed", { turn: { id: "u1", status: "completed" } });
+    await waitFor(() => expect(sentTo("codex_turn_start")).toHaveLength(1));
+    expect(channels).toHaveLength(1);
+    expect(onTitled).not.toHaveBeenCalled();
+  });
+});

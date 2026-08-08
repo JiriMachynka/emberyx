@@ -11,7 +11,7 @@ describe("capabilitiesOf", () => {
     expect(Object.values(capabilitiesOf("claude")).every(Boolean)).toBe(true);
   });
 
-  // The three Codex lacks, spelled out: a capability wrongly left on renders
+  // The four Codex lacks, spelled out: a capability wrongly left on renders
   // Claude's data under a Codex session.
   it("withholds the surfaces Codex has no transport for", () => {
     expect(capabilitiesOf("codex")).toEqual({
@@ -23,6 +23,7 @@ describe("capabilitiesOf", () => {
       slashCommands: false,
       subagents: false,
       modelPicker: true,
+      planMode: false,
       steering: true,
     });
   });

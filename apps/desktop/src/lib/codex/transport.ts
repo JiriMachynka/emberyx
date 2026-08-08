@@ -6,7 +6,8 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { Thread } from "@/types";
-import { decodeThreads } from "./decode";
+import type { CodexModel } from "./protocol";
+import { decodeAgentMessage, decodeModels, decodeThreadStart, decodeThreads } from "./decode";
 
 /** One frame from a spawned app-server. Server->client requests always arrive
  *  alone; only notifications are ever coalesced. */
@@ -51,6 +52,14 @@ export const codexTurnSteer = (id: number, params: Params) =>
 export const codexTurnInterrupt = (id: number, threadId: string, turnId: string) =>
   invoke<unknown>("codex_turn_interrupt", { id, threadId, turnId });
 
+/** The long tail of app-server methods, none of which need their own command. */
+export const codexRequest = (id: number, method: string, params: Params) =>
+  invoke<unknown>("codex_request", { id, method, params });
+
+/** Name a thread in Codex's own store, so `thread/list` shows it too. */
+export const codexSetThreadName = (id: number, threadId: string, name: string) =>
+  codexRequest(id, "thread/name/set", { threadId, name });
+
 /** Answer a server->client request. `result` is the method's response payload. */
 export const codexRespond = (id: number, requestId: number, result: unknown) =>
   invoke("codex_respond", { id, requestId, result });
@@ -78,6 +87,91 @@ export async function listCodexThreads(cwd: string): Promise<Thread[]> {
       modified: t.updatedAt,
     }));
   } finally {
+    void codexKill(id);
+  }
+}
+
+/**
+ * The account's model catalog. Like `thread/list` this is a session method, so
+ * it borrows a throwaway app-server; the answer is account-wide, so the caller
+ * caches it rather than asking per project.
+ */
+export async function listCodexModels(cwd: string): Promise<CodexModel[]> {
+  const channel = new Channel<CodexEvent>();
+  const { id } = await codexSpawn(cwd, channel);
+  try {
+    return decodeModels(await codexRequest(id, "model/list", {}));
+  } finally {
+    void codexKill(id);
+  }
+}
+
+/** Give up on a title rather than leave a process alive waiting for one. */
+const TITLE_TIMEOUT_MS = 30_000;
+const TITLE_MAX_CHARS = 60;
+
+const titlePrompt = (firstMessage: string) =>
+  "Generate a concise 3-6 word title for a coding conversation that opens " +
+  "with this user message. Reply with ONLY the title — no quotes, no trailing " +
+  `punctuation, no preamble.\n\nMessage:\n${firstMessage}`;
+
+const cleanTitle = (raw: string): string =>
+  (raw.split("\n").find((l) => l.trim()) ?? "")
+    .trim()
+    .replace(/^"|"$/g, "")
+    .slice(0, TITLE_MAX_CHARS);
+
+/**
+ * Name a fresh chat the way headless Claude is named: one throwaway turn whose
+ * only output is the title. It runs on its own app-server so its frames never
+ * reach the session's adapter, and on an ephemeral read-only thread so it
+ * neither touches the project nor shows up in the thread list.
+ */
+export async function generateCodexTitle(
+  cwd: string,
+  firstMessage: string
+): Promise<string | null> {
+  const channel = new Channel<CodexEvent>();
+  let settle: (title: string | null) => void = () => {};
+  const finished = new Promise<string | null>((resolve) => {
+    settle = resolve;
+  });
+  let text: string | null = null;
+
+  channel.onmessage = (ev) => {
+    const frames =
+      ev.type === "notification" ? [ev.data] : ev.type === "notifications" ? ev.data : [];
+    for (const f of frames) {
+      if (f.method === "item/completed") text = decodeAgentMessage(f.params) ?? text;
+      if (f.method === "turn/completed" || f.method === "turn/failed") settle(text);
+    }
+    if (ev.type === "exit") settle(text);
+  };
+
+  const { id } = await codexSpawn(cwd, channel);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const opened = await codexThreadStart(id, {
+      cwd,
+      ephemeral: true,
+      approvalPolicy: "never",
+      sandbox: "read-only",
+    });
+    const thread = decodeThreadStart(opened);
+    if (!thread) return null;
+    await codexTurnStart(id, {
+      threadId: thread.threadId,
+      effort: "low",
+      input: [{ type: "text", text: titlePrompt(firstMessage), text_elements: [] }],
+    });
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), TITLE_TIMEOUT_MS);
+    });
+    const raw = await Promise.race([finished, timeout]);
+    if (!raw) return null;
+    return cleanTitle(raw) || null;
+  } finally {
+    clearTimeout(timer);
     void codexKill(id);
   }
 }

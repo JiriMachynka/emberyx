@@ -342,7 +342,12 @@ impl Inner {
                     "name": "emberyx",
                     "title": "Emberyx",
                     "version": env!("CARGO_PKG_VERSION"),
-                }
+                },
+                // Collaboration modes (plan mode) are refused without this, and
+                // the refusal is on the handshake, so it cannot be opted into
+                // per-call later. Verified: the non-experimental methods behave
+                // identically with it set.
+                "capabilities": { "experimentalApi": true }
             }),
         )?;
 

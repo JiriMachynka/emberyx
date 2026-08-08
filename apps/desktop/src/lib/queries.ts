@@ -14,6 +14,7 @@ import type {
   SlashCommand,
   UsageRow,
 } from "@/types";
+import { listCodexModels } from "@/lib/codex/transport";
 import type {
   ConflictStages,
   MergeRequest,
@@ -406,6 +407,18 @@ export const useSlashCommands = (cwd: string, enabled: boolean) =>
     queryFn: () => invoke<SlashCommand[]>("slash_commands", { cwd }),
     enabled,
     staleTime: 5 * 60 * 1000,
+  });
+
+export const codexKeys = { models: ["codex", "models"] as const };
+
+/** Codex's model catalog. Account-wide, so it isn't keyed by project, and it
+ *  only loads once the picker that needs it is mounted. */
+export const useCodexModels = (cwd: string, enabled: boolean) =>
+  useQuery({
+    queryKey: codexKeys.models,
+    queryFn: () => listCodexModels(cwd),
+    enabled,
+    staleTime: Infinity,
   });
 
 export const usageKeys = { summary: (days: number) => ["usage", days] as const };

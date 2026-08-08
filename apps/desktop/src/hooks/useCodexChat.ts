@@ -28,14 +28,17 @@ import { decodeThreadStart, isRecord } from "@/lib/codex/decode";
 import {
   codexKill,
   codexRespond,
+  codexSetThreadName,
   codexSpawn,
   codexThreadResume,
   codexThreadStart,
   codexTurnInterrupt,
   codexTurnSteer,
   codexTurnStart,
+  generateCodexTitle,
   type CodexEvent,
 } from "@/lib/codex/transport";
+import { parseCodexModel } from "@/lib/codex/models";
 import { classifyFailure } from "@/lib/accountState";
 import { useAgentStore } from "@/lib/agentStore";
 import { nextChangeId } from "@/lib/changes";
@@ -57,8 +60,11 @@ interface Options {
   resume?: string;
   /** Grant every approval up front and drop the sandbox. */
   skipPermissions?: boolean;
-  /** `model` override; "" lets the CLI pick. Changing it respawns. */
+  /** `model` override as `id` or `id:effort`; "" lets the CLI pick. Changing
+   *  it respawns. */
   model?: string;
+  /** Called once with the title generated for a fresh thread. */
+  onTitled?: (title: string) => void;
   /** False while a session of another backend owns this pane — the hook still
    *  runs (rules of hooks) but spawns nothing. */
   enabled?: boolean;
@@ -80,8 +86,8 @@ const STDERR_CAP = 8192;
 let counter = 0;
 const localId = () => `codex-m${++counter}`;
 
-/** The approval posture a spawn asks for. Codex has no plan mode, so the
- *  composer's mode chip only decides how much is auto-approved. */
+/** The approval posture a spawn asks for. Codex's plan mode is a collaboration
+ *  mode behind `experimentalApi`, so the composer hides that chip here. */
 const approvalFor = (skipPermissions: boolean) => ({
   approvalPolicy: skipPermissions ? "never" : "on-request",
   sandbox: skipPermissions ? "danger-full-access" : "workspace-write",
@@ -142,6 +148,7 @@ export function useCodexChat({
   resume,
   skipPermissions = false,
   model = "",
+  onTitled,
   enabled = true,
 }: Options) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -166,6 +173,17 @@ export function useCodexChat({
   const approvalRef = useRef<CodexServerRequest | null>(null);
   const askRef = useRef<CodexAsk | null>(null);
   const frameRef = useRef<number | null>(null);
+  // Titling reads the opening message once, after the first turn settles.
+  const titledRef = useRef(false);
+  const firstMsgRef = useRef<string | null>(null);
+  const onTitledRef = useRef(onTitled);
+  onTitledRef.current = onTitled;
+
+  // `id:effort` is one stored value but two app-server params: the model opens
+  // the thread, the effort rides each turn.
+  const { model: modelId, effort } = parseCodexModel(model);
+  const effortRef = useRef(effort);
+  effortRef.current = effort;
 
   const addChange = useAgentStore((st) => st.addChange);
   const setSessionStatus = useAgentStore((st) => st.setStatus);
@@ -330,7 +348,7 @@ export function useCodexChat({
         const threadId = threadRef.current ?? resume;
         const config = {
           cwd,
-          model: model || null,
+          model: modelId || null,
           ...approvalFor(skipPermissions),
         };
         const opened = threadId
@@ -374,7 +392,8 @@ export function useCodexChat({
     enabled,
     cwd,
     resume,
-    model,
+    // Effort rides the next turn, so only a model change is worth a respawn.
+    modelId,
     skipPermissions,
     emberyxSessionId,
     attempt,
@@ -385,6 +404,25 @@ export function useCodexChat({
     setLocalStatus,
     reportAccountIssue,
   ]);
+
+  // Auto-title a fresh chat once its first turn settles. Codex names a thread
+  // only when the user does, so the name is set on the thread itself and
+  // `thread/list` picks it up. Resumed threads already have one.
+  useEffect(() => {
+    if (!enabled || status !== "idle" || resume || titledRef.current) return;
+    const threadId = threadRef.current;
+    const first = firstMsgRef.current;
+    if (!threadId || !first) return;
+    titledRef.current = true;
+    void generateCodexTitle(cwd, first)
+      .then(async (title) => {
+        const id = idRef.current;
+        if (!title || id === null) return;
+        await codexSetThreadName(id, threadId, title);
+        onTitledRef.current?.(title);
+      })
+      .catch((e) => console.error("[emberyx] codex title failed", e));
+  }, [enabled, status, resume, cwd]);
 
   const restart = useCallback(() => {
     setPendingPermission(null);
@@ -421,9 +459,10 @@ export function useCodexChat({
       input.push({ type: "image", url: `data:${img.mediaType};base64,${img.data}` });
     }
     const turnId = stateRef.current.turnId;
+    const effort = effortRef.current;
     const call = turnId
       ? codexTurnSteer(id, { threadId, input, expectedTurnId: turnId })
-      : codexTurnStart(id, { threadId, input });
+      : codexTurnStart(id, { threadId, input, ...(effort ? { effort } : {}) });
     void call.catch((e) => console.error("[emberyx] codex turn failed", e));
   }, []);
 
@@ -433,6 +472,7 @@ export function useCodexChat({
     (text: string, images?: ChatImage[]) => {
       const hasImages = !!images && images.length > 0;
       if (idRef.current === null || (!text.trim() && !hasImages)) return;
+      if (firstMsgRef.current === null && text.trim()) firstMsgRef.current = text;
       const message: ChatMessage = {
         id: localId(),
         role: "user",
