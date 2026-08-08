@@ -29,6 +29,58 @@ const DEFAULT_RATE = FALLBACK_RATES[0].rate;
 // quoting Claude's rates for it would invent a number.
 const UNPRICED_RATE: Rate = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
+// Per-million-token USD rates for the OpenAI models `codex` runs, from
+// developers.openai.com/api/docs/pricing (checked 2026-08-07). The LiteLLM
+// catalog only hydrates Claude keys, so nothing refreshes these: THEY WILL
+// DRIFT AND MUST BE UPDATED BY HAND when OpenAI changes its list prices.
+// Codex-branded variants are not on the public table and are priced at the
+// base tier they are built on. First match wins, so specific ids come first.
+const CODEX_RATES: { match: string; input: number; cached: number; output: number }[] = [
+  { match: "codex-mini", input: 0.25, cached: 0.025, output: 2 },
+  // 5.6 family first: `includes` means a bare "gpt-5" entry would otherwise
+  // swallow them and bill Luna at ~8x its real rate.
+  { match: "gpt-5.6-luna", input: 0.2, cached: 0.02, output: 1.2 },
+  { match: "gpt-5.6-terra", input: 2, cached: 0.2, output: 12 },
+  { match: "gpt-5.6-sol", input: 5, cached: 0.5, output: 30 },
+  { match: "gpt-5.5", input: 5, cached: 0.5, output: 30 },
+  { match: "gpt-5.4-nano", input: 0.2, cached: 0.02, output: 1.25 },
+  { match: "gpt-5.4-mini", input: 0.75, cached: 0.075, output: 4.5 },
+  { match: "gpt-5.4", input: 2.5, cached: 0.25, output: 15 },
+  { match: "gpt-5.3", input: 1.75, cached: 0.175, output: 14 },
+  { match: "gpt-5.2", input: 1.75, cached: 0.175, output: 14 },
+  { match: "gpt-5-nano", input: 0.05, cached: 0.005, output: 0.4 },
+  { match: "gpt-5-mini", input: 0.25, cached: 0.025, output: 2 },
+  { match: "gpt-5", input: 1.25, cached: 0.125, output: 10 },
+];
+
+/** Codex token counts as `thread/tokenUsage/updated` reports them. */
+export interface CodexTokens {
+  /** Inclusive of `cachedInputTokens`. */
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+}
+
+/**
+ * Estimated USD cost of a Codex turn. Undefined for a model with no rate —
+ * quoting one model's price for another invents a number.
+ *
+ * Codex counts cached input inside `inputTokens`; a turn that re-sends
+ * AGENTS.md and every MCP tool definition is mostly cache reads, so billing
+ * that share at the full input rate overstates the cost several-fold.
+ */
+export function codexCost(model: string, tokens: CodexTokens): number | undefined {
+  const m = model.toLowerCase();
+  const rate = CODEX_RATES.find((r) => m.includes(r.match));
+  if (!rate) return undefined;
+  const cached = Math.min(tokens.cachedInputTokens, tokens.inputTokens);
+  const uncached = tokens.inputTokens - cached;
+  return (
+    (uncached * rate.input + cached * rate.cached + tokens.outputTokens * rate.output) /
+    1_000_000
+  );
+}
+
 const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const CACHE_KEY = "emberyx.pricing.litellm.v2";

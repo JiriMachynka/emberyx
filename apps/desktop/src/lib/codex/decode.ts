@@ -204,7 +204,11 @@ export const decodeError = (params: unknown): ErrorFrame | null => {
 
 const decodeWindow = (v: unknown): RateLimitWindow | null => {
   if (!isRecord(v)) return null;
-  return { usedPercent: numOr(v.usedPercent, 0), resetsAt: nullableNum(v.resetsAt) };
+  return {
+    usedPercent: numOr(v.usedPercent, 0),
+    resetsAt: nullableNum(v.resetsAt),
+    windowDurationMins: nullableNum(v.windowDurationMins),
+  };
 };
 
 export const decodeRateLimits = (params: unknown): RateLimitSnapshot | null => {
@@ -214,6 +218,7 @@ export const decodeRateLimits = (params: unknown): RateLimitSnapshot | null => {
     primary: decodeWindow(r.primary),
     secondary: decodeWindow(r.secondary),
     rateLimitReachedType: str(r.rateLimitReachedType) ?? null,
+    planType: str(r.planType) ?? null,
   };
 };
 

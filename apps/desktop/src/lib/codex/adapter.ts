@@ -12,6 +12,7 @@
 
 import type {
   ChatMessage,
+  ChatQuota,
   ChatStatus,
   ChatUsage,
   PendingAsk,
@@ -19,6 +20,7 @@ import type {
   PermissionDecision,
   ToolCall,
 } from "@/hooks/useAgentChat";
+import { codexCost } from "@/lib/pricing";
 import {
   decodeDelta,
   decodeError,
@@ -33,7 +35,6 @@ import {
 import type {
   CodexApprovalDecision,
   CodexItem,
-  RateLimitSnapshot,
   ToolUserInputQuestion,
 } from "./protocol";
 
@@ -66,7 +67,6 @@ export interface CodexChatState {
   turnId: string | null;
   /** Why the last turn failed; rendered under the composer. */
   errorMessage: string | null;
-  rateLimits: RateLimitSnapshot | null;
   draft: TurnDraft | null;
 }
 
@@ -82,7 +82,6 @@ export const initialCodexState = (): CodexChatState => ({
   usage: {},
   turnId: null,
   errorMessage: null,
-  rateLimits: null,
   draft: null,
 });
 
@@ -423,6 +422,9 @@ export function applyCodexNotification(
     case "thread/tokenUsage/updated": {
       const u = decodeTokenUsage(params);
       if (!u) return none(state);
+      // Codex reports no cost, so it is computed from the rate card here and
+      // flagged as an estimate. An unpriced model leaves it undefined.
+      const costUsd = codexCost(state.usage.model ?? "", u.total);
       const usage: ChatUsage = {
         ...state.usage,
         inputTokens: u.total.inputTokens,
@@ -430,6 +432,8 @@ export function applyCodexNotification(
         // The last request's whole footprint is how full the window is now.
         contextTokens: u.last.totalTokens,
         contextWindow: u.modelContextWindow ?? state.usage.contextWindow,
+        costUsd,
+        costEstimated: costUsd !== undefined,
       };
       return none({ ...state, usage });
     }
@@ -437,10 +441,12 @@ export function applyCodexNotification(
     case "account/rateLimits/updated": {
       const limits = decodeRateLimits(params);
       if (!limits) return none(state);
-      return none({
-        ...state,
-        rateLimits: { ...state.rateLimits, ...limits },
-      });
+      const quota: ChatQuota = {
+        primary: limits.primary,
+        secondary: limits.secondary,
+        planType: limits.planType,
+      };
+      return none({ ...state, usage: { ...state.usage, quota } });
     }
 
     default:

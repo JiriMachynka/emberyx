@@ -198,7 +198,7 @@ describe("useCodexChat notifications", () => {
     expect(result.current.messages[0].text).toBe("hi");
   });
 
-  it("reports token usage without inventing a cost Codex never sends", async () => {
+  it("reports token usage and marks the derived cost as an estimate", async () => {
     const { result, notify } = await mount();
     notify("thread/tokenUsage/updated", {
       tokenUsage: {
@@ -214,7 +214,10 @@ describe("useCodexChat notifications", () => {
       contextTokens: 500,
       contextWindow: 272000,
     });
-    expect(result.current.usage.costUsd).toBeUndefined();
+    // Codex reports no cost, so ours is derived — it must never be presented
+    // as a billed figure.
+    expect(result.current.usage.costUsd).toBeGreaterThan(0);
+    expect(result.current.usage.costEstimated).toBe(true);
   });
 
   it("says it is retrying rather than failing on a retried error", async () => {

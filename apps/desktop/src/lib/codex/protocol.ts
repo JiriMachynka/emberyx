@@ -113,13 +113,18 @@ export interface TurnPlanStep {
 
 export interface RateLimitWindow {
   usedPercent: number;
+  /** Unix seconds. */
   resetsAt: number | null;
+  /** Length of the rolling window; 43200 = 30 days. */
+  windowDurationMins: number | null;
 }
 
 export interface RateLimitSnapshot {
   primary: RateLimitWindow | null;
   secondary: RateLimitWindow | null;
   rateLimitReachedType: string | null;
+  /** Account tier the limits belong to, e.g. "free", "plus", "pro". */
+  planType: string | null;
 }
 
 /** `thread/list` entry. Only the fields the thread menu shows. */

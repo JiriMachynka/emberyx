@@ -1,7 +1,8 @@
 # Emberyx — agent guide
 
-Tauri v2 desktop app: a cockpit for driving `claude` across several projects at
-once. Rust core + React 19 frontend, in a bun/turbo monorepo.
+Tauri v2 desktop app: a cockpit for driving coding agents across several
+projects at once. Two backends are supported — Claude Code (`claude`) and
+OpenAI Codex (`codex`). Rust core + React 19 frontend, in a bun/turbo monorepo.
 
 **The global Nuxt/Vue stack defaults do not apply here.** This is React 19 +
 Vite + Tailwind 4 + shadcn/ui (new-york, lucide icons). No tRPC, no Drizzle, no
@@ -13,8 +14,11 @@ Nuxt — the "backend" is Rust running in-process.
 apps/desktop/          the app
   src/                 React frontend
     components/        panes, panels, menus, dialogs; ui/ = shadcn, editor/ = CodeMirror
-    hooks/             useAgentChat, useSessions, useWorkspace, useAgentEvents, …
+    hooks/             useAgentChat, useCodexChat, useChatSession, useSessions, …
     lib/               settings, pricing, queries, diff/hunk helpers, fuzzy, slash
+      agentBackend.ts  backend + capability flags
+      codex/           Codex protocol types, decoders, normalizing adapter
+      handoff.ts       push context between backends
   src-tauri/src/       Rust core, one module per capability
 apps/web/              Astro marketing site (separate, rarely touched)
 ```
@@ -62,15 +66,35 @@ is not available.
 
 ## Architecture
 
-### Two separate ways the agent runs
+### Three separate ways an agent runs
 
-Easy to conflate — they share nothing but the `claude` binary.
+Easy to conflate — they share almost nothing.
 
-1. **Terminal sessions** (`pty.rs`) — a real PTY running `claude` interactively,
-   rendered by xterm.js in `TerminalPane`. Scrollback persists across restarts.
-2. **Chat sessions** (`agent.rs`, the default surface) — headless `claude -p --input-format
+1. **Terminal sessions** (`pty.rs`) — a real PTY running the agent CLI
+   interactively, rendered by xterm.js in `TerminalPane`. Scrollback persists
+   across restarts. Backend-agnostic: it spawns `$SHELL` and writes a command
+   line, so Claude-only flags are gated on the session's backend.
+2. **Claude chat sessions** (`agent.rs`) — headless `claude -p --input-format
    stream-json --output-format stream-json --include-partial-messages`, parsed
    into structured messages by `useAgentChat` and rendered in `ChatPane`.
+3. **Codex chat sessions** (`codex.rs`) — one long-lived `codex app-server`
+   process per session, JSON-RPC 2.0 over newline-delimited stdio. Frames are
+   normalized by `lib/codex/adapter.ts` into the same message model, driven by
+   `useCodexChat`. `useChatSession` picks the transport by session backend.
+
+### Backends and capabilities
+
+`lib/agentBackend.ts` owns `AgentBackend` (`"claude" | "codex"`) and a
+nine-flag `AgentCapabilities` record. Resolution: per-project pin →
+global default → `"claude"`. **Never reintroduce a `startsWith("claude")`
+test** — gate on a capability instead, or Claude-shaped data (pricing,
+slash commands, hook status, account-error regexes) leaks into Codex
+sessions. Codex reports tokens but no cost; leave `costUsd` undefined
+rather than fabricating it.
+
+`codex app-server` is flagged experimental and has renamed its core methods
+once already. Generate types from the installed binary
+(`codex app-server generate-ts --out DIR`) — never hand-write them.
 
 The same PTY manager also runs monorepo dev servers (`workspace.rs` detects
 turbo / pnpm / npm workspaces).
@@ -99,9 +123,9 @@ turbo / pnpm / npm workspaces).
 ### Process lifetime
 
 Tauri does not drop managed state on exit, so `lib.rs` explicitly calls
-`kill_all()` on `AgentManager` and `PtyManager` in `RunEvent::Exit`. **Any new
-module that spawns children must be killed there too**, or orphaned `claude`
-processes and shells survive the app.
+`kill_all()` on `AgentManager`, `PtyManager` and `CodexManager` in
+`RunEvent::Exit`. **Any new module that spawns children must be killed there
+too**, or orphaned agent processes and shells survive the app.
 
 ## Conventions
 

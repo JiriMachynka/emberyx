@@ -116,8 +116,28 @@ export interface PendingAsk {
   questions: AskQuestion[];
 }
 
+/** One rolling window an account's quota is measured over. */
+export interface QuotaWindow {
+  usedPercent: number;
+  /** Unix seconds; null when the backend does not say. */
+  resetsAt: number | null;
+  windowDurationMins: number | null;
+}
+
+/** Plan quota for the account driving a session. Only backends that report it
+ *  (Codex) populate this; Claude Code exposes nothing equivalent. */
+export interface ChatQuota {
+  primary: QuotaWindow | null;
+  secondary: QuotaWindow | null;
+  planType: string | null;
+}
+
 export interface ChatUsage {
   costUsd?: number;
+  /** `costUsd` was derived from token counts here, not reported by the
+   *  backend. Presenting an estimate as a billed figure would mislead. */
+  costEstimated?: boolean;
+  quota?: ChatQuota;
   inputTokens?: number;
   outputTokens?: number;
   /** Latest turn's full prompt size (input + cache read + cache creation) —

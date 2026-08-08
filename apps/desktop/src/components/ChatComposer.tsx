@@ -8,6 +8,7 @@ import {
   ClipboardList,
   Clock,
   Coins,
+  Gauge,
   Hammer,
   Lock,
   Sparkles,
@@ -29,6 +30,7 @@ import { MentionMenu } from "@/components/MentionMenu";
 import { SlashMenu } from "@/components/SlashMenu";
 import { fuzzyFilter } from "@/lib/fuzzy";
 import { contextWindowFor } from "@/lib/pricing";
+import { formatPlan, formatResetsIn, formatWindowLength } from "@/lib/quota";
 import {
   BACKEND_LABEL,
   capabilitiesOf,
@@ -38,7 +40,7 @@ import { applyMention, mentionAt, type Mention } from "@/lib/mentions";
 import { applySlash, filterCommands, slashAt, type SlashToken } from "@/lib/slash";
 import { useProjectFiles, useSlashCommands } from "@/lib/queries";
 import { cn } from "@/lib/utils";
-import type { ChatImage, ChatUsage } from "@/hooks/useAgentChat";
+import type { ChatImage, ChatQuota, ChatUsage } from "@/hooks/useAgentChat";
 
 /** Suggestions shown for an `@` file reference. */
 const MENTION_LIMIT = 8;
@@ -370,6 +372,56 @@ const ContextMeter = memo(function ContextMeter({
         <p className="mt-2 text-xs text-muted-foreground">
           Claude automatically compacts its context when needed.
         </p>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+});
+
+/** Plan quota for backends that report one. The trigger carries the tightest
+ *  window's used share; the popover breaks every window out. */
+const QuotaChip = memo(function QuotaChip({ quota }: { quota: ChatQuota }) {
+  const windows = [
+    { key: "primary", window: quota.primary },
+    { key: "secondary", window: quota.secondary },
+  ].flatMap((w) => (w.window ? [{ key: w.key, ...w.window }] : []));
+  if (!windows.length) return null;
+  const now = Date.now();
+  const plan = formatPlan(quota.planType);
+  const lead = Math.min(100, Math.round(Math.max(...windows.map((w) => w.usedPercent))));
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger className={chipTrigger} title="Usage limit">
+        <Gauge className="size-3.5 shrink-0 opacity-70" />
+        <span className="font-mono tabular-nums">{lead}%</span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="start" className="w-64 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm font-medium text-foreground">Usage Limit</span>
+          {plan && (
+            <span className="font-mono text-xs text-muted-foreground">{plan}</span>
+          )}
+        </div>
+        {windows.map((w) => {
+          const pct = Math.min(100, Math.round(w.usedPercent));
+          const resets = formatResetsIn(w.resetsAt, now);
+          const length = formatWindowLength(w.windowDurationMins);
+          return (
+            <div key={w.key} className="mt-2">
+              <div className="flex items-center justify-between gap-2 font-mono text-xs tabular-nums text-muted-foreground">
+                <span>{length || "Window"}</span>
+                <span>
+                  {pct}%{resets ? ` · ${resets}` : ""}
+                </span>
+              </div>
+              <div className="mt-1 h-1 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-[width]"
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -842,12 +894,15 @@ export const ChatComposer = memo(function ChatComposer({
           />
           <div className="flex shrink-0 items-center gap-1.5">
             {capabilitiesOf(backend).usage && (
-              <ContextMeter
-                contextTokens={usage.contextTokens}
-                model={model}
-                backend={backend}
-                resolved={usage.model}
-              />
+              <>
+                <ContextMeter
+                  contextTokens={usage.contextTokens}
+                  model={model}
+                  backend={backend}
+                  resolved={usage.model}
+                />
+                {usage.quota && <QuotaChip quota={usage.quota} />}
+              </>
             )}
             {busy && (
               <button

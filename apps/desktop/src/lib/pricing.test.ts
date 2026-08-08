@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  codexCost,
   contextWindowFor,
   costOf,
   formatTokens,
@@ -191,5 +192,55 @@ describe("formatTokens", () => {
   it("abbreviates billions to two decimals", () => {
     expect(formatTokens(1_000_000_000)).toBe("1.00B");
     expect(formatTokens(5_154_410_000)).toBe("5.15B");
+  });
+});
+
+describe("codexCost", () => {
+  it("bills cached input at the cache rate, not the full input rate", () => {
+    // 14454 input of which 8960 cached — the real shape of a Codex turn that
+    // re-sends AGENTS.md and every MCP tool definition.
+    const cost = codexCost("gpt-5.6-luna", {
+      inputTokens: 14454,
+      cachedInputTokens: 8960,
+      outputTokens: 6,
+    });
+    const uncached = (14454 - 8960) * 0.2;
+    const cached = 8960 * 0.02;
+    const output = 6 * 1.2;
+    expect(cost).toBeCloseTo((uncached + cached + output) / 1_000_000, 12);
+  });
+
+  it("does not let the bare gpt-5 entry swallow the 5.6 family", () => {
+    const luna = codexCost("gpt-5.6-luna", {
+      inputTokens: 1_000_000,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+    });
+    const gpt5 = codexCost("gpt-5", {
+      inputTokens: 1_000_000,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+    });
+    expect(luna).toBeCloseTo(0.2, 10);
+    expect(gpt5).toBeCloseTo(1.25, 10);
+  });
+
+  it("clamps cached above the reported input rather than going negative", () => {
+    const cost = codexCost("gpt-5.6-luna", {
+      inputTokens: 100,
+      cachedInputTokens: 500,
+      outputTokens: 0,
+    });
+    expect(cost).toBeCloseTo((100 * 0.02) / 1_000_000, 12);
+  });
+
+  it("returns undefined for an unknown model instead of guessing", () => {
+    expect(
+      codexCost("some-future-model", {
+        inputTokens: 100,
+        cachedInputTokens: 0,
+        outputTokens: 100,
+      })
+    ).toBeUndefined();
   });
 });
