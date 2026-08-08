@@ -23,7 +23,6 @@ describe("capabilitiesOf", () => {
       slashCommands: true,
       subagents: true,
       modelPicker: true,
-      planMode: true,
       steering: true,
     });
   });

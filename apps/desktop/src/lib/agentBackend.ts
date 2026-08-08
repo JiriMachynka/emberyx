@@ -25,8 +25,6 @@ export interface AgentCapabilities {
   subagents: boolean;
   /** The model can be chosen per session. */
   modelPicker: boolean;
-  /** The session can be put in a read-only planning mode. */
-  planMode: boolean;
   /** A message sent mid-turn steers the running turn instead of queueing. */
   steering: boolean;
 }
@@ -57,14 +55,12 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     slashCommands: true,
     subagents: true,
     modelPicker: true,
-    planMode: true,
     steering: true,
   },
   // Codex reaches all of these over the app-server rather than Claude's
   // out-of-band surfaces: hook runs arrive in-band as `hook/started` /
-  // `hook/completed`, commands are skills invoked with `$`, subagents are
-  // separate threads on the same connection, and plan mode is a collaboration
-  // mode — refused unless the handshake asks for `experimentalApi`.
+  // `hook/completed`, commands are skills invoked with `$`, and subagents are
+  // separate threads on the same connection.
   codex: {
     threads: true,
     usage: true,
@@ -74,7 +70,6 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     slashCommands: true,
     subagents: true,
     modelPicker: true,
-    planMode: true,
     steering: true,
   },
 };

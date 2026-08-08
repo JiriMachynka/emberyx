@@ -14,7 +14,6 @@ import type {
   CollabAgentState,
   CollabAgentStatus,
   CollabAgentTool,
-  CollaborationMode,
   CommandExecutionStatus,
   FileUpdateChange,
   ItemDelta,
@@ -333,22 +332,6 @@ export const decodeSkills = (result: unknown): CodexSkill[] => {
         },
       ];
     });
-  });
-};
-
-export const decodeCollaborationModes = (result: unknown): CollaborationMode[] => {
-  if (!isRecord(result)) return [];
-  return list(result.data).flatMap((m) => {
-    if (!isRecord(m)) return [];
-    const mode = str(m.mode);
-    if (mode === undefined) return [];
-    return [
-      {
-        mode,
-        model: str(m.model) ?? null,
-        reasoningEffort: str(m.reasoning_effort) ?? null,
-      },
-    ];
   });
 };
 

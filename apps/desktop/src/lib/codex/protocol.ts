@@ -177,15 +177,6 @@ export interface CodexModel {
   defaultReasoningEffort: string;
 }
 
-/** `collaborationMode/list` entry. The wire shape is flat — the mode's own
- *  settings are spread onto it rather than nested under `settings`. */
-export interface CollaborationMode {
-  mode: string;
-  /** Model the mode pins, or null to keep the thread's. */
-  model: string | null;
-  reasoningEffort: string | null;
-}
-
 /** `skills/list` entry, rendered as a command in the composer's menu. */
 export interface CodexSkill {
   name: string;

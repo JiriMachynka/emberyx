@@ -157,7 +157,6 @@ interface Options {
   backend?: AgentBackend;
   /** Claude session id to resume; omit to start fresh. */
   resume?: string;
-  permissionMode?: string;
   /** Bypass the permission protocol entirely — no in-chat approval prompts. */
   skipPermissions?: boolean;
   /** `--model` alias; "" / undefined lets the CLI pick. Changing it respawns. */
@@ -349,7 +348,6 @@ export function useAgentChat({
   emberyxSessionId,
   backend = "claude",
   resume,
-  permissionMode = "acceptEdits",
   skipPermissions = false,
   model = "",
   onTitled,
@@ -975,7 +973,7 @@ export function useAgentChat({
           // Prefer the live session id so a respawn (model switch, restart)
           // resumes the same thread instead of starting a fresh one.
           resume: sessionRef.current ?? resume ?? null,
-          permissionMode,
+          permissionMode: "acceptEdits",
           skipPermissions,
           settings: null,
           model: model || null,
@@ -1008,7 +1006,6 @@ export function useAgentChat({
     enabled,
     cwd,
     resume,
-    permissionMode,
     skipPermissions,
     model,
     emberyxSessionId,

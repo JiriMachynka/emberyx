@@ -5,11 +5,9 @@ import {
   Check,
   ChevronDown,
   ChevronsUpDown,
-  ClipboardList,
   Clock,
   Coins,
   Gauge,
-  Hammer,
   Lock,
   Sparkles,
   Square,
@@ -262,40 +260,6 @@ const AccessChip = memo(function AccessChip({
   );
 });
 
-/** Interaction mode: Build (agent edits) vs Plan (`--permission-mode plan`,
- *  read-only until you approve the plan). */
-const ModeChip = memo(function ModeChip({
-  planMode,
-  onChange,
-}: {
-  planMode: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger className={chipTrigger}>
-        {planMode ? (
-          <ClipboardList className="size-3.5 shrink-0 text-primary" />
-        ) : (
-          <Hammer className="size-3.5 shrink-0 opacity-70" />
-        )}
-        <span>{planMode ? "Plan" : "Build"}</span>
-        <ChevronDown className="size-3 shrink-0 opacity-50" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-36">
-        <DropdownMenuItem onSelect={() => onChange(false)} className="justify-between gap-4">
-          Build
-          {!planMode && <Check className="size-3.5" />}
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => onChange(true)} className="justify-between gap-4">
-          Plan
-          {planMode && <Check className="size-3.5" />}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-});
-
 /** Context-window size for the running session. The `[1m]` alias opts into the
  *  1M beta explicitly; otherwise use the model the CLI actually resolved (the
  *  alias may be "" or a family name the catalog doesn't know) and fall back to
@@ -454,8 +418,6 @@ interface UsageFooterProps {
   onModelChange: (model: string) => void;
   fullAccess: boolean;
   onFullAccessChange: (v: boolean) => void;
-  planMode: boolean;
-  onPlanModeChange: (v: boolean) => void;
 }
 
 /** Token/cost telemetry restated on every message_delta. Split out so that
@@ -470,8 +432,6 @@ const UsageFooter = memo(function UsageFooter({
   onModelChange,
   fullAccess,
   onFullAccessChange,
-  planMode,
-  onPlanModeChange,
 }: UsageFooterProps) {
   return (
     <div className="flex min-w-0 items-center gap-2.5 text-xs text-muted-foreground">
@@ -495,12 +455,6 @@ const UsageFooter = memo(function UsageFooter({
       )}
       {capabilitiesOf(backend).permissions && (
         <AccessChip fullAccess={fullAccess} onChange={onFullAccessChange} />
-      )}
-      {capabilitiesOf(backend).planMode && (
-        <>
-          <ChipDivider />
-          <ModeChip planMode={planMode} onChange={onPlanModeChange} />
-        </>
       )}
       {capabilitiesOf(backend).usage &&
         (usage.inputTokens != null ||
@@ -550,9 +504,6 @@ interface ChatComposerProps {
   /** Full access = `--dangerously-skip-permissions`; off = Supervised. */
   fullAccess: boolean;
   onFullAccessChange: (v: boolean) => void;
-  /** Plan mode = `--permission-mode plan`; off = Build. */
-  planMode: boolean;
-  onPlanModeChange: (v: boolean) => void;
   /** Text handed to this chat from elsewhere, to drop into the box unsent. */
   draft?: string;
   onDraftConsumed: () => void;
@@ -582,8 +533,6 @@ export const ChatComposer = memo(function ChatComposer({
   onModelChange,
   fullAccess,
   onFullAccessChange,
-  planMode,
-  onPlanModeChange,
   draft,
   onDraftConsumed,
   onSend,
@@ -913,8 +862,6 @@ export const ChatComposer = memo(function ChatComposer({
             onModelChange={onModelChange}
             fullAccess={fullAccess}
             onFullAccessChange={onFullAccessChange}
-            planMode={planMode}
-            onPlanModeChange={onPlanModeChange}
           />
           <div className="flex shrink-0 items-center gap-1.5">
             {capabilitiesOf(backend).usage && (

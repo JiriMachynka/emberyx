@@ -15,7 +15,6 @@ interface Options {
   backend: AgentBackend;
   /** Thread id to resume, in the backend's own id space. */
   resume?: string;
-  permissionMode?: string;
   skipPermissions?: boolean;
   model?: string;
   onTitled?: (title: string) => void;

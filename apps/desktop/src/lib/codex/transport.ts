@@ -6,10 +6,9 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { SlashCommand, Thread } from "@/types";
-import type { CodexModel, CollaborationMode } from "./protocol";
+import type { CodexModel } from "./protocol";
 import {
   decodeAgentMessage,
-  decodeCollaborationModes,
   decodeModels,
   decodeSkills,
   decodeThreadStart,
@@ -66,34 +65,6 @@ export const codexRequest = (id: number, method: string, params: Params) =>
 /** Name a thread in Codex's own store, so `thread/list` shows it too. */
 export const codexSetThreadName = (id: number, threadId: string, name: string) =>
   codexRequest(id, "thread/name/set", { threadId, name });
-
-/** The collaboration modes the account offers, `plan` among them. */
-export const codexCollaborationModes = (id: number) =>
-  codexRequest(id, "collaborationMode/list", {}).then(decodeCollaborationModes);
-
-/**
- * Switch a live thread between planning and building. `settings.model` must be
- * the thread's real model id — an empty string is accepted here and then fails
- * the next turn with "The '' model is not supported".
- */
-export const codexSetCollaborationMode = (
-  id: number,
-  threadId: string,
-  mode: CollaborationMode,
-  model: string
-) =>
-  codexRequest(id, "thread/settings/update", {
-    threadId,
-    collaborationMode: {
-      mode: mode.mode,
-      settings: {
-        model: mode.model ?? model,
-        reasoning_effort: mode.reasoningEffort,
-        // The server supplies the mode's own prompt; sending one would replace it.
-        developer_instructions: null,
-      },
-    },
-  });
 
 /** Answer a server->client request. `result` is the method's response payload. */
 export const codexRespond = (id: number, requestId: number, result: unknown) =>

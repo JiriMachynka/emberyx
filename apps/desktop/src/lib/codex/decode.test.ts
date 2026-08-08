@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   decodeAgentMessage,
-  decodeCollaborationModes,
   decodeHookRun,
   decodeItem,
   decodeModels,
@@ -103,27 +102,6 @@ describe("decodeSkills", () => {
         ],
       })
     ).toEqual([]);
-  });
-});
-
-describe("decodeCollaborationModes", () => {
-  // The wire shape is flat — settings are spread onto the entry, not nested.
-  it("reads the live flattened shape", () => {
-    expect(
-      decodeCollaborationModes({
-        data: [
-          { name: "Plan", mode: "plan", model: null, reasoning_effort: "medium" },
-          { name: "Default", mode: "default", model: null, reasoning_effort: null },
-        ],
-      })
-    ).toEqual([
-      { mode: "plan", model: null, reasoningEffort: "medium" },
-      { mode: "default", model: null, reasoningEffort: null },
-    ]);
-  });
-
-  it("drops entries with no mode", () => {
-    expect(decodeCollaborationModes({ data: [{ name: "Plan" }] })).toEqual([]);
   });
 });
 

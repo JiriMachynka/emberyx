@@ -85,7 +85,7 @@ Easy to conflate — they share almost nothing.
 ### Backends and capabilities
 
 `lib/agentBackend.ts` owns `AgentBackend` (`"claude" | "codex"`) and a
-ten-flag `AgentCapabilities` record. Resolution: per-project pin →
+nine-flag `AgentCapabilities` record. Resolution: per-project pin →
 global default → `"claude"`. **Never reintroduce a `startsWith("claude")`
 test** — gate on a capability instead, or Claude-shaped data (pricing,
 slash commands, hook status, account-error regexes) leaks into Codex

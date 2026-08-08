@@ -27,10 +27,8 @@ import {
 } from "@/lib/codex/adapter";
 import { decodeThreadStart, isRecord } from "@/lib/codex/decode";
 import {
-  codexCollaborationModes,
   codexKill,
   codexRespond,
-  codexSetCollaborationMode,
   codexSetThreadName,
   codexSpawn,
   codexThreadResume,
@@ -41,7 +39,6 @@ import {
   generateCodexTitle,
   type CodexEvent,
 } from "@/lib/codex/transport";
-import type { CollaborationMode } from "@/lib/codex/protocol";
 import { parseCodexModel } from "@/lib/codex/models";
 import { classifyFailure } from "@/lib/accountState";
 import { useAgentStore } from "@/lib/agentStore";
@@ -64,9 +61,6 @@ interface Options {
   resume?: string;
   /** Grant every approval up front and drop the sandbox. */
   skipPermissions?: boolean;
-  /** "plan" puts the thread in Codex's Plan collaboration mode; anything else
-   *  is its Default mode. Applied to the live thread, so it needs no respawn. */
-  permissionMode?: string;
   /** `model` override as `id` or `id:effort`; "" lets the CLI pick. Changing
    *  it respawns. */
   model?: string;
@@ -154,7 +148,6 @@ export function useCodexChat({
   emberyxSessionId,
   resume,
   skipPermissions = false,
-  permissionMode,
   model = "",
   onTitled,
   enabled = true,
@@ -181,13 +174,6 @@ export function useCodexChat({
   const approvalRef = useRef<CodexServerRequest | null>(null);
   const askRef = useRef<CodexAsk | null>(null);
   const frameRef = useRef<number | null>(null);
-  // The thread's real model id and the account's collaboration modes: both are
-  // required to set plan mode, and neither is known before the thread opens.
-  const threadModelRef = useRef<string | null>(null);
-  const modesRef = useRef<CollaborationMode[] | null>(null);
-  // Which mode this pane has asked for. Null while none has been asked for, so
-  // a session that never opens the chip costs no round trip.
-  const appliedModeRef = useRef<string | null>(null);
   // Titling reads the opening message once, after the first turn settles.
   const titledRef = useRef(false);
   const firstMsgRef = useRef<string | null>(null);
@@ -403,7 +389,6 @@ export function useCodexChat({
         const thread = decodeThreadStart(opened);
         if (!thread) throw new Error("codex opened no thread");
         threadRef.current = thread.threadId;
-        threadModelRef.current = thread.model ?? null;
         if (thread.model) {
           stateRef.current = {
             ...stateRef.current,
@@ -450,35 +435,6 @@ export function useCodexChat({
     setLocalStatus,
     reportAccountIssue,
   ]);
-
-  // Plan mode is a collaboration mode on the open thread, not a spawn flag, so
-  // switching it mid-conversation costs nothing. Re-runs after a respawn
-  // because a fresh thread comes back in the default mode.
-  useEffect(() => {
-    if (!enabled || !ready) return;
-    const id = idRef.current;
-    const threadId = threadRef.current;
-    const model = threadModelRef.current;
-    if (id === null || !threadId || !model) return;
-    const wanted = permissionMode === "plan" ? "plan" : "default";
-    // A fresh thread already opens in the default mode.
-    if (wanted === "default" && appliedModeRef.current === null) return;
-    appliedModeRef.current = wanted;
-    let cancelled = false;
-    void (async () => {
-      try {
-        if (!modesRef.current) modesRef.current = await codexCollaborationModes(id);
-        if (cancelled) return;
-        const mode = modesRef.current.find((m) => m.mode === wanted);
-        if (mode) await codexSetCollaborationMode(id, threadId, mode, model);
-      } catch (e) {
-        console.error("[emberyx] codex collaboration mode failed", e);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [enabled, ready, permissionMode]);
 
   // Auto-title a fresh chat once its first turn settles. Codex names a thread
   // only when the user does, so the name is set on the thread itself and
