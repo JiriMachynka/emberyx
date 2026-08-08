@@ -14,7 +14,8 @@ import type {
   SlashCommand,
   UsageRow,
 } from "@/types";
-import { listCodexModels } from "@/lib/codex/transport";
+import { listCodexModels, listCodexSkills } from "@/lib/codex/transport";
+import type { AgentBackend } from "@/lib/agentBackend";
 import type {
   ConflictStages,
   MergeRequest,
@@ -396,15 +397,26 @@ export const useSearchText = (
     staleTime: 30_000,
   });
 
-export const slashKeys = { commands: (cwd: string) => ["slash", cwd] as const };
+export const slashKeys = {
+  commands: (cwd: string, backend: AgentBackend) => ["slash", backend, cwd] as const,
+};
 
-/** Slash commands available in a project (project + user + plugin). Fetched on
- *  the first `/` typed and kept for the session — command files rarely change
- *  mid-session, and the menu refetches when a chat pane remounts. */
-export const useSlashCommands = (cwd: string, enabled: boolean) =>
+/** The commands a project offers, in whichever form the backend has them:
+ *  Claude's command files (project + user + plugin), scanned in Rust, or
+ *  Codex's skills, listed by the app-server. Fetched on the first sigil typed
+ *  and kept for the session — both rarely change mid-session, and the menu
+ *  refetches when a chat pane remounts. */
+export const useSlashCommands = (
+  cwd: string,
+  enabled: boolean,
+  backend: AgentBackend = "claude"
+) =>
   useQuery({
-    queryKey: slashKeys.commands(cwd),
-    queryFn: () => invoke<SlashCommand[]>("slash_commands", { cwd }),
+    queryKey: slashKeys.commands(cwd, backend),
+    queryFn: () =>
+      backend === "codex"
+        ? listCodexSkills(cwd)
+        : invoke<SlashCommand[]>("slash_commands", { cwd }),
     enabled,
     staleTime: 5 * 60 * 1000,
   });

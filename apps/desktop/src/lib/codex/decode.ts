@@ -6,9 +6,15 @@
  */
 
 import type {
+  CodexHookRun,
   CodexItem,
   CodexModel,
+  CodexSkill,
   CodexThread,
+  CollabAgentState,
+  CollabAgentStatus,
+  CollabAgentTool,
+  CollaborationMode,
   CommandExecutionStatus,
   FileUpdateChange,
   ItemDelta,
@@ -82,6 +88,46 @@ const decodeChanges = (v: unknown): FileUpdateChange[] =>
     return [{ path, kind: decodeChangeKind(c.kind), diff: str(c.diff) ?? "" }];
   });
 
+const COLLAB_TOOLS: CollabAgentTool[] = [
+  "spawnAgent",
+  "sendInput",
+  "resumeAgent",
+  "wait",
+  "closeAgent",
+];
+
+const collabTool = (v: unknown): CollabAgentTool =>
+  COLLAB_TOOLS.find((t) => t === v) ?? "spawnAgent";
+
+const COLLAB_STATUSES: CollabAgentStatus[] = [
+  "pendingInit",
+  "running",
+  "interrupted",
+  "completed",
+  "errored",
+  "shutdown",
+  "notFound",
+];
+
+const decodeAgentStates = (v: unknown): Record<string, CollabAgentState> => {
+  if (!isRecord(v)) return {};
+  const out: Record<string, CollabAgentState> = {};
+  for (const [threadId, state] of Object.entries(v)) {
+    if (!isRecord(state)) continue;
+    out[threadId] = {
+      status: COLLAB_STATUSES.find((s) => s === state.status) ?? "running",
+      message: str(state.message) ?? null,
+    };
+  }
+  return out;
+};
+
+/** The thread a notification belongs to. Subagent turns stream over the same
+ *  connection, so this is the only thing separating them from the session's
+ *  own transcript. */
+export const frameThreadId = (params: unknown): string | undefined =>
+  isRecord(params) ? str(params.threadId) : undefined;
+
 /** `item/started` / `item/completed` payloads wrap the item in `{ item }`. */
 export const decodeItem = (params: unknown): CodexItem | null => {
   if (!isRecord(params)) return null;
@@ -141,6 +187,16 @@ export const decodeItem = (params: unknown): CodexItem | null => {
       };
     case "userMessage":
       return { type: "userMessage", id };
+    case "collabAgentToolCall":
+      return {
+        type: "collabAgentToolCall",
+        id,
+        tool: collabTool(item.tool),
+        status: callStatus(item.status),
+        receiverThreadIds: strings(item.receiverThreadIds),
+        prompt: str(item.prompt) ?? null,
+        agentsStates: decodeAgentStates(item.agentsStates),
+      };
     default:
       return { type: "unknown", id, kind, raw: item };
   }
@@ -258,6 +314,50 @@ export const decodeModels = (result: unknown): CodexModel[] => {
       },
     ];
   });
+};
+
+/** `skills/list` answers per cwd, each with its own skill array. */
+export const decodeSkills = (result: unknown): CodexSkill[] => {
+  if (!isRecord(result)) return [];
+  return list(result.data).flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    return list(entry.skills).flatMap((s) => {
+      if (!isRecord(s)) return [];
+      const name = str(s.name);
+      if (name === undefined || s.enabled === false) return [];
+      return [
+        {
+          name,
+          description: str(s.shortDescription) ?? str(s.description) ?? "",
+          scope: str(s.scope) ?? "user",
+        },
+      ];
+    });
+  });
+};
+
+export const decodeCollaborationModes = (result: unknown): CollaborationMode[] => {
+  if (!isRecord(result)) return [];
+  return list(result.data).flatMap((m) => {
+    if (!isRecord(m)) return [];
+    const mode = str(m.mode);
+    if (mode === undefined) return [];
+    return [
+      {
+        mode,
+        model: str(m.model) ?? null,
+        reasoningEffort: str(m.reasoning_effort) ?? null,
+      },
+    ];
+  });
+};
+
+/** `hook/started` and `hook/completed` both carry `{ threadId, turnId, run }`. */
+export const decodeHookRun = (params: unknown): CodexHookRun | null => {
+  if (!isRecord(params) || !isRecord(params.run)) return null;
+  const eventName = str(params.run.eventName);
+  if (eventName === undefined) return null;
+  return { eventName, status: str(params.run.status) ?? "running" };
 };
 
 /** The assistant text an `item/completed` frame carries, when it is one. */

@@ -5,9 +5,16 @@
  */
 
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { Thread } from "@/types";
-import type { CodexModel } from "./protocol";
-import { decodeAgentMessage, decodeModels, decodeThreadStart, decodeThreads } from "./decode";
+import type { SlashCommand, Thread } from "@/types";
+import type { CodexModel, CollaborationMode } from "./protocol";
+import {
+  decodeAgentMessage,
+  decodeCollaborationModes,
+  decodeModels,
+  decodeSkills,
+  decodeThreadStart,
+  decodeThreads,
+} from "./decode";
 
 /** One frame from a spawned app-server. Server->client requests always arrive
  *  alone; only notifications are ever coalesced. */
@@ -60,6 +67,34 @@ export const codexRequest = (id: number, method: string, params: Params) =>
 export const codexSetThreadName = (id: number, threadId: string, name: string) =>
   codexRequest(id, "thread/name/set", { threadId, name });
 
+/** The collaboration modes the account offers, `plan` among them. */
+export const codexCollaborationModes = (id: number) =>
+  codexRequest(id, "collaborationMode/list", {}).then(decodeCollaborationModes);
+
+/**
+ * Switch a live thread between planning and building. `settings.model` must be
+ * the thread's real model id — an empty string is accepted here and then fails
+ * the next turn with "The '' model is not supported".
+ */
+export const codexSetCollaborationMode = (
+  id: number,
+  threadId: string,
+  mode: CollaborationMode,
+  model: string
+) =>
+  codexRequest(id, "thread/settings/update", {
+    threadId,
+    collaborationMode: {
+      mode: mode.mode,
+      settings: {
+        model: mode.model ?? model,
+        reasoning_effort: mode.reasoningEffort,
+        // The server supplies the mode's own prompt; sending one would replace it.
+        developer_instructions: null,
+      },
+    },
+  });
+
 /** Answer a server->client request. `result` is the method's response payload. */
 export const codexRespond = (id: number, requestId: number, result: unknown) =>
   invoke("codex_respond", { id, requestId, result });
@@ -101,6 +136,27 @@ export async function listCodexModels(cwd: string): Promise<CodexModel[]> {
   const { id } = await codexSpawn(cwd, channel);
   try {
     return decodeModels(await codexRequest(id, "model/list", {}));
+  } finally {
+    void codexKill(id);
+  }
+}
+
+/**
+ * Codex's answer to slash commands. Skills are the only command surface the
+ * app-server can enumerate — `~/.codex/prompts` has no listing method, and
+ * plugin skills already come back here — so the menu offers exactly these.
+ * Borrows a throwaway app-server the way the model catalog does.
+ */
+export async function listCodexSkills(cwd: string): Promise<SlashCommand[]> {
+  const channel = new Channel<CodexEvent>();
+  const { id } = await codexSpawn(cwd, channel);
+  try {
+    const result = await codexRequest(id, "skills/list", { cwds: [cwd] });
+    return decodeSkills(result).map((s) => ({
+      name: s.name,
+      description: s.description,
+      source: s.scope,
+    }));
   } finally {
     void codexKill(id);
   }

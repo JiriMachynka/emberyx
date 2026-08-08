@@ -1,10 +1,31 @@
 import { classify } from "@/lib/accountState";
 import { capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
+import type { CodexHookEvent } from "@/lib/codex/protocol";
 import type { SessionStatus } from "@/types";
 
+/** Codex spells its hook events in camelCase and has no `Notification` — an
+ *  account block never reaches the status feed this way. Listed exhaustively
+ *  so a new event in the protocol fails the build rather than going silent. */
+const CODEX_STATUS: Record<CodexHookEvent, SessionStatus | null> = {
+  preToolUse: null,
+  permissionRequest: "waiting",
+  postToolUse: null,
+  preCompact: null,
+  postCompact: null,
+  sessionStart: null,
+  sessionEnd: "idle",
+  userPromptSubmit: "working",
+  subagentStart: "working",
+  subagentStop: "working",
+  stop: "idle",
+};
+
+const CODEX_LOOKUP = new Map(Object.entries(CODEX_STATUS));
+
 /**
- * Map a Claude Code hook event name to an agent status. The event names are
- * Claude's, so a backend that doesn't drive the hook server yields no status.
+ * Map a hook event name to an agent status. A backend that reports no hook
+ * status yields none, and each backend's event names are its own: Claude's
+ * arrive over the local hook server, Codex's in-band on the app-server.
  *
  * @param message the Notification hook's own message, when there is one. A
  * usage limit or a lost login also arrives as a Notification, and neither is
@@ -17,6 +38,7 @@ export function statusForEvent(
   backend: AgentBackend = "claude"
 ): SessionStatus | null {
   if (!capabilitiesOf(backend).hookStatus) return null;
+  if (backend === "codex") return CODEX_LOOKUP.get(event) ?? null;
   switch (event) {
     case "UserPromptSubmit":
     case "SubagentStop":

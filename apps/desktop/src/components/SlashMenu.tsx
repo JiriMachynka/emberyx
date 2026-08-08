@@ -6,6 +6,8 @@ interface SlashMenuProps {
   loading: boolean;
   query: string;
   active: number;
+  /** The backend's invocation character, shown so the row reads as it will send. */
+  sigil: string;
   onHover: (index: number) => void;
   onPick: (name: string) => void;
 }
@@ -17,6 +19,7 @@ export function SlashMenu({
   loading,
   query,
   active,
+  sigil,
   onHover,
   onPick,
 }: SlashMenuProps) {
@@ -49,7 +52,10 @@ export function SlashMenu({
             i === active && "bg-accent"
           )}
         >
-          <span className="shrink-0 font-medium">/{command.name}</span>
+          <span className="shrink-0 font-medium">
+            {sigil}
+            {command.name}
+          </span>
           {command.description && (
             <span className="truncate text-muted-foreground">
               {command.description}

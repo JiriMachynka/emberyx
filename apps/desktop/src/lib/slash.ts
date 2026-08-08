@@ -5,13 +5,18 @@ export interface SlashToken {
 }
 
 /**
- * The slash command the caret sits in, or null. Like the CLI, only a `/` in the
+ * The command the caret sits in, or null. Like the CLI, only a sigil in the
  * very first column counts — "TODO: fix a/b" never opens the menu — and the
  * token ends at the first space, so the menu closes once arguments start.
+ * The sigil is the backend's: Claude uses `/`, Codex `$`.
  */
-export function slashAt(text: string, caret: number): SlashToken | null {
-  if (!text.startsWith("/")) return null;
-  const query = text.slice(1, caret);
+export function slashAt(
+  text: string,
+  caret: number,
+  sigil = "/"
+): SlashToken | null {
+  if (!text.startsWith(sigil)) return null;
+  const query = text.slice(sigil.length, caret);
   if (caret === 0 || /\s/.test(query)) return null;
   return { query };
 }
@@ -20,9 +25,10 @@ export function slashAt(text: string, caret: number): SlashToken | null {
 export function applySlash(
   text: string,
   name: string,
-  caret: number
+  caret: number,
+  sigil = "/"
 ): { text: string; caret: number } {
-  const inserted = `/${name} `;
+  const inserted = `${sigil}${name} `;
   return { text: inserted + text.slice(caret), caret: inserted.length };
 }
 

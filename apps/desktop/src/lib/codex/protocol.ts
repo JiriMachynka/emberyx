@@ -81,8 +81,40 @@ export type CodexItem =
       contentItems: unknown;
     }
   | { type: "userMessage"; id: string }
+  | {
+      type: "collabAgentToolCall";
+      id: string;
+      tool: CollabAgentTool;
+      status: ToolCallStatus;
+      /** Threads the call targets. Empty until `spawnAgent` completes. */
+      receiverThreadIds: string[];
+      prompt: string | null;
+      agentsStates: Record<string, CollabAgentState>;
+    }
   /** Anything the client has no bespoke shape for. */
   | { type: "unknown"; id: string; kind: string; raw: Record<string, unknown> };
+
+export type CollabAgentTool =
+  | "spawnAgent"
+  | "sendInput"
+  | "resumeAgent"
+  | "wait"
+  | "closeAgent";
+
+export type CollabAgentStatus =
+  | "pendingInit"
+  | "running"
+  | "interrupted"
+  | "completed"
+  | "errored"
+  | "shutdown"
+  | "notFound";
+
+export interface CollabAgentState {
+  status: CollabAgentStatus;
+  /** The agent's answer, once it has one. */
+  message: string | null;
+}
 
 // --- notifications ---------------------------------------------------------
 
@@ -143,6 +175,44 @@ export interface CodexModel {
   /** Reasoning efforts the catalog allows for this model, in its own order. */
   reasoningEfforts: string[];
   defaultReasoningEffort: string;
+}
+
+/** `collaborationMode/list` entry. The wire shape is flat — the mode's own
+ *  settings are spread onto it rather than nested under `settings`. */
+export interface CollaborationMode {
+  mode: string;
+  /** Model the mode pins, or null to keep the thread's. */
+  model: string | null;
+  reasoningEffort: string | null;
+}
+
+/** `skills/list` entry, rendered as a command in the composer's menu. */
+export interface CodexSkill {
+  name: string;
+  description: string;
+  /** "user", "repo", "system" or "admin". */
+  scope: string;
+}
+
+/** Hook events, in the app-server's own camelCase spelling. There is no
+ *  `Notification` event — an account block never arrives this way. */
+export type CodexHookEvent =
+  | "preToolUse"
+  | "permissionRequest"
+  | "postToolUse"
+  | "preCompact"
+  | "postCompact"
+  | "sessionStart"
+  | "sessionEnd"
+  | "userPromptSubmit"
+  | "subagentStart"
+  | "subagentStop"
+  | "stop";
+
+/** The part of `hook/started` and `hook/completed` the status feed reads. */
+export interface CodexHookRun {
+  eventName: string;
+  status: string;
 }
 
 // --- server -> client requests ---------------------------------------------

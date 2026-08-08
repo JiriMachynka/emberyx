@@ -85,12 +85,17 @@ Easy to conflate — they share almost nothing.
 ### Backends and capabilities
 
 `lib/agentBackend.ts` owns `AgentBackend` (`"claude" | "codex"`) and a
-nine-flag `AgentCapabilities` record. Resolution: per-project pin →
+ten-flag `AgentCapabilities` record. Resolution: per-project pin →
 global default → `"claude"`. **Never reintroduce a `startsWith("claude")`
 test** — gate on a capability instead, or Claude-shaped data (pricing,
 slash commands, hook status, account-error regexes) leaks into Codex
-sessions. Codex reports tokens but no cost; leave `costUsd` undefined
-rather than fabricating it.
+sessions. Codex reports tokens but no cost, so its cost is derived and
+flagged `costEstimated`; never present it as billed.
+
+Both backends currently satisfy every capability. Where the CLIs genuinely
+differ, the difference is carried rather than hidden — e.g. `COMMAND_SIGIL`
+is `/` for Claude and `$` for Codex, because that is what each actually
+executes. Prefer a missing control over a control that lies.
 
 `codex app-server` is flagged experimental and has renamed its core methods
 once already. Generate types from the installed binary

@@ -28,9 +28,23 @@ describe("slashAt", () => {
   it("returns null at caret 0", () => {
     expect(slashAt("/review", 0)).toBeNull();
   });
+
+  // Codex invokes its skills as `$name`, so a `/` there is just text.
+  it("opens on the backend's own sigil and nothing else", () => {
+    expect(slashAt("$diagnose", 9, "$")).toEqual({ query: "diagnose" });
+    expect(slashAt("/diagnose", 9, "$")).toBeNull();
+    expect(slashAt("$diagnose", 9)).toBeNull();
+  });
 });
 
 describe("applySlash", () => {
+  it("inserts the backend's own sigil", () => {
+    expect(applySlash("$dia", "diagnose", 4, "$")).toEqual({
+      text: "$diagnose ",
+      caret: 10,
+    });
+  });
+
   it("replaces the typed token and leaves the caret ready for arguments", () => {
     expect(applySlash("/rev", "review", 4)).toEqual({
       text: "/review ",

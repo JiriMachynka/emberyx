@@ -21,15 +21,19 @@ import type {
   ToolCall,
 } from "@/hooks/useAgentChat";
 import { codexCost } from "@/lib/pricing";
+import { describeTool } from "@/lib/toolDisplay";
+import type { SubagentActivity } from "@/lib/agentStore";
 import {
   decodeDelta,
   decodeError,
+  decodeHookRun,
   decodeItem,
   decodePlan,
   decodeQuestions,
   decodeRateLimits,
   decodeTokenUsage,
   decodeTurn,
+  frameThreadId,
   isRecord,
 } from "./decode";
 import type {
@@ -37,6 +41,8 @@ import type {
   CodexItem,
   ToolUserInputQuestion,
 } from "./protocol";
+import { statusForEvent } from "@/lib/status";
+import type { SessionStatus } from "@/types";
 
 /** One file the turn touched, in the shape the changes feed diffs. */
 export interface CodexFileChange {
@@ -68,12 +74,27 @@ export interface CodexChatState {
   /** Why the last turn failed; rendered under the composer. */
   errorMessage: string | null;
   draft: TurnDraft | null;
+  /** Subagent thread id -> the tool call that spawned it. Those threads stream
+   *  over the same connection, so this is what keeps their turns out of the
+   *  transcript and in the run they belong to. */
+  agentThreads: Record<string, string>;
 }
+
+/** One thing to do to a subagent run. The adapter is pure, so the hook applies
+ *  these to the store the way it applies `changes` to the changes feed. */
+export type CodexSubagentEvent =
+  | { type: "start"; id: string; description: string; prompt: string }
+  | { type: "activity"; id: string; activity: SubagentActivity }
+  | { type: "end"; id: string; isError: boolean };
 
 export interface CodexApply {
   state: CodexChatState;
   /** File edits to push into the changes feed. Empty for most frames. */
   changes: CodexFileChange[];
+  /** Subagent bookkeeping. Empty for most frames. */
+  subagents: CodexSubagentEvent[];
+  /** Session status a hook run implies, when it implies one. */
+  sessionStatus?: SessionStatus;
 }
 
 export const initialCodexState = (): CodexChatState => ({
@@ -83,6 +104,7 @@ export const initialCodexState = (): CodexChatState => ({
   turnId: null,
   errorMessage: null,
   draft: null,
+  agentThreads: {},
 });
 
 const joinSinks = (sinks: Sink[]): string =>
@@ -247,6 +269,115 @@ const changesFrom = (item: CodexItem): CodexFileChange[] => {
  *  the same checklist the Claude path draws. */
 const PLAN_TOOL_SUFFIX = "#plan";
 
+/** First line of a subagent's brief — all the run header has room for. */
+const AGENT_DESCRIPTION_CHARS = 80;
+
+const briefOf = (prompt: string | null): string =>
+  (prompt ?? "").trim().split("\n")[0].slice(0, AGENT_DESCRIPTION_CHARS) || "Agent";
+
+/** Statuses that mean the agent has stopped, and whether it stopped badly. */
+const ENDED_AGENT_STATUSES = new Set([
+  "completed",
+  "errored",
+  "shutdown",
+  "interrupted",
+  "notFound",
+]);
+
+/**
+ * A frame that arrived on a subagent's thread. Its work is the run's activity
+ * log, never the parent transcript, so nothing here touches `messages`.
+ */
+function subagentFrame(
+  state: CodexChatState,
+  runId: string,
+  method: string,
+  params: unknown
+): CodexApply {
+  const empty: CodexApply = { state, changes: [], subagents: [] };
+  if (method !== "item/completed") return empty;
+  const item = decodeItem(params);
+  if (!item) return empty;
+
+  if (item.type === "agentMessage") {
+    const text = item.text.trim();
+    if (!text) return empty;
+    return {
+      ...empty,
+      subagents: [
+        { type: "activity", id: runId, activity: { kind: "text", name: "", detail: text } },
+      ],
+    };
+  }
+
+  const shape = toolShapeFor(item);
+  if (!shape) return empty;
+  const d = describeTool(shape.name, shape.input);
+  return {
+    ...empty,
+    subagents: [
+      {
+        type: "activity",
+        id: runId,
+        activity: { kind: "tool", name: d.label, detail: d.title ?? "", icon: d.icon },
+      },
+    ],
+  };
+}
+
+/**
+ * A collab tool call — Codex's subagent surface. `spawnAgent` opens a run and
+ * renders where it was dispatched; the follow-up calls (`wait`, `sendInput`)
+ * only carry the agents' state, so they settle runs rather than drawing cards.
+ */
+function collabFrame(
+  state: CodexChatState,
+  item: Extract<CodexItem, { type: "collabAgentToolCall" }>,
+  done: boolean
+): CodexApply {
+  const events: CodexSubagentEvent[] = [];
+  let next = state;
+
+  if (item.tool === "spawnAgent") {
+    if (!done) {
+      events.push({
+        type: "start",
+        id: item.id,
+        description: briefOf(item.prompt),
+        prompt: item.prompt ?? "",
+      });
+    }
+    // The spawned thread is only named once the call completes.
+    for (const threadId of item.receiverThreadIds) {
+      next = { ...next, agentThreads: { ...next.agentThreads, [threadId]: item.id } };
+    }
+    // `Agent` is the name ChatPane renders a subagent under.
+    next = upsertTool(next, item.id, (prev) => ({
+      id: item.id,
+      name: "Agent",
+      input: { description: briefOf(item.prompt), prompt: item.prompt ?? "" },
+      partial: prev?.partial ?? "",
+      result: prev?.result,
+      isError: prev?.isError,
+    }));
+  }
+
+  for (const [threadId, agent] of Object.entries(item.agentsStates)) {
+    const runId = next.agentThreads[threadId];
+    if (!runId || !ENDED_AGENT_STATUSES.has(agent.status)) continue;
+    if (agent.message) {
+      events.push({
+        type: "activity",
+        id: runId,
+        activity: { kind: "text", name: "", detail: agent.message },
+      });
+    }
+    events.push({ type: "end", id: runId, isError: agent.status !== "completed" });
+  }
+
+  return { state: next, changes: [], subagents: events };
+}
+
 const startTurn = (state: CodexChatState, turnId: string): CodexChatState => {
   const message: ChatMessage = {
     id: turnId,
@@ -285,7 +416,16 @@ export function applyCodexNotification(
   method: string,
   params: unknown
 ): CodexApply {
-  const none = (next: CodexChatState): CodexApply => ({ state: next, changes: [] });
+  const none = (next: CodexChatState): CodexApply => ({
+    state: next,
+    changes: [],
+    subagents: [],
+  });
+
+  const onAgentThread = frameThreadId(params);
+  if (onAgentThread && state.agentThreads[onAgentThread]) {
+    return subagentFrame(state, state.agentThreads[onAgentThread], method, params);
+  }
 
   switch (method) {
     case "turn/started": {
@@ -333,6 +473,8 @@ export function applyCodexNotification(
         );
       }
 
+      if (item.type === "collabAgentToolCall") return collabFrame(state, item, done);
+
       const shape = toolShapeFor(item);
       if (!shape) return none(state);
       const outcome = done ? resultFor(item) : null;
@@ -348,6 +490,7 @@ export function applyCodexNotification(
       return {
         state: { ...next, status: done ? next.status : "tool" },
         changes: done ? changesFrom(item) : [],
+        subagents: [],
       };
     }
 
@@ -436,6 +579,16 @@ export function applyCodexNotification(
         costEstimated: costUsd !== undefined,
       };
       return none({ ...state, usage });
+    }
+
+    // Codex runs hooks in-process and reports them here, so the status feed
+    // needs no listener of its own — unlike Claude, which drives it over HTTP.
+    case "hook/started":
+    case "hook/completed": {
+      const run = decodeHookRun(params);
+      if (!run) return none(state);
+      const status = statusForEvent(run.eventName, undefined, "codex");
+      return status ? { ...none(state), sessionStatus: status } : none(state);
     }
 
     case "account/rateLimits/updated": {

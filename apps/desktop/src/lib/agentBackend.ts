@@ -19,7 +19,7 @@ export interface AgentCapabilities {
   permissions: boolean;
   /** The `ask_user` MCP option picker is wired in. */
   askUser: boolean;
-  /** `/`-prefixed commands exist and can be listed. */
+  /** Sigil-prefixed commands exist and can be listed. */
   slashCommands: boolean;
   /** Subagent activity is reported as its own nested transcript. */
   subagents: boolean;
@@ -38,6 +38,13 @@ export const BACKEND_LABEL: Record<AgentBackend, string> = {
   codex: "Codex",
 };
 
+/** Character that opens a command in the composer. Codex invokes its skills as
+ *  `$name`, so inserting a `/` there would send text that doesn't run. */
+export const COMMAND_SIGIL: Record<AgentBackend, string> = {
+  claude: "/",
+  codex: "$",
+};
+
 // A capability wrongly left on renders one backend's data under the other's
 // session, so each row states only what its transport actually implements.
 const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
@@ -53,20 +60,21 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     planMode: true,
     steering: true,
   },
-  // Codex has no hook server, no `/` commands, and reports subagent work as
-  // ordinary items rather than its own transcript. Its plan mode is a
-  // collaboration mode, and every method that reads or sets one is refused
-  // unless the app-server handshake asks for `experimentalApi`.
+  // Codex reaches all of these over the app-server rather than Claude's
+  // out-of-band surfaces: hook runs arrive in-band as `hook/started` /
+  // `hook/completed`, commands are skills invoked with `$`, subagents are
+  // separate threads on the same connection, and plan mode is a collaboration
+  // mode — refused unless the handshake asks for `experimentalApi`.
   codex: {
     threads: true,
     usage: true,
-    hookStatus: false,
+    hookStatus: true,
     permissions: true,
     askUser: true,
-    slashCommands: false,
-    subagents: false,
+    slashCommands: true,
+    subagents: true,
     modelPicker: true,
-    planMode: false,
+    planMode: true,
     steering: true,
   },
 };

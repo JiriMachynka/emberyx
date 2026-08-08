@@ -6,7 +6,7 @@ import { useSlashCommands } from "@/lib/queries";
 import { filterCommands } from "@/lib/slash";
 import { mergeCommands } from "@/lib/builtinCommands";
 import { useAgentStore } from "@/lib/agentStore";
-import type { AgentBackend } from "@/lib/agentBackend";
+import { COMMAND_SIGIL, type AgentBackend } from "@/lib/agentBackend";
 import { cn } from "@/lib/utils";
 
 interface SlashCommandsPanelProps {
@@ -28,7 +28,8 @@ export function SlashCommandsPanel({
   backend,
 }: SlashCommandsPanelProps) {
   const [query, setQuery] = useState("");
-  const { data, isLoading } = useSlashCommands(cwd ?? "", !!cwd);
+  const sigil = COMMAND_SIGIL[backend];
+  const { data, isLoading } = useSlashCommands(cwd ?? "", !!cwd, backend);
   const send = useAgentStore((s) => (activeChatId ? s.senders[activeChatId] : undefined));
 
   const commands = useMemo(
@@ -38,7 +39,7 @@ export function SlashCommandsPanel({
 
   const run = (name: string) => {
     if (!send) return;
-    send(`/${name}`);
+    send(`${sigil}${name}`);
     onClose();
   };
 
@@ -79,13 +80,20 @@ export function SlashCommandsPanel({
                 type="button"
                 disabled={!send}
                 onClick={() => run(command.name)}
-                title={send ? `Run /${command.name}` : "Open a chat session first"}
+                title={
+                  send
+                    ? `Run ${sigil}${command.name}`
+                    : "Open a chat session first"
+                }
                 className={cn(
                   "flex w-full items-baseline gap-2 border-b border-border/50 px-3 py-1.5 text-left text-xs",
                   send ? "hover:bg-accent" : "cursor-not-allowed opacity-60"
                 )}
               >
-                <span className="shrink-0 font-medium">/{command.name}</span>
+                <span className="shrink-0 font-medium">
+                  {sigil}
+                  {command.name}
+                </span>
                 {command.description && (
                   <span className="truncate text-muted-foreground">{command.description}</span>
                 )}

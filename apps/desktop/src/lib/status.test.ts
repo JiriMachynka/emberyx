@@ -41,11 +41,24 @@ describe("statusForEvent", () => {
     expect(statusForEvent("")).toBeNull();
   });
 
-  // The event names are Claude's; a backend that never drives the hook server
-  // must not have its sessions moved by one.
-  it("carries no status for a backend without hook status", () => {
+  // Each backend spells its own events; reading one backend's names under the
+  // other is how a session ends up with a status it never reported.
+  it("reads Codex's own camelCase event names", () => {
+    expect(statusForEvent("userPromptSubmit", undefined, "codex")).toBe("working");
+    expect(statusForEvent("subagentStart", undefined, "codex")).toBe("working");
+    expect(statusForEvent("permissionRequest", undefined, "codex")).toBe("waiting");
+    expect(statusForEvent("stop", undefined, "codex")).toBe("idle");
+    expect(statusForEvent("preToolUse", undefined, "codex")).toBeNull();
+  });
+
+  it("does not read Claude's event names under Codex, or the reverse", () => {
     expect(statusForEvent("UserPromptSubmit", undefined, "codex")).toBeNull();
     expect(statusForEvent("Stop", undefined, "codex")).toBeNull();
+    expect(statusForEvent("stop", undefined, "claude")).toBeNull();
+  });
+
+  // Codex has no Notification event, so an account block never arrives here.
+  it("carries no status for a notification under Codex", () => {
     expect(statusForEvent("Notification", "", "codex")).toBeNull();
   });
 });

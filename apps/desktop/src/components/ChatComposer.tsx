@@ -33,6 +33,7 @@ import { contextWindowFor } from "@/lib/pricing";
 import { formatPlan, formatResetsIn, formatWindowLength } from "@/lib/quota";
 import {
   BACKEND_LABEL,
+  COMMAND_SIGIL,
   capabilitiesOf,
   type AgentBackend,
 } from "@/lib/agentBackend";
@@ -612,7 +613,8 @@ export const ChatComposer = memo(function ChatComposer({
   );
 
   const slashCommands = capabilitiesOf(backend).slashCommands;
-  const commandsQuery = useSlashCommands(cwd, slashCommands && slash !== null);
+  const sigil = COMMAND_SIGIL[backend];
+  const commandsQuery = useSlashCommands(cwd, slashCommands && slash !== null, backend);
   const commandHits = useMemo(
     () =>
       slash
@@ -687,7 +689,7 @@ export const ChatComposer = memo(function ChatComposer({
    *  token the caret is actually in. */
   const syncMenus = (el: HTMLTextAreaElement) => {
     setMention(mentionAt(el.value, el.selectionStart));
-    setSlash(slashCommands ? slashAt(el.value, el.selectionStart) : null);
+    setSlash(slashCommands ? slashAt(el.value, el.selectionStart, sigil) : null);
     setMenuIndex(0);
   };
 
@@ -716,7 +718,7 @@ export const ChatComposer = memo(function ChatComposer({
   const pickCommand = (name: string) => {
     const el = inputRef.current;
     if (!el) return;
-    complete(applySlash(input, name, el.selectionStart));
+    complete(applySlash(input, name, el.selectionStart, sigil));
   };
 
   const pickActive = () => {
@@ -774,6 +776,7 @@ export const ChatComposer = memo(function ChatComposer({
           loading={commandsQuery.isPending}
           query={slash.query}
           active={menuActive}
+          sigil={sigil}
           onHover={setMenuIndex}
           onPick={pickCommand}
         />
