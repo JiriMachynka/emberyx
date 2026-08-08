@@ -1,7 +1,7 @@
 [package]
 name = "emberyx"
-version = "0.1.29"
-description = "Desktop cockpit for AI coding agents — run Claude Code across projects in integrated terminals."
+version = "0.2.0"
+description = "Desktop cockpit for AI coding agents — run Claude Code and Codex across projects in integrated terminals."
 authors = ["Jiri Machynka <machynka.j@gmail.com>"]
 edition = "2021"
 
