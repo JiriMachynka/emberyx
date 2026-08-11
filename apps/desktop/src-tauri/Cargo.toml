@@ -1,9 +1,12 @@
 [package]
 name = "emberyx"
-version = "0.2.0"
+version = "0.2.1"
 description = "Desktop cockpit for AI coding agents — run Claude Code and Codex across projects in integrated terminals."
 authors = ["Jiri Machynka <machynka.j@gmail.com>"]
 edition = "2021"
+# `src/bin/emberyxd.rs` adds a second binary, so a bare `cargo run` (which is
+# what `tauri dev` issues) has no unambiguous target without this.
+default-run = "emberyx"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -13,6 +16,10 @@ edition = "2021"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "emberyx_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "emberyxd"
+path = "src/bin/emberyxd.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -52,4 +59,3 @@ lto = "thin"
 codegen-units = 16
 strip = true
 panic = "abort"
-

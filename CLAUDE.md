@@ -1,7 +1,7 @@
 # Emberyx — agent guide
 
-Tauri v2 desktop app: a cockpit for driving coding agents across several
-projects at once. Two backends are supported — Claude Code (`claude`) and
+Tauri v2 desktop app: a chat-first command center for coding agents across
+several projects. Two backends are supported — Claude Code (`claude`) and
 OpenAI Codex (`codex`). Rust core + React 19 frontend, in a bun/turbo monorepo.
 
 **The global Nuxt/Vue stack defaults do not apply here.** This is React 19 +
@@ -17,6 +17,7 @@ apps/desktop/          the app
     hooks/             useAgentChat, useCodexChat, useChatSession, useSessions, …
     lib/               settings, pricing, queries, diff/hunk helpers, fuzzy, slash
       agentBackend.ts  backend + capability flags
+      agentStore.ts    selector store for local chat telemetry
       codex/           Codex protocol types, decoders, normalizing adapter
       handoff.ts       push context between backends
   src-tauri/src/       Rust core, one module per capability
@@ -82,17 +83,32 @@ Easy to conflate — they share almost nothing.
    normalized by `lib/codex/adapter.ts` into the same message model, driven by
    `useCodexChat`. `useChatSession` picks the transport by session backend.
 
+4. **Supervisor registry** (`supervisor.rs`) — the chat-first orchestration
+   seam above all agent transports. It owns stable agent IDs, project/workspace
+   ownership, lifecycle snapshots, bounded recent events, reconnection reads,
+   and delegation correlation. Tauri IPC (`agent.list/get/read/wait/interrupt/
+   subscribe/prompt/delegate`) exposes structured coordination; it never makes
+   raw PTY output the primary user experience. The registry is in-process for
+   now and can later move into an `emberyxd` daemon.
+
+5. **`emberyxd` (`src/bin/emberyxd.rs`)** — an experimental standalone Unix
+   socket daemon with a newline-delimited JSON protocol and durable registry
+   metadata. It is currently the persistence/reconnect seam; Claude/Codex child
+   process ownership remains in the Tauri managers until transport migration is
+   complete.
+
 ### Backends and capabilities
 
 `lib/agentBackend.ts` owns `AgentBackend` (`"claude" | "codex"`) and a
-nine-flag `AgentCapabilities` record. Resolution: per-project pin →
+ten-flag `AgentCapabilities` record. Resolution: per-project pin →
 global default → `"claude"`. **Never reintroduce a `startsWith("claude")`
 test** — gate on a capability instead, or Claude-shaped data (pricing,
 slash commands, hook status, account-error regexes) leaks into Codex
 sessions. Codex reports tokens but no cost, so its cost is derived and
 flagged `costEstimated`; never present it as billed.
 
-Both backends currently satisfy every capability. Where the CLIs genuinely
+Only `reasoningEffort` differs today — Codex takes it as its own `turn/start`
+param, Claude folds it into the model name. Where the CLIs genuinely
 differ, the difference is carried rather than hidden — e.g. `COMMAND_SIGIL`
 is `/` for Claude and `$` for Codex, because that is what each actually
 executes. Prefer a missing control over a control that lies.

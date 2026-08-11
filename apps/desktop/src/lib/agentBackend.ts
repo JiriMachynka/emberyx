@@ -25,6 +25,8 @@ export interface AgentCapabilities {
   subagents: boolean;
   /** The model can be chosen per session. */
   modelPicker: boolean;
+  /** Reasoning effort is chosen separately from the model. */
+  reasoningEffort: boolean;
   /** A message sent mid-turn steers the running turn instead of queueing. */
   steering: boolean;
 }
@@ -43,6 +45,18 @@ export const COMMAND_SIGIL: Record<AgentBackend, string> = {
   codex: "$",
 };
 
+/** `--effort` levels Claude accepts. Fixed by the CLI rather than discovered,
+ *  so the chip renders without waiting on a catalog. Codex's levels vary per
+ *  model and come from its catalog instead. Note there is no `ultra` here —
+ *  an unrecognised level is only warned about, then silently ignored. */
+export const CLAUDE_EFFORTS: readonly string[] = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
 // A capability wrongly left on renders one backend's data under the other's
 // session, so each row states only what its transport actually implements.
 const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
@@ -55,6 +69,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     slashCommands: true,
     subagents: true,
     modelPicker: true,
+    reasoningEffort: true,
     steering: true,
   },
   // Codex reaches all of these over the app-server rather than Claude's
@@ -70,6 +85,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     slashCommands: true,
     subagents: true,
     modelPicker: true,
+    reasoningEffort: true,
     steering: true,
   },
 };

@@ -28,6 +28,9 @@ export interface Settings {
   dangerouslySkipPermissions: boolean;
   /** `--model` alias for new chats: "" = CLI default, else opus/sonnet/sonnet[1m]/haiku. */
   model: string;
+  /** Reasoning effort for new chats; "" = CLI default. Its own axis, not part
+   *  of the model — each backend offers its own levels. */
+  effort: string;
   /** On project open, resume the most recent thread instead of a fresh agent. */
   resumeLatestThread: boolean;
   /** Keep every open project's session list expanded, not just the active one. */
@@ -71,6 +74,7 @@ export const DEFAULT_SETTINGS: Settings = {
   scrollback: 1000,
   dangerouslySkipPermissions: true,
   model: "",
+  effort: "",
   resumeLatestThread: false,
   expandAllProjects: false,
   autoOpenDevPanel: false,
@@ -89,6 +93,15 @@ export const DEFAULT_SETTINGS: Settings = {
 
 const KEY = "emberyx.settings";
 
+/** Codex once stored its effort inside the model as `id:effort`. Left alone,
+ *  that whole string would be sent as a model id, so lift it back out. No
+ *  Claude alias contains a colon. */
+const splitStoredEffort = (s: Settings): Settings => {
+  const at = s.model.indexOf(":");
+  if (at === -1) return s;
+  return { ...s, model: s.model.slice(0, at), effort: s.model.slice(at + 1) };
+};
+
 /** Reads the stored settings. Exported for callbacks that outlive a render and
  *  so must not close over a `useSettings` snapshot. */
 export function loadSettings(): Settings {
@@ -96,7 +109,7 @@ export function loadSettings(): Settings {
     const raw = localStorage.getItem(KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const stored = JSON.parse(raw) as Partial<Settings>;
-    const merged = { ...DEFAULT_SETTINGS, ...stored };
+    const merged = splitStoredEffort({ ...DEFAULT_SETTINGS, ...stored });
     // Settings written before the backend was explicit only recorded the
     // command; keep those users on exactly the surface they had.
     return isAgentBackend(stored.agentBackend)

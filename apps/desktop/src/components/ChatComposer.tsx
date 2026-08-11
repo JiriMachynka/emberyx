@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
+  Brain,
   Check,
   ChevronDown,
   ChevronsUpDown,
@@ -31,11 +32,20 @@ import { contextWindowFor } from "@/lib/pricing";
 import { formatPlan, formatResetsIn, formatWindowLength } from "@/lib/quota";
 import {
   BACKEND_LABEL,
+  CLAUDE_EFFORTS,
   COMMAND_SIGIL,
   capabilitiesOf,
   type AgentBackend,
 } from "@/lib/agentBackend";
-import { codexModelGroups, type ModelGroup } from "@/lib/codex/models";
+import {
+  codexDefaultEffort,
+  codexDisplayName,
+  codexEffortForModel,
+  codexEfforts,
+  codexModelGroups,
+  titleCase,
+  type ModelGroup,
+} from "@/lib/codex/models";
 import { applyMention, mentionAt, type Mention } from "@/lib/mentions";
 import { applySlash, filterCommands, slashAt, type SlashToken } from "@/lib/slash";
 import { useCodexModels, useProjectFiles, useSlashCommands } from "@/lib/queries";
@@ -146,11 +156,15 @@ const modelLabel = (value: string, groups: ModelGroup[]): string => {
 interface ModelPickerProps {
   /** Selected `--model` value for this session; "" = default. */
   model: string;
+  /** Selected reasoning effort, so a Codex switch can drop one the target
+   *  model doesn't offer. */
+  effort: string;
   backend: AgentBackend;
   /** Project root — a Codex catalog lookup needs one to open an app-server. */
   cwd: string;
   usage: ChatUsage;
   onModelChange: (model: string) => void;
+  onEffortChange: (effort: string) => void;
 }
 
 /** Dropdown that swaps the running model. "Default" shows the model the CLI
@@ -158,25 +172,38 @@ interface ModelPickerProps {
  *  Families open a submenu of pinned versions. */
 const ModelPicker = memo(function ModelPicker({
   model,
+  effort,
   backend,
   cwd,
   usage,
   onModelChange,
+  onEffortChange,
 }: ModelPickerProps) {
   const codex = backend === "codex";
   // Claude's list is hand-written; Codex's comes from its own catalog, so the
   // menu shows only "Default" until that lands rather than delaying first paint.
   const codexModels = useCodexModels(cwd, codex);
+  const models = codexModels.data ?? [];
   const groups = useMemo(
     () => (codex ? codexModelGroups(codexModels.data ?? []) : CLAUDE_MODEL_GROUPS),
     [codex, codexModels.data]
   );
-  const label =
-    model === ""
-      ? usage.model
-        ? prettyModel(usage.model)
-        : "Default"
-      : modelLabel(model, groups);
+  const selected = model;
+  // Claude's levels are the same whatever the model, so only Codex has to
+  // reconcile the effort with what the model being switched to accepts.
+  const select = (value: string) => {
+    onModelChange(value);
+    if (codex) {
+      const kept = codexEffortForModel(value, effort, models);
+      if (kept !== effort) onEffortChange(kept);
+    }
+  };
+  // The CLI-resolved model reads as a raw id unless the catalog names it.
+  const resolved = usage.model
+    ? (codex ? codexDisplayName(usage.model, models) : undefined) ??
+      prettyModel(usage.model)
+    : "";
+  const label = selected === "" ? resolved || "Default" : modelLabel(selected, groups);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className="flex items-center gap-1.5 rounded font-medium text-foreground outline-none transition-colors hover:text-primary">
@@ -186,14 +213,28 @@ const ModelPicker = memo(function ModelPicker({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-36">
         <DropdownMenuItem
-          onSelect={() => onModelChange("")}
+          onSelect={() => select("")}
           className="justify-between gap-4"
         >
-          {usage.model ? `Default (${prettyModel(usage.model)})` : "Default"}
-          {model === "" && <Check className="size-3.5" />}
+          {resolved ? `Default (${resolved})` : "Default"}
+          {selected === "" && <Check className="size-3.5" />}
         </DropdownMenuItem>
         {groups.map((g) => {
-          const active = g.options.some((o) => o.value === model);
+          const active = g.options.some((o) => o.value === selected);
+          // A family with one member has nothing to expand into.
+          if (g.options.length === 1) {
+            const [o] = g.options;
+            return (
+              <DropdownMenuItem
+                key={g.label}
+                onSelect={() => select(o.value)}
+                className="justify-between gap-4"
+              >
+                {g.label}
+                {active && <Check className="size-3.5" />}
+              </DropdownMenuItem>
+            );
+          }
           return (
             <DropdownMenuSub key={g.label}>
               <DropdownMenuSubTrigger className={active ? "text-primary" : undefined}>
@@ -203,11 +244,11 @@ const ModelPicker = memo(function ModelPicker({
                 {g.options.map((o) => (
                   <DropdownMenuItem
                     key={o.value}
-                    onSelect={() => onModelChange(o.value)}
+                    onSelect={() => select(o.value)}
                     className="justify-between gap-4"
                   >
                     {o.label}
-                    {o.value === model && <Check className="size-3.5" />}
+                    {o.value === selected && <Check className="size-3.5" />}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuSubContent>
@@ -225,6 +266,70 @@ const ChipDivider = () => <span className="h-3.5 w-px shrink-0 bg-border" />;
 /** Trigger styling shared by the access/mode chips — matches ModelPicker. */
 const chipTrigger =
   "flex items-center gap-1.5 rounded font-medium text-foreground outline-none transition-colors hover:text-primary";
+
+interface EffortPickerProps {
+  /** Selected model, which for Codex decides the levels on offer. */
+  model: string;
+  /** Selected level; "" leaves it to the CLI. */
+  effort: string;
+  backend: AgentBackend;
+  cwd: string;
+  usage: ChatUsage;
+  onEffortChange: (effort: string) => void;
+}
+
+/** Reasoning effort, chosen independently of the model. Both CLIs take it as
+ *  their own parameter — Claude as a spawn-time `--effort`, Codex per turn —
+ *  so it gets its own chip rather than multiplying the model menu. */
+const EffortPicker = memo(function EffortPicker({
+  model,
+  effort,
+  backend,
+  cwd,
+  usage,
+  onEffortChange,
+}: EffortPickerProps) {
+  const codex = backend === "codex";
+  const models = useCodexModels(cwd, codex).data ?? [];
+  // Codex: on "Default" the levels on offer are those of the model the CLI
+  // resolved. Claude: the same five levels whatever the model, so no catalog.
+  const source = model || usage.model || "";
+  const efforts = codex ? codexEfforts(source, models) : CLAUDE_EFFORTS;
+  if (efforts.length === 0) return null;
+  const fallback = codex ? codexDefaultEffort(source, models) : undefined;
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger className={chipTrigger}>
+          <Brain className="size-3.5 shrink-0 opacity-70" />
+          <span>{titleCase(effort || fallback || "") || "Default"}</span>
+          <ChevronDown className="size-3 shrink-0 opacity-50" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="min-w-36">
+          <DropdownMenuItem
+            onSelect={() => onEffortChange("")}
+            className="justify-between gap-4"
+          >
+            {fallback ? `Default (${titleCase(fallback)})` : "Default"}
+            {effort === "" && <Check className="size-3.5" />}
+          </DropdownMenuItem>
+          {efforts.map((e) => (
+            <DropdownMenuItem
+              key={e}
+              onSelect={() => onEffortChange(e)}
+              className="justify-between gap-4"
+            >
+              {titleCase(e)}
+              {e === effort && <Check className="size-3.5" />}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {/* Inside, so a catalog without efforts leaves no orphaned rule. */}
+      <ChipDivider />
+    </>
+  );
+});
 
 /** Approval posture: Full access (`--dangerously-skip-permissions`) vs
  *  Supervised (edits/commands raise a permission prompt). */
@@ -416,6 +521,9 @@ interface UsageFooterProps {
   /** Selected `--model` alias; "" = default. */
   model: string;
   onModelChange: (model: string) => void;
+  /** Selected reasoning effort; "" = let the CLI decide. */
+  effort: string;
+  onEffortChange: (effort: string) => void;
   fullAccess: boolean;
   onFullAccessChange: (v: boolean) => void;
 }
@@ -430,6 +538,8 @@ const UsageFooter = memo(function UsageFooter({
   usage,
   model,
   onModelChange,
+  effort,
+  onEffortChange,
   fullAccess,
   onFullAccessChange,
 }: UsageFooterProps) {
@@ -445,13 +555,25 @@ const UsageFooter = memo(function UsageFooter({
         <>
           <ModelPicker
             model={model}
+            effort={effort}
             backend={backend}
             cwd={cwd}
             usage={usage}
             onModelChange={onModelChange}
+            onEffortChange={onEffortChange}
           />
           <ChipDivider />
         </>
+      )}
+      {capabilitiesOf(backend).reasoningEffort && (
+        <EffortPicker
+          model={model}
+          effort={effort}
+          backend={backend}
+          cwd={cwd}
+          usage={usage}
+          onEffortChange={onEffortChange}
+        />
       )}
       {capabilitiesOf(backend).permissions && (
         <AccessChip fullAccess={fullAccess} onChange={onFullAccessChange} />
@@ -501,6 +623,9 @@ interface ChatComposerProps {
   /** Selected `--model` alias for this session; "" = default. */
   model: string;
   onModelChange: (model: string) => void;
+  /** Selected reasoning effort for this session; "" = let the CLI decide. */
+  effort: string;
+  onEffortChange: (effort: string) => void;
   /** Full access = `--dangerously-skip-permissions`; off = Supervised. */
   fullAccess: boolean;
   onFullAccessChange: (v: boolean) => void;
@@ -531,6 +656,8 @@ export const ChatComposer = memo(function ChatComposer({
   usage,
   model,
   onModelChange,
+  effort,
+  onEffortChange,
   fullAccess,
   onFullAccessChange,
   draft,
@@ -860,6 +987,8 @@ export const ChatComposer = memo(function ChatComposer({
             usage={usage}
             model={model}
             onModelChange={onModelChange}
+            effort={effort}
+            onEffortChange={onEffortChange}
             fullAccess={fullAccess}
             onFullAccessChange={onFullAccessChange}
           />

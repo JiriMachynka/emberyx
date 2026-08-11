@@ -405,14 +405,14 @@ describe("useCodexChat sending", () => {
 // the effort rides each turn.
 describe("useCodexChat model and reasoning effort", () => {
   it("opens the thread on the model id alone", async () => {
-    await mount({ model: "gpt-5.6-luna:high" });
+    await mount({ model: "gpt-5.6-luna", effort: "high" });
     expect(sentTo("codex_thread_start")[0][1]).toMatchObject({
       params: { model: "gpt-5.6-luna" },
     });
   });
 
   it("puts the effort on the turn", async () => {
-    const { result } = await mount({ model: "gpt-5.6-luna:high" });
+    const { result } = await mount({ model: "gpt-5.6-luna", effort: "high" });
     act(() => result.current.send("go"));
     expect(sentTo("codex_turn_start")[0][1]).toEqual({
       id: 7,
@@ -434,6 +434,36 @@ describe("useCodexChat model and reasoning effort", () => {
         input: [{ type: "text", text: "go", text_elements: [] }],
       },
     });
+  });
+
+  // The effort rides `turn/start`, so unlike Claude's launch flag it costs
+  // nothing to change — tearing the app-server down would lose the thread.
+  it("does not respawn when the effort changes, and uses it on the next turn", async () => {
+    const view = renderHook(({ effort }) => useCodexChat({ ...options, effort }), {
+      initialProps: { effort: "low" },
+    });
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    expect(sentTo("codex_spawn")).toHaveLength(1);
+
+    view.rerender({ effort: "high" });
+    expect(sentTo("codex_spawn")).toHaveLength(1);
+    expect(sentTo("codex_kill")).toHaveLength(0);
+
+    act(() => view.result.current.send("go"));
+    expect(sentTo("codex_turn_start")[0][1]).toMatchObject({
+      params: { effort: "high" },
+    });
+  });
+
+  // Only the model reopens the thread.
+  it("respawns when the model changes", async () => {
+    const view = renderHook(({ model }) => useCodexChat({ ...options, model }), {
+      initialProps: { model: "gpt-5.6-luna" },
+    });
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+
+    view.rerender({ model: "gpt-5.4-mini" });
+    await waitFor(() => expect(sentTo("codex_spawn")).toHaveLength(2));
   });
 });
 

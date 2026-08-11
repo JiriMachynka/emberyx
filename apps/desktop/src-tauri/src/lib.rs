@@ -15,6 +15,7 @@ mod openrouter;
 mod pty;
 mod search;
 mod slash;
+mod supervisor;
 mod threads;
 mod usage;
 mod workspace;
@@ -22,7 +23,9 @@ mod workspace;
 use agent::AgentManager;
 use codex::CodexManager;
 use pty::PtyManager;
+use supervisor::Supervisor;
 use tauri::Manager;
+use tauri::path::BaseDirectory;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -44,9 +47,13 @@ pub fn run() {
         .manage(PtyManager::new())
         .manage(AgentManager::new())
         .manage(CodexManager::new())
+        .manage(Supervisor::new())
         .manage(usage::UsageCache::default())
         .manage(usage::SummaryCache::default())
         .setup(|app| {
+            if let Ok(path) = app.path().resolve("registry.json", BaseDirectory::AppData) {
+                let _ = app.state::<Supervisor>().restore(&path);
+            }
             let config = hooks::start(app.handle())?;
             app.manage(config);
             app.manage(ask::start(app.handle())?);
@@ -77,6 +84,23 @@ pub fn run() {
             codex::codex_hooks_list,
             codex::codex_rate_limits,
             codex::codex_usage,
+            supervisor::agent_register,
+            supervisor::agent_attach_thread,
+            supervisor::agent_attach_turn,
+            supervisor::agent_complete_turn,
+            supervisor::agent_list,
+            supervisor::agent_get,
+            supervisor::agent_read,
+            supervisor::agent_wait,
+            supervisor::agent_interrupt,
+            supervisor::agent_stop,
+            supervisor::agent_kill_managed,
+            supervisor::agent_set_state,
+            supervisor::agent_subscribe,
+            supervisor::agent_prompt,
+            supervisor::agent_delegate,
+            supervisor::agent_delegation_get,
+            supervisor::agent_delegation_cancel,
             ask::answer_ask,
             workspace::scan_workspace,
             files::list_dir,
@@ -152,9 +176,16 @@ pub fn run() {
     // or orphaned headless `claude` processes and PTY shells keep running.
     app.run(|app_handle, event| {
         if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
+            if let Ok(path) = app_handle
+                .path()
+                .resolve("registry.json", BaseDirectory::AppData)
+            {
+                let _ = app_handle.state::<Supervisor>().persist(&path);
+            }
             app_handle.state::<AgentManager>().kill_all();
             app_handle.state::<CodexManager>().kill_all();
             app_handle.state::<PtyManager>().kill_all();
+            app_handle.state::<Supervisor>().kill_all();
         }
     });
 }

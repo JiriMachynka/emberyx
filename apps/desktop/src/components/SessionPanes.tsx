@@ -12,6 +12,8 @@ interface SessionPanesProps {
   settings: Settings;
   /** Persist a new default `--model` when a chat pane switches models. */
   onModelChange: (model: string) => void;
+  /** Persist a new default reasoning effort when a chat pane switches it. */
+  onEffortChange: (effort: string) => void;
   /** Chat sessions rename themselves once Claude titles the thread. */
   onTitled: (session: Session, title: string) => void;
 }
@@ -26,6 +28,7 @@ export function SessionPanes({
   activeId,
   settings,
   onModelChange,
+  onEffortChange,
   onTitled,
 }: SessionPanesProps) {
   return (
@@ -39,6 +42,7 @@ export function SessionPanes({
             activeId={activeId}
             settings={settings}
             onModelChange={onModelChange}
+            onEffortChange={onEffortChange}
             onTitled={onTitled}
           />
         ))}
@@ -54,12 +58,14 @@ function SessionPaneRow({
   activeId,
   settings,
   onModelChange,
+  onEffortChange,
   onTitled,
 }: {
   session: Session;
   activeId: string | null;
   settings: Settings;
   onModelChange: (model: string) => void;
+  onEffortChange: (effort: string) => void;
   onTitled: (session: Session, title: string) => void;
 }) {
   const active = session.id === activeId;
@@ -81,6 +87,8 @@ function SessionPaneRow({
           skipPermissions={settings.dangerouslySkipPermissions}
           model={settings.model}
           onModelChange={onModelChange}
+          effort={settings.effort}
+          onEffortChange={onEffortChange}
           onTitled={handleTitled}
         />
       ) : session.kind === "dokploy-logs" ? (

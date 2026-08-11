@@ -1059,3 +1059,50 @@ describe("readActivity", () => {
     expect(rows.map((r) => r.icon)).toEqual(["read", "bash", "tool", undefined]);
   });
 });
+
+// `--effort` is a session-scoped launch flag, so it is spent at spawn and a
+// change to it has to relaunch the process the way a model change does.
+describe("useAgentChat reasoning effort", () => {
+  it("passes the chosen level to agent_spawn", async () => {
+    await mount({ effort: "xhigh" });
+    expect(sentTo("agent_spawn")[0][1]).toMatchObject({ effort: "xhigh" });
+  });
+
+  // An empty --effort is only warned about and ignored, so it must never be
+  // sent: with no level chosen the command line stays exactly as it was.
+  it("sends no effort at all when none is chosen", async () => {
+    await mount();
+    const args = sentTo("agent_spawn")[0][1] as Record<string, unknown>;
+    expect(args.effort).toBeNull();
+    expect(args).toMatchObject({ model: null });
+  });
+
+  it("respawns when the level changes", async () => {
+    const view = renderHook(({ effort }) => useAgentChat({ ...options, effort }), {
+      initialProps: { effort: "low" },
+    });
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    expect(sentTo("agent_spawn")).toHaveLength(1);
+
+    view.rerender({ effort: "max" });
+    await waitFor(() => expect(sentTo("agent_spawn")).toHaveLength(2));
+    expect(sentTo("agent_spawn")[1][1]).toMatchObject({ effort: "max" });
+    // The old process is torn down rather than left running alongside.
+    expect(sentTo("agent_kill")).toHaveLength(1);
+  });
+
+  it("leaves the level alone when only the model changes", async () => {
+    const view = renderHook(
+      ({ model }) => useAgentChat({ ...options, model, effort: "high" }),
+      { initialProps: { model: "opus" } }
+    );
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+
+    view.rerender({ model: "sonnet" });
+    await waitFor(() => expect(sentTo("agent_spawn")).toHaveLength(2));
+    expect(sentTo("agent_spawn")[1][1]).toMatchObject({
+      model: "sonnet",
+      effort: "high",
+    });
+  });
+});

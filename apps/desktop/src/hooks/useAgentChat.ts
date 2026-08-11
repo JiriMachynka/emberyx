@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAgentStore, type SubagentActivity } from "@/lib/agentStore";
+import { registerAgent, setAgentLifecycle } from "@/lib/agentRegistry";
 import type { SessionStatus } from "@/types";
 import {
   classifyFailure,
@@ -161,6 +162,9 @@ interface Options {
   skipPermissions?: boolean;
   /** `--model` alias; "" / undefined lets the CLI pick. Changing it respawns. */
   model?: string;
+  /** `--effort` level; "" / undefined lets the CLI pick. It is a session-scoped
+   *  launch flag, so changing it respawns the same way the model does. */
+  effort?: string;
   /** Called with the generated title once a fresh chat has been auto-titled. */
   onTitled?: (title: string) => void;
   /** False while a session of another backend owns this pane — the hook still
@@ -350,6 +354,7 @@ export function useAgentChat({
   resume,
   skipPermissions = false,
   model = "",
+  effort = "",
   onTitled,
   enabled = true,
 }: Options) {
@@ -408,6 +413,7 @@ export function useAgentChat({
   useEffect(() => {
     if (!enabled) return;
     setSessionStatus(emberyxSessionId, SESSION_STATUS[status]);
+    void setAgentLifecycle(emberyxSessionId, status);
     return () => setSessionStatus(emberyxSessionId, "idle");
   }, [enabled, status, emberyxSessionId, setSessionStatus]);
   const clearAccountIssue = useAgentStore((st) => st.clearAccountIssue);
@@ -977,6 +983,7 @@ export function useAgentChat({
           skipPermissions,
           settings: null,
           model: model || null,
+          effort: effort || null,
           emberyxSessionId,
           onEvent: channel,
         });
@@ -985,6 +992,7 @@ export function useAgentChat({
           return;
         }
         idRef.current = id;
+        void registerAgent(emberyxSessionId, cwd, "claude", id);
         setReady(true);
       } catch (e) {
         console.error("[emberyx] agent_spawn failed", e);
@@ -1008,6 +1016,7 @@ export function useAgentChat({
     resume,
     skipPermissions,
     model,
+    effort,
     emberyxSessionId,
     handleLine,
     announceIssue,

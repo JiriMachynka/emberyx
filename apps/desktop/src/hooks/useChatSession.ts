@@ -17,6 +17,9 @@ interface Options {
   resume?: string;
   skipPermissions?: boolean;
   model?: string;
+  /** Reasoning effort; "" lets the CLI decide. Claude spends it at spawn, Codex
+   *  per turn, so only Claude respawns when it changes. */
+  effort?: string;
   onTitled?: (title: string) => void;
 }
 

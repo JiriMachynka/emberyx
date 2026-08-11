@@ -441,7 +441,11 @@ impl Inner {
                     }
                     Chunk::Done => {
                         flush(&mut batch);
-                        let _ = on_event.send(CodexEvent::Exit(reap()));
+                        let code = reap();
+                        if let Some(supervisor) = crate::supervisor::Supervisor::active() {
+                            supervisor.observe_process_exit_by_process(id, code);
+                        }
+                        let _ = on_event.send(CodexEvent::Exit(code));
                         return;
                     }
                 }
@@ -461,7 +465,11 @@ impl Inner {
                         }
                         Ok(Chunk::Done) => {
                             flush(&mut batch);
-                            let _ = on_event.send(CodexEvent::Exit(reap()));
+                            let code = reap();
+                            if let Some(supervisor) = crate::supervisor::Supervisor::active() {
+                                supervisor.observe_process_exit_by_process(id, code);
+                            }
+                            let _ = on_event.send(CodexEvent::Exit(code));
                             return;
                         }
                         Err(_) => break,
@@ -513,6 +521,36 @@ impl CodexManager {
     /// skipping this orphans `codex app-server` processes.
     pub fn kill_all(&self) {
         self.inner.kill_all();
+    }
+
+    /// Start a turn on an already-open thread. The app-server acknowledges the
+    /// request immediately; streamed deltas continue through the session's
+    /// existing event channel.
+    pub fn prompt(&self, id: u32, thread_id: &str, message: &str) -> Result<()> {
+        let handle = self.handle(id)?;
+        request(
+            &handle,
+            "turn/start",
+            json!({
+                "threadId": thread_id,
+                "input": [{ "type": "text", "text": message, "text_elements": [] }],
+            }),
+        )?;
+        Ok(())
+    }
+
+    pub fn steer(&self, id: u32, thread_id: &str, turn_id: &str, message: &str) -> Result<()> {
+        let handle = self.handle(id)?;
+        request(
+            &handle,
+            "turn/steer",
+            json!({
+                "threadId": thread_id,
+                "expectedTurnId": turn_id,
+                "input": [{ "type": "text", "text": message, "text_elements": [] }],
+            }),
+        )?;
+        Ok(())
     }
 }
 

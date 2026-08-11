@@ -1,10 +1,10 @@
 # Emberyx
 
-Desktop cockpit for AI coding agents. Open your projects and drive a coding
-agent (`claude` by default) across all of them from one window — each in an
-integrated terminal or chat pane, with monorepo-aware dev servers, a built-in
-editor, git tooling, token/cost tracking, and a live view of what the agent
-changes.
+Desktop command center for conversations with AI coding agents. Open your
+projects and drive Claude or Codex from chat threads, structured tool cards,
+approvals, agent status, delegation, git diffs, and project views. Integrated
+terminals remain an optional advanced surface for process execution and
+debugging.
 
 Built with Tauri v2 + React. A lighter, purpose-built alternative to cmux.
 
@@ -24,6 +24,9 @@ Built with Tauri v2 + React. A lighter, purpose-built alternative to cmux.
   conversations without leaving the app.
 - **Agent-aware UI** — Claude Code hooks drive live status (working / needs-you /
   idle), a "needs input" banner, and desktop notifications.
+- **Chat-first orchestration** — a Rust supervisor keeps an authoritative,
+  stable-ID registry for Claude and Codex sessions, bounded event transcripts,
+  lifecycle state, and chat-native delegation between agents.
 - **Session tabs** — agent + dev tabs per project; drag to reorder, close
   individually.
 
@@ -49,6 +52,42 @@ Built with Tauri v2 + React. A lighter, purpose-built alternative to cmux.
   remote), shows service status, streams logs, and triggers redeploys.
 - **Auto-updates** — checks GitHub releases on launch and installs signed
   updates in place.
+
+### Orchestration architecture
+
+The React chat hooks remain the rendering and backend-protocol layer. Above
+them, `src-tauri/src/supervisor.rs` owns agent identity, project/workspace
+ownership, lifecycle snapshots, bounded recent events, and delegation
+correlation. Tauri IPC provides `agent.list`, `agent.get`, `agent.read`,
+`agent.wait`, `agent.interrupt`, `agent.subscribe`, `agent.prompt`, and
+`agent.delegate`; the `agent-event` stream lets chat surfaces update without
+polling raw terminal output. The existing Claude stream-json and Codex
+app-server managers are intentionally retained beneath this seam.
+
+Known limitations: the registry is still runtime-owned, but its metadata,
+bounded orchestration events, and provider thread IDs are atomically restored
+on the next launch; live child processes are intentionally stopped on exit and
+must be respawned against those provider threads. Codex delegation starts a
+fresh turn when idle and steers an active turn using its expected turn ID. A
+future `emberyxd` daemon can keep processes alive across full app exits without
+changing the IPC contract.
+
+### `emberyxd` daemon (experimental)
+
+The repository includes an independent `emberyxd` binary. It owns a durable,
+bounded orchestration registry behind a Unix-domain socket and speaks
+newline-delimited JSON. This is the migration seam for moving Claude/Codex
+process ownership out of the Tauri process.
+
+```bash
+cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin emberyxd
+```
+
+The default socket is `${TMPDIR}/emberyxd.sock`; override it with
+`EMBERYX_DAEMON_SOCKET`, and override its metadata state with
+`EMBERYX_DAEMON_STATE`. The current daemon persists registry metadata and
+events, while the Tauri app still uses its in-process transport managers.
+Live process migration is the next daemon increment.
 
 ### Shortcuts
 

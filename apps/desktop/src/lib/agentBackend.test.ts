@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   AGENT_BACKENDS,
+  CLAUDE_EFFORTS,
   backendFromCommand,
   capabilitiesOf,
   isAgentBackend,
 } from "@/lib/agentBackend";
 
 describe("capabilitiesOf", () => {
-  it("gives Claude everything", () => {
+  // Both CLIs take reasoning effort as a parameter of its own — Claude as a
+  // spawn-time `--effort`, Codex per turn.
+  it("gives Claude everything its CLI implements", () => {
     expect(Object.values(capabilitiesOf("claude")).every(Boolean)).toBe(true);
   });
 
@@ -23,6 +26,7 @@ describe("capabilitiesOf", () => {
       slashCommands: true,
       subagents: true,
       modelPicker: true,
+      reasoningEffort: true,
       steering: true,
     });
   });
@@ -36,6 +40,24 @@ describe("capabilitiesOf", () => {
 
   it("hands back one shared record per backend, so memoized panes see a stable prop", () => {
     expect(capabilitiesOf("claude")).toBe(capabilitiesOf("claude"));
+  });
+});
+
+describe("CLAUDE_EFFORTS", () => {
+  // Spelled out because the CLI only warns about a level it doesn't know, then
+  // ignores it — a typo here would silently drop the setting.
+  it("lists exactly the levels the CLI accepts", () => {
+    expect(CLAUDE_EFFORTS).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
+  // Codex offers `ultra`; Claude does not, so the two lists can't be shared.
+  it("has no ultra", () => {
+    expect(CLAUDE_EFFORTS).not.toContain("ultra");
+  });
+
+  // The list is static, so the chip renders without waiting on a catalog fetch.
+  it("never contains an empty level, which the flag would reject", () => {
+    expect(CLAUDE_EFFORTS.every((e) => e.length > 0)).toBe(true);
   });
 });
 

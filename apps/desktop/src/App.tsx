@@ -149,6 +149,10 @@ function App() {
     (model: string) => modelChangeRef.current({ model }),
     []
   );
+  const onEffortChange = useCallback(
+    (effort: string) => modelChangeRef.current({ effort }),
+    []
+  );
   const titledRef = useRef<(session: Session, title: string) => void>(() => {});
   titledRef.current = (session, title) => {
     ws.renameSession(session.id, title);
@@ -387,6 +391,7 @@ function App() {
               activeId={activeId}
               settings={settings}
               onModelChange={onModelChange}
+              onEffortChange={onEffortChange}
               onTitled={onTitled}
             />
             {/* The editor is an overlay, not a tab: it covers the active pane

@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Channel } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import {
   APPROVAL_METHODS,
   ASK_METHODS,
@@ -39,9 +39,9 @@ import {
   generateCodexTitle,
   type CodexEvent,
 } from "@/lib/codex/transport";
-import { parseCodexModel } from "@/lib/codex/models";
 import { classifyFailure } from "@/lib/accountState";
 import { useAgentStore } from "@/lib/agentStore";
+import { registerAgent, setAgentLifecycle } from "@/lib/agentRegistry";
 import { nextChangeId } from "@/lib/changes";
 import {
   SESSION_STATUS,
@@ -61,9 +61,11 @@ interface Options {
   resume?: string;
   /** Grant every approval up front and drop the sandbox. */
   skipPermissions?: boolean;
-  /** `model` override as `id` or `id:effort`; "" lets the CLI pick. Changing
-   *  it respawns. */
+  /** `model` override; "" lets the CLI pick. Changing it respawns. */
   model?: string;
+  /** Reasoning effort for each turn; "" lets the CLI pick. It rides
+   *  `turn/start`, so changing it never respawns. */
+  effort?: string;
   /** Called once with the title generated for a fresh thread. */
   onTitled?: (title: string) => void;
   /** False while a session of another backend owns this pane — the hook still
@@ -149,6 +151,7 @@ export function useCodexChat({
   resume,
   skipPermissions = false,
   model = "",
+  effort = "",
   onTitled,
   enabled = true,
 }: Options) {
@@ -180,9 +183,9 @@ export function useCodexChat({
   const onTitledRef = useRef(onTitled);
   onTitledRef.current = onTitled;
 
-  // `id:effort` is one stored value but two app-server params: the model opens
-  // the thread, the effort rides each turn.
-  const { model: modelId, effort } = parseCodexModel(model);
+  // Two app-server params on different clocks: the model opens the thread, the
+  // effort rides each turn, so `send` reads it through a ref rather than
+  // rebuilding (and respawning) on a change.
   const effortRef = useRef(effort);
   effortRef.current = effort;
 
@@ -193,6 +196,7 @@ export function useCodexChat({
   useEffect(() => {
     if (!enabled) return;
     setSessionStatus(emberyxSessionId, SESSION_STATUS[status]);
+    void setAgentLifecycle(emberyxSessionId, status);
     return () => setSessionStatus(emberyxSessionId, "idle");
   }, [enabled, status, emberyxSessionId, setSessionStatus]);
 
@@ -266,6 +270,30 @@ export function useCodexChat({
         params
       );
       stateRef.current = state;
+      const p = isRecord(params) ? params : null;
+      const turn = p && isRecord(p.turn) ? p.turn : null;
+      const eventThreadId = p && typeof p.threadId === "string" ? p.threadId : threadRef.current;
+      const eventTurnId = turn && typeof turn.id === "string" ? turn.id : state.turnId;
+      const isSubagentTurn = !!(eventThreadId && state.agentThreads[eventThreadId]);
+      if (method === "turn/started" && eventThreadId && eventTurnId && !isSubagentTurn) {
+        void invoke("agent_attach_turn", {
+          agentId: emberyxSessionId,
+          threadId: eventThreadId,
+          turnId: eventTurnId,
+        });
+      } else if (
+        (method === "turn/completed" || method === "turn/failed") &&
+        eventThreadId &&
+        eventTurnId &&
+        !isSubagentTurn
+      ) {
+        void invoke("agent_complete_turn", {
+          agentId: emberyxSessionId,
+          threadId: eventThreadId,
+          turnId: eventTurnId,
+          status: turn && typeof turn.status === "string" ? turn.status : method,
+        });
+      }
       for (const c of changes) {
         addChange({
           id: nextChangeId(),
@@ -374,12 +402,13 @@ export function useCodexChat({
           return;
         }
         idRef.current = spawned.id;
+        void registerAgent(emberyxSessionId, cwd, "codex", spawned.id);
         // Prefer the live thread id so a respawn (model switch, restart) picks
         // the same thread back up instead of starting a fresh one.
         const threadId = threadRef.current ?? resume;
         const config = {
           cwd,
-          model: modelId || null,
+          model: model || null,
           ...approvalFor(skipPermissions),
         };
         const opened = threadId
@@ -389,6 +418,10 @@ export function useCodexChat({
         const thread = decodeThreadStart(opened);
         if (!thread) throw new Error("codex opened no thread");
         threadRef.current = thread.threadId;
+        void invoke("agent_attach_thread", {
+          agentId: emberyxSessionId,
+          threadId: thread.threadId,
+        });
         if (thread.model) {
           stateRef.current = {
             ...stateRef.current,
@@ -424,7 +457,7 @@ export function useCodexChat({
     cwd,
     resume,
     // Effort rides the next turn, so only a model change is worth a respawn.
-    modelId,
+    model,
     skipPermissions,
     emberyxSessionId,
     attempt,

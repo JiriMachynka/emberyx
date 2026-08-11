@@ -72,6 +72,7 @@ impl AgentManager {
         settings: Option<String>,
         mcp_config: Option<String>,
         model: Option<String>,
+        effort: Option<String>,
         emberyx_session_id: String,
         on_event: Channel<AgentEvent>,
     ) -> Result<u32> {
@@ -88,6 +89,12 @@ impl AgentManager {
         // it. Otherwise pin the alias (opus, sonnet, sonnet[1m], haiku).
         if let Some(m) = model.as_deref().filter(|m| !m.is_empty()) {
             cmd.arg("--model").arg(m);
+        }
+
+        // Session-scoped effort (low|medium|high|xhigh|max). An unknown value is
+        // only warned about by the CLI, so an empty one is dropped here instead.
+        if let Some(e) = effort.as_deref().filter(|e| !e.is_empty()) {
+            cmd.arg("--effort").arg(e);
         }
 
         if skip_permissions {
@@ -206,7 +213,11 @@ impl AgentManager {
                 let mut batch = match first {
                     Chunk::Line(line) => vec![line],
                     Chunk::Done => {
-                        let _ = out_channel.send(AgentEvent::Exit(reap()));
+                        let code = reap();
+                        if let Some(supervisor) = crate::supervisor::Supervisor::active() {
+                            supervisor.observe_process_exit_by_process(id, code);
+                        }
+                        let _ = out_channel.send(AgentEvent::Exit(code));
                         return;
                     }
                 };
@@ -229,7 +240,11 @@ impl AgentManager {
                     return;
                 }
                 if done {
-                    let _ = out_channel.send(AgentEvent::Exit(reap()));
+                    let code = reap();
+                    if let Some(supervisor) = crate::supervisor::Supervisor::active() {
+                        supervisor.observe_process_exit_by_process(id, code);
+                    }
+                    let _ = out_channel.send(AgentEvent::Exit(code));
                     return;
                 }
             }
@@ -363,6 +378,7 @@ pub fn agent_spawn(
     skip_permissions: bool,
     settings: Option<String>,
     model: Option<String>,
+    effort: Option<String>,
     emberyx_session_id: String,
     on_event: Channel<AgentEvent>,
 ) -> Result<u32> {
@@ -376,6 +392,7 @@ pub fn agent_spawn(
         settings,
         Some(mcp_config),
         model,
+        effort,
         emberyx_session_id,
         on_event,
     )?)
