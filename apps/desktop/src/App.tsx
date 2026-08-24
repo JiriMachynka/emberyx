@@ -26,6 +26,9 @@ import { requestSearch } from "@/lib/searchRequest";
 import { projectLabel } from "@/lib/worktree";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import type { Session } from "@/types";
+import { isRemoteHost, type RemoteHost } from "@/lib/forge";
+import { PreviewPanel } from "@/components/PreviewPanel";
+import { useGitRemoteHost } from "@/lib/queries";
 import { useDevServers } from "@/hooks/useDevServers";
 import { useAgentBackend } from "@/hooks/useAgentBackend";
 import { useProjectActions } from "@/hooks/useProjectActions";
@@ -58,6 +61,7 @@ function App() {
   const [usageOpen, setUsageOpen] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
   const [mrsOpen, setMrsOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [conflictOpen, setConflictOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
@@ -172,6 +176,11 @@ function App() {
     setProjectSettingsOpen(false);
   }, [activeProjectId]);
 
+  // Which service the active project's remote is on. The review panel speaks
+  // one shape for both; only the endpoints and the wording differ.
+  const remoteHostValue = useGitRemoteHost(activeProject?.path ?? "").data;
+  const remoteHost: RemoteHost =
+    remoteHostValue && isRemoteHost(remoteHostValue) ? remoteHostValue : "gitlab";
   const agentBackend = useAgentBackend(activeProject, settings.agentBackend);
   const capabilities = agentBackend.capabilities;
   const dev = useDevServers(activeProject, ws.addDev);
@@ -351,6 +360,8 @@ function App() {
           devRunning={projectSessions.some((s) => s.kind === "dev")}
           mrsOpen={mrsOpen}
           onToggleMrs={toggleMrs}
+          previewOpen={previewOpen}
+          onTogglePreview={() => setPreviewOpen((v) => !v)}
           devOpen={devOpen}
           devCount={devCount}
           onToggleDev={toggleDev}
@@ -486,9 +497,17 @@ function App() {
               />
             </div>
           )}
+          {activeProject && previewOpen && (
+            <PreviewPanel
+              open={previewOpen}
+              projectPath={activeProject.path}
+              onClose={() => setPreviewOpen(false)}
+            />
+          )}
           {activeProject && mrsOpen && (
             <MergeRequestsPanel
               open={mrsOpen}
+              host={remoteHost}
               path={activeProject.path}
               onClose={() => setMrsOpen(false)}
               onConflicts={() => setConflictOpen(true)}

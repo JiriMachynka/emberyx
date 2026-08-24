@@ -311,17 +311,31 @@ fn call_tool(app: &AppHandle, url: &str, params: &Value) -> std::result::Result<
         state.pending.lock().unwrap().insert(id.clone(), tx);
     }
 
-    let _ = app.emit(
-        "ask-user",
-        AskEvent {
-            id: id.clone(),
+    let event = AskEvent {
+        id: id.clone(),
+        session: session.clone(),
+        questions,
+    };
+    // Register before emitting: the request outlives the window, so a pane that
+    // opens after the event was fired can still read it back and answer it.
+    if let Some(supervisor) = crate::supervisor::Supervisor::active() {
+        supervisor.open_approval(
+            id.clone(),
             session,
-            questions,
-        },
-    );
+            "ask",
+            serde_json::to_string(&event).unwrap_or_default(),
+            ANSWER_TIMEOUT.as_millis() as u64,
+        );
+    }
+    let _ = app.emit("ask-user", event);
 
     let answer = rx.recv_timeout(ANSWER_TIMEOUT);
     app.state::<AskServer>().pending.lock().unwrap().remove(&id);
+    // Answered paths close it themselves; this catches the timeout, and is a
+    // no-op once the answer already closed it.
+    if let Some(supervisor) = crate::supervisor::Supervisor::active() {
+        supervisor.close_approval(&id, None);
+    }
 
     match answer {
         Ok(answer) => Ok(json!({ "content": [{ "type": "text", "text": answer }] })),
@@ -340,6 +354,9 @@ stating the assumption you made.",
 #[tauri::command]
 pub fn answer_ask(state: tauri::State<'_, AskServer>, id: String, answer: String) -> Result<()> {
     let sender = state.pending.lock().unwrap().remove(&id);
+    if let Some(supervisor) = crate::supervisor::Supervisor::active() {
+        supervisor.close_approval(&id, Some(&answer));
+    }
     match sender {
         Some(tx) => {
             let _ = tx.send(answer);

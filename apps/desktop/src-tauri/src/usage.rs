@@ -43,6 +43,10 @@ pub struct UsageCache(Mutex<HashMap<String, CacheEntry>>);
 pub struct UsageRow {
     /// UTC date, `YYYY-MM-DD`.
     pub date: String,
+    /// Which provider produced the turns. Only Claude keeps a readable history
+    /// on disk today, so that is the only value this source emits — the field
+    /// exists so the panel can be honest about *whose* usage it is showing.
+    pub provider: crate::models::Provider,
     /// Absolute project path the session ran in.
     pub project: String,
     pub model: String,
@@ -184,6 +188,7 @@ fn summary_blocking(cache: &SummaryCache, days: u32) -> Result<Vec<UsageRow>> {
             cache_read: t.cache_read,
             cache_creation: t.cache_creation,
             messages: t.messages,
+            provider: crate::models::Provider::Claude,
         })
         .collect();
     out.sort_by(|a, b| a.date.cmp(&b.date).then(a.project.cmp(&b.project)));

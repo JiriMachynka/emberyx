@@ -2,6 +2,7 @@ import {
   CircleDollarSign,
   ChevronRight,
   GitBranch as GitBranchIcon,
+  Globe,
   GitPullRequest,
   PanelRight,
   SlidersHorizontal,
@@ -17,6 +18,7 @@ import { STATUS_META, statusOf } from "@/lib/status";
 import { basename } from "@/lib/path";
 import { costOf, totalTokens, formatTokens } from "@/lib/pricing";
 import { useGitBranch, useGitRemoteHost } from "@/lib/queries";
+import { FORGE_NOUN, isRemoteHost } from "@/lib/forge";
 import { useAgentStore } from "@/lib/agentStore";
 import type { Project, Session, Thread } from "@/types";
 
@@ -29,6 +31,8 @@ interface ContextBarProps {
   usage: boolean;
   devRunning: boolean;
   mrsOpen: boolean;
+  previewOpen: boolean;
+  onTogglePreview: () => void;
   devOpen: boolean;
   /** Running action output in this project — badge on the Output toggle. */
   devCount: number;
@@ -57,6 +61,8 @@ export function ContextBar({
   usage,
   devRunning,
   mrsOpen,
+  previewOpen,
+  onTogglePreview,
   devOpen,
   devCount,
   onToggleDev,
@@ -166,6 +172,7 @@ export function ContextBar({
         </button>
         {activeProject && (
           <ActionsMenu
+            projectPath={activeProject.path}
             actions={actions}
             running={devRunning}
             onRun={onRunAction}
@@ -188,15 +195,26 @@ export function ContextBar({
             </span>
           </Button>
         )}
-        {activeProject && remoteHost === "gitlab" && (
+        {activeProject && (
+          <Button
+            variant={previewOpen ? "secondary" : "ghost"}
+            size="sm"
+            onClick={onTogglePreview}
+            title="Preview a running dev server"
+          >
+            <Globe className="size-3.5" />
+            Preview
+          </Button>
+        )}
+        {activeProject && remoteHost && isRemoteHost(remoteHost) && (
           <Button
             variant={mrsOpen ? "secondary" : "ghost"}
             size="sm"
             onClick={onToggleMrs}
-            title="Merge requests"
+            title={FORGE_NOUN[remoteHost].many}
           >
             <GitPullRequest className="size-3.5" />
-            MRs
+            {remoteHost === "github" ? "PRs" : "MRs"}
           </Button>
         )}
         {activeProject && (

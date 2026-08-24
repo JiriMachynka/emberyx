@@ -1,4 +1,5 @@
 import type { AgentBackend } from "@/lib/agentBackend";
+import type { Provider } from "@/lib/providers";
 
 export interface PackageInfo {
   name: string;
@@ -191,6 +192,10 @@ export interface GitLogEntry {
 /** One day of token usage for a project/model pair. */
 export interface UsageRow {
   date: string;
+  /** Which provider produced the turns. Only Claude keeps a readable history
+   *  on disk today; the field is what lets the panel say whose usage this is
+   *  rather than implying it covers everything. */
+  provider: Provider;
   project: string;
   model: string;
   input: number;

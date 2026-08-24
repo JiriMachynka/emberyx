@@ -626,6 +626,8 @@ export function useCodexChat({
     ready,
     send,
     queued: 0,
+    // Codex steers instead of queueing, so it has no runtime queue to manage.
+    queue: null,
     stop,
     restart,
     exitReason,

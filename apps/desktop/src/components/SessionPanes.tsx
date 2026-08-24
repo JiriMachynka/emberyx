@@ -85,6 +85,8 @@ function SessionPaneRow({
           fontFamily={settings.fontFamily}
           fontSize={settings.fontSize}
           skipPermissions={settings.dangerouslySkipPermissions}
+          persistent={settings.persistentAgents}
+          permissionMode={settings.permissionMode}
           model={settings.model}
           onModelChange={onModelChange}
           effort={settings.effort}

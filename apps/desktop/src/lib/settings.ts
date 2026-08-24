@@ -4,6 +4,24 @@ import {
   isAgentBackend,
   type AgentBackend,
 } from "@/lib/agentBackend";
+import type { IdeId } from "@/lib/ide";
+
+/** Claude Code's own permission modes, in increasing order of autonomy. */
+export const PERMISSION_MODES = [
+  "default",
+  "acceptEdits",
+  "bypassPermissions",
+  "plan",
+] as const;
+
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
+
+export const PERMISSION_MODE_LABEL: Record<PermissionMode, string> = {
+  default: "Ask every time",
+  acceptEdits: "Accept edits",
+  bypassPermissions: "Bypass permissions",
+  plan: "Plan only",
+};
 
 export interface Settings {
   /** Which agent surface opens with a project: rich chat UI or the raw terminal. */
@@ -26,6 +44,17 @@ export interface Settings {
   scrollback: number;
   /** Launch Claude with --dangerously-skip-permissions. */
   dangerouslySkipPermissions: boolean;
+  /** Editor "Open in IDE" launches. */
+  ide: IdeId;
+  /** Command for `ide: "custom"`; supports {project} {file} {line} {column}. */
+  ideCustomCommand: string;
+  /** Claude's `--permission-mode` for new chats. Ignored when permissions are
+   *  skipped entirely, which is a separate, blunter switch. */
+  permissionMode: PermissionMode;
+  /** Run chat agents inside `emberyxd` so they survive closing the window.
+   *  Off by default: the daemon owns the process, so a resumed thread renders
+   *  from the daemon's replay rather than the CLI transcript on disk. */
+  persistentAgents: boolean;
   /** `--model` alias for new chats: "" = CLI default, else opus/sonnet/sonnet[1m]/haiku. */
   model: string;
   /** Reasoning effort for new chats; "" = CLI default. Its own axis, not part
@@ -73,6 +102,10 @@ export const DEFAULT_SETTINGS: Settings = {
   editorFontSize: 13,
   scrollback: 1000,
   dangerouslySkipPermissions: true,
+  ide: "vscode",
+  ideCustomCommand: "",
+  permissionMode: "acceptEdits",
+  persistentAgents: false,
   model: "",
   effort: "",
   resumeLatestThread: false,

@@ -5,6 +5,7 @@ import type { ToolIcon } from "@/lib/toolDisplay";
 import type { ChatImage } from "@/hooks/useAgentChat";
 import type { SessionStatus } from "@/types";
 import type { AccountIssue } from "@/lib/accountState";
+import type { HandoffTurn } from "@/lib/handoff";
 import {
   MAX_NOTIFICATIONS,
   loadNotifications,
@@ -60,12 +61,17 @@ export interface SubagentRun {
   turnEndedAt?: number;
 }
 
-/** Push a message from one chat session into the other backend's chat. */
-export type HandoffFn = (
-  sourceSessionId: string,
-  text: string,
-  withDiff: boolean
-) => void;
+/** What a chat pane hands over: its recent turns, plus whether the user asked
+ *  for the working tree along with them. */
+export interface HandoffRequest {
+  sourceSessionId: string;
+  /** Recent turns, oldest first, already trimmed by the pane. */
+  turns: HandoffTurn[];
+  withDiff: boolean;
+}
+
+/** Move a conversation to another provider's chat in the same project. */
+export type HandoffFn = (request: HandoffRequest) => void;
 
 /**
  * Live agent telemetry, updated at streaming frequency from the hook listener.
@@ -86,6 +92,10 @@ interface AgentState {
   /** Each live chat session's `send`, so panels outside the pane can dispatch a
    *  turn (e.g. running a slash command) into the active session. */
   senders: Record<string, (text: string, images?: ChatImage[]) => void>;
+  /** Each live chat session's recent turns, as a getter. A handoff needs the
+   *  conversation, but publishing it per token would re-render the world — so
+   *  the pane registers a reader and it is called only at handoff time. */
+  transcripts: Record<string, () => HandoffTurn[]>;
   /** Text waiting to be dropped into a session's composer. Held here rather
    *  than pushed at a `send`, because a handoff can target a chat that hasn't
    *  mounted yet — it picks its draft up when it does. */
@@ -102,6 +112,8 @@ interface AgentState {
     fn: (text: string, images?: ChatImage[]) => void
   ) => void;
   unregisterSender: (id: string) => void;
+  registerTranscript: (id: string, read: () => HandoffTurn[]) => void;
+  unregisterTranscript: (id: string) => void;
   setStatus: (id: string, status: SessionStatus) => void;
   setUsage: (id: string, usage: Usage) => void;
   addChange: (change: Change) => void;
@@ -143,6 +155,7 @@ export const useAgentStore = create<AgentState>()((set) => ({
   subagents: {},
   selectedAgent: null,
   senders: {},
+  transcripts: {},
   drafts: {},
   handoff: null,
   notifications: loadNotifications(),
@@ -161,6 +174,13 @@ export const useAgentStore = create<AgentState>()((set) => ({
     set((s) => {
       const { [id]: _, ...rest } = s.senders;
       return { senders: rest };
+    }),
+  registerTranscript: (id, read) =>
+    set((s) => ({ transcripts: { ...s.transcripts, [id]: read } })),
+  unregisterTranscript: (id) =>
+    set((s) => {
+      const { [id]: _, ...rest } = s.transcripts;
+      return { transcripts: rest };
     }),
   setStatus: (id, status) =>
     set((s) => ({ statuses: { ...s.statuses, [id]: status } })),

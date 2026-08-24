@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { basename } from "@/lib/path";
 import { costOf, formatTokens, totalTokens } from "@/lib/pricing";
 import { useUsageSummary } from "@/lib/queries";
+import { PROVIDER_LABEL, type Provider } from "@/lib/providers";
 import type { UsageRow } from "@/types";
 
 const RANGES = [7, 30, 90] as const;
@@ -41,14 +42,27 @@ interface UsagePanelProps {
 }
 
 /**
- * Cross-project spend: every Claude Code transcript on disk, rolled up by day,
- * project, and model. Costs are estimates from the local rate table, same as
- * the per-agent meter in the context bar.
+ * Cross-project spend, rolled up by day, project, model, and provider. Costs
+ * are estimates from the local rate table, same as the per-agent meter in the
+ * context bar — never a billed figure.
+ *
+ * Only providers that keep a readable history on disk can appear here. The
+ * provider filter lists what the data actually contains rather than every
+ * provider Emberyx can drive, so an empty row never reads as "spent nothing".
  */
 export function UsagePanel({ onClose }: UsagePanelProps) {
   const [days, setDays] = useState<number>(30);
+  const [provider, setProvider] = useState<Provider | "all">("all");
   const query = useUsageSummary(days, true);
-  const rows = useMemo(() => query.data ?? [], [query.data]);
+  const all = useMemo(() => query.data ?? [], [query.data]);
+  const providers = useMemo(
+    () => [...new Set(all.map((row) => row.provider))].sort(),
+    [all]
+  );
+  const rows = useMemo(
+    () => (provider === "all" ? all : all.filter((row) => row.provider === provider)),
+    [all, provider]
+  );
 
   const byDay = useMemo(() => {
     const map = new Map<string, Bucket>();
@@ -69,6 +83,7 @@ export function UsagePanel({ onClose }: UsagePanelProps) {
 
   const byProject = useMemo(() => groupBy(rows, (r) => r.project), [rows]);
   const byModel = useMemo(() => groupBy(rows, (r) => r.model), [rows]);
+  const byProvider = useMemo(() => groupBy(rows, (r) => r.provider), [rows]);
 
   const total = rows.reduce((sum, r) => sum + costOf(r), 0);
   const tokens = rows.reduce((sum, r) => sum + totalTokens(r), 0);
@@ -87,6 +102,36 @@ export function UsagePanel({ onClose }: UsagePanelProps) {
           <header className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
             <Dialog.Title className="text-sm font-medium">Usage & cost</Dialog.Title>
             <div className="ml-auto flex items-center gap-1">
+              {providers.length > 1 && (
+                <>
+                  <button
+                    onClick={() => setProvider("all")}
+                    className={cn(
+                      "rounded px-2 py-1 text-xs",
+                      provider === "all"
+                        ? "bg-secondary text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    All
+                  </button>
+                  {providers.map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => setProvider(p)}
+                      className={cn(
+                        "rounded px-2 py-1 text-xs",
+                        provider === p
+                          ? "bg-secondary text-foreground"
+                          : "text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      {PROVIDER_LABEL[p] ?? p}
+                    </button>
+                  ))}
+                  <span className="mx-1 h-4 w-px bg-border" />
+                </>
+              )}
               {RANGES.map((r) => (
                 <button
                   key={r}
@@ -153,11 +198,27 @@ export function UsagePanel({ onClose }: UsagePanelProps) {
                 label={(key) => prettyModel(key)}
               />
             </section>
+
+            {providers.length > 1 && (
+              <section>
+                <SectionTitle>By provider</SectionTitle>
+                <Table
+                  rows={byProvider}
+                  total={total}
+                  label={(key) => PROVIDER_LABEL[key as Provider] ?? key}
+                />
+              </section>
+            )}
           </div>
 
           <footer className="shrink-0 border-t px-3 py-1.5 text-[11px] text-muted-foreground">
-            Estimated from local per-million rates — cache reads and writes are
-            priced separately.
+            Estimated from local per-million rates, not billed amounts — cache
+            reads and writes are priced separately. Covers{" "}
+            {providers.length > 0
+              ? providers.map((p) => PROVIDER_LABEL[p] ?? p).join(", ")
+              : "no provider"}
+            : only providers that keep a readable history on disk can be counted
+            here.
           </footer>
         </Dialog.Content>
       </Dialog.Portal>

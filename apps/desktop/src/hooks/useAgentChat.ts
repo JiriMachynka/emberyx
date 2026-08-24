@@ -3,6 +3,10 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAgentStore, type SubagentActivity } from "@/lib/agentStore";
 import { registerAgent, setAgentLifecycle } from "@/lib/agentRegistry";
+import { fetchPendingAsk } from "@/lib/approvals";
+import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
+import type { PermissionMode } from "@/lib/settings";
+import type { Provider } from "@/lib/providers";
 import type { SessionStatus } from "@/types";
 import {
   classifyFailure,
@@ -15,6 +19,7 @@ import { describeTool } from "@/lib/toolDisplay";
 import { notifyNative } from "@/hooks/useAgentEvents";
 import { loadSettings } from "@/lib/settings";
 import { basename } from "@/lib/path";
+import { usePromptQueue } from "@/lib/promptQueue";
 
 /** A stream-json line from the headless `claude` process (Rust AgentEvent). */
 type AgentEvent =
@@ -43,6 +48,14 @@ export interface ChatMessage {
   streaming: boolean;
   /** Images the user attached to this turn (user messages only). */
   images?: ChatImage[];
+  /** User messages only: the working-tree snapshot taken before this turn was
+   *  sent, so its file changes can be reverted on their own. */
+  checkpointId?: string;
+  /** Who produced this turn. Stamped by the pane when a thread changes hands,
+   *  so a provider switch never relabels what came before it. */
+  provider?: Provider;
+  /** The model behind `provider`, when it named one. */
+  model?: string | null;
   /** Assistant messages only: wall-clock start (message_start) and turn end
    *  (result), used to render the "Worked for Ns" turn summary. */
   startedAt?: number;
@@ -111,6 +124,14 @@ export interface AskQuestion {
   multiSelect: boolean;
 }
 
+/** What `agent_spawn` returns. `reattached` means the daemon already had this
+ *  agent and replayed it; `truncated` means the replay is knowingly partial. */
+interface AgentHandle {
+  id: number;
+  reattached: boolean;
+  truncated: boolean;
+}
+
 export interface PendingAsk {
   id: string;
   /** Always at least one; several render as tabs. */
@@ -160,6 +181,11 @@ interface Options {
   resume?: string;
   /** Bypass the permission protocol entirely — no in-chat approval prompts. */
   skipPermissions?: boolean;
+  /** Run in `emberyxd` so the agent survives this window closing. */
+  persistent?: boolean;
+  /** Claude's `--permission-mode`. Only consulted when permissions are not
+   *  skipped outright — that flag is mutually exclusive with this one. */
+  permissionMode?: PermissionMode;
   /** `--model` alias; "" / undefined lets the CLI pick. Changing it respawns. */
   model?: string;
   /** `--effort` level; "" / undefined lets the CLI pick. It is a session-scoped
@@ -353,6 +379,8 @@ export function useAgentChat({
   backend = "claude",
   resume,
   skipPermissions = false,
+  persistent = false,
+  permissionMode = "acceptEdits",
   model = "",
   effort = "",
   onTitled,
@@ -418,12 +446,36 @@ export function useAgentChat({
   }, [enabled, status, emberyxSessionId, setSessionStatus]);
   const clearAccountIssue = useAgentStore((st) => st.clearAccountIssue);
 
-  // Turns typed while the agent was busy, oldest first, plus its rendered count.
-  const queueRef = useRef<{ text: string; images?: ChatImage[] }[]>([]);
+  // Turns typed while the agent was busy. The queue itself is owned by the Rust
+  // supervisor (survives restarts, pauses when blocked); React keeps a mirror so
+  // rewind can drop the newest queued item synchronously. Each entry carries the
+  // runtime queueId once the enqueue round-trip lands.
   const [queued, setQueued] = useState(0);
+  const queueRef = useRef<{ queueId: string | null; text: string; images?: ChatImage[] }[]>([]);
   // Mirror of status for reads inside callbacks without stale closures.
   const statusRef = useRef<ChatStatus>("idle");
   statusRef.current = status;
+
+  // Runtime-owned queue for this thread: enqueue/drain go through the
+  // supervisor, not React state.
+  const promptQueue = usePromptQueue(emberyxSessionId);
+  // Reconcile the runtime list (round-trips) into the mirror — but keep ids so
+  // rewind's optimistic drop can still remove the right item.
+  useEffect(() => {
+    const runtime = promptQueue.items;
+    for (let i = 0; i < runtime.length; i++) {
+      const p = runtime[i];
+      const existing = queueRef.current[i];
+      queueRef.current[i] = {
+        queueId: p.queueId,
+        text: p.text,
+        images: p.attachments ? (JSON.parse(p.attachments) as ChatImage[]) : undefined,
+      };
+      if (existing && existing.text === p.text) queueRef.current[i].queueId = p.queueId;
+    }
+    queueRef.current.length = runtime.length;
+    setQueued(runtime.length);
+  }, [promptQueue.items]);
 
   const idRef = useRef<number | null>(null);
   // Set while an exit is the user's own doing (stop/rewind). Interrupting makes
@@ -887,8 +939,13 @@ export function useAgentChat({
   // On resume, hydrate prior turns from the on-disk transcript (headless
   // --resume never replays them). Only fills when the list is still empty so it
   // can't clobber freshly streamed messages.
+  //
+  // Skipped in persistent mode: the daemon replays its own buffer, and the two
+  // overlap — the CLI writes the same turns to disk as they stream. Rendering
+  // both would duplicate the conversation, so the daemon's replay is the single
+  // source and resuming an older thread starts visually empty.
   useEffect(() => {
-    if (!enabled || !resume) return;
+    if (!enabled || !resume || persistent) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -917,7 +974,7 @@ export function useAgentChat({
     return () => {
       cancelled = true;
     };
-  }, [enabled, resume, cwd]);
+  }, [enabled, resume, cwd, persistent]);
 
   // Spawn the process once per (cwd, resume) target.
   useEffect(() => {
@@ -973,26 +1030,42 @@ export function useAgentChat({
 
     void (async () => {
       try {
-        const id = await invoke<number>("agent_spawn", {
+        const handle = await invoke<AgentHandle>("agent_spawn", {
           cwd,
           sessionId: crypto.randomUUID(),
           // Prefer the live session id so a respawn (model switch, restart)
           // resumes the same thread instead of starting a fresh one.
           resume: sessionRef.current ?? resume ?? null,
-          permissionMode: "acceptEdits",
+          permissionMode,
           skipPermissions,
           settings: null,
           model: model || null,
           effort: effort || null,
           emberyxSessionId,
+          persistent,
+          // Always replay the daemon's whole buffer: in persistent mode it is
+          // the only source for the rendered transcript.
+          afterFrameId: null,
           onEvent: channel,
         });
+        const id = handle.id;
         if (disposed) {
-          void invoke("agent_kill", { id });
+          void invoke(persistent ? "agent_detach" : "agent_kill", { id });
           return;
+        }
+        if (handle.truncated) {
+          setExitReason(
+            "The agent ran longer than the daemon keeps output for — the start of this transcript is missing."
+          );
         }
         idRef.current = id;
         void registerAgent(emberyxSessionId, cwd, "claude", id);
+        // The queue is keyed by thread id; attach this session so the runtime
+        // knows which thread's queue to pause when the agent is blocked.
+        void invoke("agent_attach_thread", {
+          agentId: emberyxSessionId,
+          threadId: emberyxSessionId,
+        });
         setReady(true);
       } catch (e) {
         console.error("[emberyx] agent_spawn failed", e);
@@ -1006,7 +1079,11 @@ export function useAgentChat({
       disposed = true;
       setReady(false);
       if (idRef.current !== null) {
-        void invoke("agent_kill", { id: idRef.current });
+        // Persistent agents are detached, never killed: the pane closing is not
+        // the user asking the agent to stop.
+        void invoke(persistent ? "agent_detach" : "agent_kill", {
+          id: idRef.current,
+        });
         idRef.current = null;
       }
     };
@@ -1018,6 +1095,8 @@ export function useAgentChat({
     model,
     effort,
     emberyxSessionId,
+    persistent,
+    permissionMode,
     handleLine,
     announceIssue,
     setPending,
@@ -1079,9 +1158,12 @@ export function useAgentChat({
     const restored = { text: msgs[idx].text, images: msgs[idx].images };
 
     if (queueRef.current.length > 0) {
-      // Newest turn never left the queue — discard it, leave the active run.
-      queueRef.current.pop();
-      setQueued(queueRef.current.length);
+      // Newest turn never left the queue — drop it from the runtime queue,
+      // leave the active run. The count drops optimistically; the runtime's
+      // next list reconcile is the source of truth.
+      const newest = queueRef.current.pop();
+      setQueued((n) => Math.max(0, n - 1));
+      if (newest && newest.queueId) void promptQueue.remove(newest.queueId);
       setMessages(msgs.slice(0, idx));
       return restored;
     }
@@ -1093,7 +1175,7 @@ export function useAgentChat({
     if (produced) return null;
     setMessages(msgs.slice(0, idx));
     return restored;
-  }, [interrupt, flushPending]);
+  }, [interrupt, flushPending, promptQueue]);
 
   // Answer a pending can_use_tool prompt: allow (once/always) or deny.
   const respond = useCallback(
@@ -1136,6 +1218,14 @@ export function useAgentChat({
   // not on the stream-json wire), tagged with the session that asked.
   useEffect(() => {
     if (!enabled) return;
+    // The event fires once. A question raised while this pane was closed is
+    // still blocking the agent, so read the open ones back rather than leaving
+    // it waiting on a prompt nothing is showing.
+    void fetchPendingAsk(emberyxSessionId).then((pending) => {
+      if (!pending || askRef.current) return;
+      setPendingAsk(pending);
+      setStatus("awaiting_answer");
+    });
     const unlisten = listen<PendingAsk & { session: string }>("ask-user", (ev) => {
       if (ev.payload.session !== emberyxSessionId) return;
       setPendingAsk(ev.payload);
@@ -1156,11 +1246,18 @@ export function useAgentChat({
   }, []);
 
   /** Put a turn on the wire. Callers must have checked the agent is free. */
-  const deliver = useCallback((text: string, images?: ChatImage[]) => {
+  const deliver = useCallback(
+    (text: string, images?: ChatImage[]) => {
     const id = idRef.current;
     const hasImages = !!images && images.length > 0;
     if (id === null) return;
     setStatus("thinking");
+    // Snapshot the tree before the turn touches it. Fired here rather than in
+    // `send` so a queued turn is covered too, and never awaited: a checkpoint
+    // is a safety net, not a precondition for the turn the user asked for.
+    void createCheckpoint(cwd, emberyxSessionId, text).then((point) => {
+      if (point) setMessages((prev) => attachCheckpoint(prev, point.id));
+    });
     const content = hasImages
       ? [
           ...(text.trim() ? [{ type: "text", text }] : []),
@@ -1175,7 +1272,9 @@ export function useAgentChat({
       message: { role: "user", content },
     });
     void invoke("agent_send", { id, message: line });
-  }, []);
+    },
+    [cwd, emberyxSessionId]
+  );
 
   /**
    * Accept a turn at any time. While the agent is working the message is shown
@@ -1203,23 +1302,39 @@ export function useAgentChat({
       ]);
       if (!firstMsgRef.current && text.trim()) firstMsgRef.current = text;
       if (BUSY_STATUS.has(statusRef.current)) {
-        queueRef.current.push({ text, images });
-        setQueued(queueRef.current.length);
+        // The runtime owns the queue — React keeps a synchronous mirror for the
+        // composer count and rewind. The runtime queueId lands once the enqueue
+        // round-trip resolves; until then the entry is identifiable by text.
+        const attachments = hasImages ? JSON.stringify(images) : undefined;
+        setQueued((n) => n + 1);
+        queueRef.current.push({ queueId: null, text, images });
+        void promptQueue.enqueue(text, attachments, emberyxSessionId);
         return;
       }
       deliver(text, images);
     },
-    [deliver]
+    [deliver, promptQueue, emberyxSessionId]
   );
 
-  // Drain one queued turn each time the agent goes idle.
+  // Drain one queued turn each time the agent goes idle. The runtime queue pops
+  // the head — and stays paused while the agent is blocked — so this only
+  // dispatches what the supervisor is ready for. The count drops optimistically;
+  // the runtime's next list reconcile is the source of truth.
   useEffect(() => {
     if (status !== "idle") return;
-    const next = queueRef.current.shift();
-    if (!next) return;
-    setQueued(queueRef.current.length);
-    deliver(next.text, next.images);
-  }, [status, deliver]);
+    if (queueRef.current.length === 0) return;
+    void promptQueue.runNext().then((next) => {
+      if (!next) return;
+      // Shift the mirror in step with the runtime pop so rewind never sees a
+      // stale head.
+      queueRef.current.shift();
+      setQueued((n) => Math.max(0, n - 1));
+      deliver(
+        next.text,
+        next.attachments ? (JSON.parse(next.attachments) as ChatImage[]) : undefined
+      );
+    });
+  }, [status, deliver, promptQueue]);
 
   // Auto-title a fresh chat after its first turn completes (headless CC never
   // titles a session itself). Skipped for resumed threads (already titled).
@@ -1247,6 +1362,7 @@ export function useAgentChat({
     ready,
     send,
     queued,
+    queue: promptQueue,
     stop,
     restart,
     exitReason,

@@ -17,24 +17,33 @@ import { cn } from "@/lib/utils";
 import { parseDiff } from "@/lib/hunks";
 import { highlightCode, langFromPath } from "@/lib/highlight";
 import {
-  invalidateGitlab,
+  invalidateForge,
+  useForgeMr,
+  useForgeMrDiff,
+  useForgeMrNotes,
+  useForgeMrs,
+  useForgeToken,
   useGitBranch,
-  useGitlabMr,
-  useGitlabMrDiff,
-  useGitlabMrNotes,
-  useGitlabMrs,
-  useGitlabToken,
   useInvalidateGit,
 } from "@/lib/queries";
+import {
+  FORGE_LABEL,
+  FORGE_NOUN,
+  isMissingRemote,
+  type RemoteHost,
+} from "@/lib/forge";
 import type { MergeOutcome, MergeRequest, MrState } from "@/lib/gitlab";
 import { SidePanel } from "@/components/SidePanel";
 
 const STATES: MrState[] = ["opened", "merged", "closed", "all"];
 
-/** A repo without a GitLab remote is a normal state, not a failure — its error
- *  is rendered plainly rather than as a crash. */
-const isBenign = (error: unknown) =>
-  String(error).includes("Not a gitlab.com repository");
+/** Each service writes its own number: GitHub `#12`, GitLab `!12`. */
+const numberLabel = (host: RemoteHost, iid: number) =>
+  `${host === "github" ? "#" : "!"}${iid}`;
+
+/** A repo without a remote on this service is a normal state, not a failure —
+ *  its error is rendered plainly rather than as a crash. */
+const isBenign = isMissingRemote;
 
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -52,6 +61,9 @@ function relativeTime(iso: string): string {
 interface MergeRequestsPanelProps {
   open: boolean;
   onClose: () => void;
+  /** Which service the project's remote is on. Both speak the same shapes;
+   *  only the endpoints and the wording differ. */
+  host: RemoteHost;
   path: string | null;
   /** Handed the conflicted file list when a merge stops — the conflict UI
    *  lives outside this panel. */
@@ -61,6 +73,7 @@ interface MergeRequestsPanelProps {
 export function MergeRequestsPanel({
   open,
   onClose,
+  host,
   path,
   onConflicts,
 }: MergeRequestsPanelProps) {
@@ -70,9 +83,9 @@ export function MergeRequestsPanel({
   const repo = path ?? "";
   // `.data` is undefined until the keychain check lands — only a definite
   // "no token" should replace the list with the connect prompt.
-  const hasToken = useGitlabToken().data !== false;
+  const hasToken = useForgeToken(host).data !== false;
   const qc = useQueryClient();
-  const mrsQuery = useGitlabMrs(repo, state);
+  const mrsQuery = useForgeMrs(host, repo, state);
   const mrs = mrsQuery.data ?? [];
   const selected = mrs.find((mr) => mr.iid === selectedIid) ?? null;
 
@@ -114,7 +127,7 @@ export function MergeRequestsPanel({
       actions={
         selectedIid === null && (
           <button
-            onClick={() => invalidateGitlab(qc)}
+            onClick={() => invalidateForge(qc)}
             title="Refresh"
             className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
@@ -125,23 +138,24 @@ export function MergeRequestsPanel({
     >
       {!path ? (
         <Empty icon={<GitPullRequest className="size-5" />}>
-          Open a project to see its merge requests.
+          {`Open a project to see its ${FORGE_NOUN[host].one}s.`}
         </Empty>
       ) : !hasToken ? (
         <Empty icon={<GitPullRequest className="size-5" />}>
-          Connect GitLab in Settings to see merge requests.
+          {`Connect ${FORGE_LABEL[host]} in Settings to see ${FORGE_NOUN[host].one}s.`}
         </Empty>
       ) : selectedIid !== null ? (
         <MrDetail
           // Keyed so busy/error/expanded state never carries to the next MR.
           key={selectedIid}
+          host={host}
           path={path}
           iid={selectedIid}
           fallback={selected}
           onConflicts={onConflicts}
         />
       ) : (
-        <MrList query={mrsQuery} mrs={mrs} onSelect={setSelectedIid} />
+        <MrList host={host} query={mrsQuery} mrs={mrs} onSelect={setSelectedIid} />
       )}
     </SidePanel>
   );
@@ -154,19 +168,22 @@ interface QueryLike {
 }
 
 function MrList({
+  host,
   query,
   mrs,
   onSelect,
 }: {
+  host: RemoteHost;
   query: QueryLike;
   mrs: MergeRequest[];
   onSelect: (iid: number) => void;
 }) {
-  if (query.isPending) return <Empty>Loading merge requests…</Empty>;
+  const noun = FORGE_NOUN[host].one;
+  if (query.isPending) return <Empty>{`Loading ${noun}s…`}</Empty>;
   if (query.error) {
     return isBenign(query.error) ? (
       <Empty icon={<GitPullRequest className="size-5" />}>
-        Not a gitlab.com repository.
+        {`Not a ${host}.com repository.`}
       </Empty>
     ) : (
       <Empty>
@@ -174,7 +191,7 @@ function MrList({
       </Empty>
     );
   }
-  if (mrs.length === 0) return <Empty>No merge requests.</Empty>;
+  if (mrs.length === 0) return <Empty>{`No ${noun}s.`}</Empty>;
 
   return (
     <ul className="min-h-0 flex-1 overflow-auto">
@@ -189,7 +206,7 @@ function MrList({
                 {mr.title}
               </span>
               <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                !{mr.iid}
+                {numberLabel(host, mr.iid)}
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
@@ -213,19 +230,21 @@ function MrList({
 
 function MrDetail({
   path,
+  host,
   iid,
   fallback,
   onConflicts,
 }: {
+  host: RemoteHost;
   path: string;
   iid: number;
   /** The list row, so branches render before the detail request lands. */
   fallback: MergeRequest | null;
   onConflicts?: (files: string[]) => void;
 }) {
-  const detailQuery = useGitlabMr(path, iid);
-  const diffQuery = useGitlabMrDiff(path, iid);
-  const notesQuery = useGitlabMrNotes(path, iid);
+  const detailQuery = useForgeMr(host, path, iid);
+  const diffQuery = useForgeMrDiff(host, path, iid);
+  const notesQuery = useForgeMrNotes(host, path, iid);
   const branchQuery = useGitBranch(path);
   const invalidateGit = useInvalidateGit();
 
@@ -297,11 +316,11 @@ function MrDetail({
             {mr.title}
           </h2>
           <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-            !{mr.iid}
+            {numberLabel(host, mr.iid)}
           </span>
           <button
             onClick={() => void openUrl(mr.webUrl)}
-            title="Open in GitLab"
+            title={`Open in ${FORGE_LABEL[host]}`}
             className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <ExternalLink className="size-3.5" />

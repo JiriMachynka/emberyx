@@ -67,7 +67,7 @@ fn unquote_path(s: &str) -> String {
 /// Run `git -C <path> <args>` and hand back the raw output. Every git call in
 /// this module goes through here, so process spawning and the repo check live
 /// in exactly one place.
-fn git(path: &str, args: &[&str]) -> Result<Output> {
+pub(crate) fn git(path: &str, args: &[&str]) -> Result<Output> {
     let mut full = vec!["-C", path];
     full.extend_from_slice(args);
     Ok(Command::new("git").args(&full).output()?)
@@ -91,13 +91,13 @@ fn git_stdin(path: &str, args: &[&str], input: &str) -> Result<Output> {
 }
 
 /// git's own message for a failed command: stderr, falling back to stdout.
-fn failure(out: &Output) -> Error {
+pub(crate) fn failure(out: &Output) -> Error {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     Error::new(format!("{}{}", stdout, stderr).trim())
 }
 
-fn is_repo(path: &str) -> bool {
+pub(crate) fn is_repo(path: &str) -> bool {
     git(path, &["rev-parse", "--is-inside-work-tree"])
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -105,7 +105,7 @@ fn is_repo(path: &str) -> bool {
 
 /// Run a git command in a repo, returning trimmed stdout on success or git's
 /// own error message on failure.
-fn run_git(path: &str, args: &[&str]) -> Result<String> {
+pub(crate) fn run_git(path: &str, args: &[&str]) -> Result<String> {
     if !is_repo(path) {
         return Err(Error::new("Not a git repository."));
     }
@@ -576,6 +576,92 @@ pub fn git_push(path: String) -> Result<String> {
 #[tauri::command]
 pub fn git_push_to(path: String, remote: String, branch: String) -> Result<String> {
     run_git(&path, &["push", "-u", &remote, &branch])
+}
+
+/// What a combined commit-and-push actually did. The two halves are reported
+/// separately on purpose: a commit that landed and a push that didn't is the
+/// one outcome the user must not mistake for "nothing happened".
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitPush {
+    pub committed: bool,
+    pub pushed: bool,
+    pub branch: String,
+    /// Set when the branch has no upstream yet — the caller has to confirm
+    /// publishing it before anything is committed.
+    pub needs_upstream: bool,
+    /// Human-readable outcome, and the push error when the commit landed but
+    /// the push did not.
+    pub message: String,
+}
+
+/// Commit the staged changes and push them in one action.
+///
+/// Refuses rather than guesses, and always checks *before* committing so a
+/// refusal never leaves a commit stranded:
+/// - a detached HEAD has no branch to push;
+/// - a branch behind its upstream needs a pull first (pushing would be rejected
+///   anyway, and force-pushing is never something this does for you);
+/// - a branch with no upstream is only published when `set_upstream` says so,
+///   because creating a remote branch is not implied by "commit".
+#[tauri::command]
+pub fn git_commit_and_push(path: String, message: String, set_upstream: bool) -> Result<CommitPush> {
+    if !is_repo(&path) {
+        return Err(Error::new("Not a git repository."));
+    }
+    if message.trim().is_empty() {
+        return Err(Error::new("Commit message is empty."));
+    }
+    let state = git_branch(path.clone())?;
+    if state.branch == "HEAD" {
+        return Err(Error::new(
+            "HEAD is detached — check out a branch before pushing.",
+        ));
+    }
+    if state.behind > 0 {
+        return Err(Error::new(format!(
+            "{} is {} commit{} behind {}. Pull first.",
+            state.branch,
+            state.behind,
+            if state.behind == 1 { "" } else { "s" },
+            state.upstream.as_deref().unwrap_or("its upstream"),
+        )));
+    }
+    if state.upstream.is_none() && !set_upstream {
+        return Ok(CommitPush {
+            committed: false,
+            pushed: false,
+            branch: state.branch,
+            needs_upstream: true,
+            message: "This branch has no upstream yet.".into(),
+        });
+    }
+
+    git_commit(path.clone(), message)?;
+
+    let push = match &state.upstream {
+        Some(_) => run_git(&path, &["push"]),
+        // First push of a new branch: publish it and set the tracking ref.
+        None => run_git(&path, &["push", "-u", "origin", &state.branch]),
+    };
+    match push {
+        Ok(out) => Ok(CommitPush {
+            committed: true,
+            pushed: true,
+            branch: state.branch,
+            needs_upstream: false,
+            message: out,
+        }),
+        // The commit is already in history — say so, or the user reruns and
+        // ends up with an empty second commit or a lost message.
+        Err(error) => Ok(CommitPush {
+            committed: true,
+            pushed: false,
+            branch: state.branch,
+            needs_upstream: false,
+            message: format!("Committed, but the push failed: {error}"),
+        }),
+    }
 }
 
 /// Switch to `branch`, creating it (`-b`) when `create` is set.
@@ -1661,6 +1747,105 @@ mod tests {
         assert_eq!(branch.branch, "main");
         assert_eq!(branch.upstream, None);
         assert_eq!((branch.ahead, branch.behind), (0, 0));
+    }
+
+    /// A bare repo to push into, plus a clone wired to it as `origin`.
+    fn with_remote(name: &str) -> (Repo, Repo) {
+        let remote_dir = std::env::temp_dir().join(format!("emberyx_test_git_{name}_remote"));
+        let _ = std::fs::remove_dir_all(&remote_dir);
+        std::fs::create_dir_all(&remote_dir).unwrap();
+        let remote = Repo(remote_dir);
+        remote.run(&["init", "--bare", "-b", "main"]);
+
+        let local = Repo::new(name);
+        local.run(&["remote", "add", "origin", &remote.path()]);
+        local.write("seed.txt", "seed");
+        local.commit("seed");
+        local.run(&["push", "-u", "origin", "main"]);
+        (local, remote)
+    }
+
+    #[test]
+    fn commit_and_push_lands_both_halves() {
+        let (repo, remote) = with_remote("commit_push");
+        repo.write("a.txt", "one");
+        repo.run(&["add", "-A"]);
+
+        let out = git_commit_and_push(repo.path(), "add a".into(), false).unwrap();
+        assert!(out.committed && out.pushed, "{}", out.message);
+        assert_eq!(out.branch, "main");
+        // The remote actually has it, not just the local branch.
+        assert!(remote.run(&["log", "-1", "--pretty=%s", "main"]).contains("add a"));
+    }
+
+    // Refusing after committing would strand a commit the user did not expect.
+    #[test]
+    fn a_branch_behind_its_upstream_is_refused_before_anything_is_committed() {
+        let (repo, remote) = with_remote("commit_push_behind");
+        // Another clone pushes a commit, leaving `repo` behind.
+        let other_dir = std::env::temp_dir().join("emberyx_test_git_commit_push_behind_other");
+        let _ = std::fs::remove_dir_all(&other_dir);
+        std::fs::create_dir_all(&other_dir).unwrap();
+        let other = Repo(other_dir);
+        other.run(&["clone", &remote.path(), "."]);
+        other.run(&["config", "user.email", "test@emberyx.dev"]);
+        other.run(&["config", "user.name", "Emberyx Test"]);
+        other.run(&["config", "commit.gpgsign", "false"]);
+        other.write("b.txt", "theirs");
+        other.commit("theirs");
+        other.run(&["push"]);
+
+        repo.run(&["fetch"]);
+        repo.write("a.txt", "mine");
+        repo.run(&["add", "-A"]);
+        let before = repo.run(&["rev-parse", "HEAD"]);
+
+        let error = git_commit_and_push(repo.path(), "mine".into(), false).unwrap_err();
+        assert!(error.to_string().contains("Pull first"), "{error}");
+        assert_eq!(repo.run(&["rev-parse", "HEAD"]), before);
+    }
+
+    // Publishing a branch is not implied by "commit" — it has to be asked for.
+    #[test]
+    fn a_branch_with_no_upstream_asks_before_publishing() {
+        let (repo, remote) = with_remote("commit_push_upstream");
+        repo.run(&["checkout", "-b", "feature"]);
+        repo.write("a.txt", "one");
+        repo.run(&["add", "-A"]);
+        let before = repo.run(&["rev-parse", "HEAD"]);
+
+        let asked = git_commit_and_push(repo.path(), "feature work".into(), false).unwrap();
+        assert!(asked.needs_upstream);
+        assert!(!asked.committed);
+        assert_eq!(repo.run(&["rev-parse", "HEAD"]), before);
+
+        let done = git_commit_and_push(repo.path(), "feature work".into(), true).unwrap();
+        assert!(done.committed && done.pushed, "{}", done.message);
+        assert!(remote.run(&["log", "-1", "--pretty=%s", "feature"]).contains("feature work"));
+    }
+
+    // The commit is in history either way; saying "nothing happened" would send
+    // the user back to redo it.
+    #[test]
+    fn a_failed_push_still_reports_the_commit_that_landed() {
+        let (repo, remote) = with_remote("commit_push_broken_remote");
+        drop(remote);
+        repo.write("a.txt", "one");
+        repo.run(&["add", "-A"]);
+
+        let out = git_commit_and_push(repo.path(), "orphaned".into(), false).unwrap();
+        assert!(out.committed);
+        assert!(!out.pushed);
+        assert!(out.message.contains("push failed"), "{}", out.message);
+        assert!(repo.run(&["log", "-1", "--pretty=%s"]).contains("orphaned"));
+    }
+
+    #[test]
+    fn an_empty_message_is_refused() {
+        let repo = Repo::new("commit_push_empty_message");
+        repo.write("a.txt", "one");
+        repo.commit("seed");
+        assert!(git_commit_and_push(repo.path(), "   ".into(), false).is_err());
     }
 
     #[test]

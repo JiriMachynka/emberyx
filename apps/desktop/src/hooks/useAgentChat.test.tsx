@@ -77,14 +77,62 @@ const sentLines = () =>
     JSON.parse((args as { message: string }).message)
   );
 
+/** The runtime-owned queue, emulated in the mock so the hook's enqueue/drain
+ *  path is exercised rather than stubbed to a fixed value. */
+let queueItems: { queueId: string; text: string; attachments: string | null }[] = [];
+let queuePaused = false;
+let queueSeq = 0;
+
+/** Requests the supervisor still has open when the pane mounts. */
+let openApprovals: Record<string, unknown>[] = [];
+
+/** Overrides for what `agent_spawn` answers, per test. */
+let spawnReply: Record<string, unknown> = {};
+
 beforeEach(() => {
   channels.length = 0;
   listeners.length = 0;
+  queueItems = [];
+  queuePaused = false;
+  queueSeq = 0;
+  openApprovals = [];
+  spawnReply = {};
   invoke.mockReset();
-  invoke.mockImplementation((command: string) => {
-    if (command === "agent_spawn") return Promise.resolve(1);
+  invoke.mockImplementation((command: string, args: Record<string, unknown>) => {
+    if (command === "agent_spawn")
+      return Promise.resolve({ id: 1, reattached: false, truncated: false, ...spawnReply });
     if (command === "read_thread") return Promise.resolve("");
     if (command === "title_thread") return Promise.resolve("A title");
+    if (command === "agent_attach_thread") return Promise.resolve(undefined);
+    if (command === "agent_approvals_pending") return Promise.resolve(openApprovals);
+    // Runtime-owned prompt queue.
+    if (command === "agent_queue_list")
+      return Promise.resolve(queueItems.map((p) => ({ ...p, createdAt: 0 })));
+    if (command === "agent_queue_state")
+      return Promise.resolve([queueItems.length, queuePaused]);
+    if (command === "agent_queue_enqueue") {
+      const item = {
+        queueId: `q${++queueSeq}`,
+        text: String(args.text),
+        attachments: (args.attachments as string | null) ?? null,
+        createdAt: 0,
+      };
+      queueItems.push(item);
+      return Promise.resolve(item);
+    }
+    if (command === "agent_queue_run_next") {
+      if (queuePaused) return Promise.resolve(null);
+      return Promise.resolve(queueItems.shift() ?? null);
+    }
+    if (command === "agent_queue_delete") {
+      const idx = queueItems.findIndex((p) => p.queueId === args.queueId);
+      return Promise.resolve(idx >= 0 ? queueItems.splice(idx, 1)[0] : null);
+    }
+    if (command === "agent_queue_reorder") {
+      const item = queueItems.splice(Number(args.from), 1)[0];
+      if (item) queueItems.splice(Number(args.to), 0, item);
+      return Promise.resolve(item ?? null);
+    }
     return Promise.resolve(undefined);
   });
 });
@@ -517,6 +565,47 @@ describe("useAgentChat permissions", () => {
   });
 });
 
+describe("useAgentChat persistent agents", () => {
+  // Closing a pane is not the user asking the agent to stop — that is the whole
+  // point of running it in the daemon.
+  it("detaches instead of killing when the agent lives in the daemon", async () => {
+    const { unmount } = await mount({ persistent: true });
+    unmount();
+    expect(sentTo("agent_kill")).toEqual([]);
+    expect(sentTo("agent_detach")).toEqual([["agent_detach", { id: 1 }]]);
+  });
+
+  it("asks the daemon to own the agent and replays from the start", async () => {
+    await mount({ persistent: true });
+    expect(sentTo("agent_spawn")[0][1]).toMatchObject({
+      persistent: true,
+      afterFrameId: null,
+    });
+  });
+
+  // The daemon's replay and the on-disk transcript carry the same turns; taking
+  // both would render the conversation twice.
+  it("does not prefill from the transcript when the daemon replays", async () => {
+    await mount({ persistent: true, resume: "old-thread" });
+    expect(sentTo("read_thread")).toEqual([]);
+  });
+
+  it("still prefills from the transcript when the agent is window-scoped", async () => {
+    await mount({ resume: "old-thread" });
+    await waitFor(() => expect(sentTo("read_thread")).toHaveLength(1));
+  });
+
+  // A partial transcript has to say so; silently starting mid-conversation is
+  // the failure mode this flag exists to prevent.
+  it("says so when the replay is missing the start", async () => {
+    spawnReply = { truncated: true };
+    const { result } = await mount({ persistent: true });
+    await waitFor(() =>
+      expect(result.current.exitReason).toContain("start of this transcript is missing")
+    );
+  });
+});
+
 describe("useAgentChat ask_user", () => {
   const question = {
     session: "emberyx-1",
@@ -537,6 +626,45 @@ describe("useAgentChat ask_user", () => {
     const { result } = await mount();
     act(() => listeners.forEach((fn) => fn({ ...question, session: "other" })));
     expect(result.current.pendingAsk).toBeNull();
+  });
+
+  // The event fires once. A pane that was closed when it fired must still find
+  // the question, or the agent stays blocked with nothing showing it.
+  it("picks up a question raised while the pane was closed", async () => {
+    openApprovals = [
+      {
+        approvalId: "ask-9",
+        threadId: "emberyx-1",
+        kind: "ask",
+        payload: JSON.stringify({
+          id: "ask-9",
+          session: "emberyx-1",
+          questions: [{ question: "Which?", header: "Pick", options: [], multiSelect: false }],
+        }),
+        createdAt: 1,
+        expiresAt: 2,
+      },
+    ];
+    const { result } = await mount();
+    await waitFor(() => expect(result.current.pendingAsk).toMatchObject({ id: "ask-9" }));
+    expect(result.current.status).toBe("awaiting_answer");
+  });
+
+  // A live event is the fresher truth; the read-back must not overwrite it.
+  it("leaves a live question alone", async () => {
+    openApprovals = [
+      {
+        approvalId: "ask-old",
+        threadId: "emberyx-1",
+        kind: "ask",
+        payload: JSON.stringify({ questions: [{ question: "Old?", header: "Old", options: [], multiSelect: false }] }),
+        createdAt: 1,
+        expiresAt: 2,
+      },
+    ];
+    const { result } = await mount();
+    act(() => listeners.forEach((fn) => fn(question)));
+    await waitFor(() => expect(result.current.pendingAsk).toMatchObject({ id: "ask-1" }));
   });
 
   it("hands the answer back to the blocked tool call", async () => {

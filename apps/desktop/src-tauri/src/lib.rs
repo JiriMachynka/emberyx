@@ -1,21 +1,31 @@
-mod agent;
+pub mod agent;
+pub mod daemon;
+pub mod daemon_protocol;
+pub mod daemon_runtime;
 mod ask;
+mod checkpoints;
 mod codex;
 mod defs;
 mod dokploy;
-mod error;
+pub mod error;
 mod files;
 mod fs_walk;
 mod git;
+mod github;
 mod gitlab;
 mod hooks;
 mod icon;
+mod ide;
 mod menu;
+pub mod models;
 mod openrouter;
-mod pty;
+pub mod pty;
+mod preview;
+mod providers;
+mod queue;
 mod search;
 mod slash;
-mod supervisor;
+pub mod supervisor;
 mod threads;
 mod usage;
 mod workspace;
@@ -66,8 +76,13 @@ pub fn run() {
             pty::pty_kill,
             pty::read_scrollback,
             agent::agent_spawn,
+            daemon::daemon_health,
+            daemon::daemon_start,
+            daemon::daemon_live_agents,
+            daemon::daemon_stop,
             agent::agent_send,
             agent::agent_kill,
+            agent::agent_detach,
             agent::title_thread,
             codex::codex_spawn,
             codex::codex_kill,
@@ -98,6 +113,18 @@ pub fn run() {
             supervisor::agent_set_state,
             supervisor::agent_subscribe,
             supervisor::agent_prompt,
+            supervisor::agent_queue_list,
+            supervisor::agent_queue_state,
+            supervisor::agent_queue_enqueue,
+            supervisor::agent_queue_reorder,
+            supervisor::agent_queue_edit,
+            supervisor::agent_queue_delete,
+            supervisor::agent_queue_pause,
+            supervisor::agent_queue_resume,
+            supervisor::agent_queue_run_next,
+            supervisor::agent_approvals_pending,
+            supervisor::thread_timeline_read,
+            supervisor::thread_timeline_append,
             supervisor::agent_delegate,
             supervisor::agent_delegation_get,
             supervisor::agent_delegation_cancel,
@@ -113,6 +140,7 @@ pub fn run() {
             search::search_text,
             slash::slash_commands,
             icon::project_icon,
+            ide::open_in_ide,
             hooks::hook_config,
             git::git_changes,
             git::git_file_diff,
@@ -131,6 +159,12 @@ pub fn run() {
             git::git_pull,
             git::git_push,
             git::git_push_to,
+            git::git_commit_and_push,
+            checkpoints::checkpoint_create,
+            checkpoints::checkpoint_list,
+            checkpoints::checkpoint_changes,
+            checkpoints::checkpoint_restore,
+            checkpoints::checkpoint_delete,
             git::git_checkout,
             git::git_branch_delete,
             git::git_worktrees,
@@ -152,6 +186,13 @@ pub fn run() {
             git::git_merge_continue,
             git::git_merge_state,
             git::git_remote_host,
+            github::github_set_token,
+            github::github_has_token,
+            github::github_clear_token,
+            github::github_prs,
+            github::github_pr,
+            github::github_pr_diff,
+            github::github_pr_notes,
             gitlab::gitlab_set_token,
             gitlab::gitlab_has_token,
             gitlab::gitlab_clear_token,
@@ -168,12 +209,16 @@ pub fn run() {
             dokploy::dokploy_logs,
             openrouter::generate_commit_message,
             openrouter::openrouter_models,
+            providers::provider_status,
+            preview::preview_ports,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
     // Managed state isn't dropped on exit, so kill + reap spawned children here
     // or orphaned headless `claude` processes and PTY shells keep running.
+    // Daemon-owned agents are deliberately untouched: `emberyxd` holds those
+    // children, and outliving this window is the whole point of them.
     app.run(|app_handle, event| {
         if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
             if let Ok(path) = app_handle

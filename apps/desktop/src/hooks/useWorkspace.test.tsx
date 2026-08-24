@@ -9,17 +9,28 @@ import { useAgentStore } from "@/lib/agentStore";
 import { queryClient } from "@/lib/queries";
 
 const invoked: string[] = [];
+/** Same calls, with their arguments — for assertions the command name alone
+ *  can't make. */
+const calls: [string, Record<string, unknown>][] = [];
 
 vi.mock("@tauri-apps/api/core", () => ({
   Channel: class {},
-  invoke: (cmd: string) => {
+  invoke: (cmd: string, args?: Record<string, unknown>) => {
     invoked.push(cmd);
+    calls.push([cmd, args ?? {}]);
     if (cmd === "list_threads") return Promise.resolve([]);
     if (cmd === "codex_spawn") return Promise.resolve({ id: 1, initialize: {}, version: null });
     if (cmd === "codex_thread_list") return Promise.resolve({ data: [] });
     if (cmd === "git_changes")
       return Promise.resolve([{ path: "a.ts", status: " M", untracked: false }]);
     if (cmd === "git_file_diff") return Promise.resolve("+added");
+    if (cmd === "git_branch")
+      return Promise.resolve({ branch: "main", upstream: null, ahead: 0, behind: 0 });
+    if (cmd === "list_dir")
+      return Promise.resolve([
+        { name: "AGENTS.md", path: "/p/AGENTS.md", isDir: false },
+        { name: "src", path: "/p/src", isDir: true },
+      ]);
     return Promise.resolve(null);
   },
 }));
@@ -44,7 +55,8 @@ const WT = { repoRoot: "/code/emberyx", branch: "fix/panes" };
 beforeEach(() => {
   localStorage.clear();
   queryClient.clear();
-  useAgentStore.setState({ drafts: {}, senders: {} });
+  calls.length = 0;
+  useAgentStore.setState({ drafts: {}, senders: {}, transcripts: {} });
 });
 
 describe("useWorkspace launch restore", () => {
@@ -168,7 +180,18 @@ describe("useWorkspace handoff", () => {
 
   const hand = async (sourceId: string, withDiff = false) =>
     act(async () => {
-      useAgentStore.getState().handoff?.(sourceId, "look at this", withDiff);
+      useAgentStore.getState().handoff?.({
+        sourceSessionId: sourceId,
+        turns: [
+          {
+            role: "assistant",
+            provider: "claude",
+            model: null,
+            text: "look at this",
+          },
+        ],
+        withDiff,
+      });
     });
 
   it("opens the target backend's chat when the project has none", async () => {
@@ -204,6 +227,43 @@ describe("useWorkspace handoff", () => {
     await waitFor(() =>
       expect(useAgentStore.getState().drafts[existing]).toContain("look at this")
     );
+  });
+
+  it("carries the branch, the instruction files, and the turn's attribution", async () => {
+    const { result, projectId, source } = await openChat();
+
+    await hand(source.id);
+
+    const target = result.current
+      .sessionsFor(projectId)
+      .find((s) => s.backend === "codex");
+    await waitFor(() => {
+      const draft = useAgentStore.getState().drafts[target!.id];
+      expect(draft).toContain("Context handed over from Claude to Codex.");
+      expect(draft).toContain("Branch: main");
+      expect(draft).toContain("Project instructions: AGENTS.md");
+      expect(draft).toContain("### Claude");
+    });
+  });
+
+  // The switch is a durable fact on both sides: one thread records that the
+  // conversation left, the other that it arrived.
+  it("records the provider switch on both threads' timelines", async () => {
+    const { result, projectId, source } = await openChat();
+
+    await hand(source.id);
+
+    const target = result.current
+      .sessionsFor(projectId)
+      .find((s) => s.backend === "codex");
+    await waitFor(() => {
+      const switches = calls.filter(([cmd]) => cmd === "thread_timeline_append");
+      expect(switches).toHaveLength(2);
+      expect(switches.map(([, args]) => args.threadId).sort()).toEqual(
+        [source.id, target!.id].sort()
+      );
+      expect(switches.every(([, args]) => args.kind === "providerSwitch")).toBe(true);
+    });
   });
 
   // Prefill, not send: an auto-sent turn is the one thing the user can't undo.

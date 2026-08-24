@@ -16,6 +16,8 @@ import type {
 } from "@/types";
 import { listCodexModels, listCodexSkills } from "@/lib/codex/transport";
 import type { AgentBackend } from "@/lib/agentBackend";
+import type { ProviderStatus } from "@/lib/providers";
+import { forgeCommands, type RemoteHost } from "@/lib/forge";
 import type {
   ConflictStages,
   MergeRequest,
@@ -274,65 +276,135 @@ export const useGitConflictStages = (path: string, file: string | null) =>
 // GitLab reads go over the network, so they carry a longer staleTime than the
 // local git views. A missing token surfaces as a query error, not a crash —
 // hence `retry: false` throughout.
-export const gitlabKeys = {
-  token: () => ["gitlab", "token"] as const,
-  mrs: (path: string, state: MrState) =>
-    ["gitlab", "mrs", path, state] as const,
-  mr: (path: string, iid: number) => ["gitlab", "mr", path, iid] as const,
-  diff: (path: string, iid: number) => ["gitlab", "diff", path, iid] as const,
-  notes: (path: string, iid: number) => ["gitlab", "notes", path, iid] as const,
+export const forgeKeys = {
+  token: (host: RemoteHost) => ["forge", host, "token"] as const,
+  mrs: (host: RemoteHost, path: string, state: MrState) =>
+    ["forge", host, "mrs", path, state] as const,
+  mr: (host: RemoteHost, path: string, iid: number) =>
+    ["forge", host, "mr", path, iid] as const,
+  diff: (host: RemoteHost, path: string, iid: number) =>
+    ["forge", host, "diff", path, iid] as const,
+  notes: (host: RemoteHost, path: string, iid: number) =>
+    ["forge", host, "notes", path, iid] as const,
 };
 
-/** Whether a personal access token is stored in the OS keychain. */
-export const useGitlabToken = () =>
+/** Whether a personal access token for `host` is stored in the OS keychain. */
+export const useForgeToken = (host: RemoteHost) =>
   useQuery({
-    queryKey: gitlabKeys.token(),
-    queryFn: () => invoke<boolean>("gitlab_has_token"),
+    queryKey: forgeKeys.token(host),
+    queryFn: () => invoke<boolean>(forgeCommands(host).hasToken),
     staleTime: Infinity,
     retry: false,
   });
 
-/** `path` null → disabled; the project's git remote picks the GitLab project. */
-export const useGitlabMrs = (path: string | null, state: MrState) =>
+/** `path` null → disabled; the project's git remote picks the repo. */
+export const useForgeMrs = (
+  host: RemoteHost,
+  path: string | null,
+  state: MrState
+) =>
   useQuery({
-    queryKey: gitlabKeys.mrs(path ?? "", state),
-    queryFn: () => invoke<MergeRequest[]>("gitlab_mrs", { path, state }),
+    queryKey: forgeKeys.mrs(host, path ?? "", state),
+    queryFn: () => invoke<MergeRequest[]>(forgeCommands(host).list, { path, state }),
     enabled: !!path,
     staleTime: 30_000,
     retry: false,
   });
 
-export const useGitlabMr = (path: string | null, iid: number | null) =>
+export const useForgeMr = (
+  host: RemoteHost,
+  path: string | null,
+  iid: number | null
+) =>
   useQuery({
-    queryKey: gitlabKeys.mr(path ?? "", iid ?? 0),
-    queryFn: () => invoke<MergeRequestDetail>("gitlab_mr", { path, iid }),
+    queryKey: forgeKeys.mr(host, path ?? "", iid ?? 0),
+    queryFn: () => invoke<MergeRequestDetail>(forgeCommands(host).detail, { path, iid }),
     enabled: !!path && iid !== null,
     staleTime: 30_000,
     retry: false,
   });
 
-export const useGitlabMrDiff = (path: string | null, iid: number | null) =>
+export const useForgeMrDiff = (
+  host: RemoteHost,
+  path: string | null,
+  iid: number | null
+) =>
   useQuery({
-    queryKey: gitlabKeys.diff(path ?? "", iid ?? 0),
-    queryFn: () => invoke<MrDiffFile[]>("gitlab_mr_diff", { path, iid }),
+    queryKey: forgeKeys.diff(host, path ?? "", iid ?? 0),
+    queryFn: () => invoke<MrDiffFile[]>(forgeCommands(host).diff, { path, iid }),
     enabled: !!path && iid !== null,
     staleTime: 30_000,
     retry: false,
   });
 
-export const useGitlabMrNotes = (path: string | null, iid: number | null) =>
+export const useForgeMrNotes = (
+  host: RemoteHost,
+  path: string | null,
+  iid: number | null
+) =>
   useQuery({
-    queryKey: gitlabKeys.notes(path ?? "", iid ?? 0),
-    queryFn: () => invoke<MrNote[]>("gitlab_mr_notes", { path, iid }),
+    queryKey: forgeKeys.notes(host, path ?? "", iid ?? 0),
+    queryFn: () => invoke<MrNote[]>(forgeCommands(host).notes, { path, iid }),
     enabled: !!path && iid !== null,
     staleTime: 30_000,
     retry: false,
   });
 
-/** Refetch every GitLab view — after saving/clearing a token or acting on an MR.
- *  Takes the client directly so non-hook callers (mutation handlers) can use it. */
-export const invalidateGitlab = (qc: QueryClient) => {
-  qc.invalidateQueries({ queryKey: ["gitlab"] });
+/** Refetch every forge view — after saving/clearing a token or acting on a
+ *  change. Takes the client directly so non-hook callers can use it. */
+export const invalidateForge = (qc: QueryClient) => {
+  qc.invalidateQueries({ queryKey: ["forge"] });
+};
+
+// Provider install/auth detection, for the Settings → Providers surface.
+export const providerKeys = {
+  status: () => ["providers", "status"] as const,
+};
+
+/** Install + version probe for every provider CLI. Rescan on demand. */
+export const useProviderStatus = () =>
+  useQuery({
+    queryKey: providerKeys.status(),
+    queryFn: () => invoke<ProviderStatus[]>("provider_status"),
+    staleTime: 30_000,
+    retry: false,
+  });
+
+export const invalidateProviders = (qc: QueryClient) => {
+  qc.invalidateQueries({ queryKey: ["providers"] });
+};
+
+/** The persistent-agent daemon, if one is running. */
+export interface DaemonHealth {
+  ok: boolean;
+  version: string;
+  pid: number;
+  uptimeMs: number;
+  agentCount: number;
+  eventCount: number;
+}
+
+export const daemonKeys = {
+  health: () => ["daemon", "health"] as const,
+};
+
+/**
+ * Is `emberyxd` up? A rejected call is the honest answer "not running", not an
+ * error state — the daemon is optional, and the UI has to be able to say that
+ * agents will not survive the window before the user finds out the hard way.
+ */
+export const useDaemonHealth = (enabled = true) =>
+  useQuery({
+    queryKey: daemonKeys.health(),
+    queryFn: () =>
+      invoke<DaemonHealth>("daemon_health").catch(() => null),
+    enabled,
+    refetchInterval: 10_000,
+    retry: false,
+  });
+
+export const invalidateDaemon = (qc: QueryClient) => {
+  qc.invalidateQueries({ queryKey: ["daemon"] });
 };
 
 // Editor file-tree + buffer reads, keyed by absolute path.

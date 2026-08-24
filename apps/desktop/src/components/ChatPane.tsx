@@ -17,7 +17,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { issueTitle, resetLabel, type AccountIssue } from "@/lib/accountState";
-import type { AgentBackend } from "@/lib/agentBackend";
+import { BACKEND_LABEL, type AgentBackend } from "@/lib/agentBackend";
 import {
   describeResult,
   describeTool,
@@ -45,11 +45,37 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Markdown } from "@/components/Markdown";
 import { ChatComposer } from "@/components/ChatComposer";
-import { handoffLabel } from "@/lib/handoff";
+import {
+  handoffLabel,
+  handoffTurnsFrom,
+  otherBackend,
+  renderHandoffContext,
+  withFocusedTurn,
+} from "@/lib/handoff";
+import {
+  EMPTY_THREAD,
+  carryOver,
+  mergeThread,
+  switchBefore,
+  type CarriedThread,
+  type ProviderSwitchMark,
+} from "@/lib/thread";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
+import { Undo2 } from "lucide-react";
+import { useInvalidateGit } from "@/lib/queries";
+import {
+  checkpointChanges,
+  describeRestore,
+  restoreCheckpoint,
+} from "@/lib/checkpoints";
+import type { PermissionMode } from "@/lib/settings";
+import { PROVIDER_LABEL } from "@/lib/providers";
 import { useGitChanges } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
 import { type RegistryAgent } from "@/lib/agentRegistry";
@@ -92,6 +118,10 @@ interface ChatPaneProps {
   fontFamily: string;
   fontSize: number;
   skipPermissions: boolean;
+  /** Run the agent in the daemon so it outlives this window. */
+  persistent: boolean;
+  /** Claude's --permission-mode; ignored when permissions are skipped. */
+  permissionMode: PermissionMode;
   /** Default `--model` alias for new chats; "" = CLI default. */
   model: string;
   /** Persist a new default when the user switches this pane's model. */
@@ -124,6 +154,8 @@ export const ChatPane = memo(function ChatPane({
   fontFamily,
   fontSize,
   skipPermissions,
+  persistent,
+  permissionMode,
   model,
   onModelChange,
   effort,
@@ -153,6 +185,11 @@ export const ChatPane = memo(function ChatPane({
   // Approval posture is a spawn-time flag, kept local so switching it respawns
   // just this pane (via --resume), like the model.
   const [fullAccess, setFullAccess] = useState(skipPermissions);
+  // The provider this thread is on *right now*. It starts as the session's, but
+  // a thread can change hands mid-conversation — the turns each provider
+  // produced stay in the same visual transcript, stamped with who made them.
+  const [activeBackend, setActiveBackend] = useState<AgentBackend>(backend);
+  const [carried, setCarried] = useState<CarriedThread>(EMPTY_THREAD);
   const {
     messages,
     status,
@@ -161,6 +198,7 @@ export const ChatPane = memo(function ChatPane({
     send,
     rewind,
     queued,
+    queue,
     stop,
     restart,
     exitReason,
@@ -172,12 +210,55 @@ export const ChatPane = memo(function ChatPane({
     cwd,
     emberyxSessionId: sessionId,
     resume,
-    backend,
+    backend: activeBackend,
     skipPermissions: fullAccess,
+    persistent,
+    permissionMode,
     model: activeModel,
     effort: activeEffort,
     onTitled,
   });
+  // The transcript is read at switch/handoff time, not published per token —
+  // publishing it on every token would re-render the world.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
+  /**
+   * Move this thread to the other provider without leaving the pane. The turns
+   * so far are carried and stamped, the transport is swapped, and the context
+   * package lands in the composer — prefilled, never sent, so the user still
+   * decides what the next provider is actually asked.
+   */
+  const switchProvider = useCallback(() => {
+    const to = otherBackend(activeBackend);
+    setCarried((prev) =>
+      carryOver(
+        prev,
+        messagesRef.current,
+        activeBackend,
+        to,
+        activeModel || null,
+        `switch-${Date.now()}`,
+        Date.now()
+      )
+    );
+    const context = renderHandoffContext({
+      from: activeBackend,
+      to,
+      cwd,
+      turns: handoffTurnsFrom(messagesRef.current, activeBackend, activeModel || null),
+    });
+    useAgentStore.getState().setDraft(sessionId, context);
+    setActiveBackend(to);
+    // Both halves of the switch are one durable fact on this thread.
+    void invoke("thread_timeline_append", {
+      threadId: sessionId,
+      kind: "providerSwitch",
+      attribution: { provider: to, model: null, nativeThreadId: sessionId },
+      payload: JSON.stringify({ from: activeBackend, to, inPlace: true }),
+    }).catch(() => {});
+  }, [activeBackend, activeModel, cwd, sessionId]);
+
   const [preview, setPreview] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Auto-scroll only while the user is parked at the bottom: reading
@@ -189,8 +270,14 @@ export const ChatPane = memo(function ChatPane({
   // One object so the memoized rows below take a single stable prop for
   // everything a message action needs to know about its session.
   const chat = useMemo(
-    () => ({ sessionId, cwd, backend }),
-    [sessionId, cwd, backend]
+    () => ({
+      sessionId,
+      cwd,
+      backend: activeBackend,
+      model: activeModel || null,
+      onSwitchProvider: switchProvider,
+    }),
+    [sessionId, cwd, activeBackend, activeModel, switchProvider]
   );
   const draft = useAgentStore((s) => s.drafts[sessionId]);
   const clearDraft = useAgentStore((s) => s.clearDraft);
@@ -207,6 +294,15 @@ export const ChatPane = memo(function ChatPane({
     registerSender(sessionId, send);
     return () => unregisterSender(sessionId);
   }, [sessionId, send, registerSender, unregisterSender]);
+
+  const registerTranscript = useAgentStore((s) => s.registerTranscript);
+  const unregisterTranscript = useAgentStore((s) => s.unregisterTranscript);
+  useEffect(() => {
+    registerTranscript(sessionId, () =>
+      handoffTurnsFrom(messagesRef.current, backend, activeModel || null)
+    );
+    return () => unregisterTranscript(sessionId);
+  }, [sessionId, backend, activeModel, registerTranscript, unregisterTranscript]);
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -252,9 +348,17 @@ export const ChatPane = memo(function ChatPane({
   // Stable across renders so memoized rows don't re-render on every update.
   const openPreview = useCallback((dataUrl: string) => setPreview(dataUrl), []);
 
+  // Everything earlier providers produced, then whatever the live transport
+  // has now — one transcript, however many providers it took.
+  const thread = useMemo(
+    () => mergeThread(carried, messages, activeBackend, activeModel || null),
+    [carried, messages, activeBackend, activeModel]
+  );
+
   // Group the flat message list into turns so a finished turn's work (thinking,
   // tools, subagents) can collapse under one "Worked for Ns" header.
-  const turns = useMemo(() => groupTurns(messages), [messages]);
+  const turns = useMemo(() => groupTurns(thread), [thread]);
+
 
   return (
     <div className="flex h-full w-full flex-col" style={{ fontFamily }}>
@@ -270,21 +374,26 @@ export const ChatPane = memo(function ChatPane({
               transcript rebuild + re-highlight on every reveal. Isolated per-pane
               state and memoized rows keep a hidden pane from re-rendering on any
               render but its own stream. Auto-scroll stays gated on `active`. */}
-          {messages.length === 0 && (
+          {thread.length === 0 && (
             <div className="mt-24 text-center text-sm text-muted-foreground">
               {ready ? "Send a message to start." : "Starting agent…"}
             </div>
           )}
-          {turns.map((turn, i) => (
-            <TurnRow
-              key={turn.key}
-              turn={turn}
-              live={busy && i === turns.length - 1}
-              fontSize={fontSize}
-              chat={chat}
-              onPreview={openPreview}
-            />
-          ))}
+          {turns.map((turn, i) => {
+            const mark = switchBefore(carried, turn.key, thread);
+            return (
+              <Fragment key={turn.key}>
+                {mark && <ProviderSwitchDivider mark={mark} />}
+                <TurnRow
+                  turn={turn}
+                  live={busy && i === turns.length - 1}
+                  fontSize={fontSize}
+                  chat={chat}
+                  onPreview={openPreview}
+                />
+              </Fragment>
+            );
+          })}
           {busy && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin" />
@@ -346,6 +455,7 @@ export const ChatPane = memo(function ChatPane({
                   onEffortChange={changeEffort}
                   fullAccess={fullAccess}
                   onFullAccessChange={setFullAccess}
+                  queue={queue}
                   draft={draft}
                   onDraftConsumed={consumeDraft}
                   onSend={send}
@@ -738,7 +848,7 @@ const MessageRow = memo(function MessageRow({
 }) {
   if (message.role === "user") {
     return (
-      <div className="flex flex-col items-end gap-1.5">
+      <div className="group flex flex-col items-end gap-1.5">
         {message.images && message.images.length > 0 && (
           <div className="flex max-w-[85%] flex-wrap justify-end gap-2">
             {message.images.map((img) => (
@@ -761,6 +871,13 @@ const MessageRow = memo(function MessageRow({
           <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-card px-4 py-2.5">
             {message.text}
           </div>
+        )}
+        {message.checkpointId && (
+          <RevertTurnButton
+            projectPath={chat.cwd}
+            threadId={chat.sessionId}
+            checkpointId={message.checkpointId}
+          />
         )}
       </div>
     );
@@ -789,6 +906,25 @@ interface ChatContext {
   sessionId: string;
   cwd: string;
   backend: AgentBackend;
+  /** The model this pane is running, for turn attribution in a handoff. */
+  model: string | null;
+  /** Continue this same thread on the other provider, in this pane. */
+  onSwitchProvider: () => void;
+}
+
+/** Where the thread changed hands. Rendered in the transcript rather than as a
+ *  toast, because which provider wrote which turn is part of reading it back. */
+function ProviderSwitchDivider({ mark }: { mark: ProviderSwitchMark }) {
+  return (
+    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+      <span className="h-px flex-1 bg-border" />
+      <span className="flex items-center gap-1.5">
+        <ArrowRightLeft className="size-3" />
+        {`${PROVIDER_LABEL[mark.from]} → ${PROVIDER_LABEL[mark.to]}`}
+      </span>
+      <span className="h-px flex-1 bg-border" />
+    </div>
+  );
 }
 
 /** The hover strip under an assistant message. Stays visible while the handoff
@@ -828,8 +964,22 @@ function HandoffButton({ text, chat }: { text: string; chat: ChatContext }) {
   const changes = useGitChanges(chat.cwd, open);
   const dirty = (changes.data ?? []).length > 0;
   const label = handoffLabel(chat.backend);
-  const hand = (withDiff: boolean) =>
-    useAgentStore.getState().handoff?.(chat.sessionId, text, withDiff);
+  const hand = (withDiff: boolean) => {
+    const store = useAgentStore.getState();
+    const turns = store.transcripts[chat.sessionId]?.() ?? [];
+    store.handoff?.({
+      sourceSessionId: chat.sessionId,
+      // The clicked message is the point of the handoff, so it travels even
+      // when it sits further back than the turn limit.
+      turns: withFocusedTurn(turns, {
+        role: "assistant",
+        provider: chat.backend,
+        model: chat.model,
+        text,
+      }),
+      withDiff,
+    });
+  };
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger className={actionClass}>
@@ -837,6 +987,12 @@ function HandoffButton({ text, chat }: { text: string; chat: ChatContext }) {
         {label}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
+        {/* Same thread, other provider: the turns so far stay in this
+            transcript, attributed to whoever produced them. */}
+        <DropdownMenuItem onSelect={chat.onSwitchProvider}>
+          {`Continue here with ${BACKEND_LABEL[otherBackend(chat.backend)]}`}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => hand(false)}>{label}</DropdownMenuItem>
         {dirty && (
           <DropdownMenuItem onSelect={() => hand(true)}>
@@ -1458,5 +1614,78 @@ function PermissionPrompt({
         Press 1–{options.length}, ↑↓ + Enter, or click.
       </p>
     </div>
+  );
+}
+
+/** Put the working tree back to just before this turn ran. Shows what it will
+ *  touch first — a revert that silently deletes a file the user wrote by hand
+ *  is not something to find out about afterwards. */
+function RevertTurnButton({
+  projectPath,
+  threadId,
+  checkpointId,
+}: {
+  projectPath: string;
+  threadId: string;
+  checkpointId: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const invalidateGit = useInvalidateGit();
+
+  const revert = async () => {
+    setBusy(true);
+    try {
+      const changes = await checkpointChanges(projectPath, checkpointId);
+      if (changes.length === 0) {
+        toast.info("Nothing to revert", {
+          description: "The working tree is unchanged since this turn.",
+        });
+        return;
+      }
+      const added = changes.filter((c) => c.kind === "added");
+      const ok = await ask(
+        `${describeRestore(changes)}.\n\nRestore the working tree to before this turn?`,
+        { title: "Revert turn", kind: "warning" }
+      );
+      if (!ok) return;
+      // Deleting files created since the checkpoint is a second, separate ask:
+      // some of them are the agent's, some may be the user's own.
+      const removeAdded =
+        added.length > 0 &&
+        (await ask(
+          `Also delete ${added.length} file(s) created since this turn?\n\n${added
+            .slice(0, 8)
+            .map((c) => c.path)
+            .join("\n")}`,
+          { title: "Delete new files", kind: "warning" }
+        ));
+      await restoreCheckpoint(projectPath, checkpointId, removeAdded);
+      invalidateGit(projectPath);
+      // A revert is a durable fact about the thread, not just a toast.
+      void invoke("thread_timeline_append", {
+        threadId,
+        kind: "checkpointReverted",
+        attribution: null,
+        payload: JSON.stringify({ checkpointId, removeAdded, changes: changes.length }),
+      }).catch(() => {});
+      toast.success("Reverted to before this turn");
+    } catch (e) {
+      toast.error("Revert failed", { description: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void revert()}
+      disabled={busy}
+      title="Restore the working tree to before this turn"
+      className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground opacity-0 outline-none transition-opacity hover:text-foreground group-hover:opacity-100 disabled:opacity-40"
+    >
+      <Undo2 className="size-3.5" />
+      Revert turn
+    </button>
   );
 }

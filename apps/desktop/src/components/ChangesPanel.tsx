@@ -4,6 +4,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { diffLines } from "diff";
 import {
+  ArrowUpFromLine,
   FileDiff,
   RefreshCw,
   GitBranch,
@@ -16,6 +17,16 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+/** What `git_commit_and_push` did — the two halves are reported separately so a
+ *  landed commit with a failed push can be told apart from a no-op. */
+interface CommitPush {
+  committed: boolean;
+  pushed: boolean;
+  branch: string;
+  needsUpstream: boolean;
+  message: string;
+}
 import { Input } from "@/components/ui/input";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { basename } from "@/lib/path";
@@ -402,6 +413,49 @@ export function ChangesPanel({
     }
   }
 
+  /** Commit, then push in the same action. The Rust side does the safety
+   *  checks before it commits, so a refusal never strands a commit here. */
+  async function doCommitAndPush() {
+    if (!stagedFiles.length || !commitMsg.trim() || committing) return;
+    setCommitting(true);
+    setCommitErr(null);
+    try {
+      let out = await invoke<CommitPush>("git_commit_and_push", {
+        path: projectPath,
+        message: commitMsg.trim(),
+        setUpstream: false,
+      });
+      if (out.needsUpstream) {
+        const publish = await ask(
+          `"${out.branch}" isn't on the remote yet. Push it to origin and track it?`,
+          { title: "Publish branch", kind: "info" }
+        );
+        if (!publish) return;
+        out = await invoke<CommitPush>("git_commit_and_push", {
+          path: projectPath,
+          message: commitMsg.trim(),
+          setUpstream: true,
+        });
+      }
+      if (out.committed) {
+        setCommitMsg("");
+        setGitSel(null);
+      }
+      // A commit that landed with a failed push is not an error to swallow —
+      // the user needs to know the history moved even though the remote didn't.
+      if (out.committed && !out.pushed) {
+        toast.warning("Committed, but not pushed", { description: out.message });
+      } else if (out.pushed) {
+        toast.success(`Pushed to ${out.branch}`);
+      }
+    } catch (e) {
+      setCommitErr(String(e));
+    } finally {
+      setCommitting(false);
+      invalidateGit(projectPath);
+    }
+  }
+
   async function doCommit() {
     if (!stagedFiles.length || !commitMsg.trim() || committing) return;
     setCommitting(true);
@@ -576,10 +630,19 @@ export function ChangesPanel({
                     <button
                       onClick={() => void doCommit()}
                       disabled={committing || !commitMsg.trim()}
-                      className="flex items-center gap-1.5 rounded bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+                      className="flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-40"
                     >
                       <Check className="size-3.5" />
                       Commit {stagedFiles.length}
+                    </button>
+                    <button
+                      onClick={() => void doCommitAndPush()}
+                      disabled={committing || !commitMsg.trim()}
+                      title="Commit the staged files and push the branch"
+                      className="flex items-center gap-1.5 rounded bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
+                    >
+                      <ArrowUpFromLine className="size-3.5" />
+                      Commit &amp; push
                     </button>
                   </div>
                 </div>

@@ -4,15 +4,14 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
-use tauri::ipc::Channel;
+use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 
 /// Events streamed from a headless Claude Code process back to the frontend.
 /// Unlike the PTY path, this carries whole newline-delimited JSON lines from
 /// `claude --output-format stream-json` — parsing/rendering happens in the UI.
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type", content = "data")]
 pub enum AgentEvent {
     /// One JSON object line from stdout (a stream-json message).
@@ -25,6 +24,12 @@ pub enum AgentEvent {
     /// Process exited (exit code if known).
     Exit(Option<i32>),
 }
+
+/// Where an agent's output goes. The Tauri app hands it a per-spawn IPC
+/// channel; the daemon hands it a socket fan-out. Returning `false` means the
+/// consumer is gone and the reader should stop — that is the only backpressure
+/// signal either sink has.
+pub type AgentSink = Arc<dyn Fn(AgentEvent) -> bool + Send + Sync>;
 
 struct AgentSession {
     child: Child,
@@ -74,7 +79,7 @@ impl AgentManager {
         model: Option<String>,
         effort: Option<String>,
         emberyx_session_id: String,
-        on_event: Channel<AgentEvent>,
+        on_event: AgentSink,
     ) -> Result<u32> {
         let mut cmd = Command::new("claude");
         cmd.arg("-p")
@@ -167,11 +172,11 @@ impl AgentManager {
         );
 
         // stderr: forward as diagnostics.
-        let err_channel = on_event.clone();
+        let err_channel = Arc::clone(&on_event);
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines().map_while(std::io::Result::ok) {
-                if err_channel.send(AgentEvent::Stderr(line)).is_err() {
+                if !err_channel(AgentEvent::Stderr(line)) {
                     return;
                 }
             }
@@ -197,7 +202,7 @@ impl AgentManager {
             let _ = tx.send(Chunk::Done);
         });
 
-        let out_channel = on_event.clone();
+        let out_channel = Arc::clone(&on_event);
         let sessions = Arc::clone(&self.sessions);
         std::thread::spawn(move || {
             const MAX_BATCH: usize = 512;
@@ -217,7 +222,7 @@ impl AgentManager {
                         if let Some(supervisor) = crate::supervisor::Supervisor::active() {
                             supervisor.observe_process_exit_by_process(id, code);
                         }
-                        let _ = out_channel.send(AgentEvent::Exit(code));
+                        out_channel(AgentEvent::Exit(code));
                         return;
                     }
                 };
@@ -236,7 +241,7 @@ impl AgentManager {
                     1 => AgentEvent::Line(batch.remove(0)),
                     _ => AgentEvent::Lines(batch),
                 };
-                if out_channel.send(event).is_err() {
+                if !out_channel(event) {
                     return;
                 }
                 if done {
@@ -244,7 +249,7 @@ impl AgentManager {
                     if let Some(supervisor) = crate::supervisor::Supervisor::active() {
                         supervisor.observe_process_exit_by_process(id, code);
                     }
-                    let _ = out_channel.send(AgentEvent::Exit(code));
+                    out_channel(AgentEvent::Exit(code));
                     return;
                 }
             }
@@ -366,10 +371,24 @@ impl AgentManager {
     }
 }
 
+/// What a spawn gave the caller. `reattached` means the daemon already had this
+/// agent running and replayed its output: the frontend must not also resume
+/// from the provider's own transcript, or it renders the conversation twice.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentHandle {
+    pub id: u32,
+    pub reattached: bool,
+    /// True when the daemon's buffer had already dropped frames this client
+    /// never saw, so the replayed transcript is knowingly partial.
+    pub truncated: bool,
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn agent_spawn(
     manager: tauri::State<'_, AgentManager>,
+    daemon: tauri::State<'_, crate::daemon::Daemon>,
     ask: tauri::State<'_, crate::ask::AskServer>,
     cwd: String,
     session_id: String,
@@ -380,10 +399,35 @@ pub fn agent_spawn(
     model: Option<String>,
     effort: Option<String>,
     emberyx_session_id: String,
-    on_event: Channel<AgentEvent>,
-) -> Result<u32> {
+    persistent: Option<bool>,
+    after_frame_id: Option<u64>,
+    on_event: tauri::ipc::Channel<AgentEvent>,
+) -> Result<AgentHandle> {
     let mcp_config = ask.mcp_config(&emberyx_session_id);
-    Ok(manager.spawn(
+    if persistent.unwrap_or(false) {
+        // Owned by the daemon: it outlives this window, and a reopened window
+        // reattaches instead of starting a second agent.
+        let spec = crate::daemon_protocol::AgentSpec {
+            agent_id: emberyx_session_id.clone(),
+            cwd,
+            session_id,
+            resume,
+            permission_mode,
+            skip_permissions,
+            settings,
+            mcp_config: Some(mcp_config),
+            model,
+            effort,
+            emberyx_session_id,
+        };
+        let (id, outcome) = daemon.spawn(spec, after_frame_id, channel_sink(on_event))?;
+        return Ok(AgentHandle {
+            id,
+            reattached: outcome.reattached,
+            truncated: outcome.truncated,
+        });
+    }
+    let id = manager.spawn(
         cwd,
         session_id,
         resume,
@@ -394,22 +438,52 @@ pub fn agent_spawn(
         model,
         effort,
         emberyx_session_id,
-        on_event,
-    )?)
+        channel_sink(on_event),
+    )?;
+    Ok(AgentHandle {
+        id,
+        reattached: false,
+        truncated: false,
+    })
+}
+
+/// Adapt a Tauri IPC channel to an `AgentSink`. A closed channel reports `false`
+/// so the reader threads stop instead of writing into a dead pipe.
+pub fn channel_sink(channel: tauri::ipc::Channel<AgentEvent>) -> AgentSink {
+    Arc::new(move |event| channel.send(event).is_ok())
 }
 
 #[tauri::command]
 pub fn agent_send(
     manager: tauri::State<'_, AgentManager>,
+    daemon: tauri::State<'_, crate::daemon::Daemon>,
     id: u32,
     message: String,
 ) -> Result<()> {
-    Ok(manager.send(id, &message)?)
+    // A handle the daemon minted addresses a process in the daemon, not here.
+    if daemon.agent_for(id).is_some() {
+        return daemon.send(id, &message);
+    }
+    manager.send(id, &message)
+}
+
+/// Let go of a daemon agent without stopping it. This is what closing a pane
+/// does in persistent mode — killing it there would defeat the whole point.
+#[tauri::command]
+pub fn agent_detach(daemon: tauri::State<'_, crate::daemon::Daemon>, id: u32) -> Result<bool> {
+    Ok(daemon.detach(id))
 }
 
 #[tauri::command]
-pub fn agent_kill(manager: tauri::State<'_, AgentManager>, id: u32) -> Result<()> {
-    Ok(manager.kill(id)?)
+pub fn agent_kill(
+    manager: tauri::State<'_, AgentManager>,
+    daemon: tauri::State<'_, crate::daemon::Daemon>,
+    id: u32,
+) -> Result<()> {
+    if daemon.agent_for(id).is_some() {
+        return daemon.kill(id);
+    }
+    manager.kill(id)
 }
 
 #[tauri::command]
@@ -419,5 +493,5 @@ pub fn title_thread(
     session_id: String,
     first_message: String,
 ) -> Result<String> {
-    Ok(manager.title_thread(cwd, session_id, first_message)?)
+    manager.title_thread(cwd, session_id, first_message)
 }

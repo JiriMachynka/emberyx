@@ -8,7 +8,9 @@ export type AgentLifecycle =
   | "done"
   | "failed"
   | "cancelled"
-  | "exited";
+  | "exited"
+  /** Died without a clean completion — the app was killed mid-turn. */
+  | "orphaned";
 
 export interface RegistryAgent {
   agentId: string;

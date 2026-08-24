@@ -3,10 +3,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Bell,
+  Boxes,
   ChevronDown,
   ChevronUp,
+  GitBranch,
   Info,
+  Keyboard,
   Plug,
+  ShieldCheck,
   SlidersHorizontal,
   Type,
 } from "lucide-react";
@@ -30,10 +34,16 @@ import {
 import { cn } from "@/lib/utils";
 import { checkForUpdates } from "@/lib/update";
 import {
-  invalidateGitlab,
-  useGitlabToken,
+  invalidateDaemon,
+  invalidateForge,
+  useDaemonHealth,
+  useForgeToken,
   useOpenRouterModels,
+  useProviderStatus,
 } from "@/lib/queries";
+import { IDES, IDE_LABEL, type IdeId } from "@/lib/ide";
+import { PERMISSION_MODES, PERMISSION_MODE_LABEL } from "@/lib/settings";
+import { PROVIDER_LABEL } from "@/lib/providers";
 import { Field, Toggle } from "@/components/SettingsFields";
 import {
   AGENT_BACKENDS,
@@ -51,13 +61,26 @@ interface SettingsDialogProps {
   onUpdate: (patch: Partial<Settings>) => void;
 }
 
-type Tab = "general" | "notifications" | "appearance" | "integrations" | "about";
+type Tab =
+  | "general"
+  | "providers"
+  | "permissions"
+  | "connections"
+  | "sourceControl"
+  | "appearance"
+  | "notifications"
+  | "shortcuts"
+  | "about";
 
 const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: "general", label: "General", icon: SlidersHorizontal },
-  { id: "notifications", label: "Notifications", icon: Bell },
+  { id: "providers", label: "Providers", icon: Boxes },
+  { id: "permissions", label: "Permissions", icon: ShieldCheck },
+  { id: "connections", label: "Connections", icon: Plug },
+  { id: "sourceControl", label: "Source Control", icon: GitBranch },
   { id: "appearance", label: "Appearance", icon: Type },
-  { id: "integrations", label: "Integrations", icon: Plug },
+  { id: "notifications", label: "Notifications", icon: Bell },
+  { id: "shortcuts", label: "Keyboard Shortcuts", icon: Keyboard },
   { id: "about", label: "About", icon: Info },
 ];
 
@@ -73,7 +96,12 @@ export function SettingsDialog({
   const capabilities = capabilitiesOf(settings.agentBackend);
   const models = useOpenRouterModels(open).data ?? [];
   const qc = useQueryClient();
-  const hasGitlabToken = useGitlabToken().data ?? false;
+  const hasGitlabToken = useForgeToken("gitlab").data ?? false;
+  const hasGithubToken = useForgeToken("github").data ?? false;
+  const [githubToken, setGithubToken] = useState("");
+  const providers = useProviderStatus().data ?? [];
+  const daemon = useDaemonHealth(open).data ?? null;
+  const [startingDaemon, setStartingDaemon] = useState(false);
   // Held only until Save hands it to the keychain, then wiped.
   const [gitlabToken, setGitlabToken] = useState("");
 
@@ -84,12 +112,33 @@ export function SettingsDialog({
   async function onSaveGitlabToken() {
     await invoke("gitlab_set_token", { token: gitlabToken.trim() });
     setGitlabToken("");
-    invalidateGitlab(qc);
+    invalidateForge(qc);
   }
 
   async function onClearGitlabToken() {
     await invoke("gitlab_clear_token");
-    invalidateGitlab(qc);
+    invalidateForge(qc);
+  }
+
+  async function onSaveGithubToken() {
+    await invoke("github_set_token", { token: githubToken.trim() });
+    setGithubToken("");
+    invalidateForge(qc);
+  }
+
+  async function onClearGithubToken() {
+    await invoke("github_clear_token");
+    invalidateForge(qc);
+  }
+
+  async function onStartDaemon() {
+    setStartingDaemon(true);
+    try {
+      await invoke("daemon_start");
+      invalidateDaemon(qc);
+    } finally {
+      setStartingDaemon(false);
+    }
   }
 
   async function onCheckUpdates() {
@@ -155,81 +204,6 @@ export function SettingsDialog({
                     </Select>
                   </Field>
 
-                  <Field
-                    label="Agent backend"
-                    hint="Which CLI the command drives. Projects can pin their own in the project's Settings tab."
-                  >
-                    <Select
-                      value={settings.agentBackend}
-                      onValueChange={(v) => {
-                        if (isAgentBackend(v)) onUpdate({ agentBackend: v });
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {AGENT_BACKENDS.map((b) => (
-                          <SelectItem key={b} value={b}>
-                            {BACKEND_LABEL[b]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
-
-                  <Field
-                    label="Agent command"
-                    hint="Run on project open, e.g. claude or codex"
-                  >
-                    <Input
-                      value={settings.agentCommand}
-                      onChange={(e) => onUpdate({ agentCommand: e.target.value })}
-                      spellCheck={false}
-                    />
-                  </Field>
-
-                  {capabilities.permissions && (
-                    <Toggle
-                      checked={settings.dangerouslySkipPermissions}
-                      onChange={(v) =>
-                        onUpdate({ dangerouslySkipPermissions: v })
-                      }
-                      title="Skip permission prompts"
-                    >
-                      Launch Claude with{" "}
-                      <code className="text-[11px]">
-                        --dangerously-skip-permissions
-                      </code>
-                      . The agent won't ask before running commands or edits.
-                    </Toggle>
-                  )}
-
-                  {capabilities.threads && (
-                    <Toggle
-                      checked={settings.resumeLatestThread}
-                      onChange={(v) => onUpdate({ resumeLatestThread: v })}
-                      title="Resume latest thread on open"
-                    >
-                      Opening a project reopens the most recently worked-on
-                      thread. Off launches a brand-new agent each time.
-                    </Toggle>
-                  )}
-
-                  {/* --verbose is Claude's own flag; buildAgentCommand emits
-                      it for no one else. */}
-                  {settings.agentBackend === "claude" && (
-                    <Toggle
-                      checked={settings.compactSession}
-                      onChange={(v) => onUpdate({ compactSession: v })}
-                      title="Compact session"
-                    >
-                      Keep tool output collapsed. Off (default) runs a full
-                      session with <code className="text-[11px]">--verbose</code>
-                      , expanding tool output inline.
-                    </Toggle>
-                  )}
-
                   <Toggle
                     checked={settings.expandAllProjects}
                     onChange={(v) => onUpdate({ expandAllProjects: v })}
@@ -248,6 +222,173 @@ export function SettingsDialog({
                     run begins.
                   </Toggle>
                 </>
+              )}
+
+              {tab === "providers" && (
+                <>
+                  <div>
+                    <div className="mb-1 text-sm font-semibold">Installed</div>
+                    <p className="mb-3 text-xs text-muted-foreground">
+                      Detected by running each CLI's own version probe. A
+                      provider that isn't installed is listed, not hidden — the
+                      absence is the useful part.
+                    </p>
+                    <div className="grid gap-1.5">
+                      {providers.map((p) => (
+                        <div
+                          key={p.id}
+                          className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span
+                              className={cn(
+                                "size-1.5 shrink-0 rounded-full",
+                                p.installed ? "bg-emerald-500" : "bg-muted-foreground/40"
+                              )}
+                            />
+                            <span className="truncate">
+                              {PROVIDER_LABEL[p.id] ?? p.label}
+                            </span>
+                            <code className="shrink-0 text-[11px] text-muted-foreground">
+                              {p.binary}
+                            </code>
+                          </span>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {p.installed ? p.version ?? "installed" : "not installed"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="border-t pt-4 grid gap-4">
+                    <Field
+                      label="Default backend"
+                      hint="Which CLI the command drives. Projects can pin their own in the project's Settings tab."
+                    >
+                      <Select
+                        value={settings.agentBackend}
+                        onValueChange={(v) => {
+                          if (isAgentBackend(v)) onUpdate({ agentBackend: v });
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {AGENT_BACKENDS.map((b) => (
+                            <SelectItem key={b} value={b}>
+                              {BACKEND_LABEL[b]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </Field>
+
+                    <Field
+                      label="Agent command"
+                      hint="Run on project open, e.g. claude or codex"
+                    >
+                      <Input
+                        value={settings.agentCommand}
+                        onChange={(e) => onUpdate({ agentCommand: e.target.value })}
+                        spellCheck={false}
+                      />
+                    </Field>
+
+                    {capabilities.threads && (
+                      <Toggle
+                        checked={settings.resumeLatestThread}
+                        onChange={(v) => onUpdate({ resumeLatestThread: v })}
+                        title="Resume latest thread on open"
+                      >
+                        Opening a project reopens the most recently worked-on
+                        thread. Off launches a brand-new agent each time.
+                      </Toggle>
+                    )}
+
+                    {/* --verbose is Claude's own flag; buildAgentCommand emits
+                        it for no one else. */}
+                    {settings.agentBackend === "claude" && (
+                      <Toggle
+                        checked={settings.compactSession}
+                        onChange={(v) => onUpdate({ compactSession: v })}
+                        title="Compact session"
+                      >
+                        Keep tool output collapsed. Off (default) runs a full
+                        session with <code className="text-[11px]">--verbose</code>
+                        , expanding tool output inline.
+                      </Toggle>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {tab === "permissions" && (
+                <>
+                  {capabilities.permissions ? (
+                    <>
+                      <Field
+                        label="Permission mode"
+                        hint="How Claude handles a tool it hasn't been allowed yet."
+                      >
+                        <Select
+                          value={settings.permissionMode}
+                          disabled={settings.dangerouslySkipPermissions}
+                          onValueChange={(v) =>
+                            onUpdate({ permissionMode: v as typeof settings.permissionMode })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {PERMISSION_MODES.map((m) => (
+                              <SelectItem key={m} value={m}>
+                                {PERMISSION_MODE_LABEL[m]}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </Field>
+
+                      <Toggle
+                        checked={settings.dangerouslySkipPermissions}
+                        onChange={(v) => onUpdate({ dangerouslySkipPermissions: v })}
+                        title="Skip permission prompts"
+                      >
+                        Launch Claude with{" "}
+                        <code className="text-[11px]">
+                          --dangerously-skip-permissions
+                        </code>
+                        . The agent won't ask before running commands or edits.
+                        This replaces the mode above rather than refining it —
+                        the two flags are mutually exclusive.
+                      </Toggle>
+                    </>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      {BACKEND_LABEL[settings.agentBackend]} manages approvals
+                      itself; there is nothing here to set.
+                    </p>
+                  )}
+                </>
+              )}
+
+              {tab === "shortcuts" && (
+                <div className="grid gap-1">
+                  {SHORTCUTS.map((s) => (
+                    <div
+                      key={s.keys}
+                      className="flex items-center justify-between rounded-md px-2 py-1.5 text-sm odd:bg-secondary/30"
+                    >
+                      <span className="text-muted-foreground">{s.action}</span>
+                      <kbd className="rounded border bg-background px-1.5 py-0.5 text-xs">
+                        {s.keys}
+                      </kbd>
+                    </div>
+                  ))}
+                </div>
               )}
 
               {tab === "notifications" && (
@@ -358,9 +499,98 @@ export function SettingsDialog({
                 </>
               )}
 
-              {tab === "integrations" && (
+              {tab === "connections" && (
                 <>
                   <div>
+                    <div className="mb-1 text-sm font-semibold">
+                      Persistent agents
+                    </div>
+                    <p className="mb-3 text-xs text-muted-foreground">
+                      With <code className="text-[11px]">emberyxd</code> running,
+                      chat agents live in the daemon and survive closing the
+                      window. Without it, they stop when the window does.
+                    </p>
+                    <div className="mb-4 flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <span className="flex items-center gap-2">
+                        <span
+                          className={cn(
+                            "size-1.5 rounded-full",
+                            daemon ? "bg-emerald-500" : "bg-muted-foreground/40"
+                          )}
+                        />
+                        {daemon
+                          ? `Running · v${daemon.version} · ${daemon.agentCount} agent${daemon.agentCount === 1 ? "" : "s"}`
+                          : "Not running"}
+                      </span>
+                      {!daemon && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={onStartDaemon}
+                          disabled={startingDaemon}
+                        >
+                          {startingDaemon ? "Starting…" : "Start"}
+                        </Button>
+                      )}
+                    </div>
+                    <Toggle
+                      checked={settings.persistentAgents}
+                      onChange={(v) => onUpdate({ persistentAgents: v })}
+                      title="Keep agents running in the background"
+                    >
+                      New chats run inside the daemon. A resumed thread renders
+                      from the daemon's own replay, so reopening an older
+                      conversation starts empty and fills from the next turn.
+                    </Toggle>
+                  </div>
+
+                  <div className="border-t pt-4">
+                    <div className="mb-3 text-sm font-semibold">
+                      External editor
+                    </div>
+                    <div className="grid gap-4">
+                      <Field
+                        label="Open in"
+                        hint="Used by Run → Open in…, and needs the editor's command line tools on PATH."
+                      >
+                        <Select
+                          value={settings.ide}
+                          onValueChange={(v) => onUpdate({ ide: v as IdeId })}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {IDES.map((ide) => (
+                              <SelectItem key={ide.id} value={ide.id}>
+                                {ide.label}
+                              </SelectItem>
+                            ))}
+                            <SelectItem value="custom">
+                              {IDE_LABEL.custom}
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+                      {settings.ide === "custom" && (
+                        <Field
+                          label="Custom command"
+                          hint="Placeholders: {project} {file} {line} {column}. Run directly, not through a shell — quote paths with spaces."
+                        >
+                          <Input
+                            value={settings.ideCustomCommand}
+                            onChange={(e) =>
+                              onUpdate({ ideCustomCommand: e.target.value })
+                            }
+                            placeholder={'mate "{project}" -l {line} "{file}"'}
+                            spellCheck={false}
+                          />
+                        </Field>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="border-t pt-4">
                     <div className="mb-3 text-sm font-semibold">Dokploy</div>
                     <div className="grid gap-4">
                       <Field
@@ -385,6 +615,94 @@ export function SettingsDialog({
                           }
                           spellCheck={false}
                         />
+                      </Field>
+                    </div>
+                  </div>
+
+                  <div className="border-t pt-4">
+                    <div className="mb-3 text-sm font-semibold">OpenRouter</div>
+                    <div className="grid gap-4">
+                      <Field
+                        label="API key"
+                        hint="Enables the Generate button on the commit box to draft messages from your diff."
+                      >
+                        <Input
+                          type="password"
+                          value={settings.openRouterApiKey}
+                          onChange={(e) =>
+                            onUpdate({ openRouterApiKey: e.target.value })
+                          }
+                          placeholder="sk-or-…"
+                          spellCheck={false}
+                        />
+                      </Field>
+                      <Field
+                        label="Model"
+                        hint="OpenRouter model slug. Defaults to google/gemini-3.5-flash."
+                      >
+                        <Input
+                          list="openrouter-models"
+                          value={settings.openRouterModel}
+                          onChange={(e) =>
+                            onUpdate({ openRouterModel: e.target.value })
+                          }
+                          placeholder="google/gemini-3.5-flash"
+                          spellCheck={false}
+                        />
+                        <datalist id="openrouter-models">
+                          {models.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.name}
+                            </option>
+                          ))}
+                        </datalist>
+                      </Field>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {tab === "sourceControl" && (
+                <>
+                  <div>
+                    <div className="mb-3 text-sm font-semibold">GitHub</div>
+                    <div className="grid gap-4">
+                      <Field
+                        label="Personal access token"
+                        hint="Needs the repo scope. github.com only. Stored in the OS keychain, never on disk."
+                      >
+                        {hasGithubToken ? (
+                          <div className="flex items-center gap-2">
+                            <span className="flex h-9 flex-1 items-center rounded-md border border-input px-3 text-sm text-muted-foreground">
+                              •••••••• Connected
+                            </span>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={onClearGithubToken}
+                            >
+                              Disconnect
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="password"
+                              value={githubToken}
+                              onChange={(e) => setGithubToken(e.target.value)}
+                              placeholder="ghp_… or github_pat_…"
+                              spellCheck={false}
+                              autoComplete="off"
+                            />
+                            <Button
+                              size="sm"
+                              onClick={onSaveGithubToken}
+                              disabled={!githubToken.trim()}
+                            >
+                              Save
+                            </Button>
+                          </div>
+                        )}
                       </Field>
                     </div>
                   </div>
@@ -445,46 +763,6 @@ export function SettingsDialog({
                     </div>
                   </div>
 
-                  <div className="border-t pt-4">
-                    <div className="mb-3 text-sm font-semibold">OpenRouter</div>
-                    <div className="grid gap-4">
-                      <Field
-                        label="API key"
-                        hint="Enables the Generate button on the commit box to draft messages from your diff."
-                      >
-                        <Input
-                          type="password"
-                          value={settings.openRouterApiKey}
-                          onChange={(e) =>
-                            onUpdate({ openRouterApiKey: e.target.value })
-                          }
-                          placeholder="sk-or-…"
-                          spellCheck={false}
-                        />
-                      </Field>
-                      <Field
-                        label="Model"
-                        hint="OpenRouter model slug. Defaults to google/gemini-3.5-flash."
-                      >
-                        <Input
-                          list="openrouter-models"
-                          value={settings.openRouterModel}
-                          onChange={(e) =>
-                            onUpdate({ openRouterModel: e.target.value })
-                          }
-                          placeholder="google/gemini-3.5-flash"
-                          spellCheck={false}
-                        />
-                        <datalist id="openrouter-models">
-                          {models.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.name}
-                            </option>
-                          ))}
-                        </datalist>
-                      </Field>
-                    </div>
-                  </div>
                 </>
               )}
 
@@ -516,6 +794,20 @@ export function SettingsDialog({
 
 /** Popular monospace families. Values are full font stacks; the first two match
  *  the shipped defaults so the current setting selects cleanly. */
+/** The shortcuts `useShortcuts` actually binds, plus the menu's own. Listed,
+ *  not editable: nothing rebinds them yet, and a settings screen that pretends
+ *  otherwise is worse than one that just tells you what the keys are. */
+const SHORTCUTS: { action: string; keys: string }[] = [
+  { action: "Command palette", keys: "⌘K" },
+  { action: "New agent tab", keys: "⌘T" },
+  { action: "Close tab", keys: "⌘W" },
+  { action: "Toggle sidebar", keys: "⌘B" },
+  { action: "Search in project", keys: "⇧⌘F" },
+  { action: "Settings", keys: "⌘," },
+  { action: "Send message", keys: "↵" },
+  { action: "Newline in composer", keys: "⇧↵" },
+];
+
 const FONT_OPTIONS: { label: string; value: string }[] = [
   { label: "Geist Mono", value: '"Geist Mono Variable", ui-monospace, Menlo, monospace' },
   {

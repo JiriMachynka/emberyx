@@ -1,4 +1,6 @@
-import { ChevronDown, Pencil, Play, Plus, Square } from "lucide-react";
+import { ChevronDown, Pencil, Play, Plus, Square, SquareArrowOutUpRight } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -8,9 +10,13 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { IDE_LABEL, buildIdeCommand } from "@/lib/ide";
+import { loadSettings } from "@/lib/settings";
 import type { ProjectAction } from "@/lib/actions";
 
 interface ActionsMenuProps {
+  /** Project root, for "Open in <editor>". */
+  projectPath: string;
   actions: ProjectAction[];
   running: boolean;
   onRun: (action: ProjectAction) => void;
@@ -22,6 +28,7 @@ interface ActionsMenuProps {
 /** Top-bar menu of project actions: run one, edit it, or add a new one.
  *  Replaces the old detection-driven Dev split button. */
 export function ActionsMenu({
+  projectPath,
   actions,
   running,
   onRun,
@@ -90,8 +97,37 @@ export function ActionsMenu({
             <Plus className="size-3.5" />
             Add action…
           </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <OpenInIdeItem projectPath={projectPath} />
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
+  );
+}
+
+/** Hand the project to the configured external editor. Settings are read on
+ *  click rather than held as a prop: this is the only place that needs them,
+ *  and a stale editor choice would send the project to the wrong app. */
+function OpenInIdeItem({ projectPath }: { projectPath: string }) {
+  const openInIde = async () => {
+    const { ide, ideCustomCommand } = loadSettings();
+    const command = buildIdeCommand(ide, { project: projectPath }, ideCustomCommand);
+    if (!command) {
+      toast.error("No editor configured", {
+        description: "Set a custom command in Settings → Connections.",
+      });
+      return;
+    }
+    try {
+      await invoke("open_in_ide", { ...command });
+    } catch (e) {
+      toast.error(`Couldn't open ${IDE_LABEL[ide]}`, { description: String(e) });
+    }
+  };
+  return (
+    <DropdownMenuItem onSelect={() => void openInIde()}>
+      <SquareArrowOutUpRight className="size-3.5" />
+      {`Open in ${IDE_LABEL[loadSettings().ide]}`}
+    </DropdownMenuItem>
   );
 }

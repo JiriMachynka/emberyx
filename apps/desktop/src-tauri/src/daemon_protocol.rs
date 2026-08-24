@@ -8,6 +8,13 @@ use serde_json::Value;
 
 pub const MAX_EVENTS: usize = 400;
 
+/// Output frames buffered per live agent. A reconnecting client replays from
+/// this to rebuild its transcript, so it is much deeper than the metadata ring —
+/// but it is still a bound, and a client that fell further behind is told the
+/// replay is partial rather than shown a transcript with a hole in it.
+pub const MAX_FRAMES: usize = 20_000;
+pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DaemonAgent {
@@ -32,16 +39,125 @@ pub struct DaemonEvent {
     pub timestamp: u64,
 }
 
+/// One queued prompt, owned by the daemon so it survives window close and
+/// reconnects. Ordered by `position`; the queue pauses when the agent is
+/// blocked or failed (see `paused`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QueuedPrompt {
+    pub queue_id: String,
+    pub agent_id: String,
+    pub position: u32,
+    pub text: String,
+    pub created_at: u64,
+}
+
+/// Everything the daemon needs to launch a headless Claude agent. Mirrors
+/// `AgentManager::spawn`; the daemon owns the child so it outlives the window.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSpec {
+    /// Stable Emberyx agent id — how a reconnecting client finds this agent
+    /// again. Not the OS process id.
+    pub agent_id: String,
+    pub cwd: String,
+    pub session_id: String,
+    pub resume: Option<String>,
+    pub permission_mode: String,
+    pub skip_permissions: bool,
+    pub settings: Option<String>,
+    pub mcp_config: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub emberyx_session_id: String,
+}
+
+/// One buffered frame of agent output. `frameId` is monotonic per agent, so a
+/// reconnecting client asks for everything after the last frame it rendered.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFrame {
+    pub frame_id: u64,
+    pub agent_id: String,
+    /// The transport's own event, verbatim.
+    pub event: Value,
+    pub timestamp: u64,
+}
+
+/// The answer to a spawn: whether a live agent was found and reattached rather
+/// than started. A client that reattached must replay instead of resuming from
+/// the provider's own transcript, or it renders the conversation twice.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnOutcome {
+    pub agent_id: String,
+    pub reattached: bool,
+    /// Frames already buffered for this agent — what a replay would deliver.
+    pub buffered: u64,
+    /// True when the buffer dropped frames the client never saw, so a replay
+    /// cannot rebuild the whole transcript.
+    pub truncated: bool,
+}
+
+/// Health + version surfaced to clients so a reconnecting UI can confirm it is
+/// talking to the same runtime and not a stale socket.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Health {
+    pub ok: bool,
+    pub version: String,
+    pub pid: u32,
+    pub uptime_ms: u64,
+    pub agent_count: usize,
+    pub event_count: usize,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "op", rename_all = "camelCase")]
+#[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Request {
+    // Existing transport-seam ops (Claude/Codex registry).
     Ping,
     List,
     Get { agent_id: String },
     Read { agent_id: String, after_event_id: Option<u64> },
     Register { agent: DaemonAgent },
     Append { agent_id: String, kind: String, payload: String, timestamp: u64 },
+    // Daemon-wide ops.
+    Health,
+    Version,
+    ListThreads,
+    GetThread { thread_id: String },
+    ReadEvents { thread_id: String, after_seq: Option<u64> },
+    Subscribe { thread_id: String },
+    StartPrompt { agent_id: String, message: String },
+    EnqueuePrompt { agent_id: String, text: String },
+    Interrupt { agent_id: String },
+    StopAgent { agent_id: String },
+    // Process ownership. Handled by the daemon runtime, which holds the child
+    // processes; `State` is metadata only and rejects them.
+    AgentSpawn { spec: AgentSpec },
+    AgentSend { agent_id: String, message: String },
+    AgentKill { agent_id: String },
+    /// Turn this connection into a one-way frame stream, replaying from
+    /// `afterFrameId` first. The connection carries no further requests.
+    AgentAttach { agent_id: String, after_frame_id: Option<u64> },
+    AgentLive,
     Stop,
+}
+
+impl Request {
+    /// True for ops that need the live child processes rather than the metadata
+    /// state — the daemon intercepts these before `State::handle` sees them.
+    pub fn needs_runtime(&self) -> bool {
+        matches!(
+            self,
+            Request::AgentSpawn { .. }
+                | Request::AgentSend { .. }
+                | Request::AgentKill { .. }
+                | Request::AgentAttach { .. }
+                | Request::AgentLive
+        )
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -67,13 +183,61 @@ pub struct State {
     pub agents: BTreeMap<String, DaemonAgent>,
     pub events: BTreeMap<String, VecDeque<DaemonEvent>>,
     pub next_event_id: u64,
+    pub queues: BTreeMap<String, VecDeque<QueuedPrompt>>,
+    pub next_queue_id: u64,
+    pub started_at: u64,
 }
 
 impl State {
+    fn uptime(&self) -> u64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        now.saturating_sub(self.started_at)
+    }
+
     pub fn handle(&mut self, request: Request) -> (Response, bool) {
         match request {
             Request::Ping => (Response::ok("emberyxd"), false),
+            Request::Health => {
+                let health = Health {
+                    ok: true,
+                    version: DAEMON_VERSION.into(),
+                    pid: std::process::id(),
+                    uptime_ms: self.uptime(),
+                    agent_count: self.agents.len(),
+                    event_count: self.events.values().map(VecDeque::len).sum(),
+                };
+                (Response::ok(health), false)
+            }
+            Request::Version => (Response::ok(DAEMON_VERSION), false),
             Request::List => (Response::ok(self.agents.values().collect::<Vec<_>>()), false),
+            Request::ListThreads => {
+                let mut threads: Vec<String> = self.agents.values().filter_map(|a| a.thread_id.clone()).collect();
+                threads.sort();
+                threads.dedup();
+                (Response::ok(threads), false)
+            }
+            Request::GetThread { thread_id } => {
+                let mut matches: Vec<&DaemonAgent> = self.agents.values().filter(|a| a.thread_id.as_deref() == Some(thread_id.as_str())).collect();
+                if matches.is_empty() {
+                    return (Response::error(format!("unknown thread {thread_id}")), false);
+                }
+                matches.sort_by_key(|a| a.updated_at);
+                let events = self.read_thread_events(&thread_id, None);
+                let queues = self.queues.get(&thread_id).cloned().unwrap_or_default();
+                (Response::ok(serde_json::json!({ "threadId": thread_id, "agents": matches, "events": events, "queue": queues })), false)
+            }
+            Request::ReadEvents { thread_id, after_seq } => {
+                (Response::ok(self.read_thread_events(&thread_id, after_seq)), false)
+            }
+            Request::Subscribe { thread_id } => {
+                // Reconnectable subscription: return everything so the client
+                // can resync its local timeline, then watch for new appends.
+                (Response::ok(self.read_thread_events(&thread_id, None)), false)
+            }
             Request::Get { agent_id } => match self.agents.get(&agent_id) {
                 Some(agent) => (Response::ok(agent), false),
                 None => (Response::error(format!("unknown agent {agent_id}")), false),
@@ -99,13 +263,109 @@ impl State {
                 while events.len() > MAX_EVENTS { events.pop_front(); }
                 (Response::ok(event), false)
             }
+            Request::StartPrompt { agent_id, message } => {
+                if !self.agents.contains_key(&agent_id) {
+                    return (Response::error(format!("unknown agent {agent_id}")), false);
+                }
+                let up = self.uptime();
+                self.next_event_id += 1;
+                let event = DaemonEvent {
+                    event_id: self.next_event_id,
+                    agent_id: agent_id.clone(),
+                    kind: "prompt".into(),
+                    payload: message,
+                    timestamp: up,
+                };
+                self.events.entry(agent_id.clone()).or_default().push_back(event.clone());
+                if let Some(agent) = self.agents.get_mut(&agent_id) {
+                    agent.lifecycle = "working".into();
+                    agent.updated_at = up;
+                }
+                (Response::ok(event), false)
+            }
+            Request::EnqueuePrompt { agent_id, text } => {
+                if !self.agents.contains_key(&agent_id) {
+                    return (Response::error(format!("unknown agent {agent_id}")), false);
+                }
+                let up = self.uptime();
+                self.next_queue_id += 1;
+                let thread_id = self.agents.get(&agent_id).and_then(|a| a.thread_id.clone()).unwrap_or_default();
+                let queue = self.queues.entry(thread_id).or_default();
+                let position = queue.len() as u32;
+                let queued = QueuedPrompt {
+                    queue_id: format!("q-{}", self.next_queue_id),
+                    agent_id: agent_id.clone(),
+                    position,
+                    text,
+                    created_at: up,
+                };
+                queue.push_back(queued.clone());
+                (Response::ok(queued), false)
+            }
+            Request::Interrupt { agent_id } => {
+                let up = self.uptime();
+                match self.agents.get_mut(&agent_id) {
+                    Some(agent) => {
+                        agent.lifecycle = "interrupted".into();
+                        agent.updated_at = up;
+                        (Response::ok(agent.clone()), false)
+                    }
+                    None => (Response::error(format!("unknown agent {agent_id}")), false),
+                }
+            }
+            Request::StopAgent { agent_id } => {
+                let up = self.uptime();
+                match self.agents.get_mut(&agent_id) {
+                    Some(agent) => {
+                        agent.lifecycle = "exited".into();
+                        agent.updated_at = up;
+                        (Response::ok(agent.clone()), false)
+                    }
+                    None => (Response::error(format!("unknown agent {agent_id}")), false),
+                }
+            }
+            // Only reachable in-process (tests, the Tauri-side registry). The
+            // daemon routes these to its runtime before getting here.
+            Request::AgentSpawn { .. }
+            | Request::AgentSend { .. }
+            | Request::AgentKill { .. }
+            | Request::AgentAttach { .. }
+            | Request::AgentLive => (
+                Response::error("process op requires the daemon runtime"),
+                false,
+            ),
             Request::Stop => (Response::ok("stopping"), true),
         }
     }
 
+    /// Events for a thread across all its agents, sorted by event id. `after_seq`
+    /// lets a reconnecting client backfill only what it missed, ordered by the
+    /// daemon's sequence rather than client arrival time.
+    fn read_thread_events(&self, thread_id: &str, after_seq: Option<u64>) -> Vec<DaemonEvent> {
+        let agent_ids: Vec<&str> = self
+            .agents
+            .values()
+            .filter(|a| a.thread_id.as_deref() == Some(thread_id))
+            .map(|a| a.agent_id.as_str())
+            .collect();
+        let mut events: Vec<DaemonEvent> = agent_ids
+            .iter()
+            .flat_map(|id| self.events.get(*id).into_iter().flatten().cloned())
+            .collect();
+        events.sort_by_key(|e| e.event_id);
+        events
+            .into_iter()
+            .filter(|e| after_seq.is_none_or(|id| e.event_id > id))
+            .collect()
+    }
+
     pub fn load(path: &Path) -> io::Result<Self> {
         match fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(io::Error::other),
+            Ok(bytes) => {
+                let mut state: Self = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+                state.started_at = 0;
+                Ok(state)
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Self::default()),
             Err(error) => Err(error),
         }
@@ -147,11 +407,140 @@ mod tests {
     }
 
     #[test]
+    fn wire_contract_is_camel_case_for_variants_and_fields() {
+        // The frontend speaks camelCase everywhere; the daemon protocol must
+        // accept it on the wire, not just as Rust constructors.
+        let request: Request = serde_json::from_str(
+            r#"{"op":"enqueuePrompt","agentId":"a1","text":"go"}"#,
+        )
+        .unwrap();
+        match request {
+            Request::EnqueuePrompt { agent_id, text } => {
+                assert_eq!(agent_id, "a1");
+                assert_eq!(text, "go");
+            }
+            other => panic!("expected EnqueuePrompt, got {other:?}"),
+        }
+
+        let events: Request = serde_json::from_str(
+            r#"{"op":"readEvents","threadId":"t1","afterSeq":3}"#,
+        )
+        .unwrap();
+        match events {
+            Request::ReadEvents { thread_id, after_seq } => {
+                assert_eq!(thread_id, "t1");
+                assert_eq!(after_seq, Some(3));
+            }
+            other => panic!("expected ReadEvents, got {other:?}"),
+        }
+
+        let register: Request = serde_json::from_str(
+            r#"{"op":"register","agent":{"agentId":"a","projectId":"p","workspaceId":"w","backend":"claude","cwd":"/tmp","threadId":"t1","lifecycle":"idle","currentTask":null,"updatedAt":0}}"#,
+        )
+        .unwrap();
+        match register {
+            Request::Register { agent } => assert_eq!(agent.thread_id.as_deref(), Some("t1")),
+            other => panic!("expected Register, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn state_round_trips_atomically() {
         let path = std::env::temp_dir().join(format!("emberyxd-test-{}.json", std::process::id()));
         let state = State::default();
         state.save(&path).unwrap();
         assert_eq!(State::load(&path).unwrap().next_event_id, 0);
         let _ = fs::remove_file(path);
+    }
+
+    fn seed(state: &mut State, agent_id: &str, thread_id: &str) {
+        state.handle(Request::Register { agent: DaemonAgent {
+            agent_id: agent_id.into(), project_id: "p".into(), workspace_id: "w".into(),
+            backend: "codex".into(), cwd: "/tmp".into(), thread_id: Some(thread_id.into()),
+            lifecycle: "idle".into(), current_task: None, updated_at: 0,
+        }});
+    }
+
+    #[test]
+    fn health_reports_version_and_counts() {
+        let mut state = State::default();
+        seed(&mut state, "a", "t1");
+        let (response, _) = state.handle(Request::Health);
+        assert!(response.ok);
+        let health: Health = serde_json::from_value(response.result).unwrap();
+        assert!(health.ok);
+        assert_eq!(health.agent_count, 1);
+        assert_eq!(health.version, DAEMON_VERSION);
+        let (version, _) = state.handle(Request::Version);
+        assert_eq!(version.result, serde_json::json!(DAEMON_VERSION));
+    }
+
+    #[test]
+    fn thread_events_are_ordered_by_sequence_not_arrival() {
+        let mut state = State::default();
+        seed(&mut state, "a", "t1");
+        seed(&mut state, "b", "t1");
+        state.handle(Request::Append { agent_id: "b".into(), kind: "delta".into(), payload: "b-first".into(), timestamp: 2 });
+        state.handle(Request::Append { agent_id: "a".into(), kind: "delta".into(), payload: "a-second".into(), timestamp: 1 });
+
+        let (response, _) = state.handle(Request::ReadEvents { thread_id: "t1".into(), after_seq: None });
+        let events: Vec<DaemonEvent> = serde_json::from_value(response.result).unwrap();
+        assert_eq!(events.len(), 2);
+        // b was appended first, so its event id is lower even though a's
+        // timestamp is older — ordering follows the daemon sequence.
+        assert_eq!(events[0].agent_id, "b");
+        assert_eq!(events[1].agent_id, "a");
+        assert!(events[0].event_id < events[1].event_id);
+    }
+
+    #[test]
+    fn thread_events_backfill_from_a_sequence() {
+        let mut state = State::default();
+        seed(&mut state, "a", "t1");
+        for i in 0..3 {
+            state.handle(Request::Append { agent_id: "a".into(), kind: "delta".into(), payload: i.to_string(), timestamp: i });
+        }
+        let (response, _) = state.handle(Request::ReadEvents { thread_id: "t1".into(), after_seq: Some(1) });
+        let events: Vec<DaemonEvent> = serde_json::from_value(response.result).unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|e| e.event_id > 1));
+    }
+
+    #[test]
+    fn enqueue_starts_an_ordered_queue_per_thread() {
+        let mut state = State::default();
+        seed(&mut state, "a", "t1");
+        state.handle(Request::EnqueuePrompt { agent_id: "a".into(), text: "first".into() });
+        state.handle(Request::EnqueuePrompt { agent_id: "a".into(), text: "second".into() });
+        let (response, _) = state.handle(Request::GetThread { thread_id: "t1".into() });
+        let thread = response.result;
+        let queue: Vec<QueuedPrompt> = serde_json::from_value(thread["queue"].clone()).unwrap();
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue[0].position, 0);
+        assert_eq!(queue[0].text, "first");
+        assert_eq!(queue[1].position, 1);
+        assert_eq!(queue[1].text, "second");
+    }
+
+    #[test]
+    fn start_prompt_flips_lifecycle_to_working() {
+        let mut state = State::default();
+        seed(&mut state, "a", "t1");
+        state.handle(Request::StartPrompt { agent_id: "a".into(), message: "go".into() });
+        let (response, _) = state.handle(Request::Get { agent_id: "a".into() });
+        let agent: DaemonAgent = serde_json::from_value(response.result).unwrap();
+        assert_eq!(agent.lifecycle, "working");
+    }
+
+    #[test]
+    fn interrupt_and_stop_are_distinct_terminal_states() {
+        let mut state = State::default();
+        seed(&mut state, "a", "t1");
+        let (interrupt, _) = state.handle(Request::Interrupt { agent_id: "a".into() });
+        let agent: DaemonAgent = serde_json::from_value(interrupt.result).unwrap();
+        assert_eq!(agent.lifecycle, "interrupted");
+        let (stop, _) = state.handle(Request::StopAgent { agent_id: "a".into() });
+        let agent: DaemonAgent = serde_json::from_value(stop.result).unwrap();
+        assert_eq!(agent.lifecycle, "exited");
     }
 }

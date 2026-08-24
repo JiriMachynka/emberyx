@@ -8,6 +8,7 @@
 import type { AgentBackend } from "@/lib/agentBackend";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import { useCodexChat } from "@/hooks/useCodexChat";
+import type { PermissionMode } from "@/lib/settings";
 
 interface Options {
   cwd: string;
@@ -16,6 +17,9 @@ interface Options {
   /** Thread id to resume, in the backend's own id space. */
   resume?: string;
   skipPermissions?: boolean;
+  /** Run the agent in `emberyxd` so it survives closing the window. */
+  persistent?: boolean;
+  permissionMode?: PermissionMode;
   model?: string;
   /** Reasoning effort; "" lets the CLI decide. Claude spends it at spawn, Codex
    *  per turn, so only Claude respawns when it changes. */

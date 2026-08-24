@@ -1,32 +1,117 @@
-#[path = "../daemon_protocol.rs"]
-mod daemon_protocol;
-
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use daemon_protocol::{default_socket, default_state, Request, Response, State};
+use emberyx_lib::daemon_protocol::{default_socket, default_state, Request, Response, State};
+use emberyx_lib::daemon_runtime::Runtime;
 
-fn serve(stream: UnixStream, state: &Arc<Mutex<State>>, state_path: &std::path::Path) -> bool {
-    let reader = match stream.try_clone() { Ok(stream) => BufReader::new(stream), Err(_) => return false };
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Ops that need the live children. `State` is metadata only and rejects these.
+fn handle_runtime(runtime: &Runtime, request: Request) -> Response {
+    match request {
+        Request::AgentSpawn { spec } => match runtime.spawn(spec) {
+            Ok(outcome) => Response::ok(outcome),
+            Err(error) => Response::error(error),
+        },
+        Request::AgentSend { agent_id, message } => match runtime.send(&agent_id, &message) {
+            Ok(()) => Response::ok(true),
+            Err(error) => Response::error(error),
+        },
+        Request::AgentKill { agent_id } => match runtime.kill(&agent_id) {
+            Ok(()) => Response::ok(true),
+            Err(error) => Response::error(error),
+        },
+        Request::AgentLive => Response::ok(runtime.live()),
+        // Attach never reaches here — it takes over the connection first.
+        other => Response::error(format!("unsupported runtime op: {other:?}")),
+    }
+}
+
+/// Turn this connection into a one-way frame stream: the missed backlog first,
+/// then everything new until the client goes away. Attach owns the connection
+/// for its lifetime, which is why each one gets its own thread.
+fn stream_frames(
+    mut writer: UnixStream,
+    runtime: &Runtime,
+    agent_id: &str,
+    after_frame_id: Option<u64>,
+) {
+    let (backlog, rx) = runtime.attach(agent_id, after_frame_id);
+    for frame in backlog {
+        if serde_json::to_writer(&mut writer, &frame).is_err() || writer.write_all(b"\n").is_err() {
+            return;
+        }
+    }
+    let _ = writer.flush();
+    while let Ok(frame) = rx.recv() {
+        if serde_json::to_writer(&mut writer, &frame).is_err() || writer.write_all(b"\n").is_err() {
+            return;
+        }
+        let _ = writer.flush();
+    }
+}
+
+/// Serve one connection. Returns true when the client asked the daemon to stop.
+fn serve(
+    stream: UnixStream,
+    state: &Arc<Mutex<State>>,
+    runtime: &Arc<Runtime>,
+    state_path: &Path,
+) -> bool {
+    let reader = match stream.try_clone() {
+        Ok(stream) => BufReader::new(stream),
+        Err(_) => return false,
+    };
     let mut writer = stream;
     let mut stop = false;
     for line in reader.lines() {
-        let response = match line {
-            Ok(line) => match serde_json::from_str::<Request>(&line) {
-                Ok(request) => {
-                    let (response, should_stop) = state.lock().unwrap().handle(request);
-                    stop |= should_stop;
-                    let _ = state.lock().unwrap().save(state_path);
-                    response
-                }
-                Err(error) => Response::error(format!("invalid request: {error}")),
-            },
-            Err(error) => Response::error(error.to_string()),
+        let parsed = match line {
+            Ok(line) => serde_json::from_str::<Request>(&line)
+                .map_err(|error| format!("invalid request: {error}")),
+            Err(error) => Err(error.to_string()),
         };
-        if serde_json::to_writer(&mut writer, &response).is_err() || writer.write_all(b"\n").is_err() { break; }
+        let request = match parsed {
+            Ok(request) => request,
+            Err(error) => {
+                let _ = serde_json::to_writer(&mut writer, &Response::error(error));
+                let _ = writer.write_all(b"\n");
+                let _ = writer.flush();
+                break;
+            }
+        };
+        if let Request::AgentAttach {
+            agent_id,
+            after_frame_id,
+        } = request
+        {
+            stream_frames(writer, runtime, &agent_id, after_frame_id);
+            return false;
+        }
+        let response = if request.needs_runtime() {
+            handle_runtime(runtime, request)
+        } else {
+            let (response, should_stop) = state.lock().unwrap().handle(request);
+            stop |= should_stop;
+            let _ = state.lock().unwrap().save(state_path);
+            response
+        };
+        if serde_json::to_writer(&mut writer, &response).is_err()
+            || writer.write_all(b"\n").is_err()
+        {
+            break;
+        }
         let _ = writer.flush();
-        if stop { break; }
+        if stop {
+            break;
+        }
     }
     stop
 }
@@ -34,16 +119,43 @@ fn serve(stream: UnixStream, state: &Arc<Mutex<State>>, state_path: &std::path::
 fn main() -> std::io::Result<()> {
     let socket = default_socket();
     let state_path = default_state(&socket);
-    if let Some(parent) = socket.parent() { std::fs::create_dir_all(parent)?; }
+    if let Some(parent) = socket.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     if socket.exists() {
-        if UnixStream::connect(&socket).is_ok() { return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "emberyxd is already running")); }
+        if UnixStream::connect(&socket).is_ok() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                "emberyxd is already running",
+            ));
+        }
         std::fs::remove_file(&socket)?;
     }
     let listener = UnixListener::bind(&socket)?;
-    let state = Arc::new(Mutex::new(State::load(&state_path)?));
+    let mut state = State::load(&state_path)?;
+    state.started_at = now_ms();
+    let state = Arc::new(Mutex::new(state));
+    let runtime = Arc::new(Runtime::new());
+
+    // One thread per connection: an attached client blocks for as long as its
+    // agent runs, and a single-threaded accept loop would freeze the daemon
+    // behind the first one.
     for connection in listener.incoming() {
         let stream = connection?;
-        if serve(stream, &state, &state_path) { break; }
+        let state = Arc::clone(&state);
+        let runtime = Arc::clone(&runtime);
+        let state_path = state_path.clone();
+        let socket = socket.clone();
+        std::thread::spawn(move || {
+            if serve(stream, &state, &runtime, &state_path) {
+                // Stopping is the one time the daemon kills its children: they
+                // are the whole reason it outlives the window otherwise.
+                runtime.kill_all();
+                let _ = state.lock().unwrap().save(&state_path);
+                let _ = std::fs::remove_file(&socket);
+                std::process::exit(0);
+            }
+        });
     }
     let _ = std::fs::remove_file(socket);
     Ok(())

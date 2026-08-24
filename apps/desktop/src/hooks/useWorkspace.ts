@@ -11,22 +11,72 @@ import {
 import { listCodexThreads } from "@/lib/codex/transport";
 import { projectBackend } from "@/lib/projectConfig";
 import {
-  buildHandoffPayload,
+  INSTRUCTION_FILES,
   findHandoffTarget,
   otherBackend,
+  renderHandoffContext,
+  type HandoffContext,
 } from "@/lib/handoff";
+import type { Provider } from "@/lib/providers";
 import { fetchWorkingDiff } from "@/lib/queries";
-import { useAgentStore } from "@/lib/agentStore";
+import { useAgentStore, type HandoffRequest } from "@/lib/agentStore";
 import { getRecents, addRecent, removeRecent } from "@/lib/recents";
 import { getOpenProjects, saveOpenProjects } from "@/lib/openProjects";
 import { useProjects } from "@/hooks/useProjects";
 import { useSessions } from "@/hooks/useSessions";
 import { useAgentEvents } from "@/hooks/useAgentEvents";
 import { useDokploy } from "@/hooks/useDokploy";
-import type { Session, Thread, WorkspaceInfo } from "@/types";
+import type {
+  DirEntry,
+  GitBranch,
+  Session,
+  Thread,
+  WorkspaceInfo,
+} from "@/types";
 
 /** Thread titles are truncated to this in tab labels. */
 const LABEL_MAX = 24;
+
+/** The branch the project sits on. Best-effort — a non-repo directory simply
+ *  has no branch to name. */
+const fetchBranch = async (path: string): Promise<string | undefined> => {
+  try {
+    const branch = await invoke<GitBranch>("git_branch", { path });
+    return branch?.branch || undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/** Which conventional instruction files the project actually has. Probed, not
+ *  assumed: naming a file the repo doesn't have is a lie the target would act on. */
+const fetchInstructions = async (path: string): Promise<string[]> => {
+  try {
+    const entries = await invoke<DirEntry[]>("list_dir", { path });
+    const present = new Set(
+      (entries ?? []).filter((entry) => !entry.isDir).map((entry) => entry.name)
+    );
+    return INSTRUCTION_FILES.filter((name) => present.has(name));
+  } catch {
+    return [];
+  }
+};
+
+/** Note a provider switch on a thread's durable timeline, from both sides — the
+ *  source records that the conversation left, the target that it arrived.
+ *  Best-effort: a runtime that can't record it must not block the handoff. */
+const recordProviderSwitch = (
+  threadId: string,
+  from: Provider,
+  to: Provider,
+  peerThreadId: string
+) =>
+  invoke("thread_timeline_append", {
+    threadId,
+    kind: "providerSwitch",
+    attribution: { provider: to, model: null, nativeThreadId: peerThreadId },
+    payload: JSON.stringify({ from, to, peerThreadId }),
+  }).catch((e) => console.error("provider switch not recorded:", e));
 
 /** Each backend keeps its own conversation store: Claude's transcripts on
  *  disk, Codex's in its app-server. */
@@ -265,11 +315,14 @@ export function useWorkspace(settings: Settings) {
     setActive(projectId, sessionId);
   }
 
-  /** Move a chat message to the other backend, in the same project: reuse that
-   *  project's chat on the target backend or open one, prefill its composer,
-   *  and focus it. Prefilled, never sent — the user still presses enter. */
-  async function handoffFrom(sourceId: string, text: string, withDiff: boolean) {
-    const source = sessions.find((s) => s.id === sourceId);
+  /** Move a conversation to the other provider, in the same project: reuse that
+   *  project's chat on the target backend or open one, focus it, and prefill it
+   *  with a context package — the recent turns and their attribution, the
+   *  branch/worktree, the instruction files, and the working tree when asked.
+   *  Prefilled, never sent: the composer is where the user inspects and edits
+   *  the package before the second provider ever sees it. */
+  async function handoffFrom({ sourceSessionId, turns, withDiff }: HandoffRequest) {
+    const source = sessions.find((s) => s.id === sourceSessionId);
     if (!source) return;
     const from = source.backend ?? "claude";
     const target = otherBackend(from);
@@ -283,6 +336,12 @@ export function useWorkspace(settings: Settings) {
         BACKEND_LABEL[target].toLowerCase(),
         target
       );
+    // Focus first: gathering the package takes a few round trips, and the user
+    // should be looking at the composer it lands in while it fills.
+    setRevealed(true);
+    setActiveProjectId(source.projectId);
+    setActive(source.projectId, id);
+
     let diff: string | undefined;
     if (withDiff) {
       try {
@@ -292,10 +351,24 @@ export function useWorkspace(settings: Settings) {
         toast.error("Couldn't read the working tree", { description: String(e) });
       }
     }
-    useAgentStore.getState().setDraft(id, buildHandoffPayload(from, text, diff));
-    setRevealed(true);
-    setActiveProjectId(source.projectId);
-    setActive(source.projectId, id);
+    const [branch, instructions] = await Promise.all([
+      fetchBranch(source.cwd),
+      fetchInstructions(source.cwd),
+    ]);
+    const context: HandoffContext = {
+      from,
+      to: target,
+      cwd: source.cwd,
+      summary: source.label,
+      branch,
+      worktree: projects.find((p) => p.id === source.projectId)?.worktree ?? undefined,
+      instructions,
+      turns,
+      diff,
+    };
+    useAgentStore.getState().setDraft(id, renderHandoffContext(context));
+    void recordProviderSwitch(source.id, from, target, id);
+    void recordProviderSwitch(id, from, target, source.id);
   }
 
   // The chat panes reach the handoff through the store rather than a prop —
@@ -305,7 +378,7 @@ export function useWorkspace(settings: Settings) {
   useEffect(() => {
     useAgentStore
       .getState()
-      .setHandoff((id, text, withDiff) => void handoffRef.current(id, text, withDiff));
+      .setHandoff((request) => void handoffRef.current(request));
   }, []);
 
   /** Resume a Claude Code thread in a new tab of the given project, revealing
