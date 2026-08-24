@@ -336,6 +336,9 @@ function App() {
           sessionsFor={ws.sessionsFor}
           expandAll={settings.expandAllProjects}
           threadView={settings.threadView}
+          threadSettleDays={settings.threadSettleDays}
+          threadAutoSettleOnMerge={settings.threadAutoSettleOnMerge}
+          threadGrouping={settings.threadGrouping}
           collapsed={sidebarCollapsed}
           onToggleCollapse={toggleSidebar}
           onSelectProject={ws.setActiveProjectId}

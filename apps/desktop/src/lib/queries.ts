@@ -1,4 +1,9 @@
-import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  QueryClient,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   DirEntry,
@@ -46,6 +51,7 @@ export const gitKeys = {
   branch: (path: string) => ["git", "branch", path] as const,
   remoteHost: (path: string) => ["git", "remoteHost", path] as const,
   branches: (path: string) => ["git", "branches", path] as const,
+  mergedBranches: (path: string) => ["git", "mergedBranches", path] as const,
   stashes: (path: string) => ["git", "stashes", path] as const,
   worktrees: (path: string) => ["git", "worktrees", path] as const,
   repoRoot: (path: string) => ["git", "repoRoot", path] as const,
@@ -195,6 +201,27 @@ export const useGitBranches = (path: string, enabled: boolean) =>
     queryFn: () => invoke<string[]>("git_branches", { path }),
     enabled,
   });
+
+/** Branches already merged into the default branch, per repo root, for settling
+ *  their threads. `useQueries` because the roots are only known at render —
+ *  several worktrees of one repo collapse to one key, and so one call. */
+export const useMergedBranchesMap = (
+  roots: string[],
+  enabled: boolean
+): Record<string, string[]> => {
+  const results = useQueries({
+    queries: roots.map((root) => ({
+      queryKey: gitKeys.mergedBranches(root),
+      queryFn: () => invoke<string[]>("git_merged_branches", { path: root }),
+      enabled,
+    })),
+  });
+  const map: Record<string, string[]> = {};
+  roots.forEach((root, i) => {
+    map[root] = results[i]?.data ?? [];
+  });
+  return map;
+};
 
 export const useGitWorktrees = (path: string, enabled: boolean) =>
   useQuery({

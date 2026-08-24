@@ -560,6 +560,46 @@ pub fn git_branches(path: String) -> Result<Vec<String>> {
     Ok(out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
 }
 
+/// The branch a repo's work merges back into: the remote's own default when it
+/// publishes one, else the first conventional name that actually resolves.
+/// Returning None means "can't tell", which callers must treat as "nothing is
+/// merged" — claiming a branch was merged when it wasn't hides live work.
+fn merge_base_ref(path: &str) -> Option<String> {
+    if let Ok(head) = run_git(
+        path,
+        &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+    ) {
+        if !head.is_empty() {
+            return Some(head);
+        }
+    }
+    ["origin/main", "origin/master", "main", "master"]
+        .into_iter()
+        .find(|name| run_git(path, &["rev-parse", "--verify", "--quiet", name]).is_ok())
+        .map(str::to_string)
+}
+
+/// Local branches already merged into the repo's default branch, which the
+/// sidebar reads as "this thread's work is done". One call per repo root, not
+/// one per thread. The base itself is always reachable from itself, so it is
+/// dropped — a repo sitting on `main` is not a pile of finished work.
+#[tauri::command]
+pub fn git_merged_branches(path: String) -> Result<Vec<String>> {
+    let Some(base) = merge_base_ref(&path) else {
+        return Ok(vec![]);
+    };
+    let base_short = base.rsplit('/').next().unwrap_or(&base);
+    let out = run_git(
+        &path,
+        &["branch", "--format=%(refname:short)", "--merged", &base],
+    )?;
+    Ok(out
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty() && l != &base && l != base_short)
+        .collect())
+}
+
 /// Fetch and merge from the tracked remote.
 #[tauri::command]
 pub fn git_pull(path: String) -> Result<String> {
@@ -1901,6 +1941,39 @@ mod tests {
 
         assert!(git_branch_delete(repo.path(), "feature".into()).is_err());
         assert!(git_branches(repo.path()).unwrap().contains(&"feature".to_string()));
+    }
+
+    #[test]
+    fn lists_only_branches_already_merged_into_the_default() {
+        let repo = Repo::new("merged_branches");
+        repo.write("a.txt", "one\n");
+        repo.commit("init");
+
+        git_checkout(repo.path(), "done".into(), true).unwrap();
+        repo.write("b.txt", "work\n");
+        repo.commit("finished work");
+        git_checkout(repo.path(), "main".into(), false).unwrap();
+        repo.run(&["merge", "--no-ff", "-m", "merge done", "done"]);
+
+        git_checkout(repo.path(), "wip".into(), true).unwrap();
+        repo.write("c.txt", "ongoing\n");
+        repo.commit("still going");
+        git_checkout(repo.path(), "main".into(), false).unwrap();
+
+        let merged = git_merged_branches(repo.path()).unwrap();
+        assert_eq!(merged, vec!["done"]);
+    }
+
+    #[test]
+    fn reports_nothing_merged_when_there_is_no_default_branch_to_compare() {
+        let repo = Repo::new("merged_no_base");
+        repo.write("a.txt", "one\n");
+        repo.commit("init");
+        // Rename away from every conventional base name; without one, "merged"
+        // is unknowable, and guessing would settle threads that are still live.
+        repo.run(&["branch", "-m", "trunk"]);
+
+        assert_eq!(git_merged_branches(repo.path()).unwrap(), Vec::<String>::new());
     }
 
     #[test]

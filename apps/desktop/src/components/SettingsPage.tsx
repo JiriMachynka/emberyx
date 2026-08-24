@@ -39,6 +39,17 @@ import { IDES, IDE_LABEL, type IdeId } from "@/lib/ide";
 import { PERMISSION_MODES, PERMISSION_MODE_LABEL } from "@/lib/settings";
 import { PROVIDER_LABEL } from "@/lib/providers";
 import { Field, Toggle } from "@/components/SettingsFields";
+import { COMMANDS, type CommandId } from "@/lib/commands";
+import {
+  chordFromEvent,
+  conflictingBindings,
+  displayChord,
+  formatChord,
+  resetAllBindings,
+  resetBinding,
+  resolveBindings,
+  setBinding,
+} from "@/lib/keybindings";
 import {
   AGENT_BACKENDS,
   BACKEND_LABEL,
@@ -226,6 +237,55 @@ export function SettingsPage({
                     </Select>
                   </Field>
 
+                  {settings.threadView === "all" && (
+                    <>
+                      <Field
+                        label="Group threads"
+                        hint="Put one heading per repository above the active threads, with worktrees folded into their parent repo."
+                      >
+                        <Select
+                          value={settings.threadGrouping}
+                          onValueChange={(value) => {
+                            if (value === "none" || value === "repository") {
+                              onUpdate({ threadGrouping: value });
+                            }
+                          }}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">One flat list</SelectItem>
+                            <SelectItem value="repository">
+                              By repository
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </Field>
+
+                      <Field
+                        label="Settle after"
+                        hint="Days a thread can go untouched before it folds into Settled. Set 0 to keep every thread in the list until you settle it yourself."
+                      >
+                        <NumberStepper
+                          value={settings.threadSettleDays}
+                          min={0}
+                          max={90}
+                          onChange={(n) => onUpdate({ threadSettleDays: n })}
+                        />
+                      </Field>
+
+                      <Toggle
+                        checked={settings.threadAutoSettleOnMerge}
+                        onChange={(v) => onUpdate({ threadAutoSettleOnMerge: v })}
+                        title="Settle merged branches"
+                      >
+                        Fold a thread away once its branch has been merged into
+                        the default branch, however recent the thread is.
+                      </Toggle>
+                    </>
+                  )}
+
                   <Toggle
                     checked={settings.expandAllProjects}
                     onChange={(v) => onUpdate({ expandAllProjects: v })}
@@ -405,21 +465,7 @@ export function SettingsPage({
                 </>
               )}
 
-              {tab === "shortcuts" && (
-                <div className="grid gap-1">
-                  {SHORTCUTS.map((s) => (
-                    <div
-                      key={s.keys}
-                      className="flex items-center justify-between rounded-md px-2 py-1.5 text-sm odd:bg-secondary/30"
-                    >
-                      <span className="text-muted-foreground">{s.action}</span>
-                      <kbd className="rounded border bg-background px-1.5 py-0.5 text-xs">
-                        {s.keys}
-                      </kbd>
-                    </div>
-                  ))}
-                </div>
-              )}
+              {tab === "shortcuts" && <ShortcutsSection />}
 
               {tab === "notifications" && (
                 <>
@@ -826,16 +872,119 @@ export function SettingsPage({
 /** The shortcuts `useShortcuts` actually binds, plus the menu's own. Listed,
  *  not editable: nothing rebinds them yet, and a settings screen that pretends
  *  otherwise is worse than one that just tells you what the keys are. */
-const SHORTCUTS: { action: string; keys: string }[] = [
-  { action: "Command palette", keys: "⌘K" },
-  { action: "New agent tab", keys: "⌘T" },
-  { action: "Close tab", keys: "⌘W" },
-  { action: "Toggle sidebar", keys: "⌘B" },
-  { action: "Search in project", keys: "⇧⌘F" },
-  { action: "Settings", keys: "⌘," },
+/** Chords the composer owns. They aren't commands — nothing dispatches them —
+ *  so they're listed for reference rather than offered for rebinding. */
+const COMPOSER_KEYS: { action: string; keys: string }[] = [
   { action: "Send message", keys: "↵" },
   { action: "Newline in composer", keys: "⇧↵" },
 ];
+
+/** Rebindable commands, plus the fixed ones, plus the composer's own keys.
+ *  Recording a chord replaces the binding on the next keypress; Esc backs out. */
+function ShortcutsSection() {
+  const [bindings, setBindings] = useState(resolveBindings);
+  const [recording, setRecording] = useState<CommandId | null>(null);
+  const clashing = conflictingBindings(bindings);
+
+  const publish = (next: Record<CommandId, string>) => {
+    setBindings(next);
+    // Tell the live handler to re-read; a rebind that needs a restart to work
+    // reads as broken.
+    window.dispatchEvent(new Event("emberyx:keybindings"));
+  };
+
+  useEffect(() => {
+    if (!recording) return;
+    const target = recording;
+    function onKey(e: KeyboardEvent) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setRecording(null);
+        return;
+      }
+      const chord = chordFromEvent(e);
+      // A bare modifier isn't a binding yet — keep listening for the real key.
+      if (!chord || !(chord.mod || chord.alt)) return;
+      publish(setBinding(target, formatChord(chord)));
+      setRecording(null);
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [recording]);
+
+  return (
+    <div className="grid gap-4">
+      <div className="grid gap-1">
+        {COMMANDS.map((command) => (
+          <div
+            key={command.id}
+            className="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 text-sm odd:bg-secondary/30"
+          >
+            <span className="min-w-0 truncate text-muted-foreground">
+              {command.label}
+              {clashing.has(command.id) && (
+                <span className="ml-2 text-xs text-destructive">
+                  same keys as another command
+                </span>
+              )}
+            </span>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {command.rebindable ? (
+                <button
+                  type="button"
+                  onClick={() => setRecording(command.id)}
+                  className="rounded border bg-background px-1.5 py-0.5 text-xs transition-colors hover:bg-accent"
+                >
+                  {recording === command.id
+                    ? "Press keys…"
+                    : displayChord(bindings[command.id])}
+                </button>
+              ) : (
+                <kbd
+                  title="Owned by the app menu, which sees the keys first"
+                  className="rounded border bg-background px-1.5 py-0.5 text-xs text-muted-foreground"
+                >
+                  {displayChord(bindings[command.id])}
+                </kbd>
+              )}
+              {command.rebindable &&
+                bindings[command.id] !== command.defaultKey && (
+                  <button
+                    type="button"
+                    onClick={() => publish(resetBinding(command.id))}
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    Reset
+                  </button>
+                )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-1">
+        {COMPOSER_KEYS.map((s) => (
+          <div
+            key={s.keys}
+            className="flex items-center justify-between rounded-md px-2 py-1.5 text-sm odd:bg-secondary/30"
+          >
+            <span className="text-muted-foreground">{s.action}</span>
+            <kbd className="rounded border bg-background px-1.5 py-0.5 text-xs">
+              {s.keys}
+            </kbd>
+          </div>
+        ))}
+      </div>
+
+      <div>
+        <Button variant="secondary" size="sm" onClick={() => publish(resetAllBindings())}>
+          Reset all shortcuts
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 const FONT_OPTIONS: { label: string; value: string }[] = [
   { label: "Geist Mono", value: '"Geist Mono Variable", ui-monospace, Menlo, monospace' },

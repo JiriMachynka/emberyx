@@ -1,13 +1,14 @@
 /**
  * Picks the chat transport a session's backend needs and hands the pane one
- * shape either way. Both hooks are called on every render — rules of hooks —
- * but only the one matching the backend is `enabled`, so exactly one process
+ * shape whichever it is. Every hook is called on every render — rules of hooks
+ * — but only the one matching the backend is `enabled`, so exactly one process
  * is ever spawned.
  */
 
-import type { AgentBackend } from "@/lib/agentBackend";
+import { isAcpBackend, type AgentBackend } from "@/lib/agentBackend";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import { useCodexChat } from "@/hooks/useCodexChat";
+import { useAcpChat } from "@/hooks/useAcpChat";
 import type { PermissionMode } from "@/lib/settings";
 
 interface Options {
@@ -28,8 +29,15 @@ interface Options {
 }
 
 export function useChatSession(options: Options) {
+  const acp = isAcpBackend(options.backend);
   const codex = options.backend === "codex";
-  const claude = useAgentChat({ ...options, enabled: !codex });
+  const claude = useAgentChat({ ...options, enabled: !codex && !acp });
   const codexChat = useCodexChat({ ...options, enabled: codex });
+  const acpChat = useAcpChat({
+    ...options,
+    provider: options.backend,
+    enabled: acp,
+  });
+  if (acp) return acpChat;
   return codex ? codexChat : claude;
 }

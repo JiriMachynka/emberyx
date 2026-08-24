@@ -19,7 +19,12 @@ import {
 } from "@/lib/handoff";
 import type { Provider } from "@/lib/providers";
 import { fetchWorkingDiff } from "@/lib/queries";
-import { useAgentStore, type HandoffRequest } from "@/lib/agentStore";
+import {
+  useAgentStore,
+  type HandoffRequest,
+  type ImplementPlanRequest,
+} from "@/lib/agentStore";
+import { markImplemented, renderPlanPrompt } from "@/lib/plans";
 import { getRecents, addRecent, removeRecent } from "@/lib/recents";
 import { getOpenProjects, saveOpenProjects } from "@/lib/openProjects";
 import { useProjects } from "@/hooks/useProjects";
@@ -78,10 +83,16 @@ const recordProviderSwitch = (
     payload: JSON.stringify({ from, to, peerThreadId }),
   }).catch((e) => console.error("provider switch not recorded:", e));
 
-/** Each backend keeps its own conversation store: Claude's transcripts on
- *  disk, Codex's in its app-server. */
-const listThreads = (backend: AgentBackend, cwd: string): Promise<Thread[]> =>
-  backend === "codex" ? listCodexThreads(cwd) : invoke<Thread[]>("list_threads", { cwd });
+/** Each backend keeps its own conversation store: Claude's transcripts on disk,
+ *  Codex's in its app-server. A backend with no store of its own lists nothing
+ *  — reading Claude's transcripts for it would file another agent's history
+ *  under its name. */
+const listThreads = (backend: AgentBackend, cwd: string): Promise<Thread[]> => {
+  if (!capabilitiesOf(backend).threads) return Promise.resolve([]);
+  return backend === "codex"
+    ? listCodexThreads(cwd)
+    : invoke<Thread[]>("list_threads", { cwd });
+};
 
 /** The CLI argument that resumes a thread in a terminal session. */
 const resumeArg = (backend: AgentBackend, id: string) =>
@@ -379,6 +390,33 @@ export function useWorkspace(settings: Settings) {
     useAgentStore
       .getState()
       .setHandoff((request) => void handoffRef.current(request));
+  }, []);
+
+  /** Carry an agreed plan into a fresh chat on the same provider. A new thread
+   *  rather than the planning one: the planning conversation is what the plan
+   *  was argued out of, and re-sending it as context is what the plan replaced. */
+  function implementPlanFrom({
+    sourceSessionId,
+    planId,
+    markdown,
+  }: ImplementPlanRequest) {
+    const source = sessions.find((s) => s.id === sourceSessionId);
+    if (!source) return;
+    const backend = source.backend ?? "claude";
+    const id = startChat(source.projectId, source.cwd, undefined, "plan", backend);
+    setRevealed(true);
+    setActiveProjectId(source.projectId);
+    setActive(source.projectId, id);
+    useAgentStore.getState().setDraft(id, renderPlanPrompt(markdown));
+    markImplemented(planId, id, Date.now());
+  }
+
+  const implementPlanRef = useRef(implementPlanFrom);
+  implementPlanRef.current = implementPlanFrom;
+  useEffect(() => {
+    useAgentStore
+      .getState()
+      .setImplementPlan((request) => implementPlanRef.current(request));
   }, []);
 
   /** Resume a Claude Code thread in a new tab of the given project, revealing

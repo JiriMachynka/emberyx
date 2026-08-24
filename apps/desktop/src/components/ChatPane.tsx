@@ -9,6 +9,7 @@ import {
   Check,
   ChevronRight,
   Copy,
+  ListChecks,
   Loader2,
   LogIn,
   MessageCircleQuestionMark,
@@ -49,6 +50,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Markdown } from "@/components/Markdown";
+import { Button } from "@/components/ui/button";
+import { getPlan, planTextFrom, upsertPlan } from "@/lib/plans";
 import { ChatComposer } from "@/components/ChatComposer";
 import {
   handoffLabel,
@@ -185,6 +188,11 @@ export const ChatPane = memo(function ChatPane({
   // Approval posture is a spawn-time flag, kept local so switching it respawns
   // just this pane (via --resume), like the model.
   const [fullAccess, setFullAccess] = useState(skipPermissions);
+  // Plan-only is the same kind of spawn-time flag. `--permission-mode` and
+  // `--dangerously-skip-permissions` are mutually exclusive at the CLI, so a
+  // pane in plan mode drops full access for as long as it is planning rather
+  // than passing both and having the plan silently not apply.
+  const [planMode, setPlanMode] = useState(permissionMode === "plan");
   // The provider this thread is on *right now*. It starts as the session's, but
   // a thread can change hands mid-conversation — the turns each provider
   // produced stay in the same visual transcript, stamped with who made them.
@@ -211,9 +219,9 @@ export const ChatPane = memo(function ChatPane({
     emberyxSessionId: sessionId,
     resume,
     backend: activeBackend,
-    skipPermissions: fullAccess,
+    skipPermissions: planMode ? false : fullAccess,
     persistent,
-    permissionMode,
+    permissionMode: planMode ? "plan" : permissionMode,
     model: activeModel,
     effort: activeEffort,
     onTitled,
@@ -465,6 +473,8 @@ export const ChatPane = memo(function ChatPane({
                   onEffortChange={changeEffort}
                   fullAccess={fullAccess}
                   onFullAccessChange={setFullAccess}
+                  planMode={planMode}
+                  onPlanModeChange={setPlanMode}
                   queue={queue}
                   draft={draft}
                   onDraftConsumed={consumeDraft}
@@ -674,7 +684,7 @@ const TurnRow = memo(
                 {assistants.map((a, i) => (
                   <div key={a.id} className="flex flex-col gap-2">
                     {a.thinking && <ThinkingBlock text={a.thinking} active={false} />}
-                    {a.tools.length > 0 && <ToolList tools={a.tools} />}
+                    {a.tools.length > 0 && <ToolList tools={a.tools} chat={chat} />}
                     {/* Only interstitial narration stays inside; the final
                         answer is shown below the accordion. */}
                     {i < assistants.length - 1 && a.text && (
@@ -753,17 +763,101 @@ function WorkedAccordion({
   );
 }
 
-/** Tool cards for a message; agent/Task tools render their subagent inline. */
-function ToolList({ tools }: { tools: ToolCall[] }) {
+/** Tool cards for a message; agent/Task tools render their subagent inline, and
+ *  a proposed plan gets a card that can act on it rather than just show it. */
+function ToolList({ tools, chat }: { tools: ToolCall[]; chat: ChatContext }) {
   return (
     <div className="flex flex-col gap-1">
-      {tools.map((t) =>
-        isAgentTool(t.name) ? (
-          <SubagentInline key={t.id} id={t.id} tool={t} />
+      {tools.map((t) => {
+        if (isAgentTool(t.name)) return <SubagentInline key={t.id} id={t.id} tool={t} />;
+        const plan = t.name === "ExitPlanMode" ? planTextFrom(t.input) : null;
+        if (plan) {
+          return <PlanCard key={t.id} planId={t.id} markdown={plan} chat={chat} />;
+        }
+        return <ToolCard key={t.id} tool={t} />;
+      })}
+    </div>
+  );
+}
+
+/** A plan the agent proposed, kept past the turn that produced it. "Implement"
+ *  opens a fresh chat with the plan prefilled — never sent, because reviewing
+ *  and editing the plan is the whole point of having been asked. */
+function PlanCard({
+  planId,
+  markdown,
+  chat,
+}: {
+  planId: string;
+  markdown: string;
+  chat: ChatContext;
+}) {
+  const [plan, setPlan] = useState(() => {
+    const known = getPlan(planId);
+    const next = upsertPlan({
+      planId,
+      sessionId: chat.sessionId,
+      markdown,
+      createdAt: Date.now(),
+    });
+    // Only the first sighting is worth a timeline entry; the text then streams.
+    // Best-effort, like the provider-switch record — a thread that can't be
+    // written to must not break the card that shows the plan.
+    if (!known) {
+      void invoke("thread_timeline_append", {
+        threadId: chat.sessionId,
+        kind: "planProposed",
+        attribution: null,
+        payload: JSON.stringify({ planId }),
+      }).catch((e) => console.error("plan not recorded:", e));
+    }
+    return next;
+  });
+  // The plan text grows while the call streams in; keep the stored copy current
+  // without losing an implement stamp (upsertPlan preserves it).
+  useEffect(() => {
+    setPlan(
+      upsertPlan({
+        planId,
+        sessionId: chat.sessionId,
+        markdown,
+        createdAt: Date.now(),
+      })
+    );
+  }, [planId, markdown, chat.sessionId]);
+
+  const implement = useAgentStore((s) => s.implementPlan);
+  const implemented = plan.implementedAt != null;
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-primary/40 bg-primary/[0.06] text-xs">
+      <div className="flex items-center gap-2 px-2.5 py-2">
+        <ListChecks className="size-3.5 shrink-0 text-primary" />
+        <span className="font-medium text-foreground">Plan</span>
+        <span className="flex-1" />
+        {implemented ? (
+          <span className="text-muted-foreground">Implemented</span>
         ) : (
-          <ToolCard key={t.id} tool={t} />
-        )
-      )}
+          <Button
+            size="sm"
+            variant="secondary"
+            className="h-6 px-2"
+            disabled={!implement}
+            onClick={() =>
+              implement?.({
+                sourceSessionId: chat.sessionId,
+                planId,
+                markdown,
+              })
+            }
+          >
+            Implement
+          </Button>
+        )}
+      </div>
+      <div className="border-t border-primary/20 px-2.5 py-2">
+        <Markdown text={markdown} fontSize={12} />
+      </div>
     </div>
   );
 }
@@ -900,7 +994,9 @@ const MessageRow = memo(function MessageRow({
           active={message.streaming && !message.text && message.tools.length === 0}
         />
       )}
-      {message.tools.length > 0 && <ToolList tools={message.tools} />}
+      {message.tools.length > 0 && (
+        <ToolList tools={message.tools} chat={chat} />
+      )}
       {message.text && (
         <Markdown text={message.text} fontSize={fontSize} streaming={message.streaming} />
       )}

@@ -163,6 +163,9 @@ pub enum TimelineEventKind {
     QueueResumed,
     CheckpointCreated,
     CheckpointReverted,
+    /// A plan the agent proposed and the user can act on later. Durable because
+    /// "we agreed to do this" outlives the turn that said it.
+    PlanProposed,
     Error,
     Completion,
 }

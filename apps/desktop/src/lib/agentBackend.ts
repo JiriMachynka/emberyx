@@ -6,7 +6,7 @@
  * of filling in one row.
  */
 
-export type AgentBackend = "claude" | "codex";
+export type AgentBackend = "claude" | "codex" | "opencode" | "grok";
 
 export interface AgentCapabilities {
   /** Past conversations can be listed and resumed (`list_threads`). */
@@ -29,13 +29,22 @@ export interface AgentCapabilities {
   reasoningEffort: boolean;
   /** A message sent mid-turn steers the running turn instead of queueing. */
   steering: boolean;
+  /** The CLI can be held to planning only, producing a plan it won't act on. */
+  planMode: boolean;
 }
 
-export const AGENT_BACKENDS: readonly AgentBackend[] = ["claude", "codex"];
+export const AGENT_BACKENDS: readonly AgentBackend[] = [
+  "claude",
+  "codex",
+  "opencode",
+  "grok",
+];
 
 export const BACKEND_LABEL: Record<AgentBackend, string> = {
   claude: "Claude",
   codex: "Codex",
+  opencode: "OpenCode",
+  grok: "Grok",
 };
 
 /** Character that opens a command in the composer. Codex invokes its skills as
@@ -43,6 +52,8 @@ export const BACKEND_LABEL: Record<AgentBackend, string> = {
 export const COMMAND_SIGIL: Record<AgentBackend, string> = {
   claude: "/",
   codex: "$",
+  opencode: "/",
+  grok: "/",
 };
 
 /** `--effort` levels Claude accepts. Fixed by the CLI rather than discovered,
@@ -71,6 +82,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     modelPicker: true,
     reasoningEffort: true,
     steering: true,
+    planMode: true,
   },
   // Codex reaches all of these over the app-server rather than Claude's
   // out-of-band surfaces: hook runs arrive in-band as `hook/started` /
@@ -87,6 +99,50 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     modelPicker: true,
     reasoningEffort: true,
     steering: true,
+    // Codex reports a plan when it makes one, but has no mode that holds it to
+    // planning — offering the switch would promise something it won't do.
+    planMode: false,
+  },
+  // Driven over ACP. The protocol carries prompts, streamed updates, tool calls
+  // and permission requests — and nothing else here, so the rest stay off until
+  // each has a driver rather than showing Claude's data under an ACP session.
+  opencode: {
+    // `loadSession` is advertised per agent at initialize; there is no
+    // cross-session thread list to browse yet.
+    threads: false,
+    usage: false,
+    hookStatus: false,
+    permissions: true,
+    // `ask_user` is an Emberyx MCP tool, wired for Claude only.
+    askUser: false,
+    slashCommands: false,
+    subagents: false,
+    // The catalog arrives with `session/new`, but switching mid-session needs a
+    // `session/set_config` round trip that isn't wired yet.
+    modelPicker: false,
+    reasoningEffort: false,
+    // A prompt sent mid-turn is rejected; the turn is cancelled and re-sent.
+    steering: false,
+    planMode: false,
+  },
+  // Also ACP, over `grok agent stdio`. Grok advertises more than OpenCode does
+  // — reasoning effort and a session list among them — but each still needs the
+  // client half wired before its control can promise anything.
+  grok: {
+    threads: false,
+    usage: false,
+    hookStatus: false,
+    permissions: true,
+    askUser: false,
+    slashCommands: false,
+    subagents: false,
+    modelPicker: false,
+    // Grok reports `supportsReasoningEffort` and offers levels under its
+    // session config; switching one needs a set-config round trip that is not
+    // wired, and a control that doesn't change the run is worse than none.
+    reasoningEffort: false,
+    steering: false,
+    planMode: false,
   },
 };
 
@@ -102,3 +158,8 @@ export const isAgentBackend = (value: unknown): value is AgentBackend =>
  *  written before the backend was explicit — `claude` was the whole test. */
 export const backendFromCommand = (command: string): AgentBackend =>
   command.startsWith("claude") ? "claude" : "codex";
+
+/** Backends driven over ACP rather than their own transport. Cursor is absent
+ *  on purpose: `cursor-agent` has no ACP mode, only its own stream-json. */
+export const isAcpBackend = (backend: AgentBackend): boolean =>
+  backend === "opencode" || backend === "grok";

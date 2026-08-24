@@ -73,6 +73,16 @@ export interface HandoffRequest {
 /** Move a conversation to another provider's chat in the same project. */
 export type HandoffFn = (request: HandoffRequest) => void;
 
+export interface ImplementPlanRequest {
+  sourceSessionId: string;
+  /** The proposing tool call's id, so the plan can be stamped implemented. */
+  planId: string;
+  markdown: string;
+}
+
+/** Carry an agreed plan into a fresh chat that will do the work. */
+export type ImplementPlanFn = (request: ImplementPlanRequest) => void;
+
 /**
  * Live agent telemetry, updated at streaming frequency from the hook listener.
  * Kept in a store (not App state) so status/usage/change updates re-render only
@@ -106,6 +116,10 @@ interface AgentState {
    *  Installed by the workspace, which owns the session list. */
   handoff: HandoffFn | null;
   setHandoff: (fn: HandoffFn) => void;
+  /** Open a new chat on an agreed plan. Installed by the workspace, like the
+   *  handoff above — a plan card can't own the session list. */
+  implementPlan: ImplementPlanFn | null;
+  setImplementPlan: (fn: ImplementPlanFn) => void;
   selectAgent: (id: string | null) => void;
   registerSender: (
     id: string,
@@ -158,6 +172,7 @@ export const useAgentStore = create<AgentState>()((set) => ({
   transcripts: {},
   drafts: {},
   handoff: null,
+  implementPlan: null,
   notifications: loadNotifications(),
   setDraft: (id, text) => set((s) => ({ drafts: { ...s.drafts, [id]: text } })),
   clearDraft: (id) =>
@@ -167,6 +182,7 @@ export const useAgentStore = create<AgentState>()((set) => ({
       return { drafts: rest };
     }),
   setHandoff: (fn) => set({ handoff: fn }),
+  setImplementPlan: (fn) => set({ implementPlan: fn }),
   selectAgent: (id) => set({ selectedAgent: id }),
   registerSender: (id, fn) =>
     set((s) => ({ senders: { ...s.senders, [id]: fn } })),

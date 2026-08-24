@@ -18,6 +18,8 @@ export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
 export type ThreadView = "project" | "all";
 
+export type ThreadGrouping = "none" | "repository";
+
 export const PERMISSION_MODE_LABEL: Record<PermissionMode, string> = {
   default: "Ask every time",
   acceptEdits: "Accept edits",
@@ -68,6 +70,12 @@ export interface Settings {
   expandAllProjects: boolean;
   /** How resumable threads are organized in the main sidebar. */
   threadView: ThreadView;
+  /** Idle days after which a thread drops into the settled group. 0 = never. */
+  threadSettleDays: number;
+  /** Also settle a thread once its branch has been merged. */
+  threadAutoSettleOnMerge: boolean;
+  /** Group the active thread list by repository, or leave it flat. */
+  threadGrouping: ThreadGrouping;
   /** Open the dev output panel automatically when a dev/build/start run starts. */
   autoOpenDevPanel: boolean;
   /** Launch Claude compact (collapsed tool output). Off = full (--verbose). */
@@ -115,6 +123,9 @@ export const DEFAULT_SETTINGS: Settings = {
   resumeLatestThread: false,
   expandAllProjects: false,
   threadView: "project",
+  threadSettleDays: 3,
+  threadAutoSettleOnMerge: true,
+  threadGrouping: "none",
   autoOpenDevPanel: false,
   compactSession: false,
   dokployUrl: "",

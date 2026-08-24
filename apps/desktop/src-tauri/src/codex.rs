@@ -146,24 +146,28 @@ pub fn classify(line: &str) -> Frame {
 
 /// Responses arrive out of order (verified against 0.147.0: ids 4, 3, 5, 2 for
 /// requests sent 4, 2, 3, 5), so every in-flight request parks a sender here.
+///
+/// Shared with `acp.rs`: ACP is the same NDJSON JSON-RPC framing, and
+/// correlation is the part that is subtle enough to be worth having exactly one
+/// implementation of.
 #[derive(Default)]
 pub struct Pending {
     waiters: Mutex<HashMap<i64, Sender<std::result::Result<Value, RpcError>>>>,
 }
 
 impl Pending {
-    fn register(&self, id: i64) -> Receiver<std::result::Result<Value, RpcError>> {
+    pub(crate) fn register(&self, id: i64) -> Receiver<std::result::Result<Value, RpcError>> {
         let (tx, rx) = mpsc::channel();
         self.waiters.lock().unwrap().insert(id, tx);
         rx
     }
 
-    fn forget(&self, id: i64) {
+    pub(crate) fn forget(&self, id: i64) {
         self.waiters.lock().unwrap().remove(&id);
     }
 
     /// Returns false when nothing was waiting — a late reply after a timeout.
-    fn resolve(&self, id: i64, outcome: std::result::Result<Value, RpcError>) -> bool {
+    pub(crate) fn resolve(&self, id: i64, outcome: std::result::Result<Value, RpcError>) -> bool {
         let waiter = self.waiters.lock().unwrap().remove(&id);
         match waiter {
             Some(tx) => tx.send(outcome).is_ok(),
@@ -172,7 +176,7 @@ impl Pending {
     }
 
     /// Unblock everyone on process death, or commands hang until the timeout.
-    fn fail_all(&self, message: &str) {
+    pub(crate) fn fail_all(&self, message: &str) {
         let waiters: Vec<_> = self
             .waiters
             .lock()

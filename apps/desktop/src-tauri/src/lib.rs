@@ -1,3 +1,4 @@
+pub mod acp;
 pub mod agent;
 pub mod daemon;
 pub mod daemon_protocol;
@@ -57,6 +58,7 @@ pub fn run() {
         .manage(PtyManager::new())
         .manage(AgentManager::new())
         .manage(CodexManager::new())
+        .manage(acp::AcpManager::new())
         .manage(Supervisor::new())
         .manage(usage::UsageCache::default())
         .manage(usage::SummaryCache::default())
@@ -99,6 +101,15 @@ pub fn run() {
             codex::codex_hooks_list,
             codex::codex_rate_limits,
             codex::codex_usage,
+            acp::acp_spawn,
+            acp::acp_kill,
+            acp::acp_session_new,
+            acp::acp_session_load,
+            acp::acp_session_list,
+            acp::acp_prompt,
+            acp::acp_cancel,
+            acp::acp_respond,
+            acp::acp_request,
             supervisor::agent_register,
             supervisor::agent_attach_thread,
             supervisor::agent_attach_turn,
@@ -156,6 +167,7 @@ pub fn run() {
             git::git_pickaxe,
             git::git_branch,
             git::git_branches,
+            git::git_merged_branches,
             git::git_pull,
             git::git_push,
             git::git_push_to,
@@ -229,6 +241,7 @@ pub fn run() {
             }
             app_handle.state::<AgentManager>().kill_all();
             app_handle.state::<CodexManager>().kill_all();
+            app_handle.state::<acp::AcpManager>().kill_all();
             app_handle.state::<PtyManager>().kill_all();
             app_handle.state::<Supervisor>().kill_all();
         }

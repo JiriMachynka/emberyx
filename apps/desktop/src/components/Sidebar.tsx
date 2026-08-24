@@ -1,5 +1,5 @@
 import { memo, useState } from "react";
-import { Plus, SquarePen, PanelLeftClose, PanelLeftOpen, Settings, Bot, FolderOpen, GitBranch, Bell, Search } from "lucide-react";
+import { Plus, SquarePen, PanelLeftClose, PanelLeftOpen, Settings, Bot, FolderOpen, GitBranch, Bell, Search, ChevronRight, MoreHorizontal, Pin } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -10,16 +10,30 @@ import { statusOf, STATUS_META } from "@/lib/status";
 import { StatusDot } from "@/components/StatusDot";
 import { TabCloseButton } from "@/components/TabCloseButton";
 import { useAgentStore } from "@/lib/agentStore";
-import { useGitBranches, useInvalidateGit } from "@/lib/queries";
+import {
+  useGitBranches,
+  useInvalidateGit,
+  useMergedBranchesMap,
+} from "@/lib/queries";
+import {
+  deriveThreadState,
+  getAllThreadMeta,
+  setThreadMeta,
+  snoozeUntil,
+  threadMetaKey,
+  type ThreadMeta,
+  type ThreadState,
+} from "@/lib/threadMeta";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuLabel,
   DropdownMenuItem,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import type { Project, Session, Thread } from "@/types";
-import type { ThreadView } from "@/lib/settings";
+import type { ThreadGrouping, ThreadView } from "@/lib/settings";
 
 interface SidebarProps {
   projects: Project[];
@@ -29,6 +43,11 @@ interface SidebarProps {
   /** Keep every project's session list open, not only the active project's. */
   expandAll: boolean;
   threadView: ThreadView;
+  /** Idle days after which a thread folds into Settled; 0 = never. */
+  threadSettleDays: number;
+  /** Fold a thread away once its branch has been merged. */
+  threadAutoSettleOnMerge: boolean;
+  threadGrouping: ThreadGrouping;
   collapsed: boolean;
   onToggleCollapse: () => void;
   onSelectProject: (id: string) => void;
@@ -159,53 +178,288 @@ function Tree(props: SidebarProps) {
   return props.threadView === "all" ? <AllThreads {...props} /> : <ProjectTree {...props} />;
 }
 
-/** Cross-project recent thread list, matching the compact T3 Code navigation model. */
-function AllThreads({ projects, onResumeThread }: SidebarProps) {
-  const threads = projects
+interface ThreadRowData {
+  project: Project;
+  thread: Thread;
+  /** `threadMeta` store key — the identity every inbox action is keyed by. */
+  key: string;
+  state: ThreadState;
+}
+
+/** Cross-project thread inbox: pinned first, then live threads, with the ones
+ *  that have gone quiet folded away. Matches the compact T3 Code model. */
+function AllThreads(props: SidebarProps) {
+  const {
+    projects,
+    sessionsFor,
+    onResumeThread,
+    threadSettleDays,
+    threadAutoSettleOnMerge,
+    threadGrouping,
+  } = props;
+  const [meta, setMeta] = useState(getAllThreadMeta);
+
+  // One probe per repo, not per worktree and not per thread.
+  const roots = [
+    ...new Set(projects.map((p) => p.worktree?.repoRoot ?? p.path)),
+  ];
+  const merged = useMergedBranchesMap(roots, threadAutoSettleOnMerge);
+
+  const now = Date.now();
+  const rows: ThreadRowData[] = projects
     .flatMap((project) =>
-      project.threads.map((thread) => ({ project, thread }))
+      project.threads.map((thread) => {
+        const key = threadMetaKey(project.path, thread.id);
+        const root = project.worktree?.repoRoot ?? project.path;
+        const branch = project.worktree?.branch;
+        return {
+          project,
+          thread,
+          key,
+          state: deriveThreadState({
+            modified: thread.modified,
+            meta: meta[key] ?? {},
+            now,
+            settleDays: threadSettleDays,
+            merged: !!branch && (merged[root] ?? []).includes(branch),
+          }),
+        };
+      })
     )
     .sort((a, b) => b.thread.modified - a.thread.modified);
 
-  return (
-    <div className="px-2.5 pt-2">
-      <div className="mb-2 px-2 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        All threads
-      </div>
-      {threads.length === 0 ? (
+  const of = (state: ThreadState) => rows.filter((r) => r.state === state);
+  const pinned = of("pinned");
+  const active = of("active");
+  const snoozed = of("snoozed");
+  const settled = of("settled");
+  const archived = of("archived");
+
+  // setThreadMeta returns the whole store, so the new identity is what makes
+  // the list re-derive — the rows are computed from `meta`, not read per row.
+  const apply = (key: string, patch: ThreadMeta) =>
+    setMeta({ ...setThreadMeta(key, patch) });
+
+  const row = (data: ThreadRowData) => (
+    <ThreadRow
+      key={`${data.project.id}:${data.thread.id}`}
+      data={data}
+      session={sessionsFor(data.project.id).find(
+        (s) => s.resume === data.thread.id
+      )}
+      onResume={() =>
+        onResumeThread(data.project.id, data.project.path, data.thread)
+      }
+      onApply={apply}
+    />
+  );
+
+  if (rows.length === 0) {
+    return (
+      <div className="px-2.5 pt-2">
         <p className="px-2 py-6 text-center text-xs text-muted-foreground">
           No cached threads yet
         </p>
-      ) : (
-        <div className="grid gap-0.5">
-          {threads.map(({ project, thread }) => (
-            <button
-              key={`${project.id}:${thread.id}`}
-              type="button"
-              onClick={() => onResumeThread(project.id, project.path, thread)}
-              className="group flex min-w-0 flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-secondary/50"
-            >
-              <span className="flex w-full min-w-0 items-center justify-between gap-2">
-                <span className="truncate text-sm font-medium text-foreground/90">
-                  {thread.title}
-                </span>
-                <span className="shrink-0 text-[10px] text-muted-foreground">
-                  {relativeThreadTime(thread.modified)}
-                </span>
-              </span>
-              <span className="flex w-full min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
-                <span className="truncate">{projectLabel(project)}</span>
-                {project.worktree && (
-                  <span className="truncate text-[10px] text-muted-foreground/70">
-                    {project.worktree.branch}
-                  </span>
-                )}
-              </span>
-            </button>
-          ))}
-        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-3 px-2.5 pt-2">
+      {pinned.length > 0 && (
+        <section className="grid gap-0.5">
+          <SectionLabel>Pinned</SectionLabel>
+          {pinned.map(row)}
+        </section>
       )}
+
+      <section className="grid gap-0.5">
+        {pinned.length > 0 && <SectionLabel>Threads</SectionLabel>}
+        {active.length === 0 ? (
+          <p className="px-2 py-4 text-center text-xs text-muted-foreground">
+            Nothing active
+          </p>
+        ) : threadGrouping === "repository" ? (
+          groupByRepository(active).map(([label, group]) => (
+            <div key={label} className="grid gap-0.5">
+              <SectionLabel>{label}</SectionLabel>
+              {group.map(row)}
+            </div>
+          ))
+        ) : (
+          active.map(row)
+        )}
+      </section>
+
+      <FoldedThreads label="Snoozed" rows={snoozed} render={row} />
+      <FoldedThreads label="Settled" rows={settled} render={row} />
+      <FoldedThreads label="Archived" rows={archived} render={row} />
+    </div>
+  );
+}
+
+const SectionLabel = ({ children }: { children: React.ReactNode }) => (
+  <div className="px-2 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+    {children}
+  </div>
+);
+
+/** Threads grouped under the repo they belong to, worktrees folded into their
+ *  parent repo — the point of the grouping is one heading per codebase. */
+const groupByRepository = (
+  rows: ThreadRowData[]
+): [string, ThreadRowData[]][] => {
+  const groups = new Map<string, ThreadRowData[]>();
+  for (const r of rows) {
+    const label = basename(r.project.worktree?.repoRoot ?? r.project.path);
+    const group = groups.get(label);
+    if (group) group.push(r);
+    else groups.set(label, [r]);
+  }
+  return [...groups];
+};
+
+/** A collapsed pile of threads that are out of the way but not gone. Renders
+ *  nothing at all when empty, so an unused state never costs a row. */
+function FoldedThreads({
+  label,
+  rows,
+  render,
+}: {
+  label: string;
+  rows: ThreadRowData[];
+  render: (data: ThreadRowData) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  if (rows.length === 0) return null;
+  return (
+    <section className="grid gap-0.5">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronRight
+          className={cn("size-3 transition-transform", open && "rotate-90")}
+        />
+        {label} ({rows.length})
+      </button>
+      {open && rows.map(render)}
+    </section>
+  );
+}
+
+/** One thread: resume on click, inbox actions in the hover menu. The menu is a
+ *  sibling of the resume button rather than a child — a button inside a button
+ *  is invalid, and swallows the click that opens it. */
+function ThreadRow({
+  data,
+  session,
+  onResume,
+  onApply,
+}: {
+  data: ThreadRowData;
+  session: Session | undefined;
+  onResume: () => void;
+  onApply: (key: string, patch: ThreadMeta) => void;
+}) {
+  const { project, thread, key, state } = data;
+  const pinned = state === "pinned";
+  const archived = state === "archived";
+  const now = Date.now();
+
+  return (
+    <div className="group/row relative">
+      <button
+        type="button"
+        onClick={onResume}
+        className="flex w-full min-w-0 flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 pr-8 text-left transition-colors hover:bg-secondary/50"
+      >
+        <span className="flex w-full min-w-0 items-center justify-between gap-2">
+          <span
+            className={cn(
+              "truncate text-sm font-medium",
+              archived ? "text-muted-foreground" : "text-foreground/90"
+            )}
+          >
+            {thread.title}
+          </span>
+          <span className="shrink-0 text-[10px] text-muted-foreground">
+            {relativeThreadTime(thread.modified)}
+          </span>
+        </span>
+        <span className="flex w-full min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          {session ? (
+            <SessionStatusDot id={session.id} />
+          ) : (
+            <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/40" />
+          )}
+          <span className="truncate">{projectLabel(project)}</span>
+          {project.worktree && (
+            <span className="truncate text-[10px] text-muted-foreground/70">
+              {project.worktree.branch}
+            </span>
+          )}
+          {pinned && <Pin className="size-3 shrink-0 opacity-70" />}
+        </span>
+      </button>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            title="Thread actions"
+            className="absolute right-1 top-1.5 rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100"
+          >
+            <MoreHorizontal className="size-3.5" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-44">
+          <DropdownMenuItem
+            onSelect={() =>
+              onApply(key, { pinnedAt: pinned ? undefined : now })
+            }
+          >
+            {pinned ? "Unpin" : "Pin"}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onSelect={() => onApply(key, { snoozedUntil: snoozeUntil.hour(now) })}
+          >
+            Snooze 1 hour
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() =>
+              onApply(key, { snoozedUntil: snoozeUntil.tomorrow(now) })
+            }
+          >
+            Snooze until tomorrow
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => onApply(key, { snoozedUntil: snoozeUntil.week(now) })}
+          >
+            Snooze a week
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onSelect={() =>
+              onApply(key, {
+                settledOverride: state === "settled" ? "active" : "settled",
+                snoozedUntil: undefined,
+              })
+            }
+          >
+            {state === "settled" ? "Mark active" : "Mark settled"}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() =>
+              onApply(key, { archivedAt: archived ? undefined : now })
+            }
+          >
+            {archived ? "Unarchive" : "Archive"}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

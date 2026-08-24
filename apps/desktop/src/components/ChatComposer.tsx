@@ -1,12 +1,12 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowDown,
   ArrowUp,
   Brain,
   Check,
   ChevronDown,
   ChevronsUpDown,
   ChevronUp,
+  ClipboardList,
   Clock,
   Coins,
   Forward,
@@ -674,6 +674,8 @@ interface UsageFooterProps {
   onEffortChange: (effort: string) => void;
   fullAccess: boolean;
   onFullAccessChange: (v: boolean) => void;
+  planMode: boolean;
+  onPlanModeChange: (v: boolean) => void;
   /** Runtime-owned prompt queue; null when the backend has none (Codex steers). */
   queue?: PromptQueue | null;
 }
@@ -692,6 +694,8 @@ const UsageFooter = memo(function UsageFooter({
   onEffortChange,
   fullAccess,
   onFullAccessChange,
+  planMode,
+  onPlanModeChange,
   queue,
 }: UsageFooterProps) {
   return (
@@ -726,31 +730,45 @@ const UsageFooter = memo(function UsageFooter({
       {capabilitiesOf(backend).permissions && (
         <AccessChip fullAccess={fullAccess} onChange={onFullAccessChange} />
       )}
-      {capabilitiesOf(backend).usage &&
-        (usage.inputTokens != null ||
-          usage.outputTokens != null ||
-          usage.costUsd != null) && (
-        <span className="flex items-center gap-2 font-mono tabular-nums">
-          {usage.inputTokens != null && (
-            <span className="flex items-center gap-0.5">
-              <ArrowDown className="size-3 opacity-60" />
-              {usage.inputTokens.toLocaleString("en-US")}
-            </span>
-          )}
-          {usage.outputTokens != null && (
-            <span className="flex items-center gap-0.5">
-              <ArrowUp className="size-3 opacity-60" />
-              {usage.outputTokens.toLocaleString("en-US")}
-            </span>
-          )}
-          {usage.costUsd != null && (
-            <span className="flex items-center gap-0.5 text-primary">
-              <Coins className="size-3 opacity-70" />${usage.costUsd.toFixed(4)}
-            </span>
-          )}
+      {capabilitiesOf(backend).planMode && (
+        <PlanChip planMode={planMode} onChange={onPlanModeChange} />
+      )}
+      {/* Raw token counts belong in the usage panel, not under every prompt. */}
+      {capabilitiesOf(backend).usage && usage.costUsd != null && (
+        <span className="flex items-center gap-0.5 font-mono tabular-nums text-primary">
+          <Coins className="size-3 opacity-70" />${usage.costUsd.toFixed(4)}
         </span>
       )}
     </div>
+  );
+});
+
+/** Plan-only posture. Holding the CLI to planning means it must not also be
+ *  running with permissions bypassed, so the pane drops full access while this
+ *  is on — the two flags are mutually exclusive at the CLI. */
+const PlanChip = memo(function PlanChip({
+  planMode,
+  onChange,
+}: {
+  planMode: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!planMode)}
+      title={
+        planMode
+          ? "Planning only — the agent proposes a plan instead of acting"
+          : "Let the agent act on this turn"
+      }
+      className={chipTrigger}
+    >
+      <ClipboardList
+        className={cn("size-3.5 shrink-0", planMode ? "text-primary" : "opacity-70")}
+      />
+      <span>{planMode ? "Plan only" : "Act"}</span>
+    </button>
   );
 });
 
@@ -777,6 +795,8 @@ interface ChatComposerProps {
   /** Full access = `--dangerously-skip-permissions`; off = Supervised. */
   fullAccess: boolean;
   onFullAccessChange: (v: boolean) => void;
+  planMode: boolean;
+  onPlanModeChange: (v: boolean) => void;
   /** Runtime-owned prompt queue for reorder/edit/delete/pause/run-next. */
   queue?: PromptQueue | null;
   /** Text handed to this chat from elsewhere, to drop into the box unsent. */
@@ -810,6 +830,8 @@ export const ChatComposer = memo(function ChatComposer({
   onEffortChange,
   fullAccess,
   onFullAccessChange,
+  planMode,
+  onPlanModeChange,
   queue,
   draft,
   onDraftConsumed,
@@ -1145,6 +1167,8 @@ export const ChatComposer = memo(function ChatComposer({
             onEffortChange={onEffortChange}
             fullAccess={fullAccess}
             onFullAccessChange={onFullAccessChange}
+            planMode={planMode}
+            onPlanModeChange={onPlanModeChange}
             queue={queue}
           />
           <div className="flex shrink-0 items-center gap-1.5">

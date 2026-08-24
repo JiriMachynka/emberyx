@@ -31,8 +31,8 @@ describe("PROVIDERS", () => {
     expect(providerToBackend("claude")).toBe("claude");
     expect(providerToBackend("codex")).toBe("codex");
     expect(providerToBackend("cursor")).toBeNull();
-    expect(providerToBackend("grok")).toBeNull();
-    expect(providerToBackend("opencode")).toBeNull();
+    expect(providerToBackend("grok")).toBe("grok");
+    expect(providerToBackend("opencode")).toBe("opencode");
     expect(providerToBackend("kilo")).toBeNull();
   });
 });
