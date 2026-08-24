@@ -335,12 +335,14 @@ function App() {
           activeByProject={ws.activeByProject}
           sessionsFor={ws.sessionsFor}
           expandAll={settings.expandAllProjects}
+          threadView={settings.threadView}
           collapsed={sidebarCollapsed}
           onToggleCollapse={toggleSidebar}
           onSelectProject={ws.setActiveProjectId}
           onCloseProject={ws.closeProjectById}
           onPickProject={ws.pickProject}
           onSelectSession={ws.activateSession}
+          onResumeThread={ws.resumeThreadIn}
           onCloseSession={ws.closeSession}
           onMoveSession={ws.moveSession}
           onNewAgent={ws.newAgent}

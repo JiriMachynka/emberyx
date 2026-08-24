@@ -212,7 +212,7 @@ const ModelPicker = memo(function ModelPicker({
   const label = selected === "" ? resolved || "Default" : modelLabel(selected, groups);
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="flex items-center gap-1.5 rounded font-medium text-foreground outline-none transition-colors hover:text-primary">
+      <DropdownMenuTrigger className={chipTrigger}>
         <Sparkles className="size-3.5 shrink-0 text-primary" />
         <span className="truncate">{label}</span>
         <ChevronsUpDown className="size-3 shrink-0 opacity-50" />
@@ -271,7 +271,7 @@ const ChipDivider = () => <span className="h-3.5 w-px shrink-0 bg-border" />;
 
 /** Trigger styling shared by the access/mode chips — matches ModelPicker. */
 const chipTrigger =
-  "flex items-center gap-1.5 rounded font-medium text-foreground outline-none transition-colors hover:text-primary";
+  "flex items-center gap-1.5 rounded-md px-1.5 py-1 font-medium text-foreground outline-none transition-colors hover:bg-white/[0.04] hover:text-primary focus-visible:ring-1 focus-visible:ring-ring";
 
 interface EffortPickerProps {
   /** Selected model, which for Codex decides the levels on offer. */
@@ -1009,6 +1009,9 @@ export const ChatComposer = memo(function ChatComposer({
         />
       )}
       <div
+        style={{
+          fontFamily: '"DM Sans Variable", ui-sans-serif, system-ui, sans-serif',
+        }}
         onDragOver={(e) => {
           e.preventDefault();
           setDragging(true);
@@ -1016,7 +1019,7 @@ export const ChatComposer = memo(function ChatComposer({
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
         className={cn(
-          "chat-composer-surface overflow-hidden rounded-2xl border transition-colors focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40",
+          "chat-composer-surface overflow-hidden rounded-3xl border transition-colors focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40",
           dragging && "border-ring ring-1 ring-ring/50"
         )}
       >
@@ -1128,9 +1131,9 @@ export const ChatComposer = memo(function ChatComposer({
           // textarea's inner editor gets a min-content floor, so one long
           // unbreakable token (an @path mention) pushes the line wider than the
           // box instead of wrapping. `break-words` wraps the token itself.
-          className="block max-h-40 min-h-28 resize-none overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent px-4 pb-1 pt-4 shadow-none focus-visible:ring-0"
+          className="block max-h-40 min-h-28 resize-none overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent px-5 pb-1 pt-5 text-[15px] leading-6 shadow-none placeholder:text-muted-foreground/80 focus-visible:ring-0"
         />
-         <div className="flex items-center justify-between gap-2 px-3 pb-3 pt-1">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-4 pt-2">
           <UsageFooter
             queued={queued}
             backend={backend}

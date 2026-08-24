@@ -16,6 +16,8 @@ export const PERMISSION_MODES = [
 
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
+export type ThreadView = "project" | "all";
+
 export const PERMISSION_MODE_LABEL: Record<PermissionMode, string> = {
   default: "Ask every time",
   acceptEdits: "Accept edits",
@@ -64,6 +66,8 @@ export interface Settings {
   resumeLatestThread: boolean;
   /** Keep every open project's session list expanded, not just the active one. */
   expandAllProjects: boolean;
+  /** How resumable threads are organized in the main sidebar. */
+  threadView: ThreadView;
   /** Open the dev output panel automatically when a dev/build/start run starts. */
   autoOpenDevPanel: boolean;
   /** Launch Claude compact (collapsed tool output). Off = full (--verbose). */
@@ -110,6 +114,7 @@ export const DEFAULT_SETTINGS: Settings = {
   effort: "",
   resumeLatestThread: false,
   expandAllProjects: false,
+  threadView: "project",
   autoOpenDevPanel: false,
   compactSession: false,
   dokployUrl: "",

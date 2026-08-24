@@ -144,7 +144,7 @@ export function SettingsPage({
 
   return (
     <div className="absolute inset-0 z-40 flex min-h-0 flex-col bg-background">
-      <header className="flex h-16 shrink-0 items-center border-b px-6">
+      <header className="flex h-16 shrink-0 items-center border-b px-4 sm:px-6">
         <button
           type="button"
           onClick={onBack}
@@ -161,9 +161,9 @@ export function SettingsPage({
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 gap-8 px-6 py-8 lg:px-12">
+      <div className="flex min-h-0 flex-1 gap-8 px-4 py-6 sm:px-6 sm:py-8 lg:px-12">
         <nav className="flex w-48 shrink-0 flex-col gap-0.5 border-r pr-4">
-            {TABS.map((t) => (
+          {TABS.map((t) => (
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
@@ -184,9 +184,9 @@ export function SettingsPage({
           <div className="mx-auto grid max-w-2xl content-start gap-4 pb-10">
               {tab === "general" && (
                 <>
-                  <Field
-                    label="Agent interface"
-                    hint="Chat shows a rich message UI; Terminal runs the raw Claude Code TUI."
+                    <Field
+                      label="Agent interface"
+                      hint="Chat shows a rich message UI; Terminal runs the raw Claude Code TUI."
                   >
                     <Select
                       value={settings.agentUi}
@@ -200,6 +200,28 @@ export function SettingsPage({
                       <SelectContent>
                         <SelectItem value="chat">Chat UI</SelectItem>
                         <SelectItem value="terminal">Terminal</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+
+                  <Field
+                    label="Thread list"
+                    hint="Choose whether the sidebar groups threads by project or shows one list across all open projects."
+                  >
+                    <Select
+                      value={settings.threadView}
+                      onValueChange={(value) => {
+                        if (value === "project" || value === "all") {
+                          onUpdate({ threadView: value });
+                        }
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="project">By project</SelectItem>
+                        <SelectItem value="all">All threads</SelectItem>
                       </SelectContent>
                     </Select>
                   </Field>
@@ -229,9 +251,9 @@ export function SettingsPage({
                   <div>
                     <div className="mb-1 text-sm font-semibold">Installed</div>
                     <p className="mb-3 text-xs text-muted-foreground">
-                      Detected by running each CLI's own version probe. A
-                      provider that isn't installed is listed, not hidden — the
-                      absence is the useful part.
+                      Detected from your login-shell PATH and each CLI's version probe. A
+                      provider that isn't installed is listed, not hidden — the absence is the
+                      useful part.
                     </p>
                     <div className="grid gap-1.5">
                       {providers.map((p) => (
@@ -331,6 +353,9 @@ export function SettingsPage({
 
               {tab === "permissions" && (
                 <>
+                  <div className="mb-1 px-3 text-lg font-semibold tracking-[-0.025em] sm:px-4">
+                    Tool permissions
+                  </div>
                   {capabilities.permissions ? (
                     <>
                       <Field
@@ -372,7 +397,7 @@ export function SettingsPage({
                       </Toggle>
                     </>
                   ) : (
-                    <p className="text-sm text-muted-foreground">
+                    <p className="rounded-xl px-3 py-3 text-sm text-muted-foreground sm:px-4">
                       {BACKEND_LABEL[settings.agentBackend]} manages approvals
                       itself; there is nothing here to set.
                     </p>
@@ -444,7 +469,7 @@ export function SettingsPage({
               {tab === "appearance" && (
                 <>
                   <div>
-                    <div className="mb-3 text-sm font-semibold">Interface</div>
+                     <div className="mb-3 text-sm font-semibold">Interface</div>
                     <div className="grid gap-4">
                       <Field
                         label="Font family"
@@ -477,8 +502,8 @@ export function SettingsPage({
                     </div>
                   </div>
 
-                  <div className="border-t pt-4">
-                    <div className="mb-3 text-sm font-semibold">Editor</div>
+                   <div className="border-t pt-4">
+                     <div className="mb-3 text-sm font-semibold">Editor</div>
                     <div className="grid gap-4">
                       <Field
                         label="Font family"
@@ -507,7 +532,7 @@ export function SettingsPage({
               {tab === "connections" && (
                 <>
                   <div>
-                    <div className="mb-1 text-sm font-semibold">
+                     <div className="mb-1 text-sm font-semibold">
                       Persistent agents
                     </div>
                     <p className="mb-3 text-xs text-muted-foreground">
@@ -515,7 +540,7 @@ export function SettingsPage({
                       chat agents live in the daemon and survive closing the
                       window. Without it, they stop when the window does.
                     </p>
-                    <div className="mb-4 flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                     <div className="mb-4 flex items-center justify-between rounded-md border px-3 py-2 text-sm">
                       <span className="flex items-center gap-2">
                         <span
                           className={cn(
@@ -549,8 +574,8 @@ export function SettingsPage({
                     </Toggle>
                   </div>
 
-                  <div className="border-t pt-4">
-                    <div className="mb-3 text-sm font-semibold">
+                   <div className="border-t pt-4">
+                     <div className="mb-3 text-sm font-semibold">
                       External editor
                     </div>
                     <div className="grid gap-4">
@@ -595,8 +620,8 @@ export function SettingsPage({
                     </div>
                   </div>
 
-                  <div className="border-t pt-4">
-                    <div className="mb-3 text-sm font-semibold">Dokploy</div>
+                   <div className="border-t pt-4">
+                     <div className="mb-3 text-sm font-semibold">Dokploy</div>
                     <div className="grid gap-4">
                       <Field
                         label="Server URL"
@@ -624,8 +649,8 @@ export function SettingsPage({
                     </div>
                   </div>
 
-                  <div className="border-t pt-4">
-                    <div className="mb-3 text-sm font-semibold">OpenRouter</div>
+                   <div className="border-t pt-4">
+                     <div className="mb-3 text-sm font-semibold">OpenRouter</div>
                     <div className="grid gap-4">
                       <Field
                         label="API key"
@@ -670,7 +695,7 @@ export function SettingsPage({
               {tab === "sourceControl" && (
                 <>
                   <div>
-                    <div className="mb-3 text-sm font-semibold">GitHub</div>
+                     <div className="mb-3 text-sm font-semibold">GitHub</div>
                     <div className="grid gap-4">
                       <Field
                         label="Personal access token"
@@ -712,8 +737,8 @@ export function SettingsPage({
                     </div>
                   </div>
 
-                  <div className="border-t pt-4">
-                    <div className="mb-3 text-sm font-semibold">GitLab</div>
+                   <div className="border-t pt-4">
+                     <div className="mb-3 text-sm font-semibold">GitLab</div>
                     <div className="grid gap-4">
                       <Field
                         label="Personal access token"

@@ -90,15 +90,20 @@ fn path_dirs(path: &str) -> Vec<PathBuf> {
     std::env::split_paths(path).collect()
 }
 
-/// True when `binary` is an executable on PATH (case-sensitive, like `which`).
+/// Resolve an executable against a PATH value (case-sensitive, like `which`).
+fn resolve_on_path(binary: &str, path: &str) -> Option<PathBuf> {
+    path_dirs(path)
+        .into_iter()
+        .map(|dir| dir.join(binary))
+        .find(|candidate| {
+            candidate.is_file() && is_executable(candidate)
+        })
+}
+
 fn on_path(binary: &str) -> bool {
     std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|p| path_dirs(&p.to_string_lossy()))
-        .any(|dir| {
-            let candidate = dir.join(binary);
-            candidate.is_file() && is_executable(&candidate)
-        })
+        .map(|p| resolve_on_path(binary, &p.to_string_lossy()).is_some())
+        .unwrap_or(false)
 }
 
 #[cfg(unix)]
@@ -114,11 +119,12 @@ fn is_executable(_path: &std::path::Path) -> bool {
     true
 }
 
-/// Best-effort version probe. Spawns `binary --version` with a short timeout;
+/// Best-effort version probe. Spawns `binary --version`;
 /// any failure yields None rather than failing the whole status row.
-fn probe_version(binary: &str) -> Option<String> {
+fn probe_version(binary: &std::path::Path, env: &[(String, String)]) -> Option<String> {
     let out = std::process::Command::new(binary)
         .arg("--version")
+        .envs(env.iter().map(|(key, value)| (key, value)))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -137,21 +143,32 @@ fn probe_version(binary: &str) -> Option<String> {
 
 /// Probe one provider. Installed status is cheap; the version probe spawns a
 /// subprocess, so it is skipped when the binary is missing.
-fn probe(provider: Provider) -> ProviderStatus {
-    let installed = on_path(provider.binary());
+fn probe(provider: Provider, shell_env: Option<&[(String, String)]>) -> ProviderStatus {
+    let path = shell_env
+        .and_then(|env| env.iter().find(|(key, _)| key == "PATH"))
+        .map(|(_, value)| value.clone())
+        .or_else(|| std::env::var_os("PATH").map(|value| value.to_string_lossy().into_owned()));
+    let binary = path
+        .as_deref()
+        .and_then(|value| resolve_on_path(provider.binary(), value));
+    let installed = binary.is_some();
     ProviderStatus {
         id: provider.id().to_string(),
         label: provider.label().to_string(),
         binary: provider.binary().to_string(),
         installed,
-        version: if installed { probe_version(provider.binary()) } else { None },
+        version: binary.and_then(|binary| probe_version(&binary, shell_env.unwrap_or(&[]))),
     }
 }
 
 /// Detection for every provider, for the Settings → Providers page.
 #[tauri::command]
 pub fn provider_status() -> Vec<ProviderStatus> {
-    Provider::all().into_iter().map(probe).collect()
+    let shell_env = crate::pty::shell_env_blocking(std::time::Duration::from_secs(5));
+    Provider::all()
+        .into_iter()
+        .map(|provider| probe(provider, shell_env.as_deref()))
+        .collect()
 }
 
 #[cfg(test)]
@@ -188,7 +205,9 @@ mod tests {
 
     #[test]
     fn probe_skips_the_version_subprocess_when_missing() {
-        let status = probe(Provider::Kilo);
+        let shell_env = std::env::var_os("PATH")
+            .map(|path| vec![("PATH".to_string(), path.to_string_lossy().into_owned())]);
+        let status = probe(Provider::Kilo, shell_env.as_deref());
         assert_eq!(status.id, "kilo");
         assert_eq!(status.binary, "kilo");
         // Installed or not, the struct is coherent — no crash, version None when
@@ -205,5 +224,14 @@ mod tests {
         assert_eq!(rows.len(), 6);
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, ["claude", "cursor", "codex", "grok", "opencode", "kilo"]);
+    }
+
+    #[test]
+    fn resolve_on_path_finds_binary_outside_the_process_path() {
+        assert_eq!(
+            resolve_on_path("sh", "/bin").as_deref(),
+            Some(std::path::Path::new("/bin/sh"))
+        );
+        assert!(resolve_on_path("emberyx-definitely-not-a-real-binary", "/bin").is_none());
     }
 }

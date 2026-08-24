@@ -18,7 +18,8 @@ import {
   DropdownMenuLabel,
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
-import type { Project, Session } from "@/types";
+import type { Project, Session, Thread } from "@/types";
+import type { ThreadView } from "@/lib/settings";
 
 interface SidebarProps {
   projects: Project[];
@@ -27,12 +28,14 @@ interface SidebarProps {
   sessionsFor: (id: string) => Session[];
   /** Keep every project's session list open, not only the active project's. */
   expandAll: boolean;
+  threadView: ThreadView;
   collapsed: boolean;
   onToggleCollapse: () => void;
   onSelectProject: (id: string) => void;
   onCloseProject: (id: string) => void;
   onPickProject: () => void;
   onSelectSession: (projectId: string, id: string) => void;
+  onResumeThread: (projectId: string, path: string, thread: Thread) => void;
   onCloseSession: (id: string) => void;
   onMoveSession: (projectId: string, from: string, to: string) => void;
   onNewAgent: () => void;
@@ -152,8 +155,71 @@ function SidebarHeader({ collapsed, onToggleCollapse }: SidebarProps) {
   );
 }
 
-/** Expanded project → session tree. */
 function Tree(props: SidebarProps) {
+  return props.threadView === "all" ? <AllThreads {...props} /> : <ProjectTree {...props} />;
+}
+
+/** Cross-project recent thread list, matching the compact T3 Code navigation model. */
+function AllThreads({ projects, onResumeThread }: SidebarProps) {
+  const threads = projects
+    .flatMap((project) =>
+      project.threads.map((thread) => ({ project, thread }))
+    )
+    .sort((a, b) => b.thread.modified - a.thread.modified);
+
+  return (
+    <div className="px-2.5 pt-2">
+      <div className="mb-2 px-2 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        All threads
+      </div>
+      {threads.length === 0 ? (
+        <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+          No cached threads yet
+        </p>
+      ) : (
+        <div className="grid gap-0.5">
+          {threads.map(({ project, thread }) => (
+            <button
+              key={`${project.id}:${thread.id}`}
+              type="button"
+              onClick={() => onResumeThread(project.id, project.path, thread)}
+              className="group flex min-w-0 flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-secondary/50"
+            >
+              <span className="flex w-full min-w-0 items-center justify-between gap-2">
+                <span className="truncate text-sm font-medium text-foreground/90">
+                  {thread.title}
+                </span>
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {relativeThreadTime(thread.modified)}
+                </span>
+              </span>
+              <span className="flex w-full min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
+                <span className="truncate">{projectLabel(project)}</span>
+                {project.worktree && (
+                  <span className="truncate text-[10px] text-muted-foreground/70">
+                    {project.worktree.branch}
+                  </span>
+                )}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const relativeThreadTime = (seconds: number): string => {
+  const diff = Date.now() / 1000 - seconds;
+  if (diff < 60) return "now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+  return `${Math.floor(diff / 86400)}d`;
+};
+
+/** Expanded project → session tree. */
+function ProjectTree(props: SidebarProps) {
   const {
     projects,
     activeProjectId,

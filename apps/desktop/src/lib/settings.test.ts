@@ -36,6 +36,14 @@ describe("useSettings", () => {
   it("starts from the defaults when nothing is stored", () => {
     const { result } = renderHook(() => useSettings());
     expect(result.current.settings).toEqual(DEFAULT_SETTINGS);
+    expect(result.current.settings.threadView).toBe("project");
+  });
+
+  it("persists the selected thread list layout", () => {
+    const { result } = renderHook(() => useSettings());
+    act(() => result.current.update({ threadView: "all" }));
+    expect(result.current.settings.threadView).toBe("all");
+    expect(JSON.parse(localStorage.getItem("emberyx.settings")!).threadView).toBe("all");
   });
 
   it("persists an update and merges it into the current settings", () => {
