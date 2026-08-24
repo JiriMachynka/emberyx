@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  ArrowLeft,
   Bell,
   Boxes,
   ChevronDown,
@@ -14,13 +15,6 @@ import {
   SlidersHorizontal,
   Type,
 } from "lucide-react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
 import { getVersion } from "@tauri-apps/api/app";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -54,9 +48,8 @@ import {
 import type { LucideIcon } from "lucide-react";
 import type { Settings } from "@/lib/settings";
 
-interface SettingsDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+interface SettingsPageProps {
+  onBack: () => void;
   settings: Settings;
   onUpdate: (patch: Partial<Settings>) => void;
 }
@@ -84,23 +77,22 @@ const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: "about", label: "About", icon: Info },
 ];
 
-export function SettingsDialog({
-  open,
-  onOpenChange,
+export function SettingsPage({
+  onBack,
   settings,
   onUpdate,
-}: SettingsDialogProps) {
+}: SettingsPageProps) {
   const [tab, setTab] = useState<Tab>("general");
   const [version, setVersion] = useState("");
   const [checking, setChecking] = useState(false);
   const capabilities = capabilitiesOf(settings.agentBackend);
-  const models = useOpenRouterModels(open).data ?? [];
+  const models = useOpenRouterModels(true).data ?? [];
   const qc = useQueryClient();
   const hasGitlabToken = useForgeToken("gitlab").data ?? false;
   const hasGithubToken = useForgeToken("github").data ?? false;
   const [githubToken, setGithubToken] = useState("");
   const providers = useProviderStatus().data ?? [];
-  const daemon = useDaemonHealth(open).data ?? null;
+  const daemon = useDaemonHealth(true).data ?? null;
   const [startingDaemon, setStartingDaemon] = useState(false);
   // Held only until Save hands it to the keychain, then wiped.
   const [gitlabToken, setGitlabToken] = useState("");
@@ -151,18 +143,26 @@ export function SettingsDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
-          <DialogDescription>
-            Applies to every project. Per-project config lives in the project's
-            Settings tab.
-          </DialogDescription>
-        </DialogHeader>
+    <div className="absolute inset-0 z-40 flex min-h-0 flex-col bg-background">
+      <header className="flex h-16 shrink-0 items-center border-b px-6">
+        <button
+          type="button"
+          onClick={onBack}
+          className="mr-4 flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground active:scale-95"
+        >
+          <ArrowLeft className="size-4" />
+          Back
+        </button>
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Settings</h1>
+          <p className="text-xs text-muted-foreground">
+            Applies to every project
+          </p>
+        </div>
+      </header>
 
-        <div className="flex h-[60vh] min-h-96 gap-5">
-          <nav className="flex w-44 shrink-0 flex-col gap-0.5 border-r pr-2">
+      <div className="flex min-h-0 flex-1 gap-8 px-6 py-8 lg:px-12">
+        <nav className="flex w-48 shrink-0 flex-col gap-0.5 border-r pr-4">
             {TABS.map((t) => (
               <button
                 key={t.id}
@@ -178,10 +178,10 @@ export function SettingsDialog({
                 {t.label}
               </button>
             ))}
-          </nav>
+        </nav>
 
-          <div className="min-w-0 flex-1 overflow-y-auto px-1.5">
-            <div className="grid content-start gap-4 py-0.5">
+        <div className="min-w-0 flex-1 overflow-y-auto">
+          <div className="mx-auto grid max-w-2xl content-start gap-4 pb-10">
               {tab === "general" && (
                 <>
                   <Field
@@ -240,6 +240,11 @@ export function SettingsDialog({
                           className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
                         >
                           <span className="flex min-w-0 items-center gap-2">
+                            <img
+                              src={`/provider-icons/${p.id}.svg`}
+                              alt=""
+                              className="size-5 shrink-0 object-contain"
+                            />
                             <span
                               className={cn(
                                 "size-1.5 shrink-0 rounded-full",
@@ -784,11 +789,10 @@ export function SettingsDialog({
                   </Button>
                 </div>
               )}
-            </div>
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   );
 }
 

@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SessionPanes } from "@/components/SessionPanes";
 import { SidePanel } from "@/components/SidePanel";
 import { ProjectSettingsPane } from "@/components/ProjectSettingsPane";
-import { SettingsDialog } from "@/components/SettingsDialog";
+import { SettingsPage } from "@/components/SettingsPage";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { MergeRequestsPanel } from "@/components/MergeRequestsPanel";
 import { NotificationPanel } from "@/components/NotificationPanel";
@@ -351,7 +351,7 @@ function App() {
         />
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative flex min-w-0 flex-1 flex-col">
         <ContextBar
           activeProject={activeProject}
           agent={agent}
@@ -393,7 +393,7 @@ function App() {
 
         {/* Terminal viewport + changes panel */}
         <div className="flex min-h-0 flex-1">
-          <main className="canvas-lit relative flex-1 p-1">
+          <main className="canvas-lit relative flex-1">
             {/* Panes stay mounted once a session exists, so a pre-warmed
                 project boots in the background. Hidden unless it's the active,
                 revealed tab. */}
@@ -563,6 +563,13 @@ function App() {
               backend={agentBackend.backend}
             />
           )}
+          {settingsOpen && (
+            <SettingsPage
+              onBack={() => setSettingsOpen(false)}
+              settings={settings}
+              onUpdate={updateSettings}
+            />
+          )}
         </div>
       </div>
 
@@ -592,13 +599,6 @@ function App() {
       />
 
       {usageOpen && <UsagePanel onClose={() => setUsageOpen(false)} />}
-
-      <SettingsDialog
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        settings={settings}
-        onUpdate={updateSettings}
-      />
 
       <ActionDialog
         open={actionEdit !== null}

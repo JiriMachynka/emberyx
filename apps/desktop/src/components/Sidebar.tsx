@@ -52,8 +52,8 @@ export function Sidebar(props: SidebarProps) {
   return (
     <aside
       className={cn(
-        "flex shrink-0 flex-col border-r bg-sidebar transition-[width] duration-200",
-        collapsed ? "w-14" : "w-64"
+        "flex shrink-0 flex-col border-r border-white/[0.06] bg-sidebar transition-[width] duration-200",
+        collapsed ? "w-14" : "w-72"
       )}
     >
       <SidebarHeader {...props} />
@@ -125,7 +125,7 @@ function SidebarHeader({ collapsed, onToggleCollapse }: SidebarProps) {
   return (
     <header
       className={cn(
-        "flex h-11 shrink-0 items-center border-b",
+        "flex h-14 shrink-0 items-center border-b border-white/[0.06]",
         collapsed ? "justify-center" : "justify-between px-2.5"
       )}
     >
@@ -139,7 +139,7 @@ function SidebarHeader({ collapsed, onToggleCollapse }: SidebarProps) {
       )}
       <button
         onClick={onToggleCollapse}
-        className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground active:scale-95"
         title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
       >
         {collapsed ? (
@@ -168,10 +168,10 @@ function Tree(props: SidebarProps) {
   } = props;
 
   return (
-    <div className="px-1.5">
+    <div className="px-2.5 pt-2">
       <button
         onClick={onOpenSearch}
-        className="mb-1.5 flex w-full items-center gap-2 rounded-md border border-input bg-secondary px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        className="mb-4 flex w-full items-center gap-2 rounded-lg bg-secondary/70 px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
       >
         <Search className="size-3.5" />
         <span className="flex-1 text-left">Search</span>
@@ -201,9 +201,9 @@ function Tree(props: SidebarProps) {
             <div
               onClick={() => onSelectProject(p.id)}
               className={cn(
-                "group flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm transition-colors",
+                "group flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm transition-colors",
                 active
-                  ? "surface-raised bg-secondary text-foreground"
+                  ? "surface-raised bg-accent text-foreground"
                   : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
               )}
               title={projectTitle(p)}
@@ -362,7 +362,7 @@ function SessionList({
   const shown = showAll ? sessions : sessions.slice(0, LIMIT);
 
   return (
-    <ul className="ml-3 mt-0.5 border-l pl-1.5">
+    <ul className="ml-3 mt-1 border-l border-white/[0.08] pl-2">
       {shown.map((s) => {
         const active = s.id === activeId;
         return (
@@ -386,11 +386,11 @@ function SessionList({
               setOverId(null);
             }}
             className={cn(
-              "group flex cursor-grab items-center gap-2 rounded px-2 py-1.5 text-sm active:cursor-grabbing",
+              "group flex cursor-grab items-center gap-2 rounded-md px-2.5 py-2 text-sm active:cursor-grabbing",
               // Only the session on screen gets the filled treatment;
               // hover stays deliberately fainter so it can't be mistaken for it.
               active
-                ? "bg-accent font-medium text-foreground"
+                ? "bg-primary/10 font-medium text-foreground ring-1 ring-inset ring-primary/20"
                 : "text-muted-foreground hover:bg-secondary/40",
               dragId === s.id && "opacity-40",
               overId === s.id && "ring-1 ring-primary/60"

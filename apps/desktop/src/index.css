@@ -122,6 +122,16 @@
       0 1px 2px 0 oklch(0 0 0 / 35%);
   }
 
+  /* The composer is a distinct working surface rather than another generic
+     card, matching the focused plum treatment used by the chat reference. */
+  .chat-composer-surface {
+    background-color: oklch(0.19 0.018 315 / 96%);
+    border-color: oklch(1 0 0 / 8%);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 5%),
+      0 12px 30px -18px oklch(0 0 0 / 80%);
+  }
+
   /* Ember halo for the active tab / primary CTA / a working status dot. */
   .ember-glow {
     box-shadow:

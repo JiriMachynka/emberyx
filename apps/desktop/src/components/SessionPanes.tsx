@@ -74,7 +74,7 @@ function SessionPaneRow({
     [session, onTitled]
   );
   return (
-    <div className={cn("absolute inset-1", active ? "" : "hidden")}>
+    <div className={cn("absolute inset-0", active ? "" : "hidden")}>
       {session.kind === "chat" ? (
         <ChatPane
           sessionId={session.id}

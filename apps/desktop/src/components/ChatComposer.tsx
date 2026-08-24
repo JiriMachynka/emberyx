@@ -37,7 +37,6 @@ import { fuzzyFilter } from "@/lib/fuzzy";
 import { contextWindowFor } from "@/lib/pricing";
 import { formatPlan, formatResetsIn, formatWindowLength } from "@/lib/quota";
 import {
-  BACKEND_LABEL,
   CLAUDE_EFFORTS,
   COMMAND_SIGIL,
   capabilitiesOf,
@@ -1017,7 +1016,7 @@ export const ChatComposer = memo(function ChatComposer({
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
         className={cn(
-          "glass-composer overflow-hidden rounded-xl border border-input transition-colors focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40",
+          "chat-composer-surface overflow-hidden rounded-2xl border transition-colors focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40",
           dragging && "border-ring ring-1 ring-ring/50"
         )}
       >
@@ -1121,7 +1120,7 @@ export const ChatComposer = memo(function ChatComposer({
                 ? "Starting agent…"
                 : busy
                   ? "Queue a message…"
-                  : `Message ${BACKEND_LABEL[backend]}…`
+                  : "Ask anything, @tag files/folders, $use skills, or / for commands"
           }
           disabled={!ready || exited}
           rows={1}
@@ -1129,9 +1128,9 @@ export const ChatComposer = memo(function ChatComposer({
           // textarea's inner editor gets a min-content floor, so one long
           // unbreakable token (an @path mention) pushes the line wider than the
           // box instead of wrapping. `break-words` wraps the token itself.
-          className="block max-h-40 min-h-16 resize-none overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent px-3.5 pb-1 pt-3 shadow-none focus-visible:ring-0"
+          className="block max-h-40 min-h-28 resize-none overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent px-4 pb-1 pt-4 shadow-none focus-visible:ring-0"
         />
-        <div className="flex items-center justify-between gap-2 px-2.5 pb-2 pt-1">
+         <div className="flex items-center justify-between gap-2 px-3 pb-3 pt-1">
           <UsageFooter
             queued={queued}
             backend={backend}

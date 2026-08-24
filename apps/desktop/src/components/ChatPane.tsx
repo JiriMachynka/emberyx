@@ -368,15 +368,25 @@ export const ChatPane = memo(function ChatPane({
         className="contain-layout contain-style flex-1 overflow-y-auto"
         style={{ fontSize: `${fontSize}px` }}
       >
-        <div className="mx-auto flex max-w-3xl flex-col gap-6 px-5 py-6">
+        <div className="mx-auto flex max-w-3xl flex-col gap-8 px-5 py-10">
           <AgentOverview agentId={sessionId} active={active} />
           {/* Kept mounted even when hidden so switching is pure show/hide, not a
               transcript rebuild + re-highlight on every reveal. Isolated per-pane
               state and memoized rows keep a hidden pane from re-rendering on any
               render but its own stream. Auto-scroll stays gated on `active`. */}
           {thread.length === 0 && (
-            <div className="mt-24 text-center text-sm text-muted-foreground">
-              {ready ? "Send a message to start." : "Starting agent…"}
+            <div className="mt-28 text-center">
+              <div className="mx-auto mb-4 grid size-10 place-items-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/20">
+                <Bot className="size-5" />
+              </div>
+              <p className="text-lg font-medium tracking-tight text-foreground">
+                {ready ? "What are we working on?" : "Starting agent…"}
+              </p>
+              {ready && (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Describe a task, ask a question, or point the agent at a file.
+                </p>
+              )}
             </div>
           )}
           {turns.map((turn, i) => {
@@ -403,7 +413,7 @@ export const ChatPane = memo(function ChatPane({
         </div>
       </div>
 
-      <div className="border-t border-border px-5 py-3">
+      <div className="px-5 pb-5 pt-3">
         <div className="mx-auto max-w-3xl">
           {terminal &&
             (accountIssue ? (
