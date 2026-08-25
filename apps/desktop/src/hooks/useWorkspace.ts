@@ -22,11 +22,10 @@ import { fetchWorkingDiff } from "@/lib/queries";
 import {
   useAgentStore,
   type HandoffRequest,
-  type ImplementPlanRequest,
 } from "@/lib/agentStore";
-import { markImplemented, renderPlanPrompt } from "@/lib/plans";
 import { getRecents, addRecent, removeRecent } from "@/lib/recents";
 import { getOpenProjects, saveOpenProjects } from "@/lib/openProjects";
+import { cachedThreads, cacheThreads } from "@/lib/threadCache";
 import { useProjects } from "@/hooks/useProjects";
 import { useSessions } from "@/hooks/useSessions";
 import { useAgentEvents } from "@/hooks/useAgentEvents";
@@ -203,47 +202,96 @@ export function useWorkspace(settings: Settings) {
    *  silent (pre-warm), failures stay in the console — no toast for a project
    *  the user hasn't opened yet. */
   function refreshThreads(projectId: string, path: string, silent = false) {
+    void fetchThreads(projectId, path).catch((e) => {
+      console.error("list_threads failed:", e);
+      if (!silent) toast.error("Couldn't load threads", { description: String(e) });
+    });
+  }
+
+  /** List a project's threads once — a whole-directory read — cache the result
+   *  for the next launch, and publish it to the project. Concurrent scans for
+   *  the same path share the in-flight promise, so the pre-warm's scan and the
+   *  reveal's don't each read the directory. Returns null when the backend has
+   *  no store of its own to list. */
+  const threadScans = useRef(new Map<string, Promise<Thread[]>>());
+  function fetchThreads(projectId: string, path: string): Promise<Thread[] | null> {
     const backend = backendFor(path);
-    if (!capabilitiesOf(backend).threads) return;
-    listThreads(backend, path)
-      .then((t) => setThreads(projectId, t))
-      .catch((e) => {
-        console.error("list_threads failed:", e);
-        if (!silent) toast.error("Couldn't load threads", { description: String(e) });
+    if (!capabilitiesOf(backend).threads) return Promise.resolve(null);
+    const inFlight = threadScans.current.get(path);
+    if (inFlight) return inFlight;
+    const scan = listThreads(backend, path)
+      .then((t) => {
+        cacheThreads(path, t);
+        setThreads(projectId, t);
+        return t;
+      })
+      .finally(() => {
+        threadScans.current.delete(path);
       });
+    threadScans.current.set(path, scan);
+    return scan;
   }
 
   /** Launch a project's primary agent: the chat UI always resumes the most
    *  recent thread; the terminal does so only when the setting is on. Both fall
    *  back to a fresh agent if there is none / on error. Scrollback persists
-   *  under the project path either way. */
-  async function startPrimaryAgent(id: string, path: string) {
+   *  under the project path either way.
+   *
+   *  With a warm thread cache the agent boots without waiting on the directory
+   *  scan — the cached list picks the resume target and a background scan
+   *  refreshes the list behind the boot. Only a cold cache (first launch,
+   *  cleared storage) waits for the scan, so the resume target is the real
+   *  latest rather than a guessed one. */
+  async function startPrimaryAgent(id: string, path: string): Promise<void> {
     const chat = settings.agentUi === "chat";
     const backend = backendFor(path);
     // Chat always resumes when it can; the terminal only on the setting.
     const resumeLatest =
       capabilitiesOf(backend).threads && (chat || settings.resumeLatestThread);
     if (resumeLatest) {
-      try {
-        const threads = await listThreads(backend, path);
-        if (torndownRef.current.has(id)) return;
-        setThreads(id, threads);
-        const latest = [...threads].sort((a, b) => b.modified - a.modified)[0];
+      const cached = cachedThreads(path);
+      if (cached.length) {
+        const latest = [...cached].sort((a, b) => b.modified - a.modified)[0];
         if (latest) {
           const label = labelFor(latest);
           if (chat) {
             startChat(id, path, latest.id, label, backend);
+          } else {
+            startAgent(
+              id,
+              path,
+              buildAgentCommand(path, resumeArg(backend, latest.id)),
+              label,
+              path,
+              backend
+            );
+          }
+          // Show the cached list now; the scan refreshes it behind the boot.
+          refreshThreads(id, path, true);
+          return;
+        }
+      }
+      try {
+        const threads = await fetchThreads(id, path);
+        if (torndownRef.current.has(id)) return;
+        if (threads) {
+          const latest = [...threads].sort((a, b) => b.modified - a.modified)[0];
+          if (latest) {
+            const label = labelFor(latest);
+            if (chat) {
+              startChat(id, path, latest.id, label, backend);
+            } else {
+              startAgent(
+                id,
+                path,
+                buildAgentCommand(path, resumeArg(backend, latest.id)),
+                label,
+                path,
+                backend
+              );
+            }
             return;
           }
-          startAgent(
-            id,
-            path,
-            buildAgentCommand(path, resumeArg(backend, latest.id)),
-            label,
-            path,
-            backend
-          );
-          return;
         }
       } catch (e) {
         console.error("list_threads failed:", e);
@@ -252,9 +300,10 @@ export function useWorkspace(settings: Settings) {
     }
     if (chat) {
       startChat(id, path, undefined, undefined, backend);
-      return;
+    } else {
+      startAgent(id, path, buildAgentCommand(path), "agent", path, backend);
     }
-    startAgent(id, path, buildAgentCommand(path), "agent", path, backend);
+    refreshThreads(id, path, true);
   }
 
   /** Remove a project and all its sessions (kills their PTYs). */
@@ -289,10 +338,18 @@ export function useWorkspace(settings: Settings) {
     const { id, isNew } = openProject(path, opts?.worktree);
     if (prewarm) prewarmRef.current = { id, path };
     else setRecents(addRecent(path));
+    // Seed the sidebar from the last-known list while the real scan runs, so a
+    // restored window shows its threads without waiting on the directory read.
+    const cached = cachedThreads(path);
+    if (cached.length) setThreads(id, cached);
     // Fresh project, or a reopened one whose agent tab had been closed. Skip
-    // when the in-flight pre-warm will start the agent itself.
+    // when the in-flight pre-warm will start the agent itself. startPrimaryAgent
+    // owns the thread refresh in every path it runs, so only a plain reopen
+    // (agent still up) refreshes here.
     if (!matchedPrewarm && (isNew || !sessionsFor(id).some(isPrimaryAgent))) {
       await startPrimaryAgent(id, path);
+    } else if (!matchedPrewarm) {
+      refreshThreads(id, path, prewarm);
     }
     if (isNew) {
       invoke<WorkspaceInfo>("scan_workspace", { path })
@@ -306,7 +363,6 @@ export function useWorkspace(settings: Settings) {
         .then((icon) => setIcon(id, icon))
         .catch((e) => console.error("project_icon failed:", e));
     }
-    refreshThreads(id, path, prewarm);
     // Skip the Dokploy network probe for a hidden pre-warmed project; it runs
     // when the user actually reveals it.
     if (!prewarm) dokploy.refresh(id, path);
@@ -392,32 +448,6 @@ export function useWorkspace(settings: Settings) {
       .setHandoff((request) => void handoffRef.current(request));
   }, []);
 
-  /** Carry an agreed plan into a fresh chat on the same provider. A new thread
-   *  rather than the planning one: the planning conversation is what the plan
-   *  was argued out of, and re-sending it as context is what the plan replaced. */
-  function implementPlanFrom({
-    sourceSessionId,
-    planId,
-    markdown,
-  }: ImplementPlanRequest) {
-    const source = sessions.find((s) => s.id === sourceSessionId);
-    if (!source) return;
-    const backend = source.backend ?? "claude";
-    const id = startChat(source.projectId, source.cwd, undefined, "plan", backend);
-    setRevealed(true);
-    setActiveProjectId(source.projectId);
-    setActive(source.projectId, id);
-    useAgentStore.getState().setDraft(id, renderPlanPrompt(markdown));
-    markImplemented(planId, id, Date.now());
-  }
-
-  const implementPlanRef = useRef(implementPlanFrom);
-  implementPlanRef.current = implementPlanFrom;
-  useEffect(() => {
-    useAgentStore
-      .getState()
-      .setImplementPlan((request) => implementPlanRef.current(request));
-  }, []);
 
   /** Resume a Claude Code thread in a new tab of the given project, revealing
    *  and focusing it. Uses the default surface (chat / terminal). */

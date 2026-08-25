@@ -6,58 +6,11 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 
 const API_BASE: &str = "https://gitlab.com/api/v4";
-const KEYCHAIN_SERVICE: &str = "emberyx";
-const KEYCHAIN_ACCOUNT: &str = "gitlab.com";
-const NO_TOKEN: &str = "No GitLab token — add one in Settings";
 const NOT_GITLAB: &str = "Not a gitlab.com repository";
 
-// ---------------------------------------------------------------------------
-// Token storage
-// ---------------------------------------------------------------------------
-
-fn entry() -> Result<keyring::Entry> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
-        .map_err(|e| crate::err!("Keychain unavailable: {e}"))
-}
-
-/// Read the PAT from the OS keychain. Never crosses the Tauri boundary — every
-/// request re-reads it here so the frontend never holds the secret.
+/// Token the GitLab CLI would send. Never crosses the Tauri boundary.
 fn token() -> Result<String> {
-    let value = entry()?.get_password().map_err(|_| crate::err!("{NO_TOKEN}"))?;
-    let value = value.trim().to_string();
-    if value.is_empty() {
-        return Err(NO_TOKEN.into());
-    }
-    Ok(value)
-}
-
-#[tauri::command]
-pub fn gitlab_set_token(token: String) -> Result<()> {
-    let token = token.trim();
-    if token.is_empty() {
-        return Err("Token is empty".into());
-    }
-    entry()?
-        .set_password(token)
-        .map_err(|e| crate::err!("Could not save token to the keychain: {e}"))
-}
-
-#[tauri::command]
-pub fn gitlab_has_token() -> Result<bool> {
-    Ok(entry()?
-        .get_password()
-        .map(|t| !t.trim().is_empty())
-        .unwrap_or(false))
-}
-
-#[tauri::command]
-pub fn gitlab_clear_token() -> Result<()> {
-    match entry()?.delete_credential() {
-        Ok(()) => Ok(()),
-        // Clearing a token that was never stored is a no-op, not a failure.
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(crate::err!("Could not clear token from the keychain: {e}")),
-    }
+    crate::forge_cli::gitlab_token()
 }
 
 // ---------------------------------------------------------------------------
@@ -141,8 +94,8 @@ fn get_json<T: serde::de::DeserializeOwned>(url: &str, token: &str) -> Result<T>
         .call()
         .map_err(|e| match e {
             ureq::Error::Status(code, resp) => match code {
-                401 | 403 => crate::err!("GitLab rejected the token — check it in Settings"),
-                404 => crate::err!("Project not found on GitLab — check the token's access"),
+                401 | 403 => crate::err!("GitLab rejected the credentials — run `glab auth login`"),
+                404 => crate::err!("Project not found on GitLab — check the login's access"),
                 _ => {
                     let body = resp.into_string().unwrap_or_default();
                     crate::err!("GitLab error {code}: {}", body.trim())

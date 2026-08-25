@@ -14,13 +14,6 @@ describe("capabilitiesOf", () => {
     expect(Object.values(capabilitiesOf("claude")).every(Boolean)).toBe(true);
   });
 
-  // Codex reports a plan when it makes one, but has no mode that holds it to
-  // planning, so the composer must not offer the switch under a Codex session.
-  it("offers plan mode only where the CLI has one", () => {
-    expect(capabilitiesOf("claude").planMode).toBe(true);
-    expect(capabilitiesOf("codex").planMode).toBe(false);
-  });
-
   // Spelled out rather than asserted wholesale: a capability wrongly left on
   // renders Claude's data under a Codex session.
   it("gives Codex everything its app-server implements", () => {
@@ -35,7 +28,6 @@ describe("capabilitiesOf", () => {
       modelPicker: true,
       reasoningEffort: true,
       steering: true,
-      planMode: false,
     });
   });
 

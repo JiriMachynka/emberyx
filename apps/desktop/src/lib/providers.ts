@@ -75,8 +75,6 @@ export interface ProviderCapabilities {
   reasoningEffort: boolean;
   /** A message sent mid-turn steers the running turn instead of queueing. */
   steering: boolean;
-  /** The CLI can be held to planning only, producing a plan it won't act on. */
-  planMode: boolean;
   /** The binary can be probed for presence/version (Settings → Providers). */
   installDetection: boolean;
   /** An auth status can be queried (logged in / out, which account). */
@@ -128,7 +126,6 @@ const CAPABILITIES: Record<Provider, ProviderCapabilities> = {
     modelPicker: true,
     reasoningEffort: true,
     steering: true,
-    planMode: true,
     installDetection: true,
     authStatus: true,
     costReported: true,
@@ -147,7 +144,6 @@ const CAPABILITIES: Record<Provider, ProviderCapabilities> = {
     modelPicker: true,
     reasoningEffort: true,
     steering: true,
-    planMode: false,
     installDetection: true,
     authStatus: true,
     costReported: false,
@@ -167,7 +163,6 @@ const CAPABILITIES: Record<Provider, ProviderCapabilities> = {
     modelPicker: false,
     reasoningEffort: false,
     steering: false,
-    planMode: false,
     installDetection: true,
     authStatus: true,
     costReported: false,
@@ -186,7 +181,6 @@ const CAPABILITIES: Record<Provider, ProviderCapabilities> = {
     modelPicker: false,
     reasoningEffort: false,
     steering: false,
-    planMode: false,
     installDetection: true,
     authStatus: false,
     costReported: false,
@@ -203,7 +197,6 @@ const CAPABILITIES: Record<Provider, ProviderCapabilities> = {
     modelPicker: false,
     reasoningEffort: false,
     steering: false,
-    planMode: false,
     installDetection: true,
     authStatus: false,
     costReported: false,
@@ -220,7 +213,6 @@ const CAPABILITIES: Record<Provider, ProviderCapabilities> = {
     modelPicker: false,
     reasoningEffort: false,
     steering: false,
-    planMode: false,
     installDetection: true,
     authStatus: false,
     costReported: false,

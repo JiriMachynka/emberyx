@@ -409,6 +409,13 @@ export function useAgentChat({
   const [ready, setReady] = useState(false);
   // Bumped by `restart` to re-run the spawn effect for the same target.
   const [attempt, setAttempt] = useState(0);
+  // A session that dies before it has been used at all is almost always a boot
+  // problem, not the work failing — several agents start at once when a window
+  // restores its projects. Retry that once, silently, rather than greeting the
+  // user with a dead session they never touched. Reset when a turn is sent, so
+  // the retry can't mask a session failing under real use.
+  const bootRetryRef = useRef(0);
+  const usedRef = useRef(false);
   // Why the process died, when it wasn't a known account issue — the tail of its
   // stderr. A bare "Session ended" is a dead end; this says what to fix.
   const [exitReason, setExitReason] = useState<string | null>(null);
@@ -1015,6 +1022,12 @@ export function useAgentChat({
           setAttempt((n) => n + 1);
           return;
         }
+        if (!usedRef.current && bootRetryRef.current < 1) {
+          bootRetryRef.current += 1;
+          setStatus("idle");
+          setAttempt((n) => n + 1);
+          return;
+        }
         setStatus("exited");
         // A crash often says why only on stderr, and never reaches `result`.
         if (ev.data !== 0) {
@@ -1069,9 +1082,17 @@ export function useAgentChat({
         setReady(true);
       } catch (e) {
         console.error("[emberyx] agent_spawn failed", e);
-        setStatus("error");
         setPending(null);
         setPendingAsk(null);
+        if (!usedRef.current && bootRetryRef.current < 1) {
+          bootRetryRef.current += 1;
+          setAttempt((n) => n + 1);
+          return;
+        }
+        setStatus("error");
+        // Without this the pane says only "Session failed." — true, useless, and
+        // indistinguishable between a missing CLI and a bad flag.
+        setExitReason(String(e));
       }
     })();
 
@@ -1107,6 +1128,7 @@ export function useAgentChat({
   // by opening a new chat, which loses the transcript the user was reading.
   const restart = useCallback(() => {
     interruptedRef.current = false;
+    bootRetryRef.current = 0;
     setStatus("idle");
     setPending(null);
     setPendingAsk(null);
@@ -1288,6 +1310,9 @@ export function useAgentChat({
       if (id === null || (!text.trim() && !hasImages)) return;
       // A new turn outlives the last interrupt; a later exit is a real failure.
       interruptedRef.current = false;
+      // From here on the session has been used: a death is worth reporting, not
+      // silently retrying.
+      usedRef.current = true;
       setMessages((prev) => [
         ...prev,
         {

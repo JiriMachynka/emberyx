@@ -8,9 +8,10 @@
  * assistant message per turn carrying text, thinking and tool calls. Tool calls
  * are upserts by id, exactly as the spec describes them.
  *
- * A plan arrives as its own update kind, and is turned into an `ExitPlanMode`
- * tool call — the same shape Claude produces and the Codex adapter already
- * normalizes to, so one plan card serves all three.
+ * A plan arrives as its own update kind. It is a list of steps with a status
+ * each, so it is normalized to the `TodoWrite` task list — the same shape the
+ * Codex adapter maps `turn/plan/updated` to, rather than a second rendering of
+ * the same idea.
  */
 
 import type { ChatMessage, ChatStatus, ToolCall } from "@/hooks/useAgentChat";
@@ -44,18 +45,16 @@ export function planKeyOf(update: unknown): string {
   return typeof id === "string" ? id : "0";
 }
 
-/** A plan rendered as the tool call the pane's plan card already understands. */
+/** A plan rendered as the task list the pane already draws for both CLIs. */
 export function planTool(entries: AcpPlanEntry[], planKey: string): ToolCall {
-  const markdown = entries
-    .map((e) => {
-      const done = e.status === "completed";
-      return `- [${done ? "x" : " "}] ${e.content}`;
-    })
-    .join("\n");
+  const todos = entries.map((e) => ({
+    content: e.content,
+    status: e.status === "completed" || e.status === "in_progress" ? e.status : "pending",
+  }));
   return {
     id: planToolId(planKey),
-    name: "ExitPlanMode",
-    input: { plan: markdown },
+    name: "TodoWrite",
+    input: { todos },
     partial: "",
   };
 }

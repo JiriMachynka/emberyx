@@ -1,21 +1,21 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
 import {
   ArrowUp,
-  Brain,
   Check,
   ChevronDown,
-  ChevronsUpDown,
   ChevronUp,
-  ClipboardList,
   Clock,
   Coins,
   Forward,
   Gauge,
+  GitBranch,
   Lock,
   Pause,
   PencilLine,
   Play,
-  Sparkles,
   Square,
   Unlock,
   X,
@@ -26,9 +26,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { MentionMenu } from "@/components/MentionMenu";
@@ -44,16 +42,20 @@ import {
 } from "@/lib/agentBackend";
 import {
   codexDefaultEffort,
-  codexDisplayName,
-  codexEffortForModel,
   codexEfforts,
-  codexModelGroups,
   titleCase,
-  type ModelGroup,
 } from "@/lib/codex/models";
 import { applyMention, mentionAt, type Mention } from "@/lib/mentions";
 import { applySlash, filterCommands, slashAt, type SlashToken } from "@/lib/slash";
-import { useCodexModels, useProjectFiles, useSlashCommands } from "@/lib/queries";
+import {
+  useCodexModels,
+  useGitBranch,
+  useGitBranches,
+  useInvalidateGit,
+  useProjectFiles,
+  useSlashCommands,
+} from "@/lib/queries";
+import { ModelPicker } from "@/components/ModelPicker";
 import { cn } from "@/lib/utils";
 import type { PromptQueue } from "@/lib/promptQueue";
 import type { ChatImage, ChatQuota, ChatUsage } from "@/hooks/useAgentChat";
@@ -107,171 +109,9 @@ const processImage = (file: File): Promise<ChatImage> =>
     reader.readAsDataURL(file);
   });
 
-/** "claude-opus-4-8" → "Opus 4.8"; strips date/bracket suffixes. */
-const prettyModel = (id: string): string => {
-  const family = ["opus", "sonnet", "haiku", "fable"].find((f) => id.includes(f));
-  if (!family) return id;
-  const nums = id.replace(/\[.*?\]/g, "").replace(/\d{8}/g, "").match(/\d+/g);
-  const version = (nums ?? []).slice(0, 2).join(".");
-  const name = family[0].toUpperCase() + family.slice(1);
-  return version ? `${name} ${version}` : name;
-};
-
-/** Model families, each expanding to a "Latest" alias plus pinned versions.
- *  Values are passed straight to `claude --model` (aliases or full ids);
- *  "" (Default) lets the CLI resolve the model. */
-const CLAUDE_MODEL_GROUPS: ModelGroup[] = [
-  {
-    label: "Opus",
-    options: [
-      { value: "opus", label: "Latest" },
-      { value: "claude-opus-5", label: "Opus 5" },
-      { value: "claude-opus-4-8", label: "Opus 4.8" },
-      { value: "claude-opus-4-7", label: "Opus 4.7" },
-      { value: "claude-opus-4-6", label: "Opus 4.6" },
-    ],
-  },
-  {
-    label: "Sonnet",
-    options: [
-      { value: "sonnet", label: "Latest" },
-      { value: "claude-sonnet-5", label: "Sonnet 5" },
-      { value: "claude-sonnet-4-6", label: "Sonnet 4.6" },
-      { value: "sonnet[1m]", label: "Sonnet (1M)" },
-    ],
-  },
-  {
-    label: "Haiku",
-    options: [
-      { value: "haiku", label: "Latest" },
-      { value: "claude-haiku-4-5", label: "Haiku 4.5" },
-    ],
-  },
-];
-
-/** Human label for a stored value: the pinned name, or the family name for a
- *  bare "Latest" alias. Falls back to prettyModel for anything unknown. */
-const modelLabel = (value: string, groups: ModelGroup[]): string => {
-  for (const g of groups) {
-    const o = g.options.find((x) => x.value === value);
-    if (o) return o.chip ?? (o.label === "Latest" ? g.label : o.label);
-  }
-  return prettyModel(value);
-};
-
-interface ModelPickerProps {
-  /** Selected `--model` value for this session; "" = default. */
-  model: string;
-  /** Selected reasoning effort, so a Codex switch can drop one the target
-   *  model doesn't offer. */
-  effort: string;
-  backend: AgentBackend;
-  /** Project root — a Codex catalog lookup needs one to open an app-server. */
-  cwd: string;
-  usage: ChatUsage;
-  onModelChange: (model: string) => void;
-  onEffortChange: (effort: string) => void;
-}
-
-/** Dropdown that swaps the running model. "Default" shows the model the CLI
- *  actually resolved (from usage) so the footer still reads e.g. "Opus 5".
- *  Families open a submenu of pinned versions. */
-const ModelPicker = memo(function ModelPicker({
-  model,
-  effort,
-  backend,
-  cwd,
-  usage,
-  onModelChange,
-  onEffortChange,
-}: ModelPickerProps) {
-  const codex = backend === "codex";
-  // Claude's list is hand-written; Codex's comes from its own catalog, so the
-  // menu shows only "Default" until that lands rather than delaying first paint.
-  const codexModels = useCodexModels(cwd, codex);
-  const models = codexModels.data ?? [];
-  const groups = useMemo(
-    () => (codex ? codexModelGroups(codexModels.data ?? []) : CLAUDE_MODEL_GROUPS),
-    [codex, codexModels.data]
-  );
-  const selected = model;
-  // Claude's levels are the same whatever the model, so only Codex has to
-  // reconcile the effort with what the model being switched to accepts.
-  const select = (value: string) => {
-    onModelChange(value);
-    if (codex) {
-      const kept = codexEffortForModel(value, effort, models);
-      if (kept !== effort) onEffortChange(kept);
-    }
-  };
-  // The CLI-resolved model reads as a raw id unless the catalog names it.
-  const resolved = usage.model
-    ? (codex ? codexDisplayName(usage.model, models) : undefined) ??
-      prettyModel(usage.model)
-    : "";
-  const label = selected === "" ? resolved || "Default" : modelLabel(selected, groups);
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger className={chipTrigger}>
-        <Sparkles className="size-3.5 shrink-0 text-primary" />
-        <span className="truncate">{label}</span>
-        <ChevronsUpDown className="size-3 shrink-0 opacity-50" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-36">
-        <DropdownMenuItem
-          onSelect={() => select("")}
-          className="justify-between gap-4"
-        >
-          {resolved ? `Default (${resolved})` : "Default"}
-          {selected === "" && <Check className="size-3.5" />}
-        </DropdownMenuItem>
-        {groups.map((g) => {
-          const active = g.options.some((o) => o.value === selected);
-          // A family with one member has nothing to expand into.
-          if (g.options.length === 1) {
-            const [o] = g.options;
-            return (
-              <DropdownMenuItem
-                key={g.label}
-                onSelect={() => select(o.value)}
-                className="justify-between gap-4"
-              >
-                {g.label}
-                {active && <Check className="size-3.5" />}
-              </DropdownMenuItem>
-            );
-          }
-          return (
-            <DropdownMenuSub key={g.label}>
-              <DropdownMenuSubTrigger className={active ? "text-primary" : undefined}>
-                {g.label}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                {g.options.map((o) => (
-                  <DropdownMenuItem
-                    key={o.value}
-                    onSelect={() => select(o.value)}
-                    className="justify-between gap-4"
-                  >
-                    {o.label}
-                    {o.value === selected && <Check className="size-3.5" />}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-});
-
-/** Thin vertical rule between composer control chips. */
-const ChipDivider = () => <span className="h-3.5 w-px shrink-0 bg-border" />;
-
 /** Trigger styling shared by the access/mode chips — matches ModelPicker. */
 const chipTrigger =
-  "flex items-center gap-1.5 rounded-md px-1.5 py-1 font-medium text-foreground outline-none transition-colors hover:bg-white/[0.04] hover:text-primary focus-visible:ring-1 focus-visible:ring-ring";
+  "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-white/[0.04] hover:text-primary focus-visible:ring-1 focus-visible:ring-ring";
 
 interface EffortPickerProps {
   /** Selected model, which for Codex decides the levels on offer. */
@@ -303,37 +143,36 @@ const EffortPicker = memo(function EffortPicker({
   const efforts = codex ? codexEfforts(source, models) : CLAUDE_EFFORTS;
   if (efforts.length === 0) return null;
   const fallback = codex ? codexDefaultEffort(source, models) : undefined;
+  const level = titleCase(effort || fallback || "") || "Default";
+  // The window rides along on this chip: it is the other half of "how hard is
+  // this turn going to think", and it saves a second control for one number.
+  const max = resolveContextWindow(model, backend, usage.model, usage.contextWindow);
   return (
-    <>
-      <DropdownMenu>
-        <DropdownMenuTrigger className={chipTrigger}>
-          <Brain className="size-3.5 shrink-0 opacity-70" />
-          <span>{titleCase(effort || fallback || "") || "Default"}</span>
-          <ChevronDown className="size-3 shrink-0 opacity-50" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-36">
+    <DropdownMenu>
+      <DropdownMenuTrigger className={chipTrigger}>
+        <span>{max > 0 ? `${level} · ${fmtTokens(max).toUpperCase()}` : level}</span>
+        <ChevronDown className="size-3.5 shrink-0 opacity-50" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-36">
+        <DropdownMenuItem
+          onSelect={() => onEffortChange("")}
+          className="justify-between gap-4"
+        >
+          {fallback ? `Default (${titleCase(fallback)})` : "Default"}
+          {effort === "" && <Check className="size-3.5" />}
+        </DropdownMenuItem>
+        {efforts.map((e) => (
           <DropdownMenuItem
-            onSelect={() => onEffortChange("")}
+            key={e}
+            onSelect={() => onEffortChange(e)}
             className="justify-between gap-4"
           >
-            {fallback ? `Default (${titleCase(fallback)})` : "Default"}
-            {effort === "" && <Check className="size-3.5" />}
+            {titleCase(e)}
+            {e === effort && <Check className="size-3.5" />}
           </DropdownMenuItem>
-          {efforts.map((e) => (
-            <DropdownMenuItem
-              key={e}
-              onSelect={() => onEffortChange(e)}
-              className="justify-between gap-4"
-            >
-              {titleCase(e)}
-              {e === effort && <Check className="size-3.5" />}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-      {/* Inside, so a catalog without efforts leaves no orphaned rule. */}
-      <ChipDivider />
-    </>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 });
 
@@ -350,12 +189,12 @@ const AccessChip = memo(function AccessChip({
     <DropdownMenu>
       <DropdownMenuTrigger className={chipTrigger}>
         {fullAccess ? (
-          <Unlock className="size-3.5 shrink-0 text-primary" />
+          <Unlock className="size-4 shrink-0 text-primary" />
         ) : (
-          <Lock className="size-3.5 shrink-0 opacity-70" />
+          <Lock className="size-4 shrink-0 opacity-70" />
         )}
         <span>{fullAccess ? "Full access" : "Supervised"}</span>
-        <ChevronDown className="size-3 shrink-0 opacity-50" />
+        <ChevronDown className="size-3.5 shrink-0 opacity-50" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-44">
         <DropdownMenuItem onSelect={() => onChange(false)} className="justify-between gap-4">
@@ -366,6 +205,68 @@ const AccessChip = memo(function AccessChip({
           Full access
           {fullAccess && <Check className="size-3.5" />}
         </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+});
+
+/** Current branch, click to checkout another local one. Hidden when the cwd
+ *  isn't a git repo. */
+const BranchChip = memo(function BranchChip({
+  cwd,
+  busy,
+}: {
+  cwd: string;
+  busy: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const branch = useGitBranch(cwd).data?.branch;
+  const branches = useGitBranches(cwd, open).data ?? [];
+  const invalidateGit = useInvalidateGit();
+
+  if (!branch) return null;
+
+  const checkout = async (name: string) => {
+    if (name === branch) return;
+    if (busy) {
+      const ok = await ask(
+        `A turn is in progress. Switch to branch "${name}" anyway?`,
+        { title: "Switch branch", kind: "warning" },
+      );
+      if (!ok) return;
+    }
+    try {
+      await invoke<string>("git_checkout", {
+        path: cwd,
+        branch: name,
+        create: false,
+      });
+      invalidateGit(cwd);
+    } catch (e) {
+      toast.error("Checkout failed", { description: String(e) });
+    }
+  };
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger className={chipTrigger} title={`On branch ${branch}`}>
+        <GitBranch className="size-4 shrink-0 opacity-70" />
+        <span className="max-w-32 truncate">{branch}</span>
+        <ChevronDown className="size-3.5 shrink-0 opacity-50" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-h-80 w-56 overflow-auto">
+        <DropdownMenuLabel>Checkout</DropdownMenuLabel>
+        {branches.map((name) => (
+          <DropdownMenuItem
+            key={name}
+            disabled={name === branch}
+            onSelect={() => void checkout(name)}
+            className="justify-between gap-4"
+          >
+            <span className="truncate">{name}</span>
+            {name === branch && <Check className="size-3.5" />}
+          </DropdownMenuItem>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -398,7 +299,7 @@ const fmtTokens = (n: number): string =>
     ? `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}m`
     : `${Math.round(n / 1000)}k`;
 
-const RING = 2 * Math.PI * 8; // r=8 circumference
+const RING = 2 * Math.PI * 10; // r=10 in a 24 viewBox — matches the send button.
 
 /** Ring gauge beside the send button; its popover shows how full the context
  *  window is. Kept its own memo so typing never re-renders the SVG. */
@@ -424,19 +325,19 @@ const ContextMeter = memo(function ContextMeter({
         title="Context window"
         className="grid size-8 place-items-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground"
       >
-        <svg viewBox="0 0 20 20" className="size-5 -rotate-90">
+        <svg viewBox="0 0 24 24" className="size-8 -rotate-90">
           <circle
-            cx="10"
-            cy="10"
-            r="8"
+            cx="12"
+            cy="12"
+            r="10"
             fill="none"
             strokeWidth="2"
             className="stroke-muted-foreground/25"
           />
           <circle
-            cx="10"
-            cy="10"
-            r="8"
+            cx="12"
+            cy="12"
+            r="10"
             fill="none"
             strokeWidth="2"
             strokeLinecap="round"
@@ -482,7 +383,7 @@ const QuotaChip = memo(function QuotaChip({ quota }: { quota: ChatQuota }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className={chipTrigger} title="Usage limit">
-        <Gauge className="size-3.5 shrink-0 opacity-70" />
+        <Gauge className="size-4 shrink-0 opacity-70" />
         <span className="font-mono tabular-nums">{lead}%</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="start" className="w-64 p-3">
@@ -533,13 +434,13 @@ function QueueChip({ queued, queue }: { queued: number; queue: PromptQueue }) {
     <DropdownMenu>
       <DropdownMenuTrigger className={chipTrigger}>
         {queue.paused ? (
-          <Pause className="size-3.5 shrink-0 opacity-70" />
+          <Pause className="size-4 shrink-0 opacity-70" />
         ) : (
-          <Clock className="size-3.5 shrink-0 opacity-70" />
+          <Clock className="size-4 shrink-0 opacity-70" />
         )}
         <span>{queued} queued</span>
-        {queue.paused && <span className="text-[0.65rem] text-amber-400">paused</span>}
-        <ChevronDown className="size-3 shrink-0 opacity-50" />
+        {queue.paused && <span className="text-xs text-amber-400">paused</span>}
+        <ChevronDown className="size-3.5 shrink-0 opacity-50" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-80">
         <div className="flex items-center justify-between border-b border-border px-2 py-1.5">
@@ -674,8 +575,9 @@ interface UsageFooterProps {
   onEffortChange: (effort: string) => void;
   fullAccess: boolean;
   onFullAccessChange: (v: boolean) => void;
-  planMode: boolean;
-  onPlanModeChange: (v: boolean) => void;
+  /** Move the thread to another provider in place — picking a model that
+   *  belongs to one is how that happens. */
+  onSwitchBackend: (backend: AgentBackend) => void;
   /** Runtime-owned prompt queue; null when the backend has none (Codex steers). */
   queue?: PromptQueue | null;
 }
@@ -694,81 +596,46 @@ const UsageFooter = memo(function UsageFooter({
   onEffortChange,
   fullAccess,
   onFullAccessChange,
-  planMode,
-  onPlanModeChange,
+  onSwitchBackend,
   queue,
 }: UsageFooterProps) {
   return (
-    <div className="flex min-w-0 items-center gap-2.5 text-xs text-muted-foreground">
+    <div className="flex min-w-max flex-nowrap items-center gap-3 text-xs text-muted-foreground">
       {queued > 0 && queue && (
         <QueueChip queued={queued} queue={queue} />
       )}
       {capabilitiesOf(backend).modelPicker && (
-        <>
-          <ModelPicker
-            model={model}
-            effort={effort}
-            backend={backend}
-            cwd={cwd}
-            usage={usage}
-            onModelChange={onModelChange}
-            onEffortChange={onEffortChange}
-          />
-          <ChipDivider />
-        </>
-      )}
-      {capabilitiesOf(backend).reasoningEffort && (
-        <EffortPicker
+        <ModelPicker
           model={model}
           effort={effort}
           backend={backend}
           cwd={cwd}
           usage={usage}
+          onModelChange={onModelChange}
           onEffortChange={onEffortChange}
+          onSwitchBackend={onSwitchBackend}
         />
       )}
+       {capabilitiesOf(backend).reasoningEffort && (
+         <EffortPicker
+           model={model}
+           effort={effort}
+           backend={backend}
+           cwd={cwd}
+           usage={usage}
+           onEffortChange={onEffortChange}
+         />
+       )}
       {capabilitiesOf(backend).permissions && (
         <AccessChip fullAccess={fullAccess} onChange={onFullAccessChange} />
       )}
-      {capabilitiesOf(backend).planMode && (
-        <PlanChip planMode={planMode} onChange={onPlanModeChange} />
-      )}
       {/* Raw token counts belong in the usage panel, not under every prompt. */}
       {capabilitiesOf(backend).usage && usage.costUsd != null && (
-        <span className="flex items-center gap-0.5 font-mono tabular-nums text-primary">
-          <Coins className="size-3 opacity-70" />${usage.costUsd.toFixed(4)}
+        <span className="flex items-center gap-1 px-1 font-mono text-sm tabular-nums text-primary">
+          <Coins className="size-3.5 opacity-70" />${usage.costUsd.toFixed(4)}
         </span>
       )}
     </div>
-  );
-});
-
-/** Plan-only posture. Holding the CLI to planning means it must not also be
- *  running with permissions bypassed, so the pane drops full access while this
- *  is on — the two flags are mutually exclusive at the CLI. */
-const PlanChip = memo(function PlanChip({
-  planMode,
-  onChange,
-}: {
-  planMode: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => onChange(!planMode)}
-      title={
-        planMode
-          ? "Planning only — the agent proposes a plan instead of acting"
-          : "Let the agent act on this turn"
-      }
-      className={chipTrigger}
-    >
-      <ClipboardList
-        className={cn("size-3.5 shrink-0", planMode ? "text-primary" : "opacity-70")}
-      />
-      <span>{planMode ? "Plan only" : "Act"}</span>
-    </button>
   );
 });
 
@@ -779,6 +646,8 @@ interface ChatComposerProps {
   backend: AgentBackend;
   /** Focus the textarea when this pane becomes the visible tab. */
   active: boolean;
+  /** Same stack the transcript above uses. */
+  fontFamily: string;
   ready: boolean;
   busy: boolean;
   /** Turns typed while busy and not yet sent. */
@@ -795,8 +664,8 @@ interface ChatComposerProps {
   /** Full access = `--dangerously-skip-permissions`; off = Supervised. */
   fullAccess: boolean;
   onFullAccessChange: (v: boolean) => void;
-  planMode: boolean;
-  onPlanModeChange: (v: boolean) => void;
+  /** Move the thread to another provider in place. */
+  onSwitchBackend: (backend: AgentBackend) => void;
   /** Runtime-owned prompt queue for reorder/edit/delete/pause/run-next. */
   queue?: PromptQueue | null;
   /** Text handed to this chat from elsewhere, to drop into the box unsent. */
@@ -819,6 +688,7 @@ export const ChatComposer = memo(function ChatComposer({
   cwd,
   backend,
   active,
+  fontFamily,
   ready,
   busy,
   queued,
@@ -830,8 +700,7 @@ export const ChatComposer = memo(function ChatComposer({
   onEffortChange,
   fullAccess,
   onFullAccessChange,
-  planMode,
-  onPlanModeChange,
+  onSwitchBackend,
   queue,
   draft,
   onDraftConsumed,
@@ -1031,26 +900,24 @@ export const ChatComposer = memo(function ChatComposer({
         />
       )}
       <div
-        style={{
-          fontFamily: '"DM Sans Variable", ui-sans-serif, system-ui, sans-serif',
-        }}
+        style={{ fontFamily }}
         onDragOver={(e) => {
           e.preventDefault();
           setDragging(true);
         }}
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
-        className={cn(
-          "chat-composer-surface overflow-hidden rounded-3xl border transition-colors focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40",
-          dragging && "border-ring ring-1 ring-ring/50"
-        )}
+         className={cn(
+            "chat-composer-surface overflow-hidden rounded-3xl border transition-colors focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40",
+           dragging && "border-ring ring-1 ring-ring/50"
+         )}
       >
         {images.length > 0 && (
-          <div className="flex flex-wrap gap-2 px-3.5 pt-3">
+          <div className="flex flex-wrap gap-2 px-5 pt-4">
             {images.map((img) => (
               <div
                 key={img.id}
-                className="group relative size-14 overflow-hidden rounded-lg border border-border"
+                className="relative size-16 overflow-hidden rounded-lg border border-border"
               >
                 <button
                   type="button"
@@ -1059,12 +926,15 @@ export const ChatComposer = memo(function ChatComposer({
                 >
                   <img src={imageSrc(img)} alt="" className="size-full object-cover" />
                 </button>
+                {/* Always visible: a remove affordance that only appears on
+                    hover is one a trackpad user has to go hunting for. */}
                 <button
                   type="button"
+                  title="Remove"
                   onClick={() =>
                     setImages((prev) => prev.filter((i) => i.id !== img.id))
                   }
-                  className="absolute right-0.5 top-0.5 rounded-full bg-background/80 p-0.5 text-foreground opacity-0 transition-opacity hover:bg-background group-hover:opacity-100"
+                  className="absolute right-1 top-1 rounded-full bg-background/70 p-0.5 text-foreground transition-colors hover:bg-background"
                 >
                   <X className="size-3" />
                 </button>
@@ -1145,7 +1015,7 @@ export const ChatComposer = memo(function ChatComposer({
                 ? "Starting agent…"
                 : busy
                   ? "Queue a message…"
-                  : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                   : "Ask for changes, send follow-ups, or attach images"
           }
           disabled={!ready || exited}
           rows={1}
@@ -1153,9 +1023,12 @@ export const ChatComposer = memo(function ChatComposer({
           // textarea's inner editor gets a min-content floor, so one long
           // unbreakable token (an @path mention) pushes the line wider than the
           // box instead of wrapping. `break-words` wraps the token itself.
-          className="block max-h-40 min-h-28 resize-none overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent px-5 pb-1 pt-5 text-[15px] leading-6 shadow-none placeholder:text-muted-foreground/80 focus-visible:ring-0"
+           className="block max-h-40 min-h-24 resize-none overscroll-contain overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent px-5 pb-1 pt-5 text-[15px] leading-6 shadow-none placeholder:text-muted-foreground/80 focus-visible:ring-0"
         />
-          <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-4 pt-2">
+          {/* pl-2.5 rather than the textarea's px-5: each chip carries its own
+              px-2.5, so this is what puts the first chip's glyph on the same
+              left edge as the prompt text above it. */}
+          <div className="composer-controls-scroll flex min-w-0 flex-nowrap items-center justify-between gap-2 overflow-x-auto overscroll-contain pb-4 pl-2.5 pr-4 pt-2">
           <UsageFooter
             queued={queued}
             backend={backend}
@@ -1167,11 +1040,11 @@ export const ChatComposer = memo(function ChatComposer({
             onEffortChange={onEffortChange}
             fullAccess={fullAccess}
             onFullAccessChange={onFullAccessChange}
-            planMode={planMode}
-            onPlanModeChange={onPlanModeChange}
+            onSwitchBackend={onSwitchBackend}
             queue={queue}
           />
           <div className="flex shrink-0 items-center gap-1.5">
+            <BranchChip cwd={cwd} busy={busy} />
             {capabilitiesOf(backend).usage && (
               <>
                 <ContextMeter

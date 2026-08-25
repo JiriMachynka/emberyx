@@ -76,6 +76,27 @@ describe("useAgentStore", () => {
     expect(store().changes.map((c) => c.session)).toEqual(["s2"]);
   });
 
+  it("drops transcript getters and a selected run that belonged to the session", () => {
+    useAgentStore.setState({ transcripts: {}, subagents: {}, selectedAgent: null });
+    store().registerTranscript("s1", () => []);
+    store().registerTranscript("s2", () => []);
+    store().startSubagent({
+      id: "run1",
+      session: "s1",
+      description: "",
+      subagentType: "Explore",
+      prompt: "",
+      background: false,
+    });
+    store().selectAgent("run1");
+
+    store().clearSessions(["s1"]);
+
+    expect(Object.keys(store().transcripts)).toEqual(["s2"]);
+    expect(store().selectedAgent).toBeNull();
+    expect(store().subagents.run1).toBeUndefined();
+  });
+
   it("ignores unknown session ids when clearing", () => {
     store().setStatus("s1", "working");
     store().clearSessions(["nope"]);
@@ -135,5 +156,25 @@ describe("subagent runs", () => {
     });
     useAgentStore.getState().clearSessions(["sess-doomed"]);
     expect(useAgentStore.getState().subagents.toolu_2).toBeUndefined();
+  });
+});
+
+describe("statusSince", () => {
+  it("stamps when a session changes status", () => {
+    const store = useAgentStore.getState();
+    store.setStatus("s1", "working");
+    const first = useAgentStore.getState().statusSince.s1;
+    expect(first).toBeGreaterThan(0);
+
+    // The same status arriving again is the same run — restating "working" on
+    // every hook event must not restart the clock the card is counting.
+    useAgentStore.getState().setStatus("s1", "working");
+    expect(useAgentStore.getState().statusSince.s1).toBe(first);
+  });
+
+  it("drops the stamp with the session", () => {
+    useAgentStore.getState().setStatus("s2", "working");
+    useAgentStore.getState().clearSessions(["s2"]);
+    expect(useAgentStore.getState().statusSince.s2).toBeUndefined();
   });
 });

@@ -11,8 +11,6 @@ describe("forgeCommands", () => {
   it("routes every call to the service's own command", () => {
     expect(forgeCommands("github").list).toBe("github_prs");
     expect(forgeCommands("gitlab").list).toBe("gitlab_mrs");
-    expect(forgeCommands("github").hasToken).toBe("github_has_token");
-    expect(forgeCommands("gitlab").hasToken).toBe("gitlab_has_token");
   });
 
   it("covers the same surface for both", () => {
@@ -49,7 +47,7 @@ describe("isMissingRemote", () => {
   });
 
   it("leaves a real failure alone", () => {
-    expect(isMissingRemote("GitHub rejected the token — check it in Settings")).toBe(
+    expect(isMissingRemote("GitHub rejected the credentials — run `gh auth login`")).toBe(
       false
     );
   });

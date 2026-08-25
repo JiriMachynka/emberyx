@@ -269,15 +269,6 @@ export function describeTool(name: string, input: unknown): ToolDisplay {
     case "WebSearch":
       return { icon: "globe", label: "WebSearch", title: str(i.query), body: [] };
 
-    case "ExitPlanMode": {
-      const plan = str(i.plan);
-      return {
-        icon: "plan",
-        label: "Plan",
-        body: plan ? [{ kind: "text", text: plan }] : [],
-      };
-    }
-
     case "Skill":
       return {
         icon: "plan",
@@ -303,7 +294,7 @@ export function describeTool(name: string, input: unknown): ToolDisplay {
       const done = items.filter((t) => t.status === "completed").length;
       return {
         icon: "list",
-        label: "Todos",
+        label: "Tasks",
         meta: items.length > 0 ? `${done}/${items.length}` : undefined,
         body: items.length > 0 ? [{ kind: "todos", items }] : [],
       };
@@ -338,6 +329,21 @@ export function describeTool(name: string, input: unknown): ToolDisplay {
     }
   }
 }
+
+export const isTodoTool = (name: string): boolean => name === "TodoWrite";
+
+/** Latest TodoWrite list in a tool run — each call replaces the plan. */
+export const lastTodos = (
+  tools: ReadonlyArray<{ name: string; input: unknown }>,
+): TodoItem[] | null => {
+  for (let i = tools.length - 1; i >= 0; i--) {
+    const t = tools[i];
+    if (!isTodoTool(t.name)) continue;
+    const part = describeTool(t.name, t.input).body.find((p) => p.kind === "todos");
+    if (part && part.kind === "todos" && part.items.length > 0) return part.items;
+  }
+  return null;
+};
 
 /** Drop harness-injected <system-reminder> blocks from displayed tool output
  *  (Claude still received them in-band — this is display-only noise removal). */

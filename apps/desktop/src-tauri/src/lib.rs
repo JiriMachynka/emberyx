@@ -3,6 +3,7 @@ pub mod agent;
 pub mod daemon;
 pub mod daemon_protocol;
 pub mod daemon_runtime;
+mod machine;
 mod ask;
 mod checkpoints;
 mod codex;
@@ -12,6 +13,7 @@ pub mod error;
 mod files;
 mod fs_walk;
 mod git;
+mod forge_cli;
 mod github;
 mod gitlab;
 mod hooks;
@@ -59,6 +61,7 @@ pub fn run() {
         .manage(AgentManager::new())
         .manage(CodexManager::new())
         .manage(acp::AcpManager::new())
+        .manage(daemon::Daemon::new())
         .manage(Supervisor::new())
         .manage(usage::UsageCache::default())
         .manage(usage::SummaryCache::default())
@@ -77,6 +80,7 @@ pub fn run() {
             pty::pty_resize,
             pty::pty_kill,
             pty::read_scrollback,
+            machine::machine_name,
             agent::agent_spawn,
             daemon::daemon_health,
             daemon::daemon_start,
@@ -198,16 +202,11 @@ pub fn run() {
             git::git_merge_continue,
             git::git_merge_state,
             git::git_remote_host,
-            github::github_set_token,
-            github::github_has_token,
-            github::github_clear_token,
+            forge_cli::forge_cli_status,
             github::github_prs,
             github::github_pr,
             github::github_pr_diff,
             github::github_pr_notes,
-            gitlab::gitlab_set_token,
-            gitlab::gitlab_has_token,
-            gitlab::gitlab_clear_token,
             gitlab::gitlab_mrs,
             gitlab::gitlab_mr,
             gitlab::gitlab_mr_diff,

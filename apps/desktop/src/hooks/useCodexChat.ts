@@ -89,8 +89,7 @@ const STDERR_CAP = 8192;
 let counter = 0;
 const localId = () => `codex-m${++counter}`;
 
-/** The approval posture a spawn asks for. Plan mode is separate — it rides
- *  `thread/settings/update`, not the spawn. */
+/** The approval posture a spawn asks for. */
 const approvalFor = (skipPermissions: boolean) => ({
   approvalPolicy: skipPermissions ? "never" : "on-request",
   sandbox: skipPermissions ? "danger-full-access" : "workspace-write",

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { describeResult, describeTool, detectResult, shortPath, stripReminders } from "./toolDisplay";
+import {
+  describeResult,
+  describeTool,
+  detectResult,
+  lastTodos,
+  shortPath,
+  stripReminders,
+} from "./toolDisplay";
 
 describe("shortPath", () => {
   it("keeps short paths intact", () => {
@@ -96,6 +103,7 @@ describe("describeTool", () => {
         { content: "two", status: "in_progress" },
       ],
     });
+    expect(d.label).toBe("Tasks");
     expect(d.meta).toBe("1/2");
     expect(d.body[0]).toEqual({
       kind: "todos",
@@ -104,6 +112,31 @@ describe("describeTool", () => {
         { status: "in_progress", text: "two" },
       ],
     });
+  });
+
+  it("reads the latest TodoWrite list from a tool run", () => {
+    expect(
+      lastTodos([
+        {
+          name: "TodoWrite",
+          input: { todos: [{ content: "old", status: "pending" }] },
+        },
+        { name: "Read", input: { file_path: "a.ts" } },
+        {
+          name: "TodoWrite",
+          input: {
+            todos: [
+              { content: "one", status: "completed" },
+              { content: "two", status: "in_progress" },
+            ],
+          },
+        },
+      ]),
+    ).toEqual([
+      { status: "completed", text: "one" },
+      { status: "in_progress", text: "two" },
+    ]);
+    expect(lastTodos([{ name: "Read", input: { file_path: "a.ts" } }])).toBeNull();
   });
 
   it("prettifies mcp tool names", () => {

@@ -17,7 +17,7 @@ import type {
   OpenRouterModel,
   SearchFile,
   SlashCommand,
-  UsageRow,
+  UsageSummary,
 } from "@/types";
 import { listCodexModels, listCodexSkills } from "@/lib/codex/transport";
 import type { AgentBackend } from "@/lib/agentBackend";
@@ -205,6 +205,23 @@ export const useGitBranches = (path: string, enabled: boolean) =>
 /** Branches already merged into the default branch, per repo root, for settling
  *  their threads. `useQueries` because the roots are only known at render —
  *  several worktrees of one repo collapse to one key, and so one call. */
+/** Current branch per project, one query each — the thread inbox shows a branch
+ *  on every row and would otherwise fire a hook inside a loop. */
+export const useBranchMap = (paths: string[]): Record<string, string> => {
+  const results = useQueries({
+    queries: paths.map((path) => ({
+      queryKey: gitKeys.branch(path),
+      queryFn: () => invoke<GitBranch>("git_branch", { path }),
+    })),
+  });
+  const map: Record<string, string> = {};
+  paths.forEach((path, i) => {
+    const branch = results[i]?.data?.branch;
+    if (branch) map[path] = branch;
+  });
+  return map;
+};
+
 export const useMergedBranchesMap = (
   roots: string[],
   enabled: boolean
@@ -300,11 +317,10 @@ export const useGitConflictStages = (path: string, file: string | null) =>
     staleTime: 0,
   });
 
-// GitLab reads go over the network, so they carry a longer staleTime than the
-// local git views. A missing token surfaces as a query error, not a crash —
+// Forge reads go over the network, so they carry a longer staleTime than the
+// local git views. A missing CLI login surfaces as a query error, not a crash —
 // hence `retry: false` throughout.
 export const forgeKeys = {
-  token: (host: RemoteHost) => ["forge", host, "token"] as const,
   mrs: (host: RemoteHost, path: string, state: MrState) =>
     ["forge", host, "mrs", path, state] as const,
   mr: (host: RemoteHost, path: string, iid: number) =>
@@ -315,12 +331,21 @@ export const forgeKeys = {
     ["forge", host, "notes", path, iid] as const,
 };
 
-/** Whether a personal access token for `host` is stored in the OS keychain. */
-export const useForgeToken = (host: RemoteHost) =>
+export interface ForgeCliStatus {
+  id: RemoteHost;
+  label: string;
+  binary: string;
+  installed: boolean;
+  version: string | null;
+  authenticated: boolean;
+}
+
+/** Install + login probe for `gh` and `glab`, Settings → Source Control. */
+export const useForgeCliStatus = () =>
   useQuery({
-    queryKey: forgeKeys.token(host),
-    queryFn: () => invoke<boolean>(forgeCommands(host).hasToken),
-    staleTime: Infinity,
+    queryKey: ["forgeCli", "status"],
+    queryFn: () => invoke<ForgeCliStatus[]>("forge_cli_status"),
+    staleTime: 30_000,
     retry: false,
   });
 
@@ -377,10 +402,20 @@ export const useForgeMrNotes = (
     retry: false,
   });
 
+/** This machine's human name, for the thread inbox's detail card. Fixed for the
+ *  life of the process — asked once. */
+export const useMachineName = () =>
+  useQuery({
+    queryKey: ["machine", "name"],
+    queryFn: () => invoke<string>("machine_name"),
+    staleTime: Infinity,
+  });
+
 /** Refetch every forge view — after saving/clearing a token or acting on a
  *  change. Takes the client directly so non-hook callers can use it. */
 export const invalidateForge = (qc: QueryClient) => {
   qc.invalidateQueries({ queryKey: ["forge"] });
+  qc.invalidateQueries({ queryKey: ["forgeCli"] });
 };
 
 // Provider install/auth detection, for the Settings → Providers surface.
@@ -538,7 +573,7 @@ export const usageKeys = { summary: (days: number) => ["usage", days] as const }
 export const useUsageSummary = (days: number, enabled: boolean) =>
   useQuery({
     queryKey: usageKeys.summary(days),
-    queryFn: () => invoke<UsageRow[]>("usage_summary", { days }),
+    queryFn: () => invoke<UsageSummary>("usage_summary", { days }),
     enabled,
     staleTime: 60_000,
   });

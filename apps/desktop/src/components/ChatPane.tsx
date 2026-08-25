@@ -1,27 +1,32 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { diffLines } from "diff";
 import {
   ArrowRightLeft,
   Bot,
   Brain,
   Check,
+  ChevronDown,
   ChevronRight,
   Copy,
-  ListChecks,
+  ListTodo,
   Loader2,
   LogIn,
   MessageCircleQuestionMark,
   RotateCw,
   TriangleAlert,
   Wrench,
+  X,
 } from "lucide-react";
 import { issueTitle, resetLabel, type AccountIssue } from "@/lib/accountState";
+import { basename } from "@/lib/path";
+import { Button } from "@/components/ui/button";
 import { BACKEND_LABEL, type AgentBackend } from "@/lib/agentBackend";
 import {
   describeResult,
   describeTool,
+  isTodoTool,
+  lastTodos,
   stripReminders,
   type TodoItem,
   type ToolBodyPart,
@@ -50,8 +55,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Markdown } from "@/components/Markdown";
-import { Button } from "@/components/ui/button";
-import { getPlan, planTextFrom, upsertPlan } from "@/lib/plans";
 import { ChatComposer } from "@/components/ChatComposer";
 import {
   handoffLabel,
@@ -81,35 +84,11 @@ import type { PermissionMode } from "@/lib/settings";
 import { PROVIDER_LABEL } from "@/lib/providers";
 import { useGitChanges } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
-import { type RegistryAgent } from "@/lib/agentRegistry";
-import { highlightCode } from "@/lib/highlight";
+import { highlightCached } from "@/lib/highlight";
 import { cn } from "@/lib/utils";
 
 /** Reconstruct a data: URL for rendering from a stored ChatImage. */
 const imageSrc = (img: ChatImage) => `data:${img.mediaType};base64,${img.data}`;
-
-/** Highlighting is pure but hot — a diff re-highlights every line on each
- *  render, at token frequency. Cache by code+language, evicting least-recently
- *  used, so a streaming pane pays for each line once. */
-const HIGHLIGHT_CACHE = new Map<string, string>();
-const HIGHLIGHT_CACHE_LIMIT = 1000;
-
-const highlightCached = (code: string, lang: string | null): string => {
-  const key = `${lang ?? ""}\x00${code}`;
-  const hit = HIGHLIGHT_CACHE.get(key);
-  if (hit !== undefined) {
-    HIGHLIGHT_CACHE.delete(key);
-    HIGHLIGHT_CACHE.set(key, hit);
-    return hit;
-  }
-  const html = highlightCode(code, lang);
-  HIGHLIGHT_CACHE.set(key, html);
-  if (HIGHLIGHT_CACHE.size > HIGHLIGHT_CACHE_LIMIT) {
-    const oldest = HIGHLIGHT_CACHE.keys().next().value;
-    if (oldest !== undefined) HIGHLIGHT_CACHE.delete(oldest);
-  }
-  return html;
-};
 
 interface ChatPaneProps {
   sessionId: string;
@@ -118,6 +97,7 @@ interface ChatPaneProps {
   /** Agent CLI this chat drives; gates the Claude-only composer surfaces. */
   backend: AgentBackend;
   active: boolean;
+  /** Chat + composer font stack; the terminal's is separate. */
   fontFamily: string;
   fontSize: number;
   skipPermissions: boolean;
@@ -188,11 +168,6 @@ export const ChatPane = memo(function ChatPane({
   // Approval posture is a spawn-time flag, kept local so switching it respawns
   // just this pane (via --resume), like the model.
   const [fullAccess, setFullAccess] = useState(skipPermissions);
-  // Plan-only is the same kind of spawn-time flag. `--permission-mode` and
-  // `--dangerously-skip-permissions` are mutually exclusive at the CLI, so a
-  // pane in plan mode drops full access for as long as it is planning rather
-  // than passing both and having the plan silently not apply.
-  const [planMode, setPlanMode] = useState(permissionMode === "plan");
   // The provider this thread is on *right now*. It starts as the session's, but
   // a thread can change hands mid-conversation — the turns each provider
   // produced stay in the same visual transcript, stamped with who made them.
@@ -219,9 +194,9 @@ export const ChatPane = memo(function ChatPane({
     emberyxSessionId: sessionId,
     resume,
     backend: activeBackend,
-    skipPermissions: planMode ? false : fullAccess,
+    skipPermissions: fullAccess,
     persistent,
-    permissionMode: planMode ? "plan" : permissionMode,
+    permissionMode,
     model: activeModel,
     effort: activeEffort,
     onTitled,
@@ -237,8 +212,9 @@ export const ChatPane = memo(function ChatPane({
    * package lands in the composer — prefilled, never sent, so the user still
    * decides what the next provider is actually asked.
    */
-  const switchProvider = useCallback(() => {
-    const to = otherBackend(activeBackend);
+  const switchProvider = useCallback(
+    (to: AgentBackend, prefill: boolean) => {
+    if (to === activeBackend) return;
     setCarried((prev) =>
       carryOver(
         prev,
@@ -250,13 +226,15 @@ export const ChatPane = memo(function ChatPane({
         Date.now()
       )
     );
-    const context = renderHandoffContext({
-      from: activeBackend,
-      to,
-      cwd,
-      turns: handoffTurnsFrom(messagesRef.current, activeBackend, activeModel || null),
-    });
-    useAgentStore.getState().setDraft(sessionId, context);
+    if (prefill) {
+      const context = renderHandoffContext({
+        from: activeBackend,
+        to,
+        cwd,
+        turns: handoffTurnsFrom(messagesRef.current, activeBackend, activeModel || null),
+      });
+      useAgentStore.getState().setDraft(sessionId, context);
+    }
     setActiveBackend(to);
     // Both halves of the switch are one durable fact on this thread.
     void invoke("thread_timeline_append", {
@@ -265,7 +243,9 @@ export const ChatPane = memo(function ChatPane({
       attribution: { provider: to, model: null, nativeThreadId: sessionId },
       payload: JSON.stringify({ from: activeBackend, to, inPlace: true }),
     }).catch(() => {});
-  }, [activeBackend, activeModel, cwd, sessionId]);
+    },
+    [activeBackend, activeModel, cwd, sessionId]
+  );
 
   const [preview, setPreview] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -274,6 +254,7 @@ export const ChatPane = memo(function ChatPane({
   // token is what makes a long thread stutter.
   const pinnedRef = useRef(true);
   const scrollRaf = useRef<number | null>(null);
+  const [showScrollEnd, setShowScrollEnd] = useState(false);
 
   // One object so the memoized rows below take a single stable prop for
   // everything a message action needs to know about its session.
@@ -283,7 +264,7 @@ export const ChatPane = memo(function ChatPane({
       cwd,
       backend: activeBackend,
       model: activeModel || null,
-      onSwitchProvider: switchProvider,
+      onSwitchProvider: () => switchProvider(otherBackend(activeBackend), true),
     }),
     [sessionId, cwd, activeBackend, activeModel, switchProvider]
   );
@@ -315,7 +296,17 @@ export const ChatPane = memo(function ChatPane({
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    pinnedRef.current = pinned;
+    setShowScrollEnd(!pinned);
+  }, []);
+
+  const scrollToEnd = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    pinnedRef.current = true;
+    setShowScrollEnd(false);
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, []);
 
   // Stick to the bottom as messages stream in, and when this pane is revealed.
@@ -367,34 +358,51 @@ export const ChatPane = memo(function ChatPane({
   // tools, subagents) can collapse under one "Worked for Ns" header.
   const turns = useMemo(() => groupTurns(thread), [thread]);
 
+  // Latest plan for the in-flight turn — pinned above the composer like T3,
+  // not buried in a generic tool card.
+  const liveTodos = useMemo(() => {
+    if (!busy) return null;
+    const turn = turns[turns.length - 1];
+    return turn ? lastTodos(turn.assistants.flatMap((a) => a.tools)) : null;
+  }, [busy, turns]);
+  const todosSig = liveTodos?.map((t) => `${t.status}\0${t.text}`).join("\n") ?? "";
+  const [tasksHidden, setTasksHidden] = useState(false);
+  useEffect(() => setTasksHidden(false), [todosSig]);
+
 
   return (
-    <div className="flex h-full w-full flex-col" style={{ fontFamily }}>
+    <div
+      className="chat-pane relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+      style={{ fontFamily }}
+    >
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="contain-layout contain-style flex-1 overflow-y-auto"
+        className="contain-layout contain-style absolute inset-0 min-h-0 overflow-y-auto overscroll-contain"
         style={{ fontSize: `${fontSize}px` }}
       >
-        <div className="mx-auto flex max-w-3xl flex-col gap-8 px-5 py-10">
-          <AgentOverview agentId={sessionId} active={active} />
+        <div className="chat-content-width mx-auto flex min-h-full flex-col gap-8 px-5 pb-64 pt-10">
           {/* Kept mounted even when hidden so switching is pure show/hide, not a
               transcript rebuild + re-highlight on every reveal. Isolated per-pane
               state and memoized rows keep a hidden pane from re-rendering on any
               render but its own stream. Auto-scroll stays gated on `active`. */}
           {thread.length === 0 && (
             <div className="mt-28 text-center">
-              <div className="mx-auto mb-4 grid size-10 place-items-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/20">
-                <Bot className="size-5" />
-              </div>
-              <p className="text-lg font-medium tracking-tight text-foreground">
-                {ready ? "What are we working on?" : "Starting agent…"}
-              </p>
-              {ready && (
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Describe a task, ask a question, or point the agent at a file.
-                </p>
-              )}
+              {/* One heading, no supporting line — the composer under it is the
+                  instruction. Naming the project is what makes it useful. */}
+              <h2 className="text-2xl font-medium tracking-tight text-foreground">
+                {ready ? (
+                  <>
+                    What should we build in{" "}
+                    <span className="underline decoration-border underline-offset-4">
+                      {basename(cwd)}
+                    </span>
+                    ?
+                  </>
+                ) : (
+                  "Starting agent…"
+                )}
+              </h2>
             </div>
           )}
           {turns.map((turn, i) => {
@@ -419,27 +427,33 @@ export const ChatPane = memo(function ChatPane({
             </div>
           )}
         </div>
+        {showScrollEnd && (
+          <button
+            type="button"
+            onClick={scrollToEnd}
+            className="absolute bottom-52 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border/70 bg-card/95 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur transition-colors hover:text-foreground"
+          >
+            <ChevronDown className="size-3.5" />
+            Scroll to end
+          </button>
+        )}
       </div>
 
-      <div className="px-5 pb-5 pt-3">
-        <div className="mx-auto max-w-3xl">
+      <div className="absolute inset-x-0 bottom-0 z-10 shrink-0 px-5 pb-5 pt-3">
+        <div className="chat-content-width mx-auto">
           {terminal &&
             (accountIssue ? (
               <AccountNotice issue={accountIssue} />
             ) : (
-              <div className="mb-2 flex flex-col items-center gap-1.5 text-xs text-muted-foreground">
-                <div className="flex items-center justify-center gap-2">
+              <div className="mb-2 flex flex-col items-center gap-2 text-sm text-muted-foreground">
+                <div className="flex items-center justify-center gap-3">
                   <span>
                     {status === "error" ? "Session failed." : "Session ended."}
                   </span>
-                  <button
-                    type="button"
-                    onClick={restart}
-                    className="rounded-md border border-border px-2 py-1 text-xs text-foreground transition-colors hover:bg-secondary active:scale-97"
-                  >
-                    <RotateCw className="mr-1 inline size-3" />
+                  <Button variant="outline" onClick={restart}>
+                    <RotateCw />
                     Restart session
-                  </button>
+                  </Button>
                 </div>
                 {exitReason && (
                   <span className="max-w-full truncate font-mono text-xs text-muted-foreground/80">
@@ -458,10 +472,20 @@ export const ChatPane = memo(function ChatPane({
               ) : pendingAsk ? (
                 <AskPrompt pending={pendingAsk} onAnswer={answerAsk} />
               ) : (
+                <>
+                  {liveTodos && !tasksHidden && (
+                    <div className="mb-3">
+                      <TasksCard
+                        items={liveTodos}
+                        onDismiss={() => setTasksHidden(true)}
+                      />
+                    </div>
+                  )}
                 <ChatComposer
                   cwd={cwd}
-                  backend={backend}
+                  backend={activeBackend}
                   active={active}
+                  fontFamily={fontFamily}
                   ready={ready}
                   busy={busy}
                   queued={queued}
@@ -473,8 +497,7 @@ export const ChatPane = memo(function ChatPane({
                   onEffortChange={changeEffort}
                   fullAccess={fullAccess}
                   onFullAccessChange={setFullAccess}
-                  planMode={planMode}
-                  onPlanModeChange={setPlanMode}
+                  onSwitchBackend={(to) => switchProvider(to, false)}
                   queue={queue}
                   draft={draft}
                   onDraftConsumed={consumeDraft}
@@ -483,6 +506,7 @@ export const ChatPane = memo(function ChatPane({
                   onRewind={rewind}
                   onPreview={setPreview}
                 />
+                </>
               )}
             </div>
           </div>
@@ -504,56 +528,6 @@ export const ChatPane = memo(function ChatPane({
     </div>
   );
 });
-
-/** A compact coordination surface. The conversation remains primary; this
- * card only makes parallel work visible and actionable from the chat thread. */
-function AgentOverview({ agentId, active }: { agentId: string; active: boolean }) {
-  const [agents, setAgents] = useState<RegistryAgent[]>([]);
-  const refresh = useCallback(async () => {
-    const next = await invoke<RegistryAgent[]>("agent_list");
-    setAgents(next);
-  }, []);
-  useEffect(() => {
-    if (!active) return;
-    void refresh();
-    let unlisten: (() => void) | undefined;
-    void listen("agent-event", () => void refresh()).then((stop) => { unlisten = stop; });
-    return () => unlisten?.();
-  }, [active, refresh]);
-  const others = agents.filter((agent) => agent.agentId !== agentId);
-  if (agents.length === 0) return null;
-  const delegate = async (target: RegistryAgent) => {
-    const task = `Review the current work from ${agentId} and report concrete findings.`;
-    await invoke("agent_delegate", { sourceAgentId: agentId, targetAgentId: target.agentId, task });
-    await refresh();
-  };
-  return (
-    <div className="rounded-lg border border-border/70 bg-secondary/20 px-3 py-2 text-xs">
-      <div className="mb-2 flex items-center justify-between text-muted-foreground">
-        <span className="font-medium text-foreground">Agent workspace</span>
-        <span>{agents.length} active conversation{agents.length === 1 ? "" : "s"}</span>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {agents.map((agent) => (
-          <div key={agent.agentId} className="flex items-center gap-1.5 rounded-md border border-border/60 px-2 py-1">
-            <span className={cn("size-1.5 rounded-full", agent.lifecycle === "working" ? "bg-amber-500" : agent.lifecycle === "failed" ? "bg-red-500" : "bg-emerald-500")} />
-            <span>{agent.backend === "claude" ? "Claude" : "Codex"}</span>
-            <span className="text-muted-foreground">{agent.lifecycle}</span>
-          </div>
-        ))}
-      </div>
-      {others.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {others.map((agent) => (
-            <button key={agent.agentId} type="button" onClick={() => void delegate(agent)} className="rounded-md border border-border px-2 py-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground">
-              Send to {agent.backend === "claude" ? "Claude" : "Codex"}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 /** Why this session died, when it was the account rather than the work: the
  *  generic "Session ended" is indistinguishable from a clean exit. The action
@@ -614,6 +588,90 @@ const formatDuration = (ms: number): string => {
 
 const isAgentTool = (name: string): boolean => name === "Task" || name === "Agent";
 
+/** Elapsed time per todo text, captured at status transitions so the card
+ *  can show "2m 35s" / "now" without the tool payload carrying clocks. */
+const useTodoTimings = (items: TodoItem[]) => {
+  const timings = useRef(new Map<string, { startedAt: number; endedAt?: number }>());
+  const now = Date.now();
+  for (const item of items) {
+    const prev = timings.current.get(item.text);
+    if (item.status === "in_progress") {
+      if (!prev || prev.endedAt != null) {
+        timings.current.set(item.text, { startedAt: now });
+      }
+    } else if (item.status === "completed" && prev && prev.endedAt == null) {
+      timings.current.set(item.text, { startedAt: prev.startedAt, endedAt: now });
+    }
+  }
+  return timings.current;
+};
+
+const TasksCard = memo(function TasksCard({
+  items,
+  onDismiss,
+}: {
+  items: TodoItem[];
+  onDismiss?: () => void;
+}) {
+  const timings = useTodoTimings(items);
+  const done = items.filter((t) => t.status === "completed").length;
+  return (
+    <div className="rounded-xl border border-border bg-card/70">
+      <div className="flex items-center gap-2 px-3 py-2 text-sm">
+        <ListTodo className="size-4 shrink-0 text-muted-foreground" />
+        <span className="font-medium">
+          Tasks {done}/{items.length}
+        </span>
+        {onDismiss && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="ml-auto rounded-md p-1 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+            aria-label="Dismiss tasks"
+          >
+            <X className="size-3.5" />
+          </button>
+        )}
+      </div>
+      <ul className="flex flex-col px-3 pb-2">
+        {items.map((item, i) => {
+          const t = timings.get(item.text);
+          const elapsed =
+            item.status === "in_progress"
+              ? "now"
+              : item.status === "completed" && t?.endedAt != null
+                ? formatDuration(t.endedAt - t.startedAt)
+                : undefined;
+          return (
+            <li key={`${i}:${item.text}`} className="flex items-start gap-2 py-1.5 text-sm">
+              {item.status === "completed" ? (
+                <Check className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+              ) : item.status === "in_progress" ? (
+                <span className="mt-1.5 size-2 shrink-0 rounded-full bg-primary" />
+              ) : (
+                <span className="mt-1.5 size-2 shrink-0 rounded-full border border-muted-foreground/40" />
+              )}
+              <span
+                className={cn(
+                  "min-w-0 flex-1",
+                  item.status === "completed" && "text-muted-foreground",
+                )}
+              >
+                {item.text}
+              </span>
+              {elapsed && (
+                <span className="shrink-0 tabular-nums text-muted-foreground">
+                  {elapsed}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+});
+
 /** One turn: the user bubble, then either the live work (streaming) or, once
  *  finished, a "Worked for Ns" accordion over the work with the final answer
  *  left visible below it. */
@@ -634,6 +692,7 @@ const TurnRow = memo(
     const { user, assistants } = turn;
     const last = assistants[assistants.length - 1];
     const hasWork = assistants.some((a) => a.thinking || a.tools.length > 0);
+    const turnTodos = lastTodos(assistants.flatMap((a) => a.tools));
     // Background subagents outlive the turn that spawned them, so the work
     // accordion must not collapse over them while they're still running.
     const agentToolIds = useMemo(
@@ -673,6 +732,7 @@ const TurnRow = memo(
             ))
           ) : (
             <div className="flex flex-col gap-2">
+              {turnTodos && <TasksCard items={turnTodos} />}
               <WorkedAccordion
                 durationMs={
                   last?.endedAt != null && assistants[0]?.startedAt != null
@@ -684,7 +744,7 @@ const TurnRow = memo(
                 {assistants.map((a, i) => (
                   <div key={a.id} className="flex flex-col gap-2">
                     {a.thinking && <ThinkingBlock text={a.thinking} active={false} />}
-                    {a.tools.length > 0 && <ToolList tools={a.tools} chat={chat} />}
+                    {a.tools.length > 0 && <ToolList tools={a.tools} />}
                     {/* Only interstitial narration stays inside; the final
                         answer is shown below the accordion. */}
                     {i < assistants.length - 1 && a.text && (
@@ -763,101 +823,20 @@ function WorkedAccordion({
   );
 }
 
-/** Tool cards for a message; agent/Task tools render their subagent inline, and
- *  a proposed plan gets a card that can act on it rather than just show it. */
-function ToolList({ tools, chat }: { tools: ToolCall[]; chat: ChatContext }) {
+/** Tool cards for a message; agent/Task tools render their subagent inline.
+ *  TodoWrite is lifted into TasksCard so it isn't a generic tool row. */
+function ToolList({ tools }: { tools: ToolCall[] }) {
+  const rest = tools.filter((t) => !isTodoTool(t.name));
+  if (rest.length === 0) return null;
   return (
     <div className="flex flex-col gap-1">
-      {tools.map((t) => {
-        if (isAgentTool(t.name)) return <SubagentInline key={t.id} id={t.id} tool={t} />;
-        const plan = t.name === "ExitPlanMode" ? planTextFrom(t.input) : null;
-        if (plan) {
-          return <PlanCard key={t.id} planId={t.id} markdown={plan} chat={chat} />;
-        }
-        return <ToolCard key={t.id} tool={t} />;
-      })}
-    </div>
-  );
-}
-
-/** A plan the agent proposed, kept past the turn that produced it. "Implement"
- *  opens a fresh chat with the plan prefilled — never sent, because reviewing
- *  and editing the plan is the whole point of having been asked. */
-function PlanCard({
-  planId,
-  markdown,
-  chat,
-}: {
-  planId: string;
-  markdown: string;
-  chat: ChatContext;
-}) {
-  const [plan, setPlan] = useState(() => {
-    const known = getPlan(planId);
-    const next = upsertPlan({
-      planId,
-      sessionId: chat.sessionId,
-      markdown,
-      createdAt: Date.now(),
-    });
-    // Only the first sighting is worth a timeline entry; the text then streams.
-    // Best-effort, like the provider-switch record — a thread that can't be
-    // written to must not break the card that shows the plan.
-    if (!known) {
-      void invoke("thread_timeline_append", {
-        threadId: chat.sessionId,
-        kind: "planProposed",
-        attribution: null,
-        payload: JSON.stringify({ planId }),
-      }).catch((e) => console.error("plan not recorded:", e));
-    }
-    return next;
-  });
-  // The plan text grows while the call streams in; keep the stored copy current
-  // without losing an implement stamp (upsertPlan preserves it).
-  useEffect(() => {
-    setPlan(
-      upsertPlan({
-        planId,
-        sessionId: chat.sessionId,
-        markdown,
-        createdAt: Date.now(),
-      })
-    );
-  }, [planId, markdown, chat.sessionId]);
-
-  const implement = useAgentStore((s) => s.implementPlan);
-  const implemented = plan.implementedAt != null;
-
-  return (
-    <div className="overflow-hidden rounded-lg border border-primary/40 bg-primary/[0.06] text-xs">
-      <div className="flex items-center gap-2 px-2.5 py-2">
-        <ListChecks className="size-3.5 shrink-0 text-primary" />
-        <span className="font-medium text-foreground">Plan</span>
-        <span className="flex-1" />
-        {implemented ? (
-          <span className="text-muted-foreground">Implemented</span>
+      {rest.map((t) =>
+        isAgentTool(t.name) ? (
+          <SubagentInline key={t.id} id={t.id} tool={t} />
         ) : (
-          <Button
-            size="sm"
-            variant="secondary"
-            className="h-6 px-2"
-            disabled={!implement}
-            onClick={() =>
-              implement?.({
-                sourceSessionId: chat.sessionId,
-                planId,
-                markdown,
-              })
-            }
-          >
-            Implement
-          </Button>
-        )}
-      </div>
-      <div className="border-t border-primary/20 px-2.5 py-2">
-        <Markdown text={markdown} fontSize={12} />
-      </div>
+          <ToolCard key={t.id} tool={t} />
+        )
+      )}
     </div>
   );
 }
@@ -889,7 +868,13 @@ const SubagentInline = memo(function SubagentInline({
   const shown = showAll ? run.activity : run.activity.slice(-LIMIT);
 
   return (
-    <div className="rounded-lg border border-border/70 bg-card/40 px-2.5 py-2 text-xs">
+    <div className={cn("relative rounded-lg", running && "tool-running")}>
+    <div
+      className={cn(
+        "rounded-lg border bg-card/40 px-2.5 py-2 text-xs",
+        running ? "border-transparent" : "border-border/70",
+      )}
+    >
       <div className="flex items-center gap-2">
         <Bot className="size-3.5 shrink-0 text-violet-400" />
         <span className="font-medium text-foreground">Subagent task</span>
@@ -933,6 +918,7 @@ const SubagentInline = memo(function SubagentInline({
           })}
         </div>
       )}
+    </div>
     </div>
   );
 });
@@ -995,7 +981,7 @@ const MessageRow = memo(function MessageRow({
         />
       )}
       {message.tools.length > 0 && (
-        <ToolList tools={message.tools} chat={chat} />
+        <ToolList tools={message.tools} />
       )}
       {message.text && (
         <Markdown text={message.text} fontSize={fontSize} streaming={message.streaming} />
@@ -1039,7 +1025,7 @@ function MessageActions({ text, chat }: { text: string; chat: ChatContext }) {
   return (
     <div className="absolute left-0 top-full flex w-fit items-center gap-1 text-xs opacity-0 transition-opacity group-hover:opacity-100 has-data-[state=open]:opacity-100">
       <CopyButton text={text} />
-      <HandoffButton text={text} chat={chat} />
+      {chat.backend !== "claude" && <HandoffButton text={text} chat={chat} />}
     </div>
   );
 }
@@ -1153,10 +1139,12 @@ const ToolDiff = memo(function ToolDiff({
   before,
   after,
   lang,
+  streaming = false,
 }: {
   before: string;
   after: string;
   lang: string | null;
+  streaming?: boolean;
 }) {
   const rows = useMemo(
     () =>
@@ -1172,10 +1160,10 @@ const ToolDiff = memo(function ToolDiff({
               : part.removed
                 ? "border-red-500/50 bg-red-500/15"
                 : "border-transparent",
-            html: highlightCached(line, lang),
+            html: highlightCached(line, lang, !streaming),
           }))
       ),
-    [before, after, lang]
+    [before, after, lang, streaming]
   );
   return (
     <pre className="max-h-64 overflow-auto whitespace-pre font-mono text-[0.7rem] leading-relaxed">
@@ -1196,7 +1184,13 @@ const ToolDiff = memo(function ToolDiff({
 });
 
 /** One chunk of a tool's expanded input, rendered per part kind. */
-function ToolBody({ part }: { part: ToolBodyPart }) {
+function ToolBody({
+  part,
+  streaming = false,
+}: {
+  part: ToolBodyPart;
+  streaming?: boolean;
+}) {
   const label = "label" in part && part.label && (
     <div className="mb-1 text-[0.65rem] uppercase tracking-wide text-muted-foreground">
       {part.label}
@@ -1238,7 +1232,12 @@ function ToolBody({ part }: { part: ToolBodyPart }) {
     return (
       <div>
         {label}
-        <ToolDiff before={part.before} after={part.after} lang={part.lang} />
+        <ToolDiff
+          before={part.before}
+          after={part.after}
+          lang={part.lang}
+          streaming={streaming}
+        />
       </div>
     );
   }
@@ -1257,7 +1256,12 @@ function ToolBody({ part }: { part: ToolBodyPart }) {
   return (
     <div>
       {label}
-      <ToolCode code={part.code} lang={part.lang} className="max-h-64 overflow-auto" />
+      <ToolCode
+        code={part.code}
+        lang={part.lang}
+        className="max-h-64 overflow-auto"
+        streaming={streaming}
+      />
     </div>
   );
 }
@@ -1297,7 +1301,13 @@ const ToolCard = memo(function ToolCard({ tool }: { tool: ToolCall }) {
   if (open && !bodyMounted) setBodyMounted(true);
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-card/50 text-xs">
+    <div className={cn("relative rounded-lg", running && "tool-running")}>
+      <div
+        className={cn(
+          "overflow-hidden rounded-lg border bg-card/50 text-xs",
+          running ? "border-transparent" : "border-border",
+        )}
+      >
       <button
         type="button"
         onClick={() =>
@@ -1364,7 +1374,7 @@ const ToolCard = memo(function ToolCard({ tool }: { tool: ToolCall }) {
           {bodyMounted && (
             <div className="flex flex-col gap-2 border-t border-border px-3 py-2">
               {display.body.map((part, idx) => (
-                <ToolBody key={idx} part={part} />
+                <ToolBody key={idx} part={part} streaming={running} />
               ))}
               {resultParts?.map((part, idx) => (
                 <div
@@ -1381,6 +1391,7 @@ const ToolCard = memo(function ToolCard({ tool }: { tool: ToolCall }) {
             </div>
           )}
         </div>
+      </div>
       </div>
     </div>
   );
@@ -1408,12 +1419,17 @@ const ToolCode = memo(function ToolCode({
   code,
   lang,
   className,
+  streaming = false,
 }: {
   code: string;
   lang: string | null;
   className?: string;
+  streaming?: boolean;
 }) {
-  const html = useMemo(() => highlightCached(code, lang), [code, lang]);
+  const html = useMemo(
+    () => highlightCached(code, lang, !streaming),
+    [code, lang, streaming]
+  );
   return (
     <pre
       className={cn(

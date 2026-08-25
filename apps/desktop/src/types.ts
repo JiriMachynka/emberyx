@@ -192,9 +192,7 @@ export interface GitLogEntry {
 /** One day of token usage for a project/model pair. */
 export interface UsageRow {
   date: string;
-  /** Which provider produced the turns. Only Claude keeps a readable history
-   *  on disk today; the field is what lets the panel say whose usage this is
-   *  rather than implying it covers everything. */
+  /** Which provider produced the turns. */
   provider: Provider;
   project: string;
   model: string;
@@ -203,6 +201,19 @@ export interface UsageRow {
   cacheRead: number;
   cacheCreation: number;
   messages: number;
+  /** USD the agent recorded (OpenCode, Kilo). Absent for Claude/Codex. */
+  cost?: number;
+}
+
+/** Distinct transcripts that contributed to a usage window, per provider. */
+export interface ProviderSessions {
+  provider: Provider;
+  count: number;
+}
+
+export interface UsageSummary {
+  rows: UsageRow[];
+  sessions: ProviderSessions[];
 }
 
 /** A saved stash entry from `git stash list`. */

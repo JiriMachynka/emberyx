@@ -21,8 +21,8 @@ import {
   useForgeMr,
   useForgeMrDiff,
   useForgeMrNotes,
+  useForgeCliStatus,
   useForgeMrs,
-  useForgeToken,
   useGitBranch,
   useInvalidateGit,
 } from "@/lib/queries";
@@ -68,6 +68,8 @@ interface MergeRequestsPanelProps {
   /** Handed the conflicted file list when a merge stops — the conflict UI
    *  lives outside this panel. */
   onConflicts?: (files: string[]) => void;
+  /** Render inside the dock rather than as its own right aside. */
+  embedded?: boolean;
 }
 
 export function MergeRequestsPanel({
@@ -76,14 +78,18 @@ export function MergeRequestsPanel({
   host,
   path,
   onConflicts,
+  embedded,
 }: MergeRequestsPanelProps) {
   const [state, setState] = useState<MrState>("opened");
   const [selectedIid, setSelectedIid] = useState<number | null>(null);
 
   const repo = path ?? "";
-  // `.data` is undefined until the keychain check lands — only a definite
-  // "no token" should replace the list with the connect prompt.
-  const hasToken = useForgeToken(host).data !== false;
+  // `.data` is undefined until the CLI probe lands — only a definite
+  // "not logged in" should replace the list with the prompt.
+  const forgeClis = useForgeCliStatus().data;
+  const hasToken = forgeClis
+    ? (forgeClis.find((c) => c.id === host)?.authenticated ?? false)
+    : true;
   const qc = useQueryClient();
   const mrsQuery = useForgeMrs(host, repo, state);
   const mrs = mrsQuery.data ?? [];
@@ -95,6 +101,7 @@ export function MergeRequestsPanel({
     <SidePanel
       storageKey="mergeRequests"
       open={open}
+      embedded={embedded}
       onClose={onClose}
       flushHeader={selectedIid === null}
       header={
@@ -142,7 +149,7 @@ export function MergeRequestsPanel({
         </Empty>
       ) : !hasToken ? (
         <Empty icon={<GitPullRequest className="size-5" />}>
-          {`Connect ${FORGE_LABEL[host]} in Settings to see ${FORGE_NOUN[host].one}s.`}
+          {`Log in with ${host === "github" ? "gh" : "glab"} auth login to see ${FORGE_NOUN[host].one}s.`}
         </Empty>
       ) : selectedIid !== null ? (
         <MrDetail
@@ -241,6 +248,8 @@ function MrDetail({
   /** The list row, so branches render before the detail request lands. */
   fallback: MergeRequest | null;
   onConflicts?: (files: string[]) => void;
+  /** Render inside the dock rather than as its own right aside. */
+  embedded?: boolean;
 }) {
   const detailQuery = useForgeMr(host, path, iid);
   const diffQuery = useForgeMrDiff(host, path, iid);

@@ -1,9 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Toaster } from "sonner";
-import { SlidersHorizontal } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SessionPanes } from "@/components/SessionPanes";
-import { SidePanel } from "@/components/SidePanel";
+import { RightDock } from "@/components/RightDock";
+import { WorkspaceTerminals } from "@/components/WorkspaceTerminals";
 import { ProjectSettingsPane } from "@/components/ProjectSettingsPane";
 import { SettingsPage } from "@/components/SettingsPage";
 import { ChangesPanel } from "@/components/ChangesPanel";
@@ -20,13 +20,25 @@ import { AttentionBanner } from "@/components/AttentionBanner";
 import { AccountBanner } from "@/components/AccountBanner";
 import { cn } from "@/lib/utils";
 import { useSettings } from "@/lib/settings";
+import {
+  DOCK_KINDS,
+  EMPTY_DOCK,
+  closeTab,
+  closeTabs,
+  hideDock,
+  isSticky,
+  openTab,
+  showDock,
+  toggleTab,
+  type DockKind,
+  type DockState,
+} from "@/lib/dock";
 import { useAgentStore, selectUnreadCount } from "@/lib/agentStore";
 import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
 import { requestSearch } from "@/lib/searchRequest";
-import { projectLabel } from "@/lib/worktree";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import type { Session } from "@/types";
-import { isRemoteHost, type RemoteHost } from "@/lib/forge";
+import { FORGE_NOUN, isRemoteHost, type RemoteHost } from "@/lib/forge";
 import { PreviewPanel } from "@/components/PreviewPanel";
 import { useGitRemoteHost } from "@/lib/queries";
 import { useDevServers } from "@/hooks/useDevServers";
@@ -47,81 +59,31 @@ const ConflictView = lazy(() =>
 const EditorPane = lazy(() =>
   import("@/components/EditorPane").then((m) => ({ default: m.EditorPane }))
 );
-const SurfacePanel = lazy(() => import("@/components/SurfacePanel"));
 
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [changesOpen, setChangesOpen] = useState(false);
-  const [surfaceOpen, setSurfaceOpen] = useState(false);
-  // Lazily mounted on first open, then kept mounted and merely hidden — the
-  // terminals inside own live shells that closing must not kill.
-  const [surfaceMounted, setSurfaceMounted] = useState(false);
-  const [devOpen, setDevOpen] = useState(false);
+  // Every right-hand surface is a tab of one dock, so a diff and a terminal are
+  // a click apart instead of mutually exclusive asides.
+  const [dock, setDock] = useState<DockState>(EMPTY_DOCK);
   const [usageOpen, setUsageOpen] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
-  const [mrsOpen, setMrsOpen] = useState(false);
-  const [previewOpen, setPreviewOpen] = useState(false);
   const [conflictOpen, setConflictOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   // Once opened the editor stays mounted and is merely hidden, so open buffers,
   // scroll position and undo history survive closing it.
   const [editorMounted, setEditorMounted] = useState(false);
-  // Keep the Changes panel mounted while its exit animation plays (~200ms).
-  const [changesClosing, setChangesClosing] = useState(false);
   const [sidebarCollapsed, setCollapsed] = useState<boolean>(getSidebarCollapsed);
 
-  const closeChanges = () => {
-    setChangesClosing(true);
-    window.setTimeout(() => {
-      setChangesOpen(false);
-      setChangesClosing(false);
-    }, 200);
-  };
-
-  // Only one right-hand panel is visible at a time — opening any closes the rest.
-  const closeRightPanels = () => {
-    setSurfaceOpen(false);
-    setDevOpen(false);
-    setMrsOpen(false);
-    setProjectSettingsOpen(false);
-    if (changesOpen) closeChanges();
-  };
-
-  const toggleChanges = () => {
-    if (changesOpen) closeChanges();
-    else {
-      closeRightPanels();
-      setChangesOpen(true);
-    }
-  };
-
-  const toggleSurface = () => {
-    if (surfaceOpen) setSurfaceOpen(false);
-    else {
-      closeRightPanels();
-      setSurfaceMounted(true);
-      setSurfaceOpen(true);
-    }
-  };
-
-  const toggleDev = () => {
-    if (devOpen) setDevOpen(false);
-    else {
-      closeRightPanels();
-      setDevOpen(true);
-    }
-  };
-
-  const toggleMrs = () => {
-    if (mrsOpen) setMrsOpen(false);
-    else {
-      closeRightPanels();
-      setMrsOpen(true);
-    }
-  };
+  const dockActive = dock.active;
+  const showTab = (kind: DockKind) => setDock((s) => openTab(s, kind));
+  const hideTab = (kind: DockKind) => setDock((s) => closeTab(s, kind));
+  const flipTab = (kind: DockKind) => setDock((s) => toggleTab(s, kind));
+  // The dock's own toggle reveals the chooser when nothing is open, and
+  // otherwise hides the panel without dropping the tabs that were showing.
+  const toggleDock = () =>
+    setDock((s) => (s.open ? hideDock(s) : showDock(s)));
 
   function toggleSidebar() {
     setCollapsed((c) => {
@@ -168,12 +130,10 @@ function App() {
   );
 
   // Project-scoped panels close when switching projects, so a panel opened
-  // for one project doesn't linger empty over the next.
+  // for one project doesn't linger empty over the next. Sticky tabs (terminal,
+  // output) stay — their panes own live processes and already retarget.
   useEffect(() => {
-    setChangesOpen(false);
-    setDevOpen(false);
-    setMrsOpen(false);
-    setProjectSettingsOpen(false);
+    setDock((s) => closeTabs(s, DOCK_KINDS.filter((k) => !isSticky(k))));
   }, [activeProjectId]);
 
   // Which service the active project's remote is on. The review panel speaks
@@ -192,10 +152,7 @@ function App() {
   const runAction = (a: ProjectAction) => {
     if (!activeProject) return;
     ws.addDev(activeProject.id, a.name, activeProject.path, a.command);
-    if (settings.autoOpenDevPanel) {
-      closeRightPanels();
-      setDevOpen(true);
-    }
+    if (settings.autoOpenDevPanel) showTab("dev");
   };
   // Open a new worktree, then fire the source project's run-on-create actions.
   const openWorktreeAndRun = async (
@@ -257,8 +214,7 @@ function App() {
 
   const openProjectSettings = () => {
     if (!activeProject) return;
-    closeRightPanels();
-    setProjectSettingsOpen(true);
+    showTab("projectSettings");
   };
 
   const openEditor = () => {
@@ -295,11 +251,17 @@ function App() {
   useLaunchUpdateCheck();
   usePricingRefresh();
 
-  // The context bar reflects the active tab when it's an agent, else the first
-  // agent — so multiple resumed threads each drive it when focused.
-  const firstAgent = projectSessions.find((s) => s.kind === "agent");
+  // The context bar follows the focused chat/agent tab, else the project's
+  // primary one — chat is the default surface, so a `kind === "agent"`-only
+  // lookup would leave the header untitled.
+  const firstAgent = projectSessions.find(
+    (s) => s.kind === "agent" || s.kind === "chat",
+  );
   const activeSession = projectSessions.find((s) => s.id === activeId);
-  const agent = activeSession?.kind === "agent" ? activeSession : firstAgent;
+  const agent =
+    activeSession?.kind === "agent" || activeSession?.kind === "chat"
+      ? activeSession
+      : firstAgent;
   // The chat session slash commands run in — the active tab when it's a chat.
   const activeChatId = activeSession?.kind === "chat" ? activeSession.id : null;
   const chatSend = useAgentStore((s) =>
@@ -326,6 +288,102 @@ function App() {
     (s) => s.projectId === activeProject?.id
   ).length;
 
+  // Content per dock tab. The dock decides what is mounted — a pane that owns a
+  // child process stays mounted once opened, the rest come and go with the tab.
+  const dockPanes: Partial<Record<DockKind, React.ReactNode>> = {
+    terminal: (
+      <WorkspaceTerminals
+        projectPath={activeProject?.path ?? ""}
+        active={dockActive === "terminal"}
+        fontFamily={settings.fontFamily}
+        fontSize={settings.fontSize}
+        scrollback={settings.scrollback}
+      />
+    ),
+    files: activeProject && (
+      <Suspense fallback={null}>
+        <EditorPane
+          key={activeProject.path}
+          projectPath={activeProject.path}
+          fontFamily={settings.editorFontFamily}
+          fontSize={settings.editorFontSize}
+          active={dockActive === "files"}
+        />
+      </Suspense>
+    ),
+    diff: activeProject && (
+      <ChangesPanel
+        embedded
+        projectPath={activeProject.path}
+        sessionIds={projectSessionIds}
+        openRouterApiKey={settings.openRouterApiKey}
+        openRouterModel={settings.openRouterModel}
+        onClose={() => hideTab("diff")}
+        onOpenWorktree={openWorktreeAndRun}
+        onRemoveWorktree={ws.removeWorktree}
+      />
+    ),
+    preview: activeProject && (
+      <PreviewPanel
+        embedded
+        open={dockActive === "preview"}
+        projectPath={activeProject.path}
+        onClose={() => hideTab("preview")}
+      />
+    ),
+    mrs: activeProject && (
+      <MergeRequestsPanel
+        embedded
+        open={dockActive === "mrs"}
+        host={remoteHost}
+        path={activeProject.path}
+        onClose={() => hideTab("mrs")}
+        onConflicts={() => setConflictOpen(true)}
+      />
+    ),
+    dev: (
+      <DevPanel
+        embedded
+        sessions={devSessions}
+        projectId={activeProject?.id ?? null}
+        open={dockActive === "dev"}
+        fontFamily={settings.fontFamily}
+        fontSize={settings.fontSize}
+        scrollback={settings.scrollback}
+        onStop={ws.closeSession}
+        onExit={ws.closeSession}
+        onClose={() => hideTab("dev")}
+      />
+    ),
+    projectSettings: activeProject && (
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <ProjectSettingsPane
+          key={activeProject.id}
+          project={activeProject}
+          backend={agentBackend.pinned}
+          onSetBackend={agentBackend.setBackend}
+          defaultBackend={settings.agentBackend}
+          devCommand={dev.customCommand}
+          onSetDevCommand={dev.setCustomCommand}
+          buildCommand={dev.buildCommandOverride}
+          onSetBuildCommand={dev.setBuildCommand}
+          detectedBuildCommand={dev.detectedBuildCommand}
+          startCommand={dev.startCommandOverride}
+          onSetStartCommand={dev.setStartCommand}
+          detectedStartCommand={dev.detectedStartCommand}
+          onRefreshDokploy={() =>
+            dokploy.refresh(activeProject.id, activeProject.path)
+          }
+          onOpenWorktree={openWorktreeAndRun}
+          onRemoveWorktree={ws.removeWorktree}
+          dokployConfigured={Boolean(
+            settings.dokployUrl && settings.dokployApiKey
+          )}
+        />
+      </div>
+    ),
+  };
+
   return (
     <div className="flex h-full bg-background text-foreground">
       {revealed && projects.length > 0 && (
@@ -339,66 +397,96 @@ function App() {
           threadSettleDays={settings.threadSettleDays}
           threadAutoSettleOnMerge={settings.threadAutoSettleOnMerge}
           threadGrouping={settings.threadGrouping}
+          fontFamily={settings.chatFontFamily}
           collapsed={sidebarCollapsed}
           onToggleCollapse={toggleSidebar}
-          onSelectProject={ws.setActiveProjectId}
+          onSelectProject={(id) => {
+            setSettingsOpen(false);
+            setUsageOpen(false);
+            ws.setActiveProjectId(id);
+          }}
           onCloseProject={ws.closeProjectById}
           onPickProject={ws.pickProject}
-          onSelectSession={ws.activateSession}
-          onResumeThread={ws.resumeThreadIn}
+          onSelectSession={(projectId, id) => {
+            setSettingsOpen(false);
+            setUsageOpen(false);
+            ws.activateSession(projectId, id);
+          }}
+          onResumeThread={(projectId, path, thread) => {
+            setSettingsOpen(false);
+            setUsageOpen(false);
+            ws.resumeThreadIn(projectId, path, thread);
+          }}
           onCloseSession={ws.closeSession}
           onMoveSession={ws.moveSession}
-          onNewAgent={ws.newAgent}
+          onNewAgent={() => {
+            setSettingsOpen(false);
+            setUsageOpen(false);
+            ws.newAgent();
+          }}
           onOpenSearch={() => setPaletteOpen(true)}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={() => {
+            setUsageOpen(false);
+            setSettingsOpen(true);
+          }}
+          onOpenUsage={() => {
+            setSettingsOpen(false);
+            setUsageOpen(true);
+          }}
           notificationCount={unread}
           onOpenNotifications={toggleNotifications}
         />
       )}
 
       <div className="relative flex min-w-0 flex-1 flex-col">
-        <ContextBar
-          activeProject={activeProject}
-          agent={agent}
-          threads={capabilities.threads}
-          usage={capabilities.usage}
-          devRunning={projectSessions.some((s) => s.kind === "dev")}
-          mrsOpen={mrsOpen}
-          onToggleMrs={toggleMrs}
-          previewOpen={previewOpen}
-          onTogglePreview={() => setPreviewOpen((v) => !v)}
-          devOpen={devOpen}
-          devCount={devCount}
-          onToggleDev={toggleDev}
-          onOpenProjectSettings={openProjectSettings}
-          actions={projectActions.actions}
-          onRunAction={runAction}
-          onEditAction={(a) => setActionEdit({ action: a })}
-          onAddAction={() => setActionEdit({ action: null })}
-          onStopDev={() => {
-            if (activeProjectId) ws.stopAllDev(activeProjectId);
-          }}
-          onRefreshThreads={() => {
-            if (activeProject) ws.refreshThreads(activeProject.id, activeProject.path);
-          }}
-          onResumeThread={ws.resumeThread}
-          surfaceOpen={surfaceOpen}
-          onToggleSurface={toggleSurface}
-          onOpenUsage={() => setUsageOpen(true)}
-        />
-
-        <AccountBanner onLogin={activeProject ? startLogin : undefined} />
-
-        {agent && activeProjectId && (
-          <AttentionBanner
-            agentId={agent.id}
-            onJump={() => ws.setActive(activeProjectId, agent.id)}
+        {settingsOpen ? (
+          <SettingsPage
+            onBack={() => setSettingsOpen(false)}
+            settings={settings}
+            onUpdate={updateSettings}
           />
+        ) : usageOpen ? (
+          <UsagePanel onBack={() => setUsageOpen(false)} />
+        ) : (
+          <>
+            <ContextBar
+              activeProject={activeProject}
+              agent={agent}
+              devRunning={projectSessions.some((s) => s.kind === "dev")}
+              mrsOpen={dockActive === "mrs"}
+              onToggleMrs={() => flipTab("mrs")}
+              previewOpen={dockActive === "preview"}
+              onTogglePreview={() => flipTab("preview")}
+              devOpen={dockActive === "dev"}
+              devCount={devCount}
+              onToggleDev={() => flipTab("dev")}
+              onOpenProjectSettings={openProjectSettings}
+              actions={projectActions.actions}
+              onRunAction={runAction}
+              onEditAction={(a) => setActionEdit({ action: a })}
+              onAddAction={() => setActionEdit({ action: null })}
+              onStopDev={() => {
+                if (activeProjectId) ws.stopAllDev(activeProjectId);
+              }}
+              dockOpen={dock.open}
+              onToggleDock={toggleDock}
+            />
+
+            <AccountBanner onLogin={activeProject ? startLogin : undefined} />
+
+            {agent && activeProjectId && (
+              <AttentionBanner
+                agentId={agent.id}
+                onJump={() => ws.setActive(activeProjectId, agent.id)}
+              />
+            )}
+          </>
         )}
 
-        {/* Terminal viewport + changes panel */}
-        <div className="flex min-h-0 flex-1">
-          <main className="canvas-lit relative flex-1">
+        {/* Hidden rather than unmounted while settings is the page, so chat
+            sessions and dock PTYs keep running. */}
+        <div className={cn("flex min-h-0 flex-1", (settingsOpen || usageOpen) && "hidden")}>
+           <main className="canvas-lit relative min-h-0 min-w-0 flex-1 overflow-hidden">
             {/* Panes stay mounted once a session exists, so a pre-warmed
                 project boots in the background. Hidden unless it's the active,
                 revealed tab. */}
@@ -452,108 +540,24 @@ function App() {
               </div>
             )}
           </main>
-          {/* Always mounted: the panes inside own the running dev PTYs. */}
-          <DevPanel
-            sessions={devSessions}
-            projectId={activeProject?.id ?? null}
-            open={devOpen}
-            fontFamily={settings.fontFamily}
-            fontSize={settings.fontSize}
-            scrollback={settings.scrollback}
-            onStop={ws.closeSession}
-            onExit={ws.closeSession}
-            onClose={() => setDevOpen(false)}
+          <RightDock
+            state={dock}
+            available={activeProject ? DOCK_KINDS : []}
+            panes={dockPanes}
+            onSelect={showTab}
+            onClose={hideTab}
+            onAdd={showTab}
+            onHide={() => setDock(hideDock)}
+            titles={{
+              preview: "Browser",
+              mrs: remoteHost === "github" ? "Pull request" : "Merge request",
+            }}
+            unavailable={
+              remoteHostValue && isRemoteHost(remoteHostValue)
+                ? undefined
+                : { mrs: `No ${FORGE_NOUN[remoteHost].one} on this branch yet.` }
+            }
           />
-          {/* Always mounted once opened: its terminals own live shells. */}
-          {activeProject && surfaceMounted && (
-            <Suspense fallback={null}>
-              <SurfacePanel
-                projectPath={activeProject.path}
-                open={surfaceOpen}
-                fontFamily={settings.fontFamily}
-                fontSize={settings.fontSize}
-                scrollback={settings.scrollback}
-                onClose={() => setSurfaceOpen(false)}
-                sessionIds={projectSessionIds}
-                openRouterApiKey={settings.openRouterApiKey}
-                openRouterModel={settings.openRouterModel}
-                onOpenWorktree={openWorktreeAndRun}
-                onRemoveWorktree={ws.removeWorktree}
-              />
-            </Suspense>
-          )}
-          {activeProject && (changesOpen || changesClosing) && (
-            <div
-              className={cn(
-                "flex shrink-0 duration-200",
-                changesClosing
-                  ? "animate-out fade-out slide-out-to-right-4"
-                  : "animate-in fade-in slide-in-from-right-4"
-              )}
-            >
-              <ChangesPanel
-                projectPath={activeProject.path}
-                sessionIds={projectSessionIds}
-                openRouterApiKey={settings.openRouterApiKey}
-                openRouterModel={settings.openRouterModel}
-                onClose={closeChanges}
-                onOpenWorktree={openWorktreeAndRun}
-                onRemoveWorktree={ws.removeWorktree}
-              />
-            </div>
-          )}
-          {activeProject && previewOpen && (
-            <PreviewPanel
-              open={previewOpen}
-              projectPath={activeProject.path}
-              onClose={() => setPreviewOpen(false)}
-            />
-          )}
-          {activeProject && mrsOpen && (
-            <MergeRequestsPanel
-              open={mrsOpen}
-              host={remoteHost}
-              path={activeProject.path}
-              onClose={() => setMrsOpen(false)}
-              onConflicts={() => setConflictOpen(true)}
-            />
-          )}
-          {activeProject && projectSettingsOpen && (
-            <SidePanel
-              storageKey="projectSettings"
-              onClose={() => setProjectSettingsOpen(false)}
-              header={
-                <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
-                  <SlidersHorizontal className="size-4 shrink-0" />
-                  <span className="truncate">{projectLabel(activeProject)}</span>
-                </div>
-              }
-            >
-              <ProjectSettingsPane
-                key={activeProject.id}
-                project={activeProject}
-                backend={agentBackend.pinned}
-                onSetBackend={agentBackend.setBackend}
-                defaultBackend={settings.agentBackend}
-                devCommand={dev.customCommand}
-                onSetDevCommand={dev.setCustomCommand}
-                buildCommand={dev.buildCommandOverride}
-                onSetBuildCommand={dev.setBuildCommand}
-                detectedBuildCommand={dev.detectedBuildCommand}
-                startCommand={dev.startCommandOverride}
-                onSetStartCommand={dev.setStartCommand}
-                detectedStartCommand={dev.detectedStartCommand}
-                onRefreshDokploy={() =>
-                  dokploy.refresh(activeProject.id, activeProject.path)
-                }
-                onOpenWorktree={openWorktreeAndRun}
-                onRemoveWorktree={ws.removeWorktree}
-                dokployConfigured={Boolean(
-                  settings.dokployUrl && settings.dokployApiKey
-                )}
-              />
-            </SidePanel>
-          )}
           {notificationsOpen && (
             <NotificationPanel
               onClose={() => setNotificationsOpen(false)}
@@ -568,13 +572,6 @@ function App() {
               backend={agentBackend.backend}
             />
           )}
-          {settingsOpen && (
-            <SettingsPage
-              onBack={() => setSettingsOpen(false)}
-              settings={settings}
-              onUpdate={updateSettings}
-            />
-          )}
         </div>
       </div>
 
@@ -586,15 +583,33 @@ function App() {
         activeProject={activeProject}
         slashCommands={capabilities.slashCommands}
         chatUi={settings.agentUi === "chat"}
-        onSelectSession={ws.activateSession}
-        onResumeThread={ws.resumeThreadIn}
-        onNewAgent={ws.newAgent}
+        onSelectSession={(projectId, id) => {
+          setSettingsOpen(false);
+          setUsageOpen(false);
+          ws.activateSession(projectId, id);
+        }}
+        onResumeThread={(projectId, path, thread) => {
+          setSettingsOpen(false);
+          setUsageOpen(false);
+          ws.resumeThreadIn(projectId, path, thread);
+        }}
+        onNewAgent={() => {
+          setSettingsOpen(false);
+          setUsageOpen(false);
+          ws.newAgent();
+        }}
         onPickProject={ws.pickProject}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenSettings={() => {
+          setUsageOpen(false);
+          setSettingsOpen(true);
+        }}
         onOpenEditor={openEditor}
-        onToggleChanges={toggleChanges}
+        onToggleChanges={() => flipTab("diff")}
         onSearch={openSearch}
-        onOpenUsage={() => setUsageOpen(true)}
+        onOpenUsage={() => {
+          setSettingsOpen(false);
+          setUsageOpen(true);
+        }}
         onOpenNotifications={toggleNotifications}
         onOpenSlash={() => setSlashOpen(true)}
         onRedeployDokploy={dokploy.redeploy}
@@ -603,7 +618,7 @@ function App() {
         }}
       />
 
-      {usageOpen && <UsagePanel onClose={() => setUsageOpen(false)} />}
+
 
       <ActionDialog
         open={actionEdit !== null}

@@ -73,16 +73,6 @@ export interface HandoffRequest {
 /** Move a conversation to another provider's chat in the same project. */
 export type HandoffFn = (request: HandoffRequest) => void;
 
-export interface ImplementPlanRequest {
-  sourceSessionId: string;
-  /** The proposing tool call's id, so the plan can be stamped implemented. */
-  planId: string;
-  markdown: string;
-}
-
-/** Carry an agreed plan into a fresh chat that will do the work. */
-export type ImplementPlanFn = (request: ImplementPlanRequest) => void;
-
 /**
  * Live agent telemetry, updated at streaming frequency from the hook listener.
  * Kept in a store (not App state) so status/usage/change updates re-render only
@@ -90,6 +80,10 @@ export type ImplementPlanFn = (request: ImplementPlanRequest) => void;
  */
 interface AgentState {
   statuses: Record<string, SessionStatus>;
+  /** When each session entered the status it is in, so a row can say how long
+   *  it has been working rather than only that it is. Stamped on change only —
+   *  restating "working" every hook event would reset the clock. */
+  statusSince: Record<string, number>;
   usages: Record<string, Usage>;
   changes: Change[];
   /** Change count per session, kept in step with `changes` so consumers don't
@@ -116,10 +110,6 @@ interface AgentState {
    *  Installed by the workspace, which owns the session list. */
   handoff: HandoffFn | null;
   setHandoff: (fn: HandoffFn) => void;
-  /** Open a new chat on an agreed plan. Installed by the workspace, like the
-   *  handoff above — a plan card can't own the session list. */
-  implementPlan: ImplementPlanFn | null;
-  setImplementPlan: (fn: ImplementPlanFn) => void;
   selectAgent: (id: string | null) => void;
   registerSender: (
     id: string,
@@ -163,6 +153,7 @@ interface AgentState {
 
 export const useAgentStore = create<AgentState>()((set) => ({
   statuses: {},
+  statusSince: {},
   usages: {},
   changes: [],
   changeCounts: {},
@@ -172,7 +163,6 @@ export const useAgentStore = create<AgentState>()((set) => ({
   transcripts: {},
   drafts: {},
   handoff: null,
-  implementPlan: null,
   notifications: loadNotifications(),
   setDraft: (id, text) => set((s) => ({ drafts: { ...s.drafts, [id]: text } })),
   clearDraft: (id) =>
@@ -182,7 +172,6 @@ export const useAgentStore = create<AgentState>()((set) => ({
       return { drafts: rest };
     }),
   setHandoff: (fn) => set({ handoff: fn }),
-  setImplementPlan: (fn) => set({ implementPlan: fn }),
   selectAgent: (id) => set({ selectedAgent: id }),
   registerSender: (id, fn) =>
     set((s) => ({ senders: { ...s.senders, [id]: fn } })),
@@ -199,7 +188,14 @@ export const useAgentStore = create<AgentState>()((set) => ({
       return { transcripts: rest };
     }),
   setStatus: (id, status) =>
-    set((s) => ({ statuses: { ...s.statuses, [id]: status } })),
+    set((s) =>
+      s.statuses[id] === status
+        ? s
+        : {
+            statuses: { ...s.statuses, [id]: status },
+            statusSince: { ...s.statusSince, [id]: Date.now() },
+          }
+    ),
   setUsage: (id, usage) =>
     set((s) => ({ usages: { ...s.usages, [id]: usage } })),
   addChange: (change) =>
@@ -284,9 +280,15 @@ export const useAgentStore = create<AgentState>()((set) => ({
   clearSessions: (ids) =>
     set((s) => {
       const drop = new Set(ids);
+      const subagents = Object.fromEntries(
+        Object.entries(s.subagents).filter(([, r]) => !drop.has(r.session))
+      );
       return {
         statuses: Object.fromEntries(
           Object.entries(s.statuses).filter(([id]) => !drop.has(id))
+        ),
+        statusSince: Object.fromEntries(
+          Object.entries(s.statusSince).filter(([id]) => !drop.has(id))
         ),
         usages: Object.fromEntries(
           Object.entries(s.usages).filter(([id]) => !drop.has(id))
@@ -295,15 +297,20 @@ export const useAgentStore = create<AgentState>()((set) => ({
         changeCounts: Object.fromEntries(
           Object.entries(s.changeCounts).filter(([id]) => !drop.has(id))
         ),
-        subagents: Object.fromEntries(
-          Object.entries(s.subagents).filter(([, r]) => !drop.has(r.session))
-        ),
+        subagents,
         senders: Object.fromEntries(
           Object.entries(s.senders).filter(([id]) => !drop.has(id))
+        ),
+        transcripts: Object.fromEntries(
+          Object.entries(s.transcripts).filter(([id]) => !drop.has(id))
         ),
         drafts: Object.fromEntries(
           Object.entries(s.drafts).filter(([id]) => !drop.has(id))
         ),
+        selectedAgent:
+          s.selectedAgent && subagents[s.selectedAgent]
+            ? s.selectedAgent
+            : null,
       };
     }),
   accountIssue: null,

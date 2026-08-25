@@ -13,7 +13,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -31,18 +31,20 @@ const START_TIMEOUT: Duration = Duration::from_secs(5);
 /// addressing the wrong process.
 const HANDLE_BASE: u32 = 1_000_000;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Daemon {
     /// Frontend handle → daemon agent id, for the agents this window attached.
-    handles: Mutex<HashMap<u32, String>>,
-    next_handle: AtomicU32,
+    handles: Arc<Mutex<HashMap<u32, String>>>,
+    /// Arc'd so a clone shares both fields: `agent_spawn` hands a cloned daemon
+    /// to a blocking thread, and parallel spawns must share the handle space.
+    next_handle: Arc<AtomicU32>,
 }
 
 impl Daemon {
     pub fn new() -> Self {
         Self {
-            handles: Mutex::new(HashMap::new()),
-            next_handle: AtomicU32::new(HANDLE_BASE),
+            handles: Arc::new(Mutex::new(HashMap::new())),
+            next_handle: Arc::new(AtomicU32::new(HANDLE_BASE)),
         }
     }
 

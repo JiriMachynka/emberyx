@@ -196,6 +196,41 @@ export function costOf(u: Usage): number {
   );
 }
 
+/** Cost for a usage dashboard row. Codex rates are a separate table;
+ *  OpenCode/Kilo store their own USD on the row. */
+export function rowCost(row: Usage & { provider: string; cost?: number }): number {
+  if (row.provider === "opencode" || row.provider === "kilo") {
+    return row.cost ?? 0;
+  }
+  if (row.provider === "codex") {
+    return (
+      codexCost(row.model, {
+        inputTokens: row.input + row.cacheRead,
+        cachedInputTokens: row.cacheRead,
+        outputTokens: row.output,
+      }) ?? 0
+    );
+  }
+  return costOf(row);
+}
+
+/** What cache hits saved versus paying the full input rate. */
+export function cacheSavingsOf(row: Usage & { provider: string }): number {
+  if (row.provider === "opencode" || row.provider === "kilo") {
+    // Those agents don't publish cache rates; inventing Claude's would
+    // overstate the saving.
+    return 0;
+  }
+  if (row.provider === "codex") {
+    const m = row.model.toLowerCase();
+    const rate = CODEX_RATES.find((r) => m.includes(r.match));
+    if (!rate) return 0;
+    return (row.cacheRead * (rate.input - rate.cached)) / 1_000_000;
+  }
+  const r = rateFor(row.model);
+  return (row.cacheRead * (r.input - r.cacheRead)) / 1_000_000;
+}
+
 /** Compact token count, e.g. 12345 → "12.3k". */
 export function formatTokens(n: number): string {
   if (n < 1000) return `${n}`;

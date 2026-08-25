@@ -77,4 +77,26 @@ describe("useSettings", () => {
     const { result } = renderHook(() => useSettings());
     expect(result.current.settings).toEqual(DEFAULT_SETTINGS);
   });
+
+  it("writes the chat and editor stacks onto :root so font-mono follows Appearance", () => {
+    const { result } = renderHook(() => useSettings());
+    expect(document.documentElement.style.getPropertyValue("--chat-font")).toBe(
+      DEFAULT_SETTINGS.chatFontFamily,
+    );
+    expect(document.documentElement.style.getPropertyValue("--code-font")).toBe(
+      DEFAULT_SETTINGS.editorFontFamily,
+    );
+    act(() =>
+      result.current.update({
+        chatFontFamily: "ui-sans-serif, sans-serif",
+        editorFontFamily: "Menlo, monospace",
+      }),
+    );
+    expect(document.documentElement.style.getPropertyValue("--chat-font")).toBe(
+      "ui-sans-serif, sans-serif",
+    );
+    expect(document.documentElement.style.getPropertyValue("--code-font")).toBe(
+      "Menlo, monospace",
+    );
+  });
 });

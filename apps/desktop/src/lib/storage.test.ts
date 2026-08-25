@@ -3,6 +3,8 @@ import { addRecent, getRecents } from "@/lib/recents";
 import { getOpenProjects, saveOpenProjects } from "@/lib/openProjects";
 import { PANEL_MIN_WIDTH, getPanelWidth, setPanelWidth } from "@/lib/panels";
 import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
+import { cachedThreads, cacheThreads } from "@/lib/threadCache";
+import type { Thread } from "@/types";
 import {
   getProjectConfigs,
   projectBackend,
@@ -121,6 +123,46 @@ describe("sidebar collapse", () => {
     expect(getSidebarCollapsed()).toBe(true);
     setSidebarCollapsed(false);
     expect(getSidebarCollapsed()).toBe(false);
+  });
+});
+
+describe("thread cache", () => {
+  it("starts empty", () => {
+    expect(cachedThreads("/a")).toEqual([]);
+  });
+
+  it("round-trips a thread list per project path", () => {
+    const threads: Thread[] = [
+      { id: "s1", title: "Fix the parser", modified: 100 },
+      { id: "s2", title: "Ship the sidebar", modified: 200 },
+    ];
+    cacheThreads("/a", threads);
+    expect(cachedThreads("/a")).toEqual(threads);
+    expect(cachedThreads("/b")).toEqual([]);
+  });
+
+  it("a later scan replaces the entry wholesale", () => {
+    cacheThreads("/a", [{ id: "s1", title: "old", modified: 100 }]);
+    cacheThreads("/a", [{ id: "s2", title: "new", modified: 200 }]);
+    expect(cachedThreads("/a")).toEqual([{ id: "s2", title: "new", modified: 200 }]);
+  });
+
+  it("recovers from corrupt storage", () => {
+    localStorage.setItem("emberyx.threadCache", "{not json");
+    expect(cachedThreads("/a")).toEqual([]);
+  });
+
+  it("recovers from a stored value of the wrong shape", () => {
+    localStorage.setItem("emberyx.threadCache", JSON.stringify({ "/a": "nope" }));
+    expect(cachedThreads("/a")).toEqual([]);
+  });
+
+  it("ignores a storage failure instead of throwing", () => {
+    const spy = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new Error("quota");
+    });
+    expect(() => cacheThreads("/a", [])).not.toThrow();
+    spy.mockRestore();
   });
 });
 

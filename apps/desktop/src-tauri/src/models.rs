@@ -163,8 +163,9 @@ pub enum TimelineEventKind {
     QueueResumed,
     CheckpointCreated,
     CheckpointReverted,
-    /// A plan the agent proposed and the user can act on later. Durable because
-    /// "we agreed to do this" outlives the turn that said it.
+    /// A plan the agent proposed. Nothing writes this any more — plan mode and
+    /// its card were removed — but timelines already on disk carry it, so the
+    /// variant stays or those threads stop deserializing.
     PlanProposed,
     Error,
     Completion,

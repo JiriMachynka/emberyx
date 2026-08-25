@@ -3,15 +3,16 @@ import { createRoot } from "react-dom/client";
 import { Markdown } from "@/components/Markdown";
 
 /**
- * Mounted on a bare root rather than through Testing Library: comark parses
- * behind a Suspense boundary, and a suspended tree never resolves inside
- * Testing Library's `act` environment. Polls because React throttles the commit
- * that swaps the fallback for real content.
+ * Mounted on a bare root rather than through Testing Library: the renderer
+ * may commit asynchronously (Shiki grammars, block splits). Poll until the
+ * chat wrapper has children.
  */
-const md = async (text: string) => {
+const md = async (text: string, streaming = false) => {
   const container = document.createElement("div");
   document.body.appendChild(container);
-  createRoot(container).render(<Markdown text={text} fontSize={13} />);
+  createRoot(container).render(
+    <Markdown text={text} fontSize={13} streaming={streaming} />
+  );
   for (let i = 0; i < 100 && !container.querySelector(".chat-md")?.children.length; i++) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -21,24 +22,24 @@ const md = async (text: string) => {
 describe("Markdown code rendering", () => {
   it("renders a fence with no language as a plain block, not inline pills", async () => {
     const el = await md("```\n$ find src -type f\n(no output)\n```");
-    const code = el.querySelector("pre code")!;
-    expect(code.className).toBe("hljs");
-    expect(el.querySelector("pre .bg-muted")).toBeNull();
-    expect(code.textContent).toBe("$ find src -type f\n(no output)");
+    const pre = el.querySelector("pre")!;
+    expect(pre).not.toBeNull();
+    expect(pre.textContent).toContain("$ find src -type f");
+    expect(pre.textContent).toContain("(no output)");
+    expect(el.querySelector("p code")).toBeNull();
   });
 
-  it("highlights a fence that declares a language", async () => {
+  it("renders a language fence as a code block", async () => {
     const el = await md("```bash\nfind src -type f\n```");
-    const code = el.querySelector("pre code")!;
-    expect(code.className).toBe("hljs");
-    expect(code.innerHTML).toContain("<span");
+    const pre = el.querySelector("pre")!;
+    expect(pre).not.toBeNull();
+    expect(pre.textContent).toContain("find src -type f");
   });
 
   it("still styles genuine inline code as a pill", async () => {
     const el = await md("run `find src` first");
-    const code = el.querySelector("code")!;
-    expect(code.className).toContain("bg-muted");
     expect(el.querySelector("pre")).toBeNull();
+    expect(el.querySelector("code")?.textContent).toBe("find src");
   });
 });
 
@@ -56,7 +57,14 @@ describe("Markdown GFM", () => {
   });
 
   it("closes markup left open by a partial stream", async () => {
-    const el = await md("this is **bo");
-    expect(el.querySelector("strong")?.textContent).toBe("bo");
+    const el = await md("this is **bo", true);
+    expect(el.querySelector("[data-streamdown=strong]")?.textContent).toBe("bo");
+  });
+
+  it("shows an incomplete fence immediately while streaming", async () => {
+    const el = await md("```ts\nconst x = 1", true);
+    expect(el.querySelector("[data-streamdown=code-block]")?.textContent).toContain(
+      "const x = 1",
+    );
   });
 });

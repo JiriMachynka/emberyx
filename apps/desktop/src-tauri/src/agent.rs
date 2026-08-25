@@ -36,9 +36,13 @@ struct AgentSession {
     stdin: ChildStdin,
 }
 
+#[derive(Clone)]
 pub struct AgentManager {
     sessions: Arc<Mutex<HashMap<u32, AgentSession>>>,
-    next_id: AtomicU32,
+    /// Arc'd so a clone shares the counter: `agent_spawn` hands a cloned
+    /// manager to a blocking thread, and parallel spawns must not mint the
+    /// same session id from two independent copies.
+    next_id: Arc<AtomicU32>,
 }
 
 /// How long a spawn waits for the login-shell env capture. Sessions restored on
@@ -52,7 +56,7 @@ impl Default for AgentManager {
         crate::pty::warm_shell_env();
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
-            next_id: AtomicU32::new(0),
+            next_id: Arc::new(AtomicU32::new(0)),
         }
     }
 }
@@ -302,8 +306,9 @@ impl AgentManager {
     /// haiku one-shot (user hooks/settings excluded to keep it fast, cheap, and
     /// unstyled), then append it to the transcript as an `ai-title` line so
     /// `list_threads` surfaces it — headless sessions never get one otherwise.
+    /// Runs off the main thread: a title is a whole `claude -p` process, and a
+    /// sync command would freeze the UI for its duration.
     pub fn title_thread(
-        &self,
         cwd: String,
         session_id: String,
         first_message: String,
@@ -386,7 +391,7 @@ pub struct AgentHandle {
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub fn agent_spawn(
+pub async fn agent_spawn(
     manager: tauri::State<'_, AgentManager>,
     daemon: tauri::State<'_, crate::daemon::Daemon>,
     ask: tauri::State<'_, crate::ask::AskServer>,
@@ -404,47 +409,57 @@ pub fn agent_spawn(
     on_event: tauri::ipc::Channel<AgentEvent>,
 ) -> Result<AgentHandle> {
     let mcp_config = ask.mcp_config(&emberyx_session_id);
-    if persistent.unwrap_or(false) {
-        // Owned by the daemon: it outlives this window, and a reopened window
-        // reattaches instead of starting a second agent.
-        let spec = crate::daemon_protocol::AgentSpec {
-            agent_id: emberyx_session_id.clone(),
+    // Off the main thread: a spawn waits up to ENV_WAIT for the login-shell env
+    // capture on first launch, and a sync command would freeze the window for
+    // the whole wait. The clones share the managers' state, so concurrent
+    // spawns can't collide on session ids.
+    let manager = manager.inner().clone();
+    let daemon = daemon.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if persistent.unwrap_or(false) {
+            // Owned by the daemon: it outlives this window, and a reopened window
+            // reattaches instead of starting a second agent.
+            let spec = crate::daemon_protocol::AgentSpec {
+                agent_id: emberyx_session_id.clone(),
+                cwd,
+                session_id,
+                resume,
+                permission_mode,
+                skip_permissions,
+                settings,
+                mcp_config: Some(mcp_config),
+                model,
+                effort,
+                emberyx_session_id,
+            };
+            let (id, outcome) = daemon.spawn(spec, after_frame_id, channel_sink(on_event))?;
+            return Ok(AgentHandle {
+                id,
+                reattached: outcome.reattached,
+                truncated: outcome.truncated,
+            });
+        }
+        let id = manager.spawn(
             cwd,
             session_id,
             resume,
             permission_mode,
             skip_permissions,
             settings,
-            mcp_config: Some(mcp_config),
+            Some(mcp_config),
             model,
             effort,
             emberyx_session_id,
-        };
-        let (id, outcome) = daemon.spawn(spec, after_frame_id, channel_sink(on_event))?;
-        return Ok(AgentHandle {
+            channel_sink(on_event),
+        )?;
+        Ok(AgentHandle {
             id,
-            reattached: outcome.reattached,
-            truncated: outcome.truncated,
-        });
-    }
-    let id = manager.spawn(
-        cwd,
-        session_id,
-        resume,
-        permission_mode,
-        skip_permissions,
-        settings,
-        Some(mcp_config),
-        model,
-        effort,
-        emberyx_session_id,
-        channel_sink(on_event),
-    )?;
-    Ok(AgentHandle {
-        id,
-        reattached: false,
-        truncated: false,
+            reattached: false,
+            truncated: false,
+        })
     })
+    .await
+    .map_err(|e| crate::err!("agent_spawn join failed: {e}"))?
 }
 
 /// Adapt a Tauri IPC channel to an `AgentSink`. A closed channel reports `false`
@@ -487,11 +502,14 @@ pub fn agent_kill(
 }
 
 #[tauri::command]
-pub fn title_thread(
-    manager: tauri::State<'_, AgentManager>,
+pub async fn title_thread(
     cwd: String,
     session_id: String,
     first_message: String,
 ) -> Result<String> {
-    manager.title_thread(cwd, session_id, first_message)
+    tauri::async_runtime::spawn_blocking(move || {
+        AgentManager::title_thread(cwd, session_id, first_message)
+    })
+    .await
+    .map_err(|e| crate::err!("title_thread join failed: {e}"))?
 }

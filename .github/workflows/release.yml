@@ -10,14 +10,35 @@ on:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  # A release can already have created a GitHub release or uploaded artifacts.
+  cancel-in-progress: false
 
 jobs:
-  # Gate the build on the same checks CI runs on main — a red commit must never
-  # ship a .dmg. Uses the `test` cache key so it never thrashes the `release`
-  # cache the build job restores.
-  test:
-    runs-on: macos-latest
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Validate tag and project versions
+        run: bun run release:check -- "${GITHUB_REF_NAME}"
+
+      - name: Ensure tag is based on main
+        run: |
+          git fetch origin main --quiet
+          git merge-base --is-ancestor "${GITHUB_SHA}" origin/main
+
+  # Gate the release on the same checks CI runs on main, then publish from this
+  # runner. Keeping verification and packaging together avoids a second macOS
+  # runner plus a second checkout, toolchain setup, and dependency install.
+  release:
+    needs: preflight
+    runs-on: macos-14
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -26,11 +47,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+          targets: aarch64-apple-darwin
 
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
-          shared-key: test
+          # Matches warm-cache.yml so tag runs restore the main-branch release
+          # cache instead of compiling every dependency from scratch.
+          shared-key: release
 
       - run: bun install --frozen-lockfile
 
@@ -49,29 +73,6 @@ jobs:
       - name: Rust tests
         run: cargo test
         working-directory: apps/desktop/src-tauri
-
-  release:
-    needs: test
-    runs-on: macos-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: apps/desktop/src-tauri
-          # Matches warm-cache.yml so tag runs restore the main-branch cache
-          # instead of compiling every dependency from scratch.
-          shared-key: release
-
-      - run: bun install --frozen-lockfile
 
       - uses: tauri-apps/tauri-action@v0
         env:

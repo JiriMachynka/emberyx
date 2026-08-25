@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import {
   backendFromCommand,
   isAgentBackend,
@@ -11,7 +11,6 @@ export const PERMISSION_MODES = [
   "default",
   "acceptEdits",
   "bypassPermissions",
-  "plan",
 ] as const;
 
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
@@ -24,7 +23,6 @@ export const PERMISSION_MODE_LABEL: Record<PermissionMode, string> = {
   default: "Ask every time",
   acceptEdits: "Accept edits",
   bypassPermissions: "Bypass permissions",
-  plan: "Plan only",
 };
 
 export interface Settings {
@@ -35,8 +33,11 @@ export interface Settings {
   agentBackend: AgentBackend;
   /** Base agent command run on project open. */
   agentCommand: string;
-  /** Terminal + chat font-family stack. */
+  /** Terminal font-family stack. */
   fontFamily: string;
+  /** Chat, composer and thread-list font stack. Its own axis: the terminal
+   *  needs a monospace grid, the conversation around it does not. */
+  chatFontFamily: string;
   /** Editor font-family stack, kept separate so the editor can use a font
    *  whose ligatures render correctly. */
   editorFontFamily: string;
@@ -108,6 +109,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agentBackend: "claude",
   agentCommand: "claude",
   fontFamily: '"Geist Mono Variable", ui-monospace, Menlo, monospace',
+  chatFontFamily: '"DM Sans Variable", ui-sans-serif, system-ui, sans-serif',
   editorFontFamily:
     '"JetBrains Mono Variable", "Geist Mono Variable", ui-monospace, Menlo, monospace',
   fontSize: 13,
@@ -142,6 +144,14 @@ export const DEFAULT_SETTINGS: Settings = {
 
 const KEY = "emberyx.settings";
 
+/** Plan-only was dropped as a mode. A stored `"plan"` would still be passed to
+ *  `--permission-mode` with nothing in the UI to turn it off, so it reverts to
+ *  the default posture. */
+const dropStoredPlanMode = (s: Settings): Settings =>
+  PERMISSION_MODES.includes(s.permissionMode)
+    ? s
+    : { ...s, permissionMode: DEFAULT_SETTINGS.permissionMode };
+
 /** Codex once stored its effort inside the model as `id:effort`. Left alone,
  *  that whole string would be sent as a model id, so lift it back out. No
  *  Claude alias contains a colon. */
@@ -158,7 +168,9 @@ export function loadSettings(): Settings {
     const raw = localStorage.getItem(KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const stored = JSON.parse(raw) as Partial<Settings>;
-    const merged = splitStoredEffort({ ...DEFAULT_SETTINGS, ...stored });
+    const merged = dropStoredPlanMode(
+      splitStoredEffort({ ...DEFAULT_SETTINGS, ...stored })
+    );
     // Settings written before the backend was explicit only recorded the
     // command; keep those users on exactly the surface they had.
     return isAgentBackend(stored.agentBackend)
@@ -169,8 +181,23 @@ export function loadSettings(): Settings {
   }
 }
 
+/** Push the chosen stacks onto `:root` so Tailwind `font-sans` / `font-mono`
+ *  and Streamdown code fences follow Appearance instead of the hardcoded
+ *  theme defaults. Layout-effect so the first paint already matches. */
+export const applyFontFamilies = (
+  s: Pick<Settings, "chatFontFamily" | "editorFontFamily">,
+) => {
+  const root = document.documentElement.style;
+  root.setProperty("--chat-font", s.chatFontFamily);
+  root.setProperty("--code-font", s.editorFontFamily);
+};
+
 export function useSettings() {
   const [settings, setSettings] = useState<Settings>(loadSettings);
+
+  useLayoutEffect(() => {
+    applyFontFamilies(settings);
+  }, [settings.chatFontFamily, settings.editorFontFamily]);
 
   function update(patch: Partial<Settings>) {
     setSettings((prev) => {

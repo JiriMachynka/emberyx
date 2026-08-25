@@ -105,8 +105,9 @@ export const handoffTurnsFrom = (
         const tools = [...new Set(message.tools.map((tool) => tool.name))];
         return {
           role: message.role,
-          provider,
-          model: message.role === "assistant" ? model : null,
+          provider: message.provider ?? provider,
+          model:
+            message.role === "assistant" ? (message.model ?? model) : null,
           text: message.text,
           ...(tools.length ? { tools } : {}),
         };

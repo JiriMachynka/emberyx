@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { STATUS_META, statusForEvent, statusOf } from "@/lib/status";
+import { STATUS_META, formatElapsed, statusForEvent, statusOf } from "@/lib/status";
 import type { SessionStatus } from "@/types";
 
 describe("statusForEvent", () => {
@@ -83,5 +83,31 @@ describe("STATUS_META", () => {
     expect(STATUS_META.idle.pulse).toBe(false);
     expect(STATUS_META.working.pulse).toBe(true);
     expect(STATUS_META.waiting.pulse).toBe(true);
+  });
+});
+
+describe("formatElapsed", () => {
+  const start = 1_000_000;
+
+  it("counts seconds while a turn is short", () => {
+    expect(formatElapsed(start, start + 2_000)).toBe("2s");
+    expect(formatElapsed(start, start + 59_000)).toBe("59s");
+  });
+
+  it("switches to minutes with padded seconds", () => {
+    expect(formatElapsed(start, start + 80_000)).toBe("1m 20s");
+  });
+
+  it("drops seconds once the run is hours long", () => {
+    expect(formatElapsed(start, start + 3_900_000)).toBe("1h 05m");
+  });
+
+  // A session with no recorded start says nothing rather than "NaN".
+  it("says nothing without a start", () => {
+    expect(formatElapsed(undefined)).toBe("");
+  });
+
+  it("never counts backwards", () => {
+    expect(formatElapsed(start, start - 5_000)).toBe("0s");
   });
 });

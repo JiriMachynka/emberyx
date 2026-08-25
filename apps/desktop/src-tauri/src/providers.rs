@@ -91,19 +91,13 @@ fn path_dirs(path: &str) -> Vec<PathBuf> {
 }
 
 /// Resolve an executable against a PATH value (case-sensitive, like `which`).
-fn resolve_on_path(binary: &str, path: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_on_path(binary: &str, path: &str) -> Option<PathBuf> {
     path_dirs(path)
         .into_iter()
         .map(|dir| dir.join(binary))
         .find(|candidate| {
             candidate.is_file() && is_executable(candidate)
         })
-}
-
-fn on_path(binary: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|p| resolve_on_path(binary, &p.to_string_lossy()).is_some())
-        .unwrap_or(false)
 }
 
 #[cfg(unix)]
@@ -121,7 +115,7 @@ fn is_executable(_path: &std::path::Path) -> bool {
 
 /// Best-effort version probe. Spawns `binary --version`;
 /// any failure yields None rather than failing the whole status row.
-fn probe_version(binary: &std::path::Path, env: &[(String, String)]) -> Option<String> {
+pub(crate) fn probe_version(binary: &std::path::Path, env: &[(String, String)]) -> Option<String> {
     let out = std::process::Command::new(binary)
         .arg("--version")
         .envs(env.iter().map(|(key, value)| (key, value)))
@@ -196,11 +190,11 @@ mod tests {
     }
 
     #[test]
-    fn on_path_finds_a_known_binary() {
+    fn resolve_on_path_finds_a_known_binary() {
+        let path = std::env::var("PATH").unwrap();
         // `sh` is guaranteed on PATH on every unix; the probe must find it.
-        assert!(on_path("sh"));
-        // A binary that does not exist must never report installed.
-        assert!(!on_path("emberyx-definitely-not-a-real-binary"));
+        assert!(resolve_on_path("sh", &path).is_some());
+        assert!(resolve_on_path("emberyx-definitely-not-a-real-binary", &path).is_none());
     }
 
     #[test]
@@ -212,7 +206,8 @@ mod tests {
         assert_eq!(status.binary, "kilo");
         // Installed or not, the struct is coherent — no crash, version None when
         // the binary is absent.
-        assert_eq!(status.installed, on_path("kilo"));
+        let path = std::env::var("PATH").unwrap_or_default();
+        assert_eq!(status.installed, resolve_on_path("kilo", &path).is_some());
         if !status.installed {
             assert!(status.version.is_none());
         }

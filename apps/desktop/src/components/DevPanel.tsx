@@ -19,6 +19,8 @@ interface DevPanelProps {
   /** A server that exited on its own — drop it so "running" stops lying. */
   onExit: (id: string) => void;
   onClose: () => void;
+  /** Render inside the dock rather than as its own right aside. */
+  embedded?: boolean;
 }
 
 /** Right-hand panel streaming each running dev server's output. Hidden rather
@@ -33,6 +35,7 @@ export function DevPanel({
   onStop,
   onExit,
   onClose,
+  embedded,
 }: DevPanelProps) {
   const mine = sessions.filter((s) => s.projectId === projectId);
   const [selected, setSelected] = useState<string | null>(null);
@@ -53,6 +56,7 @@ export function DevPanel({
     <SidePanel
       storageKey="dev"
       open={open}
+      embedded={embedded}
       onClose={onClose}
       header={
         <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
@@ -108,7 +112,7 @@ export function DevPanel({
               fontFamily={fontFamily}
               fontSize={fontSize}
               scrollback={scrollback}
-              active={false}
+              active={open && s.id === active?.id}
               onExit={handleExit}
             />
           </div>

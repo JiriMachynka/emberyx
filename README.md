@@ -115,11 +115,15 @@ Requires Rust, bun, and Xcode Command Line Tools.
 ## Releases
 
 In-app updates use the [Tauri updater](https://v2.tauri.app/plugin/updater/).
-Cut a release by bumping `version` in `apps/desktop/src-tauri/tauri.conf.json`
-(keep `package.json` and `src-tauri/Cargo.toml` in sync) and pushing a tag:
+Cut a release by running the version helper, reviewing the generated diff, and
+pushing the tag:
 
 ```bash
-git tag v0.1.8 && git push --tags
+bun run release 0.2.6
+git add apps/desktop/package.json apps/desktop/src-tauri/Cargo.toml \
+  apps/desktop/src-tauri/tauri.conf.json
+git commit -m "chore(release): v0.2.6"
+git tag v0.2.6 && git push origin main v0.2.6
 ```
 
 GitHub Actions (`.github/workflows/release.yml`) builds a signed
@@ -127,6 +131,8 @@ GitHub Actions (`.github/workflows/release.yml`) builds a signed
 `latest.json`. Installed apps pick it up on next launch.
 `.github/workflows/warm-cache.yml` keeps a Rust dependency cache on `main` —
 tag runs can't read each other's caches, only the default branch's.
+The release workflow rejects tags that do not match all three version files or
+that are not based on `main`.
 
 Signing needs the `TAURI_SIGNING_PRIVATE_KEY` repo secret (a minisign key from
 `bun run tauri signer generate`); the matching public key lives in

@@ -1,10 +1,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  cacheSavingsOf,
   codexCost,
   contextWindowFor,
   costOf,
   formatTokens,
   refreshPricing,
+  rowCost,
   totalTokens,
   type Usage,
 } from "@/lib/pricing";
@@ -242,5 +244,62 @@ describe("codexCost", () => {
         outputTokens: 100,
       })
     ).toBeUndefined();
+  });
+});
+
+describe("rowCost", () => {
+  it("prices Codex rows on the Codex table, not Claude rates", () => {
+    const row = {
+      ...usage({
+        model: "gpt-5.6-luna",
+        input: 1_000_000,
+        cacheRead: 0,
+        output: 0,
+      }),
+      provider: "codex",
+    };
+    expect(rowCost(row)).toBeCloseTo(0.2, 10);
+  });
+
+  it("uses the stored USD for OpenCode and Kilo instead of Claude rates", () => {
+    const row = {
+      ...usage({
+        model: "gpt-5.6-luna",
+        input: 1_000_000,
+        cacheRead: 0,
+        output: 0,
+      }),
+      provider: "opencode",
+      cost: 1.25,
+    };
+    expect(rowCost(row)).toBe(1.25);
+    expect(
+      rowCost({
+        ...usage({ model: "minimax/minimax-m2.5:free" }),
+        provider: "kilo",
+        cost: 0,
+      }),
+    ).toBe(0);
+  });
+});
+
+describe("cacheSavingsOf", () => {
+  it("is the gap between full input and cache-read rates", () => {
+    const row = {
+      ...usage({ cacheRead: 1_000_000 }),
+      provider: "claude",
+    };
+    const asInput = costOf(usage({ input: 1_000_000 }));
+    const asCache = costOf(usage({ cacheRead: 1_000_000 }));
+    expect(cacheSavingsOf(row)).toBeCloseTo(asInput - asCache, 10);
+  });
+
+  it("does not invent cache savings for OpenCode or Kilo", () => {
+    expect(
+      cacheSavingsOf({
+        ...usage({ cacheRead: 1_000_000 }),
+        provider: "opencode",
+      }),
+    ).toBe(0);
   });
 });

@@ -181,7 +181,7 @@ const toolShapeFor = (
     case "dynamicToolCall":
       return { name: item.tool, input: item.arguments ?? {} };
     case "plan":
-      return { name: "ExitPlanMode", input: { plan: item.text } };
+      return { name: "Plan", input: { plan: item.text } };
     case "unknown":
       return { name: item.kind, input: item.raw };
     default:
@@ -534,7 +534,7 @@ export function applyCodexNotification(
               : "";
           return {
             id: d.itemId,
-            name: "ExitPlanMode",
+            name: "Plan",
             input: { plan: plan + d.delta },
             partial: prev?.partial ?? "",
             result: prev?.result,

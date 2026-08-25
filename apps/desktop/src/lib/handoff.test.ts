@@ -118,6 +118,18 @@ describe("handoffTurnsFrom", () => {
   });
 
   // The user did not run on a model; claiming one would misattribute the turn.
+  // Attribution is stamped at carry-over; reading the pane's current provider
+  // would relabel earlier turns the moment the thread changes hands.
+  it("keeps a stamped provider instead of the pane's current one", () => {
+    const [carried] = handoffTurnsFrom(
+      [message({ provider: "claude", model: "opus-5" })],
+      "codex",
+      "gpt-5.1"
+    );
+    expect(carried.provider).toBe("claude");
+    expect(carried.model).toBe("opus-5");
+  });
+
   it("leaves the user's own turns without a model", () => {
     const [carried] = handoffTurnsFrom(
       [message({ role: "user", text: "do it" })],

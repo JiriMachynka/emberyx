@@ -26,6 +26,7 @@ apps/desktop/          the app
       thread.ts        one visual thread across several providers
       checkpoints.ts   per-turn working-tree snapshots
       preview.ts       dev-server URL normalising
+      dock.ts          right-hand dock tab model (pure state)
   src-tauri/src/       Rust core, one module per capability
 apps/web/              Astro marketing site (separate, rarely touched)
 ```
@@ -154,6 +155,18 @@ pointed at nothing looks identical to a broken app. `lib/preview.ts` only accept
 http(s): the frame runs in the app's own webview, and an all-digit input is
 resolved as a port because `new URL("http://999999")` is a valid *IP address*.
 
+### The right-hand dock
+
+Every right-side surface — terminal, files, diff, preview, reviews, dev output,
+project settings — is a tab of one resizable panel (`RightDock`), not an aside
+of its own. `lib/dock.ts` is the pure state behind the strip; the panel owns the
+*mounting* policy, which is where the sharp edge is: `STICKY_KINDS` (terminal,
+dev output) stay mounted after their tab closes, because `TerminalPane` kills
+its PTY on unmount and a dev server that dies when you close a tab is a stop
+button, not a tab. Everything else unmounts with its tab so a closed diff isn't
+still polling git. Panels rendered here pass `embedded` to `SidePanel`, which
+drops the frame and keeps the header row.
+
 ### Settings
 
 `SettingsDialog.tsx` is nine sections: General, Providers, Permissions,
@@ -167,6 +180,10 @@ About. Two are worth knowing about:
 - **Keyboard Shortcuts** is a reference table, not a rebinding UI. Nothing
   rebinds keys yet, and a settings screen that implies otherwise is worse than
   one that tells you what the keys are.
+
+Fonts are two axes, not one: `chatFontFamily` drives the chat transcript, the
+composer and the sidebar thread list; `fontFamily` is the terminal's. The chat
+list offers sans faces — the conversation is prose, the terminal is a grid.
 
 `lib/ide.ts` gives each editor a *pair* of argv templates (project, file) rather
 than one with optional placeholders — a single template has to drop flags
@@ -258,6 +275,16 @@ param, Claude folds it into the model name. Where the CLIs genuinely
 differ, the difference is carried rather than hidden — e.g. `COMMAND_SIGIL`
 is `/` for Claude and `$` for Codex, because that is what each actually
 executes. Prefer a missing control over a control that lies.
+
+The composer's model picker is one list across providers, not a menu per
+backend (`components/ModelPicker.tsx`, catalog in `lib/modelCatalog.ts`): each
+entry knows whose it is, so picking a Codex model inside a Claude chat switches
+the transport in place first and then sets the model. That switch is silent —
+`ChatPane.switchProvider(to, prefill)` only fills the composer with the handoff
+package for the explicit "Continue here with X" action. Providers that can't be
+enumerated (the ACP ones negotiate a catalog but no mid-session switch) are
+listed disabled rather than hidden: an absent icon reads as unsupported, a
+disabled one as not wired yet, and the second is the truth.
 
 `codex app-server` is flagged experimental and has renamed its core methods
 once already. Generate types from the installed binary

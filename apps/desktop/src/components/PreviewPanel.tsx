@@ -10,6 +10,8 @@ import { PREVIEW_PORT_HINT, isLocalUrl, normalizePreviewUrl, portUrl } from "@/l
 interface PreviewPanelProps {
   open: boolean;
   onClose: () => void;
+  /** Render inside the dock rather than as its own right aside. */
+  embedded?: boolean;
   /** Remembers the last URL per project, so reopening lands where you were. */
   projectPath: string | null;
 }
@@ -24,7 +26,12 @@ const memoryKey = (project: string) => `emberyx.preview.${project}`;
  * app. Reloading remounts the frame rather than poking at its document: the
  * frame is cross-origin, so its internals are not ours to touch.
  */
-export function PreviewPanel({ open, onClose, projectPath }: PreviewPanelProps) {
+export function PreviewPanel({
+  open,
+  onClose,
+  projectPath,
+  embedded,
+}: PreviewPanelProps) {
   const [draft, setDraft] = useState("");
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +75,7 @@ export function PreviewPanel({ open, onClose, projectPath }: PreviewPanelProps) 
     <SidePanel
       storageKey="preview"
       open={open}
+      embedded={embedded}
       onClose={onClose}
       header={
         <div className="flex items-center gap-2 text-sm font-medium">

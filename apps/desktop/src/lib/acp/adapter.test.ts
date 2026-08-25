@@ -146,7 +146,7 @@ describe("plans", () => {
     expect(planEntriesOf({ sessionUpdate: "agent_message_chunk" })).toBeNull();
   });
 
-  it("renders a plan as the ExitPlanMode tool the pane's plan card reads", () => {
+  it("renders a plan as the task list both CLIs already map their steps to", () => {
     const turn = fold([
       {
         sessionUpdate: "plan",
@@ -157,8 +157,13 @@ describe("plans", () => {
       },
     ]);
     const tool = turn.message!.tools[0];
-    expect(tool.name).toBe("ExitPlanMode");
-    expect(tool.input).toEqual({ plan: "- [x] Look around\n- [ ] Change it" });
+    expect(tool.name).toBe("TodoWrite");
+    expect(tool.input).toEqual({
+      todos: [
+        { content: "Look around", status: "completed" },
+        { content: "Change it", status: "pending" },
+      ],
+    });
   });
 
   it("replaces the plan in place as it evolves, rather than stacking copies", () => {
@@ -167,7 +172,9 @@ describe("plans", () => {
       { sessionUpdate: "plan", entries: [{ content: "One", status: "completed" }] },
     ]);
     expect(turn.message?.tools).toHaveLength(1);
-    expect(turn.message?.tools[0].input).toEqual({ plan: "- [x] One" });
+    expect(turn.message?.tools[0].input).toEqual({
+      todos: [{ content: "One", status: "completed" }],
+    });
   });
 });
 

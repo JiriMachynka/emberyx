@@ -7,8 +7,8 @@
 //! normalised to GitLab's `opened | merged | closed` — GitHub reports a merged
 //! PR as `closed` with a `merged_at`, which would otherwise read as "rejected".
 //!
-//! The token lives in the OS keychain and never crosses the Tauri boundary; each
-//! request re-reads it here.
+//! Auth is the GitHub CLI (`gh auth token`). Reviews never take a PAT of their
+//! own — `gh` already stored one when the user logged in.
 
 use std::process::Command;
 use std::time::Duration;
@@ -19,61 +19,13 @@ use crate::error::Result;
 use crate::gitlab::{MergeRequest, MergeRequestDetail, MrDiffFile, MrNote};
 
 const API_BASE: &str = "https://api.github.com";
-const KEYCHAIN_SERVICE: &str = "emberyx";
-const KEYCHAIN_ACCOUNT: &str = "github.com";
-const NO_TOKEN: &str = "No GitHub token — add one in Settings";
 const NOT_GITHUB: &str = "Not a github.com repository";
 /// GitHub rejects requests without one, and pins the response shape by version.
 const API_VERSION: &str = "2022-11-28";
 const USER_AGENT: &str = "emberyx";
 
-// ---------------------------------------------------------------------------
-// Token storage
-// ---------------------------------------------------------------------------
-
-fn entry() -> Result<keyring::Entry> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
-        .map_err(|e| crate::err!("Keychain unavailable: {e}"))
-}
-
 fn token() -> Result<String> {
-    let value = entry()?
-        .get_password()
-        .map_err(|_| crate::err!("{NO_TOKEN}"))?;
-    let value = value.trim().to_string();
-    if value.is_empty() {
-        return Err(NO_TOKEN.into());
-    }
-    Ok(value)
-}
-
-#[tauri::command]
-pub fn github_set_token(token: String) -> Result<()> {
-    let token = token.trim();
-    if token.is_empty() {
-        return Err("Token is empty".into());
-    }
-    entry()?
-        .set_password(token)
-        .map_err(|e| crate::err!("Could not save token to the keychain: {e}"))
-}
-
-#[tauri::command]
-pub fn github_has_token() -> Result<bool> {
-    Ok(entry()?
-        .get_password()
-        .map(|t| !t.trim().is_empty())
-        .unwrap_or(false))
-}
-
-#[tauri::command]
-pub fn github_clear_token() -> Result<()> {
-    match entry()?.delete_credential() {
-        Ok(()) => Ok(()),
-        // Clearing a token that was never stored is a no-op, not a failure.
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(crate::err!("Could not clear token from the keychain: {e}")),
-    }
+    crate::forge_cli::github_token()
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +94,7 @@ fn get_json<T: serde::de::DeserializeOwned>(url: &str, token: &str) -> Result<T>
         .call()
         .map_err(|e| match e {
             ureq::Error::Status(code, resp) => match code {
-                401 => crate::err!("GitHub rejected the token — check it in Settings"),
+                401 => crate::err!("GitHub rejected the credentials — run `gh auth login`"),
                 403 => crate::err!(
                     "GitHub refused the request — the token may lack `repo` scope, or you are rate limited"
                 ),

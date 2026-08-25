@@ -80,3 +80,17 @@ export const STATUS_META: Record<
     pulse: true,
   },
 };
+
+/** How long the current status has been true, as a card shows it: "2s", "45s",
+ *  "1m 20s", "2h 05m". Seconds matter while a turn is short — that is the whole
+ *  point of the readout — and stop mattering once it isn't. */
+export function formatElapsed(sinceMs: number | undefined, now = Date.now()): string {
+  if (!sinceMs) return "";
+  const total = Math.max(0, Math.floor((now - sinceMs) / 1000));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  if (minutes < 60) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+}

@@ -163,7 +163,29 @@ describe("useAgentChat lifecycle", () => {
 
   it("reports an exited process", async () => {
     const { result, channel } = await mount();
+    act(() => result.current.send("go"));
     act(() => channel.onmessage!({ type: "exit", data: 0 }));
+    expect(result.current.status).toBe("exited");
+  });
+
+  // Several agents boot at once when a window restores its projects; one dying
+  // before the user has touched it is a boot problem, not the work failing.
+  it("retries once, silently, when a session dies before it was used", async () => {
+    const { result, channel } = await mount();
+    act(() => channel.onmessage!({ type: "exit", data: 1 }));
+
+    expect(result.current.status).not.toBe("exited");
+    expect(result.current.exitReason).toBeNull();
+    await waitFor(() => expect(sentTo("agent_spawn")).toHaveLength(2));
+  });
+
+  it("gives up after one silent retry", async () => {
+    const { result, channel } = await mount();
+    act(() => channel.onmessage!({ type: "exit", data: 1 }));
+    await waitFor(() => expect(sentTo("agent_spawn")).toHaveLength(2));
+
+    const next = channels[channels.length - 1];
+    act(() => next.onmessage!({ type: "exit", data: 1 }));
     expect(result.current.status).toBe("exited");
   });
 
@@ -200,6 +222,7 @@ describe("useAgentChat lifecycle", () => {
 
   it("surfaces the stderr tail as the exit reason on a non-zero exit", async () => {
     const { result, channel } = await mount();
+    act(() => result.current.send("go"));
     act(() => channel.onmessage!({ type: "stderr", data: "warming up\n" }));
     act(() => channel.onmessage!({ type: "stderr", data: "Error: could not read credentials\n" }));
     act(() => channel.onmessage!({ type: "exit", data: 1 }));
@@ -209,6 +232,7 @@ describe("useAgentChat lifecycle", () => {
 
   it("clears the exit reason on restart", async () => {
     const { result, channel } = await mount();
+    act(() => result.current.send("go"));
     act(() => channel.onmessage!({ type: "stderr", data: "boom\n" }));
     act(() => channel.onmessage!({ type: "exit", data: 1 }));
     expect(result.current.exitReason).toBe("boom");
@@ -226,6 +250,8 @@ describe("useAgentChat lifecycle", () => {
     const { result } = renderHook(() => useAgentChat(options));
     await waitFor(() => expect(result.current.status).toBe("error"));
     expect(result.current.ready).toBe(false);
+    // "Session failed." on its own is true and useless.
+    expect(result.current.exitReason).toContain("no claude on PATH");
   });
 });
 

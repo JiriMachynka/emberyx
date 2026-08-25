@@ -1,395 +1,735 @@
-import { useMemo, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
-import { RefreshCw, X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { basename } from "@/lib/path";
-import { costOf, formatTokens, totalTokens } from "@/lib/pricing";
+import {
+  cacheSavingsOf,
+  formatTokens,
+  rowCost,
+  totalTokens,
+} from "@/lib/pricing";
 import { useUsageSummary } from "@/lib/queries";
-import { PROVIDER_LABEL, type Provider } from "@/lib/providers";
+import { PROVIDERS, PROVIDER_LABEL, type Provider } from "@/lib/providers";
 import type { UsageRow } from "@/types";
 
-const RANGES = [7, 30, 90] as const;
 
-/** Cost + token totals for a group of rows. */
-interface Bucket {
-  key: string;
-  cost: number;
-  tokens: number;
-  messages: number;
-}
+const RANGES = [
+  { label: "Past 24h", days: 1 },
+  { label: "7 days", days: 7 },
+  { label: "30 days", days: 30 },
+  { label: "90 days", days: 90 },
+] as const;
 
-/** Roll rows up by whatever key `pick` returns, most expensive first. */
-function groupBy(rows: UsageRow[], pick: (row: UsageRow) => string): Bucket[] {
-  const map = new Map<string, Bucket>();
-  for (const row of rows) {
-    const key = pick(row);
-    const bucket = map.get(key) ?? { key, cost: 0, tokens: 0, messages: 0 };
-    bucket.cost += costOf(row);
-    bucket.tokens += totalTokens(row);
-    bucket.messages += row.messages;
-    map.set(key, bucket);
-  }
-  return [...map.values()].sort((a, b) => b.cost - a.cost);
-}
+const PROVIDER_DOT: Record<Provider, string> = {
+  claude: "bg-primary",
+  cursor: "bg-zinc-400",
+  codex: "bg-zinc-200",
+  grok: "bg-foreground/70",
+  opencode: "bg-sky-400",
+  kilo: "bg-amber-400",
+};
 
-/** Shorten a model id for display: "claude-opus-4-8-2026…" → "opus-4-8". */
-function prettyModel(model: string): string {
-  return model.replace(/^claude-/, "").replace(/-\d{8}$/, "");
-}
+/** Stroke/fill for the SVG series — CSS variables so they track the theme. */
+const PROVIDER_COLOR: Record<Provider, string> = {
+  claude: "var(--primary)",
+  cursor: "oklch(0.7 0 0)",
+  codex: "oklch(0.86 0 0)",
+  grok: "oklch(0.78 0 0)",
+  opencode: "oklch(0.72 0.12 230)",
+  kilo: "oklch(0.78 0.14 75)",
+};
+
+type Metric = "cost" | "tokens";
+type Breakdown = "model" | "day";
+
+const formatUsd = (n: number): string =>
+  n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+
+const formatCount = (n: number): string => n.toLocaleString("en-US");
+
+const utcDate = (iso: string): Date => new Date(`${iso}T00:00:00Z`);
+
+const addUtcDays = (iso: string, n: number): string => {
+  const d = utcDate(iso);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+
+const formatRange = (from: string, to: string): string => {
+  const fmt = (iso: string) =>
+    utcDate(iso).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      timeZone: "UTC",
+    });
+  return `${fmt(from)} to ${fmt(to)}`;
+};
+
+const todayUtc = (): string => new Date().toISOString().slice(0, 10);
 
 interface UsagePanelProps {
-  onClose: () => void;
+  onBack: () => void;
 }
 
 /**
- * Cross-project spend, rolled up by day, project, model, and provider. Costs
- * are estimates from the local rate table, same as the per-agent meter in the
- * context bar — never a billed figure.
- *
- * Only providers that keep a readable history on disk can appear here. The
- * provider filter lists what the data actually contains rather than every
- * provider Emberyx can drive, so an empty row never reads as "spent nothing".
+ * Cross-project spend across every provider that keeps a readable history
+ * on disk (Claude and Codex JSONL, OpenCode and Kilo sqlite). Costs are
+ * estimates — never billed. Grok and Cursor do not log per-turn tokens.
  */
-export function UsagePanel({ onClose }: UsagePanelProps) {
-  const [days, setDays] = useState<number>(30);
-  const [provider, setProvider] = useState<Provider | "all">("all");
+export function UsagePanel({ onBack }: UsagePanelProps) {
+  const [days, setDays] = useState(30);
+  const [metric, setMetric] = useState<Metric>("cost");
+  const [breakdown, setBreakdown] = useState<Breakdown>("model");
   const query = useUsageSummary(days, true);
-  const all = useMemo(() => query.data ?? [], [query.data]);
-  const providers = useMemo(
-    () => [...new Set(all.map((row) => row.provider))].sort(),
-    [all]
-  );
-  const rows = useMemo(
-    () => (provider === "all" ? all : all.filter((row) => row.provider === provider)),
-    [all, provider]
-  );
+  const rows = query.data?.rows ?? [];
+  const sessionCounts = query.data?.sessions ?? [];
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onBack();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onBack]);
+
+  const to = todayUtc();
+  const from = addUtcDays(to, -(days - 1));
 
   const byDay = useMemo(() => {
-    const map = new Map<string, Bucket>();
+    const map = new Map<string, { cost: number; tokens: number }>();
+    for (let d = from; d <= to; d = addUtcDays(d, 1)) {
+      map.set(d, { cost: 0, tokens: 0 });
+    }
     for (const row of rows) {
-      const bucket = map.get(row.date) ?? {
-        key: row.date,
-        cost: 0,
-        tokens: 0,
-        messages: 0,
-      };
-      bucket.cost += costOf(row);
+      const bucket = map.get(row.date);
+      if (!bucket) continue;
+      bucket.cost += rowCost(row);
+      bucket.tokens += totalTokens(row);
+    }
+    return [...map.entries()].map(([date, v]) => ({ date, ...v }));
+  }, [rows, from, to]);
+
+  const byProvider = useMemo(() => {
+    const map = new Map<
+      Provider,
+      { cost: number; tokens: number; messages: number }
+    >();
+    for (const provider of PROVIDERS) {
+      map.set(provider, { cost: 0, tokens: 0, messages: 0 });
+    }
+    for (const row of rows) {
+      const bucket = map.get(row.provider) ?? { cost: 0, tokens: 0, messages: 0 };
+      bucket.cost += rowCost(row);
       bucket.tokens += totalTokens(row);
       bucket.messages += row.messages;
-      map.set(row.date, bucket);
+      map.set(row.provider, bucket);
     }
-    return [...map.values()].sort((a, b) => a.key.localeCompare(b.key));
+    return PROVIDERS.map((provider) => ({
+      provider,
+      ...(map.get(provider) ?? { cost: 0, tokens: 0, messages: 0 }),
+      sessions: sessionCounts.find((s) => s.provider === provider)?.count ?? 0,
+    })).sort((a, b) => b.cost - a.cost || b.tokens - a.tokens);
+  }, [rows, sessionCounts]);
+
+  const chartProviders = useMemo(
+    () => byProvider.filter((p) => p.cost > 0 || p.tokens > 0).map((p) => p.provider),
+    [byProvider],
+  );
+
+  const byModel = useMemo(() => {
+    const map = new Map<
+      string,
+      { cost: number; tokens: number; provider: Provider }
+    >();
+    for (const row of rows) {
+      const bucket = map.get(row.model) ?? {
+        cost: 0,
+        tokens: 0,
+        provider: row.provider,
+      };
+      bucket.cost += rowCost(row);
+      bucket.tokens += totalTokens(row);
+      map.set(row.model, bucket);
+    }
+    return [...map.entries()]
+      .map(([model, v]) => ({ model, ...v }))
+      .sort((a, b) => b.cost - a.cost);
   }, [rows]);
 
-  const byProject = useMemo(() => groupBy(rows, (r) => r.project), [rows]);
-  const byModel = useMemo(() => groupBy(rows, (r) => r.model), [rows]);
-  const byProvider = useMemo(() => groupBy(rows, (r) => r.provider), [rows]);
-
-  const total = rows.reduce((sum, r) => sum + costOf(r), 0);
-  const tokens = rows.reduce((sum, r) => sum + totalTokens(r), 0);
-  const today = byDay[byDay.length - 1];
-  const peak = Math.max(...byDay.map((d) => d.cost), 0.01);
-  const lastSeven = byDay.slice(-7).reduce((sum, d) => sum + d.cost, 0);
+  const totalCost = byProvider.reduce((s, p) => s + p.cost, 0);
+  const totalTokensAll = byProvider.reduce((s, p) => s + p.tokens, 0);
+  const totalSessions = sessionCounts.reduce((s, p) => s + p.count, 0);
+  const cachedInput = rows.reduce((s, r) => s + r.cacheRead, 0);
+  const uncachedInput = rows.reduce((s, r) => s + r.input, 0);
+  const output = rows.reduce((s, r) => s + r.output, 0);
+  const processed = rows.reduce((s, r) => s + totalTokens(r), 0);
+  const savings = rows.reduce((s, r) => s + cacheSavingsOf(r), 0);
 
   return (
-    <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=open]:fade-in" />
-        <Dialog.Content
-          aria-describedby={undefined}
-          className="fixed inset-x-0 top-[6%] z-50 mx-auto flex max-h-[85%] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border bg-popover shadow-2xl outline-none data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95"
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
+        <button
+          type="button"
+          onClick={onBack}
+          className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+          aria-label="Back"
         >
-          <header className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
-            <Dialog.Title className="text-sm font-medium">Usage & cost</Dialog.Title>
-            <div className="ml-auto flex items-center gap-1">
-              {providers.length > 1 && (
-                <>
-                  <button
-                    onClick={() => setProvider("all")}
-                    className={cn(
-                      "rounded px-2 py-1 text-xs",
-                      provider === "all"
-                        ? "bg-secondary text-foreground"
-                        : "text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    All
-                  </button>
-                  {providers.map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => setProvider(p)}
-                      className={cn(
-                        "rounded px-2 py-1 text-xs",
-                        provider === p
-                          ? "bg-secondary text-foreground"
-                          : "text-muted-foreground hover:text-foreground"
-                      )}
-                    >
-                      {PROVIDER_LABEL[p] ?? p}
-                    </button>
-                  ))}
-                  <span className="mx-1 h-4 w-px bg-border" />
-                </>
-              )}
-              {RANGES.map((r) => (
-                <button
-                  key={r}
-                  onClick={() => setDays(r)}
-                  className={cn(
-                    "rounded px-2 py-1 text-xs",
-                    days === r
-                      ? "bg-secondary text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  {r}d
-                </button>
-              ))}
-              <button
-                onClick={() => void query.refetch()}
-                title="Rescan transcripts"
-                className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+          <ArrowLeft className="size-4" />
+        </button>
+        <h1 className="text-sm font-medium">Usage</h1>
+        <span className="text-sm text-muted-foreground">/ {formatRange(from, to)}</span>
+        <div className="ml-auto flex items-center gap-1">
+          <PillGroup>
+            <Pill active={metric === "cost"} onClick={() => setMetric("cost")}>
+              Cost
+            </Pill>
+            <Pill active={metric === "tokens"} onClick={() => setMetric("tokens")}>
+              Tokens
+            </Pill>
+          </PillGroup>
+          <PillGroup>
+            {RANGES.map((r) => (
+              <Pill
+                key={r.days}
+                active={days === r.days}
+                onClick={() => setDays(r.days)}
               >
-                <RefreshCw
-                  className={cn("size-3.5", query.isFetching && "animate-spin")}
-                />
-              </button>
-              <Dialog.Close className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
-                <X className="size-4" />
-              </Dialog.Close>
-            </div>
-          </header>
-
-          <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
-            <div className="grid grid-cols-4 gap-2">
-              <Stat label={`Last ${days} days`} value={`$${total.toFixed(2)}`} />
-              <Stat label="Last 7 days" value={`$${lastSeven.toFixed(2)}`} />
-              <Stat label="Today" value={`$${(today?.cost ?? 0).toFixed(2)}`} />
-              <Stat label="Tokens" value={formatTokens(tokens)} />
-            </div>
-
-            <section>
-              <SectionTitle>Daily spend</SectionTitle>
-              {byDay.length === 0 ? (
-                <Empty>
-                  {query.isPending ? "Reading transcripts…" : "No usage recorded."}
-                </Empty>
-              ) : (
-                <DailyChart days={byDay} peak={peak} />
-              )}
-            </section>
-
-            <section>
-              <SectionTitle>By project</SectionTitle>
-              <Table
-                rows={byProject}
-                total={total}
-                label={(key) => basename(key) || key}
-                sub={(key) => key}
-              />
-            </section>
-
-            <section>
-              <SectionTitle>By model</SectionTitle>
-              <Table
-                rows={byModel}
-                total={total}
-                label={(key) => prettyModel(key)}
-              />
-            </section>
-
-            {providers.length > 1 && (
-              <section>
-                <SectionTitle>By provider</SectionTitle>
-                <Table
-                  rows={byProvider}
-                  total={total}
-                  label={(key) => PROVIDER_LABEL[key as Provider] ?? key}
-                />
-              </section>
-            )}
-          </div>
-
-          <footer className="shrink-0 border-t px-3 py-1.5 text-[11px] text-muted-foreground">
-            Estimated from local per-million rates, not billed amounts — cache
-            reads and writes are priced separately. Covers{" "}
-            {providers.length > 0
-              ? providers.map((p) => PROVIDER_LABEL[p] ?? p).join(", ")
-              : "no provider"}
-            : only providers that keep a readable history on disk can be counted
-            here.
-          </footer>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  );
-}
-
-/** Daily-spend bars with a $ axis, dated ticks, and a hover tooltip. */
-function DailyChart({ days, peak }: { days: Bucket[]; peak: number }) {
-  const [hover, setHover] = useState<number | null>(null);
-  const active = hover === null ? null : days[hover];
-  // Three ticks read cleanly at this height; more crowds the 8rem plot.
-  const ticks = [peak, peak / 2, 0];
-  const xTicks = [0, Math.floor((days.length - 1) / 2), days.length - 1].filter(
-    (i, pos, all) => i >= 0 && all.indexOf(i) === pos
-  );
-
-  return (
-    <div className="rounded border p-2">
-      <div className="flex gap-2">
-        <div className="flex h-32 w-12 shrink-0 flex-col justify-between py-px text-right text-xs tabular-nums text-muted-foreground">
-          {ticks.map((t) => (
-            <span key={t}>${t.toFixed(t < 10 ? 2 : 0)}</span>
-          ))}
-        </div>
-        <div className="relative min-w-0 flex-1">
-          {/* Gridlines sit behind the bars, aligned to the $ ticks. */}
-          <div className="pointer-events-none absolute inset-0 flex flex-col justify-between">
-            {ticks.map((t) => (
-              <span key={t} className="block border-t border-border/50" />
+                {r.label}
+              </Pill>
             ))}
-          </div>
-          <div
-            className="relative flex h-32 items-end gap-0.5"
-            onMouseLeave={() => setHover(null)}
+          </PillGroup>
+          <button
+            type="button"
+            onClick={() => void query.refetch()}
+            title="Rescan transcripts"
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
-            {days.map((d, i) => (
-              // The hit area is the full-height column, so a near-zero bar is
-              // still hoverable.
-              <button
-                key={d.key}
-                type="button"
-                onMouseEnter={() => setHover(i)}
-                className={cn(
-                  "flex h-full flex-1 flex-col justify-end rounded-sm transition-colors",
-                  hover === i && "bg-primary/10"
+            <RefreshCw className={cn("size-4", query.isFetching && "animate-spin")} />
+          </button>
+        </div>
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-auto px-8 py-8">
+        <div className="mx-auto flex max-w-6xl flex-col gap-10">
+          <div className="grid gap-8 lg:grid-cols-[minmax(0,18rem)_1fr]">
+            <div>
+              <p className="text-4xl font-semibold tracking-tight tabular-nums">
+                {metric === "cost" ? formatUsd(totalCost) : formatTokens(totalTokensAll)}
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {formatCount(totalSessions)} sessions · API estimate
+              </p>
+              <ul className="mt-6 flex flex-col gap-4">
+                {query.isPending && rows.length === 0 ? (
+                  <li className="text-sm text-muted-foreground">
+                    Reading transcripts…
+                  </li>
+                ) : (
+                  byProvider.map((p) => {
+                    const share = totalCost ? (p.cost / totalCost) * 100 : 0;
+                    const empty = p.tokens === 0 && p.sessions === 0;
+                    return (
+                      <li key={p.provider} className="flex items-start gap-2">
+                        <span
+                          className={cn(
+                            "mt-1.5 size-2 shrink-0 rounded-full",
+                            PROVIDER_DOT[p.provider],
+                          )}
+                        />
+                        <img
+                          src={`/provider-icons/${p.provider}.svg`}
+                          alt=""
+                          className="mt-0.5 size-4 shrink-0 object-contain"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-baseline justify-between gap-3">
+                            <span className="truncate text-sm">
+                              {PROVIDER_LABEL[p.provider]}
+                              <span className="ml-2 text-xs text-muted-foreground">
+                                {formatCount(p.sessions)} sessions
+                              </span>
+                            </span>
+                            <span className="shrink-0 text-sm tabular-nums">
+                              {empty ? "—" : formatUsd(p.cost)}
+                            </span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {empty
+                              ? "No local token history"
+                              : `${share.toFixed(1)}% of cost · ${formatTokens(p.tokens)} tokens`}
+                          </p>
+                        </div>
+                      </li>
+                    );
+                  })
                 )}
-              >
-                <span
-                  style={{ height: `${Math.max(2, (d.cost / peak) * 100)}%` }}
-                  className={cn(
-                    "block w-full rounded-sm transition-colors",
-                    hover === i ? "bg-primary" : "bg-primary/60"
-                  )}
-                />
-              </button>
-            ))}
-          </div>
-          {active && (
-            <div
-              style={{
-                left: `${((hover! + 0.5) / days.length) * 100}%`,
-                // Keep the card inside the plot at both ends.
-                transform: `translateX(${
-                  hover! < days.length / 4
-                    ? "0"
-                    : hover! > (days.length * 3) / 4
-                      ? "-100%"
-                      : "-50%"
-                })`,
-              }}
-              className="pointer-events-none absolute -top-1 z-10 w-max rounded-md border bg-popover px-2 py-1 text-xs shadow-lg"
-            >
-              <p className="font-medium tabular-nums">
-                ${active.cost.toFixed(2)}
-              </p>
-              <p className="tabular-nums text-muted-foreground">
-                {formatTokens(active.tokens)} tokens · {active.messages} msgs
-              </p>
-              <p className="tabular-nums text-muted-foreground">{active.key}</p>
+              </ul>
             </div>
-          )}
-          <div className="relative mt-1 h-4 border-t text-xs tabular-nums text-muted-foreground">
-            {xTicks.map((i) => (
-              <span
-                key={days[i].key}
-                style={{
-                  left: `${((i + 0.5) / days.length) * 100}%`,
-                  transform: `translateX(${
-                    i === 0 ? "0" : i === days.length - 1 ? "-100%" : "-50%"
-                  })`,
-                }}
-                className="absolute top-0.5"
-              >
-                {days[i].key.slice(5)}
-              </span>
-            ))}
+            <div>
+              <p className="mb-3 text-sm text-muted-foreground">
+                Daily {metric === "cost" ? "cost" : "tokens"}
+              </p>
+              <DailyChart
+                days={byDay.map((d) => d.date)}
+                rows={rows}
+                providers={chartProviders}
+                metric={metric}
+              />
+            </div>
           </div>
+
+          <section>
+            <h2 className="mb-4 text-sm font-medium">Totals</h2>
+            <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-5">
+              <Total label="Processed tokens" value={formatTokens(processed)} />
+              <Total label="Cached input" value={formatTokens(cachedInput)} />
+              <Total label="Uncached input" value={formatTokens(uncachedInput)} />
+              <Total label="Output" value={formatTokens(output)} />
+              <Total label="Cache savings" value={formatUsd(savings)} />
+            </div>
+          </section>
+
+          <section>
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-medium">Breakdown</h2>
+              <PillGroup>
+                <Pill
+                  active={breakdown === "model"}
+                  onClick={() => setBreakdown("model")}
+                >
+                  Model
+                </Pill>
+                <Pill active={breakdown === "day"} onClick={() => setBreakdown("day")}>
+                  Day
+                </Pill>
+              </PillGroup>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-muted-foreground">
+                  <th className="pb-2 font-normal">
+                    {breakdown === "model" ? "Model" : "Day"}
+                  </th>
+                  <th className="pb-2 text-right font-normal">Cost</th>
+                  <th className="pb-2 text-right font-normal">Share</th>
+                  <th className="pb-2 text-right font-normal">Tokens</th>
+                </tr>
+              </thead>
+              <tbody>
+                {breakdown === "model"
+                  ? byModel.map((row) => (
+                      <tr key={row.model} className="border-b border-border/60">
+                        <td className="py-2.5">
+                          <span className="flex items-center gap-2">
+                            <img
+                              src={`/provider-icons/${row.provider}.svg`}
+                              alt=""
+                              className="size-3.5 shrink-0 object-contain"
+                            />
+                            <span className="font-mono text-xs">{row.model}</span>
+                          </span>
+                        </td>
+                        <td className="py-2.5 text-right tabular-nums">
+                          {formatUsd(row.cost)}
+                        </td>
+                        <td className="py-2.5 text-right tabular-nums text-muted-foreground">
+                          {totalCost ? `${((row.cost / totalCost) * 100).toFixed(1)}%` : "0%"}
+                        </td>
+                        <td className="py-2.5 text-right tabular-nums">
+                          {formatTokens(row.tokens)}
+                        </td>
+                      </tr>
+                    ))
+                  : byDay
+                      .filter((d) => d.cost > 0 || d.tokens > 0)
+                      .map((row) => (
+                        <tr key={row.date} className="border-b border-border/60">
+                          <td className="py-2.5 tabular-nums">{row.date}</td>
+                          <td className="py-2.5 text-right tabular-nums">
+                            {formatUsd(row.cost)}
+                          </td>
+                          <td className="py-2.5 text-right tabular-nums text-muted-foreground">
+                            {totalCost
+                              ? `${((row.cost / totalCost) * 100).toFixed(1)}%`
+                              : "0%"}
+                          </td>
+                          <td className="py-2.5 text-right tabular-nums">
+                            {formatTokens(row.tokens)}
+                          </td>
+                        </tr>
+                      ))}
+              </tbody>
+            </table>
+          </section>
         </div>
       </div>
     </div>
   );
 }
 
-function Table({
-  rows,
-  total,
-  label,
-  sub,
+const Total = ({ label, value }: { label: string; value: string }) => (
+  <div>
+    <p className="text-sm text-muted-foreground">{label}</p>
+    <p className="mt-1 text-lg font-medium tabular-nums">{value}</p>
+  </div>
+);
+
+const PillGroup = ({ children }: { children: React.ReactNode }) => (
+  <div className="flex items-center rounded-lg bg-secondary p-0.5">{children}</div>
+);
+
+const Pill = ({
+  active,
+  onClick,
+  children,
 }: {
-  rows: Bucket[];
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={cn(
+      "rounded-md px-2.5 py-1 text-xs",
+      active ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+    )}
+  >
+    {children}
+  </button>
+);
+
+const VIEW_WIDTH = 960;
+const VIEW_HEIGHT = 260;
+const TICK_COUNT = 4;
+const PLOT_TOP = 8;
+
+type Point = { x: number; y: number };
+
+type DayColumn = {
+  bands: { provider: Provider; value: number }[];
   total: number;
-  label: (key: string) => string;
-  sub?: (key: string) => string;
+};
+
+/** 1/2/5 × 10^n ticks at or above the peak so the tallest day is not clipped. */
+const niceScale = (peak: number, count: number): { max: number; ticks: number[] } => {
+  if (peak <= 0) return { max: 0, ticks: [0] };
+  const rawStep = peak / count;
+  const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+  const normalized = rawStep / magnitude;
+  const step = (normalized > 5 ? 10 : normalized > 2 ? 5 : normalized > 1 ? 2 : 1) * magnitude;
+  const max = Math.ceil(peak / step) * step;
+  const ticks: number[] = [];
+  for (let value = 0; value <= max + step * 1e-6; value += step) ticks.push(value);
+  return { max, ticks };
+};
+
+const monotoneTangents = (points: Point[]): number[] => {
+  const count = points.length;
+  if (count < 2) return [0];
+  const slopes: number[] = [];
+  for (let i = 0; i < count - 1; i++) {
+    const dx = points[i + 1].x - points[i].x;
+    const dy = points[i + 1].y - points[i].y;
+    slopes.push(dx === 0 ? 0 : dy / dx);
+  }
+  const tangents = Array.from({ length: count }, () => 0);
+  tangents[0] = slopes[0] ?? 0;
+  tangents[count - 1] = slopes[count - 2] ?? 0;
+  for (let i = 1; i < count - 1; i++) {
+    const prev = slopes[i - 1] ?? 0;
+    const next = slopes[i] ?? 0;
+    tangents[i] = prev * next <= 0 ? 0 : (prev + next) / 2;
+  }
+  for (let i = 0; i < count - 1; i++) {
+    const slope = slopes[i] ?? 0;
+    if (slope === 0) {
+      tangents[i] = 0;
+      tangents[i + 1] = 0;
+      continue;
+    }
+    const a = (tangents[i] ?? 0) / slope;
+    const b = (tangents[i + 1] ?? 0) / slope;
+    const magnitude = a * a + b * b;
+    if (magnitude > 9) {
+      const scale = 3 / Math.sqrt(magnitude);
+      tangents[i] = scale * a * slope;
+      tangents[i + 1] = scale * b * slope;
+    }
+  }
+  return tangents;
+};
+
+const curvePath = (points: Point[]): string => {
+  if (points.length === 0) return "";
+  if (points.length === 1) return `M${points[0].x.toFixed(2)},${points[0].y.toFixed(2)}`;
+  const tangents = monotoneTangents(points);
+  let path = `M${points[0].x.toFixed(2)},${points[0].y.toFixed(2)}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const from = points[i];
+    const to = points[i + 1];
+    const dx = to.x - from.x;
+    const c1x = from.x + dx / 3;
+    const c1y = from.y + ((tangents[i] ?? 0) * dx) / 3;
+    const c2x = to.x - dx / 3;
+    const c2y = to.y - ((tangents[i + 1] ?? 0) * dx) / 3;
+    path += ` C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${to.x.toFixed(2)},${to.y.toFixed(2)}`;
+  }
+  return path;
+};
+
+const formatDayTick = (iso: string): string =>
+  utcDate(iso)
+    .toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
+    .toUpperCase();
+
+function DailyChart({
+  days,
+  rows,
+  providers,
+  metric,
+}: {
+  days: string[];
+  rows: UsageRow[];
+  providers: Provider[];
+  metric: Metric;
 }) {
-  if (rows.length === 0) return <Empty>Nothing in this range.</Empty>;
+  const plotRef = useRef<HTMLDivElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const hoverPos = useRef<{ x: number; y: number } | null>(null);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+
+  const { paths, series, stepX, toY, ticks } = useMemo(() => {
+    if (days.length === 0) {
+      return {
+        paths: [] as { provider: Provider; line: string; area: string }[],
+        series: [] as DayColumn[],
+        stepX: 0,
+        ticks: [0],
+        toY: () => VIEW_HEIGHT,
+      };
+    }
+
+    const byDay = new Map<string, Map<Provider, number>>();
+    for (const date of days) byDay.set(date, new Map());
+    for (const row of rows) {
+      const day = byDay.get(row.date);
+      if (!day) continue;
+      const value = metric === "cost" ? rowCost(row) : totalTokens(row);
+      day.set(row.provider, (day.get(row.provider) ?? 0) + value);
+    }
+
+    const columns: DayColumn[] = days.map((date) => {
+      const day = byDay.get(date);
+      const bands = providers.map((provider) => ({
+        provider,
+        value: day?.get(provider) ?? 0,
+      }));
+      return { bands, total: bands.reduce((sum, b) => sum + b.value, 0) };
+    });
+
+    const peak = columns.reduce(
+      (max, col) => col.bands.reduce((inner, b) => Math.max(inner, b.value), max),
+      0,
+    );
+    const { max, ticks: tickValues } = niceScale(peak, TICK_COUNT);
+    const step = days.length === 1 ? 0 : VIEW_WIDTH / (days.length - 1);
+    const toY = (value: number) =>
+      max === 0 ? VIEW_HEIGHT : VIEW_HEIGHT - (value / max) * (VIEW_HEIGHT - PLOT_TOP);
+
+    const built = providers.map((provider, providerIndex) => {
+      const line = curvePath(
+        columns.map((column, i) => ({
+          x: i * step,
+          y: toY(column.bands[providerIndex]?.value ?? 0),
+        })),
+      );
+      return {
+        provider,
+        total: columns.reduce((sum, col) => sum + (col.bands[providerIndex]?.value ?? 0), 0),
+        line,
+        area: line === "" ? "" : `${line} L${VIEW_WIDTH},${VIEW_HEIGHT} L0,${VIEW_HEIGHT} Z`,
+      };
+    });
+    built.sort((a, b) => b.total - a.total);
+
+    return { paths: built, series: columns, stepX: step, ticks: tickValues, toY };
+  }, [days, rows, providers, metric]);
+
+  const format = metric === "cost" ? formatUsd : formatTokens;
+
+  const positionTooltip = useCallback(() => {
+    const plot = plotRef.current;
+    const tooltip = tooltipRef.current;
+    const pos = hoverPos.current;
+    if (!plot || !tooltip || !pos) return;
+    const gap = 12;
+    const tw = tooltip.offsetWidth;
+    const th = tooltip.offsetHeight;
+    const pw = plot.clientWidth;
+    const ph = plot.clientHeight;
+    const preferredLeft = pos.x + gap + tw <= pw ? pos.x + gap : pos.x - gap - tw;
+    const preferredTop = pos.y + gap + th <= ph ? pos.y + gap : pos.y - gap - th;
+    const left = Math.min(Math.max(0, preferredLeft), Math.max(0, pw - tw));
+    const top = Math.min(Math.max(0, preferredTop), Math.max(0, ph - th));
+    plot.style.setProperty("--usage-tooltip-left", `${left}px`);
+    plot.style.setProperty("--usage-tooltip-top", `${top}px`);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (hoverIndex === null) return;
+    positionTooltip();
+    const plot = plotRef.current;
+    const tooltip = tooltipRef.current;
+    if (!plot || !tooltip || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(positionTooltip);
+    observer.observe(plot);
+    observer.observe(tooltip);
+    return () => observer.disconnect();
+  }, [hoverIndex, positionTooltip]);
+
+  const onMove = (event: React.MouseEvent<HTMLDivElement>) => {
+    const plot = plotRef.current;
+    if (!plot || days.length === 0) return;
+    const bounds = plot.getBoundingClientRect();
+    if (bounds.width === 0) return;
+    const localX = Math.min(bounds.width, Math.max(0, event.clientX - bounds.left));
+    const localY = Math.min(bounds.height, Math.max(0, event.clientY - bounds.top));
+    hoverPos.current = { x: localX, y: localY };
+    const index = Math.round((localX / bounds.width) * (days.length - 1));
+    positionTooltip();
+    setHoverIndex(Math.min(days.length - 1, Math.max(0, index)));
+  };
+
+  const hovered = hoverIndex === null ? undefined : series[hoverIndex];
+  const hoveredDay = hoverIndex === null ? undefined : days[hoverIndex];
+  const xTicks = [0, Math.floor((days.length - 1) / 2), days.length - 1].filter(
+    (i, pos, all) => i >= 0 && days[i] && all.indexOf(i) === pos,
+  );
+
   return (
-    <ul className="divide-y rounded border">
-      {rows.map((row) => (
-        <li key={row.key} className="flex items-center gap-3 px-3 py-2 text-sm">
-          <span className="min-w-0 flex-1">
-            <span className="block truncate font-medium">{label(row.key)}</span>
-            {sub && (
-              <span className="block truncate text-xs text-muted-foreground">
-                {sub(row.key)}
-              </span>
-            )}
-          </span>
-          <span className="w-24 shrink-0">
-            <span className="block h-1 rounded bg-secondary">
-              <span
-                style={{ width: `${total ? (row.cost / total) * 100 : 0}%` }}
-                className="block h-1 rounded bg-primary/70"
-              />
+    <div className="flex flex-col gap-1">
+      <div className="flex gap-2">
+        <div className="relative h-56 w-14 shrink-0">
+          {ticks.map((tick) => (
+            <span
+              key={tick}
+              className="absolute right-0 -translate-y-1/2 text-xs tabular-nums text-muted-foreground"
+              style={{ top: `${(toY(tick) / VIEW_HEIGHT) * 100}%` }}
+            >
+              {tick === 0 ? "0" : format(tick)}
             </span>
-          </span>
-          <span className="w-20 shrink-0 text-right tabular-nums text-muted-foreground">
-            {formatTokens(row.tokens)}
-          </span>
-          <span className="w-20 shrink-0 text-right tabular-nums">
-            ${row.cost.toFixed(2)}
-          </span>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded border p-2">
-      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-        {label}
-      </p>
-      <p className="text-lg font-medium tabular-nums">{value}</p>
+          ))}
+        </div>
+        <div
+          ref={plotRef}
+          className="relative h-56 min-w-0 flex-1"
+          onMouseMove={onMove}
+          onMouseLeave={() => {
+            hoverPos.current = null;
+            setHoverIndex(null);
+          }}
+        >
+          <svg
+            className="h-full w-full"
+            viewBox={`0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}`}
+            preserveAspectRatio="none"
+            role="img"
+            aria-label={`Daily ${metric === "tokens" ? "tokens" : "cost"} by provider`}
+          >
+            {ticks.map((tick) => (
+              <line
+                key={tick}
+                x1={0}
+                x2={VIEW_WIDTH}
+                y1={toY(tick)}
+                y2={toY(tick)}
+                stroke="currentColor"
+                strokeWidth={1}
+                className="text-border"
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
+            {paths.map(({ provider, area }) => (
+              <path
+                key={`${provider}-area`}
+                d={area}
+                fill={PROVIDER_COLOR[provider]}
+                fillOpacity={0.12}
+              />
+            ))}
+            {paths.map(({ provider, line }) => (
+              <path
+                key={`${provider}-line`}
+                d={line}
+                fill="none"
+                stroke={PROVIDER_COLOR[provider]}
+                strokeWidth={2}
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
+            {hoverIndex !== null && (
+              <line
+                x1={hoverIndex * stepX}
+                x2={hoverIndex * stepX}
+                y1={PLOT_TOP}
+                y2={VIEW_HEIGHT}
+                stroke="currentColor"
+                strokeWidth={1}
+                className="text-muted-foreground"
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
+          </svg>
+          {hoverIndex !== null &&
+            hovered?.bands.map((band) => (
+              <span
+                key={band.provider}
+                className="pointer-events-none absolute size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-background"
+                style={{
+                  left: `${days.length <= 1 ? 50 : (hoverIndex / (days.length - 1)) * 100}%`,
+                  top: `${(toY(band.value) / VIEW_HEIGHT) * 100}%`,
+                  backgroundColor: PROVIDER_COLOR[band.provider],
+                }}
+              />
+            ))}
+          {hoveredDay !== undefined && hovered && (
+            <div
+              ref={tooltipRef}
+              className="pointer-events-none absolute z-10 min-w-36 rounded-xl border border-border/50 bg-popover px-2.5 py-2 text-xs shadow-lg"
+              style={{
+                left: "var(--usage-tooltip-left, 0px)",
+                top: "var(--usage-tooltip-top, 0px)",
+              }}
+            >
+              <div className="mb-1 text-muted-foreground">{formatDayTick(hoveredDay)}</div>
+              {providers.map((provider) => (
+                <div key={provider} className="flex items-center justify-between gap-3">
+                  <span className="flex items-center gap-1.5 text-muted-foreground">
+                    <img
+                      src={`/provider-icons/${provider}.svg`}
+                      alt=""
+                      className="size-3 shrink-0 object-contain"
+                    />
+                    {PROVIDER_LABEL[provider]}
+                  </span>
+                  <span className="tabular-nums text-foreground">
+                    {format(hovered.bands.find((b) => b.provider === provider)?.value ?? 0)}
+                  </span>
+                </div>
+              ))}
+              <div className="mt-1 flex items-center justify-between gap-3 border-t border-border pt-1">
+                <span className="text-muted-foreground">Total</span>
+                <span className="tabular-nums text-foreground">{format(hovered.total)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="flex justify-between pl-16 text-xs uppercase text-muted-foreground">
+        {xTicks.map((i) => (
+          <span key={days[i]}>{formatDayTick(days[i])}</span>
+        ))}
+      </div>
     </div>
-  );
-}
-
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-      {children}
-    </h3>
-  );
-}
-
-function Empty({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="rounded border p-4 text-center text-xs text-muted-foreground">
-      {children}
-    </p>
   );
 }

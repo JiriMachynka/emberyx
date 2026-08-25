@@ -5,6 +5,7 @@ import { DEFAULT_SETTINGS } from "@/lib/settings";
 import { saveOpenProjects } from "@/lib/openProjects";
 import { addRecent } from "@/lib/recents";
 import { setProjectBackend } from "@/lib/projectConfig";
+import { cacheThreads } from "@/lib/threadCache";
 import { useAgentStore } from "@/lib/agentStore";
 import { queryClient } from "@/lib/queries";
 
@@ -118,6 +119,25 @@ describe("useWorkspace launch restore", () => {
 
     await waitFor(() => expect(result.current.projects).toHaveLength(1));
     expect(result.current.revealed).toBe(false);
+  });
+
+  // A warm cache is what makes launch instant: the agent boots on the cached
+  // latest while the real scan refreshes the list behind it. Only a cold cache
+  // waits for the scan, so this proves the resume target came from the cache.
+  it("resumes the cached latest thread on a warm cache instead of waiting on the scan", async () => {
+    cacheThreads("/p", [
+      { id: "older", title: "older", modified: 100 },
+      { id: "latest", title: "latest", modified: 200 },
+    ]);
+
+    const { result } = renderHook(() => useWorkspace(DEFAULT_SETTINGS));
+    await act(() => result.current.openProjectAt("/p"));
+    const id = result.current.projects[0].id;
+    await waitFor(() => expect(result.current.sessionsFor(id)).toHaveLength(1));
+
+    const session = result.current.sessionsFor(id)[0];
+    expect(session.resume).toBe("latest");
+    expect(session.label).toBe("latest");
   });
 });
 

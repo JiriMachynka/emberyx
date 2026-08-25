@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { TerminalPane } from "@/components/TerminalPane";
 import { ChatPane } from "@/components/ChatPane";
 import { DokployLogsPane } from "@/components/DokployLogsPane";
@@ -69,9 +69,13 @@ function SessionPaneRow({
   onTitled: (session: Session, title: string) => void;
 }) {
   const active = session.id === activeId;
+  // `session` is a new object whenever the workspace list rebuilds. Pin the
+  // callback on `onTitled` alone or ChatPane's memo sees a new prop every poll.
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
   const handleTitled = useCallback(
-    (title: string) => onTitled(session, title),
-    [session, onTitled]
+    (title: string) => onTitled(sessionRef.current, title),
+    [onTitled]
   );
   return (
     <div className={cn("absolute inset-0", active ? "" : "hidden")}>
@@ -82,7 +86,7 @@ function SessionPaneRow({
           resume={session.resume}
           backend={session.backend ?? "claude"}
           active={active}
-          fontFamily={settings.fontFamily}
+          fontFamily={settings.chatFontFamily}
           fontSize={settings.fontSize}
           skipPermissions={settings.dangerouslySkipPermissions}
           persistent={settings.persistentAgents}
@@ -103,7 +107,7 @@ function SessionPaneRow({
           fontFamily={settings.fontFamily}
           fontSize={settings.fontSize}
         />
-      ) : session.kind === "agent" || session.kind === "dev" ? (
+      ) : session.kind === "agent" ? (
         <TerminalPane
           sessionId={session.id}
           cwd={session.cwd}

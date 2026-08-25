@@ -22,9 +22,6 @@ export const FORGE_NOUN: Record<RemoteHost, { one: string; many: string }> = {
 };
 
 export interface ForgeCommands {
-  hasToken: string;
-  setToken: string;
-  clearToken: string;
   list: string;
   detail: string;
   diff: string;
@@ -33,18 +30,12 @@ export interface ForgeCommands {
 
 const COMMANDS: Record<RemoteHost, ForgeCommands> = {
   github: {
-    hasToken: "github_has_token",
-    setToken: "github_set_token",
-    clearToken: "github_clear_token",
     list: "github_prs",
     detail: "github_pr",
     diff: "github_pr_diff",
     notes: "github_pr_notes",
   },
   gitlab: {
-    hasToken: "gitlab_has_token",
-    setToken: "gitlab_set_token",
-    clearToken: "gitlab_clear_token",
     list: "gitlab_mrs",
     detail: "gitlab_mr",
     diff: "gitlab_mr_diff",
