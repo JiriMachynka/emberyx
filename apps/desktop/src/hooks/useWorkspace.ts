@@ -26,9 +26,9 @@ import {
 import { getRecents, addRecent, removeRecent } from "@/lib/recents";
 import { getOpenProjects, saveOpenProjects } from "@/lib/openProjects";
 import { cachedThreads, cacheThreads } from "@/lib/threadCache";
+import { disposeLog, killLog, spawnLog } from "@/lib/ptyLog";
 import { useProjects } from "@/hooks/useProjects";
 import { useSessions } from "@/hooks/useSessions";
-import { useAgentEvents } from "@/hooks/useAgentEvents";
 import { useDokploy } from "@/hooks/useDokploy";
 import type {
   DirEntry,
@@ -93,10 +93,6 @@ const listThreads = (backend: AgentBackend, cwd: string): Promise<Thread[]> => {
     : invoke<Thread[]>("list_threads", { cwd });
 };
 
-/** The CLI argument that resumes a thread in a terminal session. */
-const resumeArg = (backend: AgentBackend, id: string) =>
-  backend === "codex" ? `resume ${id}` : `--resume ${id}`;
-
 const labelFor = (thread: Thread) =>
   thread.title.length > LABEL_MAX
     ? `${thread.title.slice(0, LABEL_MAX)}…`
@@ -107,10 +103,8 @@ const labelFor = (thread: Thread) =>
  * that changes which project or thread is live — opening, pre-warming,
  * resuming, spawning agents, and tearing down. App renders what this returns.
  */
-/** A project's primary Claude session, whichever surface it runs on — the
- *  `agentUi` setting decides between a terminal ("agent") and a chat pane
- *  ("chat"), and guards that only look for one silently miss the other. */
-const isPrimaryAgent = (s: Session) => s.kind === "agent" || s.kind === "chat";
+/** A project's primary agent session — always a chat pane. */
+const isPrimaryAgent = (s: Session) => s.kind === "chat";
 
 export function useWorkspace(settings: Settings) {
   const [recents, setRecents] = useState<string[]>(getRecents);
@@ -144,16 +138,11 @@ export function useWorkspace(settings: Settings) {
     sessions,
     activeByProject,
     setActive,
-    startAgent,
     startChat,
     startDokployLogs,
     closeProjectSessions,
     sessionsFor,
   } = sessionApi;
-
-  const { hookSettings, pendingAttention } = useAgentEvents((id) =>
-    sessions.find((s) => s.id === id)
-  );
 
   const dokploy = useDokploy({
     url: settings.dokployUrl,
@@ -180,23 +169,6 @@ export function useWorkspace(settings: Settings) {
 
   /** The backend a project runs — its own pin, else the global default. */
   const backendFor = (path: string) => projectBackend(path, settings.agentBackend);
-
-  /** Build the agent launch command, injecting hooks + any extra flags. Flags
-   *  are Claude Code's own CLI surface, so only Claude gets them. */
-  function buildAgentCommand(path: string, extra?: string): string {
-    const base = settings.agentCommand;
-    const flags: string[] = [];
-    if (backendFor(path) === "claude") {
-      if (hookSettings) flags.push(`--settings "${hookSettings}"`);
-      if (settings.dangerouslySkipPermissions) {
-        flags.push("--dangerously-skip-permissions");
-      }
-      // Full session (default) expands tool output; compact leaves it collapsed.
-      if (!settings.compactSession) flags.push("--verbose");
-    }
-    if (extra) flags.push(extra);
-    return flags.length ? `${base} ${flags.join(" ")}` : base;
-  }
 
   /** Fetch and cache the project's Claude Code threads (non-blocking). When
    *  silent (pre-warm), failures stay in the console — no toast for a project
@@ -232,10 +204,8 @@ export function useWorkspace(settings: Settings) {
     return scan;
   }
 
-  /** Launch a project's primary agent: the chat UI always resumes the most
-   *  recent thread; the terminal does so only when the setting is on. Both fall
-   *  back to a fresh agent if there is none / on error. Scrollback persists
-   *  under the project path either way.
+  /** Launch a project's primary agent: a chat pane resuming the most recent
+   *  thread, falling back to a fresh one if there is none / on error.
    *
    *  With a warm thread cache the agent boots without waiting on the directory
    *  scan — the cached list picks the resume target and a background scan
@@ -243,29 +213,13 @@ export function useWorkspace(settings: Settings) {
    *  cleared storage) waits for the scan, so the resume target is the real
    *  latest rather than a guessed one. */
   async function startPrimaryAgent(id: string, path: string): Promise<void> {
-    const chat = settings.agentUi === "chat";
     const backend = backendFor(path);
-    // Chat always resumes when it can; the terminal only on the setting.
-    const resumeLatest =
-      capabilitiesOf(backend).threads && (chat || settings.resumeLatestThread);
-    if (resumeLatest) {
+    if (capabilitiesOf(backend).threads) {
       const cached = cachedThreads(path);
       if (cached.length) {
         const latest = [...cached].sort((a, b) => b.modified - a.modified)[0];
         if (latest) {
-          const label = labelFor(latest);
-          if (chat) {
-            startChat(id, path, latest.id, label, backend);
-          } else {
-            startAgent(
-              id,
-              path,
-              buildAgentCommand(path, resumeArg(backend, latest.id)),
-              label,
-              path,
-              backend
-            );
-          }
+          startChat(id, path, latest.id, labelFor(latest), backend);
           // Show the cached list now; the scan refreshes it behind the boot.
           refreshThreads(id, path, true);
           return;
@@ -274,45 +228,62 @@ export function useWorkspace(settings: Settings) {
       try {
         const threads = await fetchThreads(id, path);
         if (torndownRef.current.has(id)) return;
-        if (threads) {
-          const latest = [...threads].sort((a, b) => b.modified - a.modified)[0];
-          if (latest) {
-            const label = labelFor(latest);
-            if (chat) {
-              startChat(id, path, latest.id, label, backend);
-            } else {
-              startAgent(
-                id,
-                path,
-                buildAgentCommand(path, resumeArg(backend, latest.id)),
-                label,
-                path,
-                backend
-              );
-            }
-            return;
-          }
+        const latest = threads
+          ? [...threads].sort((a, b) => b.modified - a.modified)[0]
+          : undefined;
+        if (latest) {
+          startChat(id, path, latest.id, labelFor(latest), backend);
+          return;
         }
       } catch (e) {
         console.error("list_threads failed:", e);
         // Fall through to a fresh agent.
       }
     }
-    if (chat) {
-      startChat(id, path, undefined, undefined, backend);
-    } else {
-      startAgent(id, path, buildAgentCommand(path), "agent", path, backend);
-    }
+    startChat(id, path, undefined, undefined, backend);
     refreshThreads(id, path, true);
   }
 
   /** Remove a project and all its sessions (kills their PTYs). */
   function teardownProject(id: string) {
     torndownRef.current.add(id);
-    const ids = sessionsFor(id).map((s) => s.id);
+    const own = sessionsFor(id);
+    for (const s of own) if (s.kind === "dev") void killLog(s.id);
     closeProjectSessions(id);
-    useAgentStore.getState().clearSessions(ids);
+    useAgentStore.getState().clearSessions(own.map((s) => s.id));
     closeProject(id);
+  }
+
+  // ptyLog owns the dev-server processes now — no pane unmount kills them, so
+  // every path that removes a dev session must stop its PTY explicitly.
+  const closeSessionRef = useRef(sessionApi.closeSession);
+  closeSessionRef.current = sessionApi.closeSession;
+
+  function addDev(projectId: string, label: string, cwd: string, command: string) {
+    const id = sessionApi.addDev(projectId, label, cwd, command);
+    void spawnLog({
+      sessionId: id,
+      cwd,
+      command,
+      maxLines: settings.scrollback,
+      // A server that exited on its own — drop it so "running" stops lying.
+      onExit: () => {
+        disposeLog(id);
+        closeSessionRef.current(id);
+      },
+    });
+  }
+
+  function closeSession(id: string) {
+    if (sessions.find((s) => s.id === id)?.kind === "dev") void killLog(id);
+    sessionApi.closeSession(id);
+  }
+
+  function stopAllDev(projectId: string) {
+    for (const s of sessionsFor(projectId)) {
+      if (s.kind === "dev") void killLog(s.id);
+    }
+    sessionApi.stopAllDev(projectId);
   }
 
   async function openProjectAt(
@@ -449,25 +420,20 @@ export function useWorkspace(settings: Settings) {
   }, []);
 
 
-  /** Resume a Claude Code thread in a new tab of the given project, revealing
-   *  and focusing it. Uses the default surface (chat / terminal). */
+  /** Resume a thread in a new chat tab of the given project, revealing and
+   *  focusing it. */
   function resumeThreadIn(projectId: string, path: string, thread: Thread) {
     setRevealed(true);
     setActiveProjectId(projectId);
-    const label = labelFor(thread);
-    const backend = backendFor(path);
-    if (settings.agentUi === "chat") {
-      startChat(projectId, path, thread.id, label, backend);
+    // A thread that's already open gets focused, not opened again — a second
+    // session with the same resume id also breaks the sidebar highlight, which
+    // pairs each row with the first matching session.
+    const existing = sessionsFor(projectId).find((s) => s.resume === thread.id);
+    if (existing) {
+      setActive(projectId, existing.id);
       return;
     }
-    startAgent(
-      projectId,
-      path,
-      buildAgentCommand(path, resumeArg(backend, thread.id)),
-      label,
-      undefined,
-      backend
-    );
+    startChat(projectId, path, thread.id, labelFor(thread), backendFor(path));
   }
 
   /** Resume a thread in the active project (ContextBar / Threads menu). */
@@ -481,16 +447,11 @@ export function useWorkspace(settings: Settings) {
     if (typeof selected === "string") void openProjectAt(selected);
   }
 
-  /** Spawn a fresh agent tab in the active project, using the default surface. */
+  /** Spawn a fresh chat tab in the active project. */
   function newAgent() {
     if (!activeProject) return;
     const { id, path } = activeProject;
-    const backend = backendFor(path);
-    if (settings.agentUi === "chat") {
-      startChat(id, path, undefined, undefined, backend);
-      return;
-    }
-    startAgent(id, path, buildAgentCommand(path), undefined, undefined, backend);
+    startChat(id, path, undefined, undefined, backendFor(path));
   }
 
   /** Returns false when the user declines to close a project with a live agent. */
@@ -602,25 +563,11 @@ export function useWorkspace(settings: Settings) {
     );
   }, [projects, activeProjectId, revealed]);
 
-  // When the window regains focus (e.g. clicking the desktop notification),
-  // jump to the session that raised it if it's still waiting.
-  useEffect(() => {
-    function onFocus() {
-      const sid = pendingAttention.current;
-      if (!sid) return;
-      pendingAttention.current = null;
-      const sess = sessions.find((s) => s.id === sid);
-      if (sess && useAgentStore.getState().statuses[sid] === "waiting") {
-        setActiveProjectId(sess.projectId);
-        setActive(sess.projectId, sid);
-      }
-    }
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [sessions, setActiveProjectId, setActive, pendingAttention]);
-
   return {
     ...sessionApi,
+    addDev,
+    closeSession,
+    stopAllDev,
     projects,
     activeProjectId,
     setActiveProjectId,

@@ -22,15 +22,10 @@ export const COMMAND_IDS = [
 
 export type CommandId = (typeof COMMAND_IDS)[number];
 
-/** Where a binding applies. `!terminalFocus` keeps a chord out of the terminal,
- *  which has its own claim on most of them. */
-export type WhenClause = "always" | "!terminalFocus";
-
 export interface CommandDef {
   id: CommandId;
   label: string;
   defaultKey: string;
-  when: WhenClause;
   /**
    * False for chords the app doesn't own. AppKit consumes menu key equivalents
    * before the webview sees them, so rebinding one here would change the
@@ -44,35 +39,30 @@ export const COMMANDS: readonly CommandDef[] = [
     id: "commandPalette.toggle",
     label: "Command palette",
     defaultKey: "mod+k",
-    when: "always",
     rebindable: true,
   },
   {
     id: "project.open",
     label: "Open project",
     defaultKey: "mod+o",
-    when: "always",
     rebindable: true,
   },
   {
     id: "agent.new",
     label: "New agent tab",
-    defaultKey: "mod+t",
-    when: "always",
+    defaultKey: "mod+n",
     rebindable: true,
   },
   {
     id: "sidebar.toggle",
     label: "Toggle sidebar",
     defaultKey: "mod+b",
-    when: "always",
     rebindable: true,
   },
   {
     id: "project.search",
     label: "Search in project",
     defaultKey: "mod+shift+f",
-    when: "always",
     rebindable: true,
   },
   // Both of these are app-menu items; the menu, not this table, is what fires.
@@ -80,14 +70,12 @@ export const COMMANDS: readonly CommandDef[] = [
     id: "tab.close",
     label: "Close tab",
     defaultKey: "mod+w",
-    when: "always",
     rebindable: false,
   },
   {
     id: "settings.open",
     label: "Settings",
     defaultKey: "mod+,",
-    when: "always",
     rebindable: false,
   },
 ];

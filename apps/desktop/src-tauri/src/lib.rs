@@ -16,7 +16,6 @@ mod git;
 mod forge_cli;
 mod github;
 mod gitlab;
-mod hooks;
 mod icon;
 mod ide;
 mod menu;
@@ -63,14 +62,11 @@ pub fn run() {
         .manage(acp::AcpManager::new())
         .manage(daemon::Daemon::new())
         .manage(Supervisor::new())
-        .manage(usage::UsageCache::default())
         .manage(usage::SummaryCache::default())
         .setup(|app| {
             if let Ok(path) = app.path().resolve("registry.json", BaseDirectory::AppData) {
                 let _ = app.state::<Supervisor>().restore(&path);
             }
-            let config = hooks::start(app.handle())?;
-            app.manage(config);
             app.manage(ask::start(app.handle())?);
             Ok(())
         })
@@ -79,7 +75,6 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
-            pty::read_scrollback,
             machine::machine_name,
             agent::agent_spawn,
             daemon::daemon_health,
@@ -156,7 +151,7 @@ pub fn run() {
             slash::slash_commands,
             icon::project_icon,
             ide::open_in_ide,
-            hooks::hook_config,
+            ide::open_in_terminal,
             git::git_changes,
             git::git_file_diff,
             git::git_commit,
@@ -211,7 +206,6 @@ pub fn run() {
             gitlab::gitlab_mr,
             gitlab::gitlab_mr_diff,
             gitlab::gitlab_mr_notes,
-            usage::read_usage,
             usage::usage_summary,
             threads::list_threads,
             threads::read_thread,

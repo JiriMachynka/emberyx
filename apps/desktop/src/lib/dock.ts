@@ -39,9 +39,9 @@ export const DOCK_LABEL: Record<DockKind, string> = {
 };
 
 /**
- * First-open chooser: the six surfaces a new dock offers, in the 2×3 order
- * they are shown. Project settings stay on the header sliders, not here —
- * they are a config page, not a working surface.
+ * First-open chooser: the surfaces a new dock offers, in the order they are
+ * shown. Project settings stay on the header sliders, not here — they are a
+ * config page, not a working surface.
  */
 export interface DockOffer {
   kind: DockKind;
@@ -50,20 +50,13 @@ export interface DockOffer {
 }
 
 export const PICKER_OFFERS = [
-  { kind: "preview", shortcut: "B", blurb: "Open a local app or URL." },
   { kind: "terminal", shortcut: "T", blurb: "Start a shell in this workspace." },
+  { kind: "preview", shortcut: "B", blurb: "Open a local app or URL." },
   { kind: "files", shortcut: "F", blurb: "Browse and read workspace files." },
   { kind: "diff", shortcut: "D", blurb: "Review uncommitted changes." },
   { kind: "mrs", shortcut: "P", blurb: "Review open requests on this branch." },
   { kind: "dev", shortcut: "O", blurb: "Running servers and command output." },
 ] as const satisfies readonly DockOffer[];
-
-/**
- * Tabs whose pane owns live child processes. Closing one hides it; it is never
- * unmounted, because unmounting a `TerminalPane` kills its PTY — and a dev
- * server that dies because a tab was closed is not a tab, it's a stop button.
- */
-export const STICKY_KINDS: readonly DockKind[] = ["terminal", "dev"];
 
 export interface DockState {
   /** Open tabs, left to right, in the order they were opened. */
@@ -120,16 +113,4 @@ export function toggleTab(state: DockState, kind: DockKind): DockState {
 /** Drop tabs that belonged to the project being left. */
 export function closeTabs(state: DockState, kinds: readonly DockKind[]): DockState {
   return kinds.reduce(closeTab, state);
-}
-
-export const isSticky = (kind: DockKind): boolean => STICKY_KINDS.includes(kind);
-
-/** What stays mounted after the tab strip changes. Sticky panes that have been
- *  opened once never unmount (their child process would die); everything else
- *  follows the strip. Returns `prev` when nothing changed so a caller can skip
- *  a state update. */
-export function nextMounted(prev: DockKind[], tabs: readonly DockKind[]): DockKind[] {
-  const keep = prev.filter((k) => isSticky(k) || tabs.includes(k));
-  const added = tabs.filter((k) => !keep.includes(k));
-  return added.length === 0 && keep.length === prev.length ? prev : [...keep, ...added];
 }

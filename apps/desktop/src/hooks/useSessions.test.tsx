@@ -6,35 +6,33 @@ describe("useSessions", () => {
   it("scopes a project's list to the sessions it owns", () => {
     const { result } = renderHook(() => useSessions());
     act(() => {
-      result.current.startAgent("a", "/a", "claude");
+      result.current.startChat("a", "/a");
       result.current.startChat("b", "/b");
     });
 
-    expect(result.current.sessionsFor("a").map((s) => s.kind)).toEqual([
-      "agent",
-    ]);
+    expect(result.current.sessionsFor("a").map((s) => s.kind)).toEqual(["chat"]);
     expect(result.current.sessionsFor("b").map((s) => s.kind)).toEqual(["chat"]);
   });
 
   it("repoints the project when its focused session closes", () => {
     const { result } = renderHook(() => useSessions());
-    let agentId = "";
-    let chatId = "";
+    let firstId = "";
+    let secondId = "";
     act(() => {
-      agentId = result.current.startAgent("a", "/a", "claude");
-      chatId = result.current.startChat("a", "/a");
+      firstId = result.current.startChat("a", "/a");
+      secondId = result.current.startChat("a", "/a");
     });
-    expect(result.current.activeByProject.a).toBe(chatId);
+    expect(result.current.activeByProject.a).toBe(secondId);
 
-    act(() => result.current.closeSession(chatId));
-    expect(result.current.activeByProject.a).toBe(agentId);
+    act(() => result.current.closeSession(secondId));
+    expect(result.current.activeByProject.a).toBe(firstId);
   });
 
   it("drops an exited dev session without moving the project's focus", () => {
     const { result } = renderHook(() => useSessions());
-    let agentId = "";
+    let chatId = "";
     act(() => {
-      agentId = result.current.startAgent("a", "/a", "claude");
+      chatId = result.current.startChat("a", "/a");
       result.current.addDev("a", "dev", "/a", "bun dev");
     });
     const dev = result.current.sessionsFor("a").find((s) => s.kind === "dev")!;
@@ -43,13 +41,13 @@ describe("useSessions", () => {
     expect(result.current.sessionsFor("a").some((s) => s.kind === "dev")).toBe(
       false
     );
-    expect(result.current.activeByProject.a).toBe(agentId);
+    expect(result.current.activeByProject.a).toBe(chatId);
   });
 
   it("drops a closed project's sessions and its focus", () => {
     const { result } = renderHook(() => useSessions());
     act(() => {
-      result.current.startAgent("a", "/a", "claude");
+      result.current.startChat("a", "/a");
       result.current.startChat("b", "/b");
     });
 

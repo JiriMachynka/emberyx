@@ -54,6 +54,19 @@ function escapeHtml(s: string): string {
 }
 
 /**
+ * Render ANSI-colored terminal output to themed HTML. The `ansi` "language"
+ * is built into shiki's core tokenizer — no grammar loads, no wasm.
+ */
+export async function highlightAnsi(text: string): Promise<string> {
+  try {
+    const shiki = await core();
+    return shiki.codeToHtml(text, { lang: "ansi", theme: THEME });
+  } catch {
+    return `<pre><code>${escapeHtml(text)}</code></pre>`;
+  }
+}
+
+/**
  * Render a code snippet to themed HTML. `lang` is a highlight.js id (what
  * langFromPath returns); unknown ones fall back to escaped plain text.
  */

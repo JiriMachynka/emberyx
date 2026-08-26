@@ -117,32 +117,30 @@ describe("bindings", () => {
 });
 
 describe("matchCommand", () => {
-  const ctx = { terminalFocus: false };
-
   it("fires the command bound to the pressed chord", () => {
     const b = resolveBindings();
-    expect(matchCommand(press("k", { meta: true }), b, ctx)).toBe(
+    expect(matchCommand(press("k", { meta: true }), b)).toBe(
       "commandPalette.toggle"
     );
-    expect(matchCommand(press("F", { meta: true, shift: true }), b, ctx)).toBe(
+    expect(matchCommand(press("F", { meta: true, shift: true }), b)).toBe(
       "project.search"
     );
   });
 
   it("follows an override", () => {
     const b = setBinding("commandPalette.toggle", "mod+j");
-    expect(matchCommand(press("j", { meta: true }), b, ctx)).toBe(
+    expect(matchCommand(press("j", { meta: true }), b)).toBe(
       "commandPalette.toggle"
     );
-    expect(matchCommand(press("k", { meta: true }), b, ctx)).toBeNull();
+    expect(matchCommand(press("k", { meta: true }), b)).toBeNull();
   });
 
   it("never claims a menu-owned chord, which would run the action twice", () => {
-    expect(matchCommand(press("w", { meta: true }), resolveBindings(), ctx)).toBeNull();
+    expect(matchCommand(press("w", { meta: true }), resolveBindings())).toBeNull();
   });
 
   it("ignores a plain keypress with no modifier", () => {
-    expect(matchCommand(press("k"), resolveBindings(), ctx)).toBeNull();
+    expect(matchCommand(press("k"), resolveBindings())).toBeNull();
   });
 });
 

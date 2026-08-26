@@ -19,24 +19,6 @@ export function useSessions() {
     setActiveByProject((m) => ({ ...m, [projectId]: id }));
   }
 
-  /** Start an agent session for a project and focus it. Returns its id. */
-  function startAgent(
-    projectId: string,
-    cwd: string,
-    command: string,
-    label = "agent",
-    persistKey?: string,
-    backend: AgentBackend = "claude"
-  ): string {
-    const id = nextId();
-    setSessions((s) => [
-      ...s,
-      { id, projectId, label, cwd, command, kind: "agent", backend, persistKey },
-    ]);
-    setActive(projectId, id);
-    return id;
-  }
-
   /** Start a headless chat-mode agent session for a project and focus it. */
   function startChat(
     projectId: string,
@@ -82,12 +64,13 @@ export function useSessions() {
     label: string,
     cwd: string,
     command: string
-  ) {
+  ): string {
     const id = nextId();
     setSessions((s) => [
       ...s,
       { id, projectId, label, cwd, command, kind: "dev" },
     ]);
+    return id;
   }
 
   /** Rename a session's sidebar label (e.g. after a chat is auto-titled). */
@@ -106,7 +89,7 @@ export function useSessions() {
         changed = true;
         const siblings = next.filter((s) => s.projectId === projectId);
         const fallback =
-          siblings.find((s) => s.kind === "agent")?.id ??
+          siblings.find((s) => s.kind === "chat")?.id ??
           siblings[siblings.length - 1]?.id;
         if (fallback) copy[projectId] = fallback;
         else delete copy[projectId];
@@ -145,7 +128,7 @@ export function useSessions() {
 
   function stopAllDev(projectId: string) {
     const agent = sessions.find(
-      (s) => s.projectId === projectId && s.kind === "agent"
+      (s) => s.projectId === projectId && s.kind === "chat"
     );
     if (agent) setActive(projectId, agent.id);
     setSessions((prev) =>
@@ -176,7 +159,6 @@ export function useSessions() {
     sessions,
     activeByProject,
     setActive,
-    startAgent,
     startChat,
     startDokployLogs,
     renameSession,

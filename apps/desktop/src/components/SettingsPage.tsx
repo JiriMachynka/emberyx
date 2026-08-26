@@ -99,7 +99,6 @@ const TABS: TabMeta[] = [
     label: "General",
     icon: SlidersHorizontal,
     keys: [
-      "agentUi",
       "threadView",
       "threadGrouping",
       "threadSettleDays",
@@ -107,7 +106,7 @@ const TABS: TabMeta[] = [
       "expandAllProjects",
       "autoOpenDevPanel",
     ],
-    finds: "agent interface chat terminal thread list sidebar settle merge group project dev panel",
+    finds: "thread list sidebar settle merge group project dev panel",
   },
   {
     id: "appearance",
@@ -134,8 +133,8 @@ const TABS: TabMeta[] = [
     id: "providers",
     label: "Providers",
     icon: Boxes,
-    keys: ["agentBackend", "agentCommand", "resumeLatestThread", "compactSession"],
-    finds: "claude codex backend cli command installed version resume compact",
+    keys: ["agentBackend", "agentCommand"],
+    finds: "claude codex backend cli command installed version",
   },
   {
     id: "permissions",
@@ -349,27 +348,6 @@ export function SettingsPage({
 
             {tab === "general" && (
               <Group>
-                <Row
-                  label="Agent interface"
-                  hint="Chat shows a rich message UI; Terminal runs the raw agent TUI."
-                  control={
-                    <Select
-                      value={settings.agentUi}
-                      onValueChange={(v) =>
-                        onUpdate({ agentUi: v as "chat" | "terminal" })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="chat">Chat UI</SelectItem>
-                        <SelectItem value="terminal">Terminal</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  }
-                />
-
                 <Row
                   label="Thread list"
                   hint="Whether the sidebar groups threads by project or shows one list across every open project."
@@ -606,7 +584,7 @@ export function SettingsPage({
 
                   <Row
                     label="Agent command"
-                    hint="Run on project open, e.g. claude or codex."
+                    hint="The agent CLI binary, e.g. claude or codex."
                     control={
                       <Input
                         value={settings.agentCommand}
@@ -615,26 +593,6 @@ export function SettingsPage({
                       />
                     }
                   />
-
-                  {capabilities.threads && (
-                    <SwitchRow
-                      label="Resume latest thread on open"
-                      hint="Opening a project reopens the most recently worked-on thread. Off launches a brand-new agent each time."
-                      checked={settings.resumeLatestThread}
-                      onChange={(v) => onUpdate({ resumeLatestThread: v })}
-                    />
-                  )}
-
-                  {/* --verbose is Claude's own flag; buildAgentCommand emits
-                      it for no one else. */}
-                  {settings.agentBackend === "claude" && (
-                    <SwitchRow
-                      label="Compact session"
-                      hint="Keep tool output collapsed. Off runs a full session with --verbose, expanding tool output inline."
-                      checked={settings.compactSession}
-                      onChange={(v) => onUpdate({ compactSession: v })}
-                    />
-                  )}
                 </Group>
               </>
             )}

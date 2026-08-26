@@ -8,7 +8,7 @@
  * which is what the hand-rolled handler this replaces already did.
  */
 
-import { COMMANDS, type CommandId, type WhenClause } from "@/lib/commands";
+import { COMMANDS, type CommandId } from "@/lib/commands";
 
 const KEY = "emberyx.keybindings";
 
@@ -18,11 +18,6 @@ export interface Chord {
   shift: boolean;
   /** Lowercased key, e.g. "k", ",", "space". */
   key: string;
-}
-
-/** Where the keypress happened, for `when` clauses. */
-export interface KeyContext {
-  terminalFocus: boolean;
 }
 
 const normalizeKey = (key: string): string => {
@@ -157,9 +152,6 @@ export function resetAllBindings(): Record<CommandId, string> {
   return resolveBindings();
 }
 
-const applies = (when: WhenClause, context: KeyContext): boolean =>
-  when === "always" || !context.terminalFocus;
-
 /**
  * The command an event fires, or null. Only commands the app itself dispatches
  * are considered — a menu-owned chord never reaches here, and matching it would
@@ -167,15 +159,13 @@ const applies = (when: WhenClause, context: KeyContext): boolean =>
  */
 export function matchCommand(
   event: Parameters<typeof chordFromEvent>[0],
-  bindings: Record<CommandId, string>,
-  context: KeyContext
+  bindings: Record<CommandId, string>
 ): CommandId | null {
   const pressed = chordFromEvent(event);
   if (!pressed) return null;
   const wanted = formatChord(pressed);
   for (const command of COMMANDS) {
     if (!command.rebindable) continue;
-    if (!applies(command.when, context)) continue;
     const chord = parseChord(bindings[command.id]);
     if (chord && formatChord(chord) === wanted) return command.id;
   }
@@ -192,7 +182,7 @@ export function conflictingBindings(
   for (const command of COMMANDS) {
     const chord = parseChord(bindings[command.id]);
     if (!chord) continue;
-    const key = `${formatChord(chord)}|${command.when}`;
+    const key = formatChord(chord);
     const other = seen.get(key);
     if (other) {
       clashing.add(other);

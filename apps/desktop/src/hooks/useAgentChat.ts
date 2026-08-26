@@ -16,7 +16,7 @@ import {
 } from "@/lib/accountState";
 import type { AgentBackend } from "@/lib/agentBackend";
 import { describeTool } from "@/lib/toolDisplay";
-import { notifyNative } from "@/hooks/useAgentEvents";
+import { notifyNative } from "@/lib/notifications";
 import { loadSettings } from "@/lib/settings";
 import { basename } from "@/lib/path";
 import { usePromptQueue } from "@/lib/promptQueue";

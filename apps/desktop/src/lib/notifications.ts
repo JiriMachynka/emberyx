@@ -1,3 +1,9 @@
+import {
+  isPermissionGranted,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
+import type { Settings } from "@/lib/settings";
+
 const KEY = "emberyx.notifications";
 
 export type NotificationKind =
@@ -56,4 +62,32 @@ export function loadNotifications(): AppNotification[] {
 
 export function saveNotifications(list: AppNotification[]): void {
   localStorage.setItem(KEY, JSON.stringify(list.slice(0, MAX_NOTIFICATIONS)));
+}
+
+/**
+ * Raises an OS notification, honouring the notification settings. Kinds the
+ * user switched off, and (optionally) anything raised while the window is
+ * focused, are dropped.
+ */
+export async function notifyNative(
+  settings: Settings,
+  kind: NotificationKind,
+  title: string,
+  body: string
+): Promise<void> {
+  if (kind === "done" && !settings.notifyOnDone) return;
+  if (kind === "error" && !settings.notifyOnError) return;
+  if (
+    (kind === "rate-limited" || kind === "logged-out") &&
+    !settings.notifyOnAccountIssue
+  ) {
+    return;
+  }
+  if (settings.notifyOnlyWhenUnfocused && document.hasFocus()) return;
+  if (!(await isPermissionGranted())) return;
+  sendNotification({
+    title,
+    body,
+    sound: settings.notifySound ? "default" : undefined,
+  });
 }

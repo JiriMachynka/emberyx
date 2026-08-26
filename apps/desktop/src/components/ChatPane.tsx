@@ -328,6 +328,23 @@ export const ChatPane = memo(function ChatPane({
     []
   );
 
+  // A resumed thread keeps growing after the one-shot jump above — Shiki
+  // colors fences in ~80ms late and images size on load — so a single scroll
+  // lands mid-thread. While pinned, follow every content resize instead. The
+  // observer fires after layout, so reading scrollHeight here is not a forced
+  // reflow.
+  useEffect(() => {
+    if (!active) return;
+    const el = scrollRef.current;
+    const content = el?.firstElementChild;
+    if (!el || !content) return;
+    const ro = new ResizeObserver(() => {
+      if (pinnedRef.current) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
+  }, [active]);
+
   const busy = status === "thinking" || status === "streaming" || status === "tool";
   // Both are dead ends for this session — `error` used to render nothing and
   // left the composer live with no agent behind it.

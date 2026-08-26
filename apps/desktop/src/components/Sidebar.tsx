@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { Plus, SquarePen, PanelLeftClose, PanelLeftOpen, Settings, Bot, FolderOpen, FolderPlus, GitBranch, Bell, Search, ChevronDown, Clock, Check, Laptop, LoaderCircle, SquareTerminal, MoreHorizontal, Pin, ChartColumn } from "lucide-react";
+import { Plus, SquarePen, PanelLeftClose, PanelLeftOpen, Settings, FolderOpen, FolderPlus, GitBranch, Bell, Search, ChevronDown, Clock, Check, Laptop, LoaderCircle, SquareTerminal, MoreHorizontal, Pin, ChartColumn } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -101,14 +101,6 @@ export function Sidebar(props: SidebarProps) {
   );
 }
 
-/** Status dot for one session, subscribed on its own so a status change
- *  re-renders just this dot. Hidden while idle. */
-const SessionStatusDot = memo(function SessionStatusDot({ id }: { id: string }) {
-  const status = useAgentStore((s) => statusOf(s.statuses, id));
-  if (status === "idle") return null;
-  return <StatusDot status={status} />;
-});
-
 /** Text status ("working" / "needs you") beside a session row, subscribed on
  *  its own like the dot. Hidden while idle. */
 const SessionStatusLabel = memo(function SessionStatusLabel({ id }: { id: string }) {
@@ -149,7 +141,7 @@ function ProjectStatusDot({
   hideIdle?: boolean;
 }) {
   const status = useAgentStore((s) => {
-    const agents = sessions.filter((x) => x.kind === "agent");
+    const agents = sessions.filter((x) => x.kind === "chat");
     if (agents.some((x) => statusOf(s.statuses, x.id) === "working")) return "working";
     return agents[0] ? statusOf(s.statuses, agents[0].id) : "idle";
   });
@@ -316,9 +308,7 @@ function AllThreads(props: SidebarProps) {
         }
         machine={machine}
         terminals={
-          sessionsFor(data.project.id).filter(
-            (s) => s.kind === "agent" || s.kind === "dev"
-          ).length
+          sessionsFor(data.project.id).filter((s) => s.kind === "dev").length
         }
         onResume={() =>
           onResumeThread(data.project.id, data.project.path, data.thread)
@@ -1037,20 +1027,15 @@ function SessionList({
               overId === s.id && "ring-1 ring-primary/60"
             )}
           >
-            {s.kind === "agent" ? (
-              <Bot className="size-4 shrink-0 opacity-70" />
-            ) : s.kind === "chat" ? (
+            {s.kind === "chat" ? (
               <ChatStatusBullet id={s.id} />
             ) : (
               <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
             )}
-            {(s.kind === "agent" || s.kind === "chat") && (
-              <SessionStatusLabel id={s.id} />
-            )}
+            {s.kind === "chat" && <SessionStatusLabel id={s.id} />}
             <span className="flex-1 truncate">
               {s.kind === "dev" ? `dev:${s.label}` : s.label}
             </span>
-            {s.kind === "agent" && <SessionStatusDot id={s.id} />}
             <TabCloseButton
               active={active}
               title={s.kind === "dev" ? "Stop" : "Close"}

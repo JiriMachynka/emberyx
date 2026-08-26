@@ -23,10 +23,9 @@ type Rail = typeof FAVORITES | Provider;
 
 /** Providers whose models Emberyx can actually enumerate. Claude's list is
  *  hand-written (the CLI has none to ask); Codex's comes off its app-server.
- *  The ACP providers negotiate a catalog but no switch, so they are listed
- *  disabled rather than offered. */
-const LISTABLE: readonly Provider[] = ["claude", "codex"];
-const isListable = (p: Provider) => LISTABLE.includes(p);
+ *  ACP providers have no model catalog yet, but their provider-only default is
+ *  still selectable. */
+const isLiveProvider = (p: Provider) => isAgentBackend(p);
 
 interface ModelPickerProps {
   /** Selected `--model` value for this session; "" = let the CLI decide. */
@@ -55,9 +54,8 @@ const ProviderIcon = ({ provider, className }: { provider: string; className?: s
  *
  * Picking a model is also how a thread changes provider — the entry knows whose
  * it is, so a Codex model chosen in a Claude chat switches the transport in
- * place and then sets the model. Providers Emberyx can't enumerate models for
- * are still listed, disabled: an absent icon reads as "unsupported", a disabled
- * one reads as "not wired yet", and the second is the truth.
+ * place and then sets the model. ACP providers expose a provider-only default
+ * until their model catalog can be enumerated.
  */
 export const ModelPicker = memo(function ModelPicker({
   model,
@@ -72,7 +70,7 @@ export const ModelPicker = memo(function ModelPicker({
   const [open, setOpen] = useState(false);
   // A chat on a provider with no catalog would otherwise open on an empty list.
   const [rail, setRail] = useState<Rail>(() =>
-    isListable(backend) ? backend : FAVORITES
+    isLiveProvider(backend) ? backend : FAVORITES
   );
   const [query, setQuery] = useState("");
   const [showLegacy, setShowLegacy] = useState(false);
@@ -147,7 +145,7 @@ export const ModelPicker = memo(function ModelPicker({
         setOpen(next);
         // The chip names the live backend; snap the rail to match so a silent
         // picker switch doesn't leave the list on whoever was showing last.
-        if (next) setRail(isListable(backend) ? backend : FAVORITES);
+        if (next) setRail(isLiveProvider(backend) ? backend : FAVORITES);
       }}
     >
       <PopoverTrigger className={TRIGGER}>
@@ -168,7 +166,7 @@ export const ModelPicker = memo(function ModelPicker({
           </RailButton>
           {PROVIDERS.filter((p) => installed.some((s) => s.id === p && s.installed)).map(
             (provider) => {
-              const listable = isListable(provider);
+              const listable = isLiveProvider(provider);
               return (
                 <RailButton
                   key={provider}
@@ -177,7 +175,7 @@ export const ModelPicker = memo(function ModelPicker({
                   title={
                     listable
                       ? PROVIDER_LABEL[provider]
-                      : `${PROVIDER_LABEL[provider]} — no model list yet`
+                      : `${PROVIDER_LABEL[provider]} — not available in chat`
                   }
                   onClick={() => setRail(provider)}
                 >

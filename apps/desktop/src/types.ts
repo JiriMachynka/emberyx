@@ -29,19 +29,17 @@ export interface WorkspaceInfo {
   isPython: boolean;
 }
 
-/** A terminal session shown as a tab. */
+/** A workspace session shown as a tab. */
 export interface Session {
   id: string;
   projectId: string;
   label: string;
   cwd: string;
+  /** Shell command the session runs (dev kind only). */
   command?: string;
-  kind: "agent" | "dev" | "chat" | "dokploy-logs";
-  /** Agent CLI this session drives (agent + chat kinds). */
+  kind: "dev" | "chat" | "dokploy-logs";
+  /** Agent CLI this session drives (chat kind). */
   backend?: AgentBackend;
-  /** Stable key for cross-restart scrollback restore; only the project's
-   *  primary agent sets it, so secondary/dev panes never share its log. */
-  persistKey?: string;
   /** Claude session id to resume (chat kind only). */
   resume?: string;
   /** Service to stream logs for (dokploy-logs kind only). */
@@ -88,15 +86,8 @@ export interface Project {
   worktree: { repoRoot: string; branch: string } | null;
 }
 
-/** Agent status derived from Claude Code hook events. */
+/** Live agent status shown beside a session. */
 export type SessionStatus = "idle" | "working" | "waiting";
-
-/** Payload emitted by the Rust hook listener. */
-export interface HookEvent {
-  session: string;
-  event: string;
-  payload: string;
-}
 
 /** A working-tree change from `git status`. */
 export interface GitFile {

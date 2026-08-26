@@ -1,5 +1,4 @@
 import { useCallback, useRef } from "react";
-import { TerminalPane } from "@/components/TerminalPane";
 import { ChatPane } from "@/components/ChatPane";
 import { DokployLogsPane } from "@/components/DokployLogsPane";
 import { cn } from "@/lib/utils";
@@ -106,18 +105,6 @@ function SessionPaneRow({
           active={active}
           fontFamily={settings.fontFamily}
           fontSize={settings.fontSize}
-        />
-      ) : session.kind === "agent" ? (
-        <TerminalPane
-          sessionId={session.id}
-          cwd={session.cwd}
-          command={session.command}
-          persistKey={session.persistKey}
-          fontFamily={settings.fontFamily}
-          fontSize={settings.fontSize}
-          scrollback={settings.scrollback}
-          backend={session.backend}
-          active={active}
         />
       ) : null}
     </div>

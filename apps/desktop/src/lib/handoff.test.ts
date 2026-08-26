@@ -59,11 +59,8 @@ describe("findHandoffTarget", () => {
     expect(findHandoffTarget(sessions, "p1", "codex")).toBeUndefined();
   });
 
-  it("ignores terminal and dev sessions on the target backend", () => {
-    const sessions = [
-      session({ id: "t", kind: "agent", backend: "codex" }),
-      session({ id: "d", kind: "dev", backend: "codex" }),
-    ];
+  it("ignores dev sessions on the target backend", () => {
+    const sessions = [session({ id: "d", kind: "dev", backend: "codex" })];
     expect(findHandoffTarget(sessions, "p1", "codex")).toBeUndefined();
   });
 });

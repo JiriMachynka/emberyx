@@ -51,9 +51,51 @@ pub fn open_in_ide(program: String, args: Vec<String>, cwd: Option<String>) -> R
     }
 }
 
+/// Quote a string as an AppleScript literal — backslashes and quotes escaped,
+/// so a command can't break out of the `do script` string.
+fn applescript_string(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Run a command in the user's Terminal.app. The auth login flow is
+/// interactive (browser hand-off, code pasted back) and the app no longer
+/// hosts a terminal of its own, so the system one carries it.
+#[tauri::command]
+pub fn open_in_terminal(command: String) -> Result<()> {
+    if command.trim().is_empty() {
+        return Err("no command to run".into());
+    }
+    let script = format!(
+        "tell application \"Terminal\"\nactivate\ndo script {}\nend tell",
+        applescript_string(&command)
+    );
+    let output = Command::new("osascript")
+        .args(["-e", &script])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string().into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn applescript_quoting_escapes_quotes_and_backslashes() {
+        assert_eq!(
+            applescript_string(r#"say "hi" \ bye"#),
+            r#""say \"hi\" \\ bye""#
+        );
+    }
+
+    #[test]
+    fn an_empty_terminal_command_is_refused() {
+        assert!(open_in_terminal("  ".into()).is_err());
+    }
 
     #[test]
     fn an_empty_program_is_refused_before_anything_runs() {

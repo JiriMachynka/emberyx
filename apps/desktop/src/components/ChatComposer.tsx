@@ -604,28 +604,26 @@ const UsageFooter = memo(function UsageFooter({
       {queued > 0 && queue && (
         <QueueChip queued={queued} queue={queue} />
       )}
-      {capabilitiesOf(backend).modelPicker && (
-        <ModelPicker
+      <ModelPicker
+        model={model}
+        effort={effort}
+        backend={backend}
+        cwd={cwd}
+        usage={usage}
+        onModelChange={onModelChange}
+        onEffortChange={onEffortChange}
+        onSwitchBackend={onSwitchBackend}
+      />
+      {capabilitiesOf(backend).reasoningEffort && (
+        <EffortPicker
           model={model}
           effort={effort}
           backend={backend}
           cwd={cwd}
           usage={usage}
-          onModelChange={onModelChange}
           onEffortChange={onEffortChange}
-          onSwitchBackend={onSwitchBackend}
         />
       )}
-       {capabilitiesOf(backend).reasoningEffort && (
-         <EffortPicker
-           model={model}
-           effort={effort}
-           backend={backend}
-           cwd={cwd}
-           usage={usage}
-           onEffortChange={onEffortChange}
-         />
-       )}
       {capabilitiesOf(backend).permissions && (
         <AccessChip fullAccess={fullAccess} onChange={onFullAccessChange} />
       )}

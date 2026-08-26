@@ -26,26 +26,24 @@ export const PERMISSION_MODE_LABEL: Record<PermissionMode, string> = {
 };
 
 export interface Settings {
-  /** Which agent surface opens with a project: rich chat UI or the raw terminal. */
-  agentUi: "chat" | "terminal";
   /** Which agent CLI the command drives, and so which features are offered.
    *  Projects may override it; this is the default for new ones. */
   agentBackend: AgentBackend;
-  /** Base agent command run on project open. */
+  /** Agent CLI binary (used to resolve auth flows and backend inference). */
   agentCommand: string;
-  /** Terminal font-family stack. */
+  /** Monospace stack for PTY output logs (dev servers, Dokploy). */
   fontFamily: string;
-  /** Chat, composer and thread-list font stack. Its own axis: the terminal
-   *  needs a monospace grid, the conversation around it does not. */
+  /** Chat, composer and thread-list font stack. Its own axis: logs need a
+   *  monospace grid, the conversation around them does not. */
   chatFontFamily: string;
   /** Editor font-family stack, kept separate so the editor can use a font
    *  whose ligatures render correctly. */
   editorFontFamily: string;
-  /** Terminal + chat font size in px. */
+  /** Log + chat font size in px. */
   fontSize: number;
   /** Built-in file editor font size in px. */
   editorFontSize: number;
-  /** Terminal scrollback in lines. */
+  /** Output-log scrollback in lines. */
   scrollback: number;
   /** Launch Claude with --dangerously-skip-permissions. */
   dangerouslySkipPermissions: boolean;
@@ -65,8 +63,6 @@ export interface Settings {
   /** Reasoning effort for new chats; "" = CLI default. Its own axis, not part
    *  of the model — each backend offers its own levels. */
   effort: string;
-  /** On project open, resume the most recent thread instead of a fresh agent. */
-  resumeLatestThread: boolean;
   /** Keep every open project's session list expanded, not just the active one. */
   expandAllProjects: boolean;
   /** How resumable threads are organized in the main sidebar. */
@@ -79,8 +75,6 @@ export interface Settings {
   threadGrouping: ThreadGrouping;
   /** Open the dev output panel automatically when a dev/build/start run starts. */
   autoOpenDevPanel: boolean;
-  /** Launch Claude compact (collapsed tool output). Off = full (--verbose). */
-  compactSession: boolean;
   /** Dokploy server base URL, e.g. https://dokploy.example.com. */
   dokployUrl: string;
   /** Dokploy API key (sent as x-api-key). */
@@ -105,7 +99,6 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  agentUi: "chat",
   agentBackend: "claude",
   agentCommand: "claude",
   fontFamily: '"Geist Mono Variable", ui-monospace, Menlo, monospace',
@@ -122,14 +115,12 @@ export const DEFAULT_SETTINGS: Settings = {
   persistentAgents: false,
   model: "",
   effort: "",
-  resumeLatestThread: false,
   expandAllProjects: false,
   threadView: "project",
   threadSettleDays: 3,
   threadAutoSettleOnMerge: true,
   threadGrouping: "none",
   autoOpenDevPanel: false,
-  compactSession: false,
   dokployUrl: "",
   dokployApiKey: "",
   gitlabRemote: "origin",

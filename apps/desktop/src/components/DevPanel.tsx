@@ -1,51 +1,39 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Square, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { TerminalPane } from "@/components/TerminalPane";
+import { AnsiLog } from "@/components/AnsiLog";
 import { SidePanel } from "@/components/SidePanel";
 import type { Session } from "@/types";
 
 interface DevPanelProps {
-  /** Every dev session across all projects — panes stay mounted so closing
-   *  the panel (or switching project) never kills a running server. */
+  /** Every dev session across all projects; only this project's are shown. */
   sessions: Session[];
-  /** Only this project's servers are shown. */
   projectId: string | null;
   open: boolean;
   fontFamily: string;
   fontSize: number;
-  scrollback: number;
   onStop: (id: string) => void;
-  /** A server that exited on its own — drop it so "running" stops lying. */
-  onExit: (id: string) => void;
   onClose: () => void;
   /** Render inside the dock rather than as its own right aside. */
   embedded?: boolean;
 }
 
-/** Right-hand panel streaming each running dev server's output. Hidden rather
- *  than unmounted when closed — TerminalPane kills its PTY on unmount. */
+/** Right-hand panel streaming each running dev server's output. The output
+ *  buffer lives in lib/ptyLog, so panes mount and unmount freely — closing
+ *  the panel never touches the process. */
 export function DevPanel({
   sessions,
   projectId,
   open,
   fontFamily,
   fontSize,
-  scrollback,
   onStop,
-  onExit,
   onClose,
   embedded,
 }: DevPanelProps) {
   const mine = sessions.filter((s) => s.projectId === projectId);
   const [selected, setSelected] = useState<string | null>(null);
   const active = mine.find((s) => s.id === selected) ?? mine[0];
-
-  // TerminalPane is memoised on primitive props; a fresh arrow per render would
-  // defeat that, so the callback identity is pinned and the ref carries updates.
-  const onExitRef = useRef(onExit);
-  onExitRef.current = onExit;
-  const handleExit = useCallback((id: string) => onExitRef.current(id), []);
 
   // Follow the newest server when the current selection stops.
   useEffect(() => {
@@ -97,26 +85,14 @@ export function DevPanel({
       )}
 
       <div className="relative min-h-0 flex-1 p-1">
-        {sessions.map((s) => (
-          <div
-            key={s.id}
-            className={cn(
-              "absolute inset-1",
-              s.id === active?.id && open ? "" : "hidden"
-            )}
-          >
-            <TerminalPane
-              sessionId={s.id}
-              cwd={s.cwd}
-              command={s.command}
-              fontFamily={fontFamily}
-              fontSize={fontSize}
-              scrollback={scrollback}
-              active={open && s.id === active?.id}
-              onExit={handleExit}
-            />
-          </div>
-        ))}
+        {active && (
+          <AnsiLog
+            sessionId={active.id}
+            fontFamily={fontFamily}
+            fontSize={fontSize}
+            active={open}
+          />
+        )}
         {mine.length === 0 && (
           <div className="flex h-full items-center justify-center px-4 text-center text-xs text-muted-foreground">
             No dev server running. Start one from the Dev menu.

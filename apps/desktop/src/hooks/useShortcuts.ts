@@ -16,6 +16,8 @@ export function useShortcuts(handlers: {
   onCommandPalette: () => void;
   onSearch: () => void;
   onCloseTab: () => void;
+  onSelectTab: (index: number) => void;
+  onCycleTab: (direction: 1 | -1) => void;
 }) {
   const ref = useRef(handlers);
   ref.current = handlers;
@@ -49,10 +51,18 @@ export function useShortcuts(handlers: {
     };
 
     function onKey(e: KeyboardEvent) {
-      const target = e.target as HTMLElement | null;
-      const id = matchCommand(e, bindingsRef.current, {
-        terminalFocus: !!target?.closest(".xterm"),
-      });
+      if (e.defaultPrevented) return;
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+        e.preventDefault();
+        ref.current.onSelectTab(Number(e.key) - 1);
+        return;
+      }
+      if (e.ctrlKey && e.key === "Tab") {
+        e.preventDefault();
+        ref.current.onCycleTab(e.shiftKey ? -1 : 1);
+        return;
+      }
+      const id = matchCommand(e, bindingsRef.current);
       if (!id) return;
       e.preventDefault();
       RUN[id]();

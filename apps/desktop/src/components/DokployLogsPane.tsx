@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { highlightAnsi } from "@/lib/shiki";
 
 interface DokployLogsPaneProps {
   sessionId: string;
@@ -27,7 +28,20 @@ export function DokployLogsPane({
   fontSize,
 }: DokployLogsPaneProps) {
   const [text, setText] = useState("Loading logs…");
-  const preRef = useRef<HTMLPreElement>(null);
+  // Container logs arrive with ANSI color intact — render it instead of
+  // showing the raw escape bytes.
+  const [html, setHtml] = useState("");
+  const preRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let stale = false;
+    void highlightAnsi(text).then((out) => {
+      if (!stale) setHtml(out);
+    });
+    return () => {
+      stale = true;
+    };
+  }, [text]);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,7 +73,7 @@ export function DokployLogsPane({
   useEffect(() => {
     const el = preRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [text]);
+  }, [html]);
 
   const refresh = () => {
     invoke<string>("dokploy_logs", {
@@ -90,13 +104,12 @@ export function DokployLogsPane({
           <RotateCw className="size-3.5" />
         </button>
       </div>
-      <pre
+      <div
         ref={preRef}
-        className="h-full w-full overflow-auto whitespace-pre-wrap p-3"
+        className="ansi-log h-full w-full overflow-auto"
         style={{ fontFamily, fontSize: `${fontSize}px` }}
-      >
-        {text}
-      </pre>
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
     </div>
   );
 }

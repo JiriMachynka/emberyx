@@ -6,14 +6,6 @@
 @source "../node_modules/streamdown/dist/*.js";
 @source "../node_modules/@streamdown/code/dist/*.js";
 
-/* Icons-only Nerd Font, appended to the terminal's font stack so powerline
-   prompts (Starship/p10k) render their glyphs whatever base font is chosen. */
-@font-face {
-  font-family: "Symbols Nerd Font";
-  src: url("/fonts/SymbolsNerdFontMono-Regular.ttf") format("truetype");
-  font-display: swap;
-}
-
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -160,6 +152,23 @@
 
   .composer-controls-scroll::-webkit-scrollbar {
     display: none;
+  }
+
+  /* PTY log view: shiki's `ansi` output arrives as a themed <pre> with its
+     own background — the pane's surface wins, the spans keep their colors. */
+  .ansi-log pre {
+    margin: 0;
+    padding: 0.75rem;
+    background-color: transparent !important;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: inherit;
+    font-size: inherit;
+  }
+
+  .ansi-log code {
+    font-family: inherit;
+    font-size: inherit;
   }
 
   /* Chat follows the reference's soft plum canvas without changing the

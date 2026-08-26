@@ -142,8 +142,6 @@ describe("useWorkspace launch restore", () => {
 });
 
 describe("useWorkspace agent backend", () => {
-  const terminal = { ...DEFAULT_SETTINGS, agentUi: "terminal" } as const;
-
   const primaryCommand = async (settings: typeof DEFAULT_SETTINGS) => {
     const { result } = renderHook(() => useWorkspace(settings));
     await act(() => result.current.openProjectAt("/p"));
@@ -152,28 +150,29 @@ describe("useWorkspace agent backend", () => {
     return result.current.sessionsFor(id)[0];
   };
 
-  it("appends Claude's own flags for a Claude project", async () => {
-    const session = await primaryCommand(terminal);
+  it("opens a Claude chat for a Claude project", async () => {
+    const session = await primaryCommand(DEFAULT_SETTINGS);
     expect(session.backend).toBe("claude");
-    expect(session.command).toBe("claude --dangerously-skip-permissions --verbose");
+    expect(session.kind).toBe("chat");
   });
 
-  // Those flags are Claude CLI syntax; another binary would reject them.
-  it("launches another backend bare", async () => {
+  it("follows the project's backend pin", async () => {
     setProjectBackend("/p", "codex");
-    const session = await primaryCommand({ ...terminal, agentCommand: "codex" });
+    const session = await primaryCommand({
+      ...DEFAULT_SETTINGS,
+      agentCommand: "codex",
+    });
     expect(session.backend).toBe("codex");
-    expect(session.command).toBe("codex");
+    expect(session.kind).toBe("chat");
   });
 
   it("follows the global default when the project pins nothing", async () => {
     const session = await primaryCommand({
-      ...terminal,
+      ...DEFAULT_SETTINGS,
       agentBackend: "codex",
       agentCommand: "codex",
     });
     expect(session.backend).toBe("codex");
-    expect(session.command).toBe("codex");
   });
 
   // Claude's transcripts live in ~/.claude; a Codex thread is only knowable
@@ -316,5 +315,55 @@ describe("useWorkspace handoff", () => {
       )
     );
     expect(invoked).toContain("git_changes");
+  });
+});
+
+describe("useWorkspace thread resume", () => {
+  const openProject = async () => {
+    const { result } = renderHook(() => useWorkspace(DEFAULT_SETTINGS));
+    await act(() => result.current.openProjectAt("/p"));
+    const projectId = result.current.projects[0].id;
+    await waitFor(() =>
+      expect(result.current.sessionsFor(projectId)).toHaveLength(1)
+    );
+    return { result, projectId };
+  };
+
+  // A duplicate also breaks the sidebar highlight: the row pairs with the
+  // first session matching the thread id, while focus sits on the newest.
+  it("focuses the existing session instead of opening the thread twice", async () => {
+    const { result, projectId } = await openProject();
+    const thread = { id: "t1", title: "Fix the parser", modified: 100 };
+
+    act(() => result.current.resumeThreadIn(projectId, "/p", thread));
+    const opened = result.current
+      .sessionsFor(projectId)
+      .find((s) => s.resume === "t1");
+    expect(opened).toBeDefined();
+
+    act(() => result.current.resumeThreadIn(projectId, "/p", thread));
+
+    expect(
+      result.current.sessionsFor(projectId).filter((s) => s.resume === "t1")
+    ).toHaveLength(1);
+    expect(result.current.activeId).toBe(opened!.id);
+  });
+
+  it("still opens a session for a thread that has none", async () => {
+    const { result, projectId } = await openProject();
+
+    act(() =>
+      result.current.resumeThreadIn(projectId, "/p", {
+        id: "t2",
+        title: "Another",
+        modified: 100,
+      })
+    );
+
+    const opened = result.current
+      .sessionsFor(projectId)
+      .find((s) => s.resume === "t2");
+    expect(opened).toBeDefined();
+    expect(result.current.activeId).toBe(opened!.id);
   });
 });

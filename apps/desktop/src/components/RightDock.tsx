@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { Plus, X } from "lucide-react";
 import {
   DropdownMenu,
@@ -12,7 +11,6 @@ import { DockPicker } from "@/components/DockPicker";
 import {
   DOCK_LABEL,
   isChooser,
-  nextMounted,
   type DockKind,
   type DockState,
 } from "@/lib/dock";
@@ -34,11 +32,9 @@ interface RightDockProps {
 
 /**
  * The right-hand dock: one resizable panel holding every right-side surface as
- * a tab. It owns *mounting*, not content — a tab whose pane runs a child process
- * (terminal, dev output) is hidden when its tab closes and mounted for as long
- * as the window lives, because unmounting it would kill the process it is
- * showing. Everything else unmounts with its tab, so a closed diff isn't still
- * polling git.
+ * a tab. Open tabs stay mounted (an inactive tab is hidden, not rebuilt);
+ * closing a tab unmounts its pane, so a closed diff isn't still polling git.
+ * Child processes live in lib/ptyLog, never in a pane, so unmounting is safe.
  */
 export function RightDock({
   state,
@@ -53,12 +49,6 @@ export function RightDock({
 }: RightDockProps) {
   const { tabs, active } = state;
   const chooser = isChooser(state);
-  const [mounted, setMounted] = useState<DockKind[]>([]);
-
-  useEffect(() => {
-    setMounted((prev) => nextMounted(prev, tabs));
-  }, [tabs]);
-
   const addable = available.filter((k) => !tabs.includes(k));
 
   return (
@@ -118,7 +108,7 @@ export function RightDock({
       {chooser && (
         <DockPicker onPick={onAdd} titles={titles} unavailable={unavailable} />
       )}
-      {mounted.map((kind) => (
+      {tabs.map((kind) => (
         <div
           key={kind}
           className={cn(

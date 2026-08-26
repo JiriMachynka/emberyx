@@ -11,8 +11,8 @@ import { cn } from "@/lib/utils";
 import { DOCK_LABEL, PICKER_OFFERS, type DockKind } from "@/lib/dock";
 
 const ICONS: Record<(typeof PICKER_OFFERS)[number]["kind"], typeof Globe> = {
-  preview: Globe,
   terminal: Terminal,
+  preview: Globe,
   files: FolderOpen,
   diff: GitCompare,
   mrs: GitPullRequest,
@@ -28,7 +28,7 @@ interface DockPickerProps {
 }
 
 /**
- * Empty dock: pick a surface instead of guessing Terminal. Letter keys match
+ * Empty dock: pick a surface instead of guessing. Letter keys match
  * the badges, and only fire while this chooser is mounted and the user isn't
  * typing in the composer.
  */

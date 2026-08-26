@@ -1,15 +1,16 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Toaster } from "sonner";
+import { toast, Toaster } from "sonner";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SessionPanes } from "@/components/SessionPanes";
 import { RightDock } from "@/components/RightDock";
-import { WorkspaceTerminals } from "@/components/WorkspaceTerminals";
 import { ProjectSettingsPane } from "@/components/ProjectSettingsPane";
 import { SettingsPage } from "@/components/SettingsPage";
 import { ChangesPanel } from "@/components/ChangesPanel";
 import { MergeRequestsPanel } from "@/components/MergeRequestsPanel";
 import { NotificationPanel } from "@/components/NotificationPanel";
 import { DevPanel } from "@/components/DevPanel";
+import { TerminalPane } from "@/components/TerminalPane";
 import { ContextBar } from "@/components/ContextBar";
 import { Sidebar } from "@/components/Sidebar";
 import { CommandPalette } from "@/components/CommandPalette";
@@ -26,7 +27,6 @@ import {
   closeTab,
   closeTabs,
   hideDock,
-  isSticky,
   openTab,
   showDock,
   toggleTab,
@@ -130,10 +130,10 @@ function App() {
   );
 
   // Project-scoped panels close when switching projects, so a panel opened
-  // for one project doesn't linger empty over the next. Sticky tabs (terminal,
-  // output) stay — their panes own live processes and already retarget.
+  // for one project doesn't linger empty over the next. Output stays — it
+  // already retargets to the new project's servers.
   useEffect(() => {
-    setDock((s) => closeTabs(s, DOCK_KINDS.filter((k) => !isSticky(k))));
+    setDock((s) => closeTabs(s, DOCK_KINDS.filter((k) => k !== "dev")));
   }, [activeProjectId]);
 
   // Which service the active project's remote is on. The review panel speaks
@@ -191,24 +191,17 @@ function App() {
     if (target) ws.activateSession(target.projectId, target.id);
   };
 
-  // Signing in is interactive (browser hand-off, then a code pasted back), so
-  // it runs in a real terminal tab. `/login` is a REPL slash command that can't
-  // be reached from outside the pane; `claude auth login` is the same flow as a
-  // command. The binary comes from the configured agent command so a wrapper or
-  // absolute path still resolves.
+  // Signing in is interactive (browser hand-off, then a code pasted back) —
+  // that needs a real terminal, and the app no longer hosts one, so the flow
+  // runs in the system terminal. The binary comes from the configured agent
+  // command so a wrapper or absolute path still resolves.
   const startLogin = () => {
-    if (!activeProject) return;
     const bin =
       agentBackend.backend === "claude"
         ? settings.agentCommand.split(" ")[0]
         : "claude";
-    ws.startAgent(
-      activeProject.id,
-      activeProject.path,
-      `${bin} auth login`,
-      "login",
-      undefined,
-      "claude"
+    void invoke("open_in_terminal", { command: `${bin} auth login` }).catch(
+      (e) => toast.error("Couldn't open Terminal", { description: String(e) })
     );
   };
 
@@ -247,21 +240,27 @@ function App() {
     onCommandPalette: () => setPaletteOpen((v) => !v),
     onSearch: openSearch,
     onCloseTab: () => activeId && ws.closeSession(activeId),
+    onSelectTab: (index) => {
+      const tabs = projectSessions.filter((s) => s.kind !== "dev");
+      const target = tabs[index];
+      if (target) ws.activateSession(target.projectId, target.id);
+    },
+    onCycleTab: (direction) => {
+      const tabs = projectSessions.filter((s) => s.kind !== "dev");
+      const current = tabs.findIndex((s) => s.id === activeId);
+      if (tabs.length === 0) return;
+      const next = (current + direction + tabs.length) % tabs.length;
+      const target = tabs[next];
+      if (target) ws.activateSession(target.projectId, target.id);
+    },
   });
   useLaunchUpdateCheck();
   usePricingRefresh();
 
-  // The context bar follows the focused chat/agent tab, else the project's
-  // primary one — chat is the default surface, so a `kind === "agent"`-only
-  // lookup would leave the header untitled.
-  const firstAgent = projectSessions.find(
-    (s) => s.kind === "agent" || s.kind === "chat",
-  );
+  // The context bar follows the focused chat tab, else the project's first one.
+  const firstAgent = projectSessions.find((s) => s.kind === "chat");
   const activeSession = projectSessions.find((s) => s.id === activeId);
-  const agent =
-    activeSession?.kind === "agent" || activeSession?.kind === "chat"
-      ? activeSession
-      : firstAgent;
+  const agent = activeSession?.kind === "chat" ? activeSession : firstAgent;
   // The chat session slash commands run in — the active tab when it's a chat.
   const activeChatId = activeSession?.kind === "chat" ? activeSession.id : null;
   const chatSend = useAgentStore((s) =>
@@ -291,13 +290,13 @@ function App() {
   // Content per dock tab. The dock decides what is mounted — a pane that owns a
   // child process stays mounted once opened, the rest come and go with the tab.
   const dockPanes: Partial<Record<DockKind, React.ReactNode>> = {
-    terminal: (
-      <WorkspaceTerminals
-        projectPath={activeProject?.path ?? ""}
-        active={dockActive === "terminal"}
+    terminal: activeProject && (
+      <TerminalPane
+        cwd={activeProject.path}
         fontFamily={settings.fontFamily}
         fontSize={settings.fontSize}
         scrollback={settings.scrollback}
+        active={dockActive === "terminal"}
       />
     ),
     files: activeProject && (
@@ -349,9 +348,7 @@ function App() {
         open={dockActive === "dev"}
         fontFamily={settings.fontFamily}
         fontSize={settings.fontSize}
-        scrollback={settings.scrollback}
         onStop={ws.closeSession}
-        onExit={ws.closeSession}
         onClose={() => hideTab("dev")}
       />
     ),
@@ -582,7 +579,6 @@ function App() {
         projects={projects}
         activeProject={activeProject}
         slashCommands={capabilities.slashCommands}
-        chatUi={settings.agentUi === "chat"}
         onSelectSession={(projectId, id) => {
           setSettingsOpen(false);
           setUsageOpen(false);

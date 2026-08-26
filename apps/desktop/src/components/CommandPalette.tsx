@@ -27,7 +27,6 @@ interface CommandPaletteProps {
   activeProject: Project | null;
   /** This backend exposes slash commands. */
   slashCommands: boolean;
-  chatUi: boolean;
   onSelectSession: (projectId: string, sessionId: string) => void;
   onResumeThread: (projectId: string, path: string, thread: Thread) => void;
   onNewAgent: () => void;
@@ -52,7 +51,6 @@ export function CommandPalette({
   projects,
   activeProject,
   slashCommands,
-  chatUi,
   onSelectSession,
   onResumeThread,
   onNewAgent,
@@ -115,12 +113,9 @@ export function CommandPalette({
               </Command.Empty>
 
               <Command.Group heading="Actions">
-                <Item
-                  value={`action new ${chatUi ? "chat" : "agent"}`}
-                  onSelect={() => run(onNewAgent)}
-                >
+                <Item value="action new chat" onSelect={() => run(onNewAgent)}>
                   <Plus className="size-4 text-muted-foreground" />
-                  {chatUi ? "New chat" : "New agent"}
+                  New chat
                 </Item>
                 <Item value="action open project" onSelect={() => run(onPickProject)}>
                   <FolderOpen className="size-4 text-muted-foreground" />
