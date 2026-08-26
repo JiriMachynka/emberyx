@@ -635,5 +635,8 @@ export function useCodexChat({
     respond,
     pendingAsk,
     answerAsk,
+    hasMore: false,
+    loadingOlder: false,
+    loadOlder: async () => false,
   };
 }

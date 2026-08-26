@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CLAUDE_MODELS,
+  acpModelEntries,
   codexGeneration,
   codexModelEntries,
   labelForModel,
@@ -48,6 +49,19 @@ describe("codexModelEntries", () => {
   it("falls back to the id when the catalog has no display name", () => {
     const entries = codexModelEntries([{ id: "gpt-5.6", displayName: "" } as CodexModel]);
     expect(entries[0].label).toBe("gpt-5.6");
+  });
+});
+
+describe("acpModelEntries", () => {
+  it("stamps the entries with the provider they came from", () => {
+    const entries = acpModelEntries("grok", [
+      { value: "grok-4.6", label: "Grok 4.6" },
+      { value: "grok-4.5", label: "Grok 4.5" },
+    ]);
+    expect(entries).toEqual([
+      { id: "grok-4.6", label: "Grok 4.6", provider: "grok", legacy: false },
+      { id: "grok-4.5", label: "Grok 4.5", provider: "grok", legacy: false },
+    ]);
   });
 });
 

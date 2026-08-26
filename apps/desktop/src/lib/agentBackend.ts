@@ -111,9 +111,9 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     askUser: false,
     slashCommands: false,
     subagents: false,
-    // The catalog arrives with `session/new`, but switching mid-session needs a
-    // `session/set_config` round trip that isn't wired yet.
-    modelPicker: false,
+    // The catalog arrives with `session/new`; switching is a `session/set_model`
+    // round trip.
+    modelPicker: true,
     reasoningEffort: false,
     // A prompt sent mid-turn is rejected; the turn is cancelled and re-sent.
     steering: false,
@@ -129,7 +129,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     askUser: false,
     slashCommands: false,
     subagents: false,
-    modelPicker: false,
+    modelPicker: true,
     // Grok reports `supportsReasoningEffort` and offers levels under its
     // session config; switching one needs a set-config round trip that is not
     // wired, and a control that doesn't change the run is worse than none.

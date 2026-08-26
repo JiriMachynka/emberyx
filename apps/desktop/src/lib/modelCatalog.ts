@@ -74,6 +74,19 @@ export const codexModelEntries = (models: CodexModel[]): ModelEntry[] => {
   }));
 };
 
+/** An ACP provider's catalog (from `session/new`) as picker entries. ACP
+ *  declares no generations, so nothing is folded away as legacy. */
+export const acpModelEntries = (
+  provider: AgentBackend,
+  models: { value: string; label: string }[]
+): ModelEntry[] =>
+  models.map((m) => ({
+    id: m.value,
+    label: m.label,
+    provider,
+    legacy: false,
+  }));
+
 /** Substring match over the model's name, its id and its provider, so "opus",
  *  "4-8" and "codex" all find something. Empty query keeps everything. */
 export function searchModels(entries: ModelEntry[], query: string): ModelEntry[] {

@@ -4,7 +4,7 @@
  * adapter stays pure.
  */
 
-import { invoke, type Channel } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type { AcpConfigOption } from "./protocol";
 
 export interface AcpNotify {
@@ -55,6 +55,7 @@ interface AcpGrokModelState {
 
 export interface AcpSessionResult {
   sessionId: string;
+  models?: AcpGrokModelState;
   configOptions?: AcpConfigOption[];
   _meta?: Record<string, unknown> & {
     "x.ai/sessionConfig"?: AcpVendorSessionConfig;
@@ -105,10 +106,12 @@ const vendorModels = (session: AcpSessionResult | undefined) =>
     .map((o) => ({ id: o.id, label: o.label, selected: o.selected }));
 
 const grokModels = (session: AcpSessionResult | undefined) =>
-  (session?._meta?.modelState?.availableModels ?? []).map((model) => ({
+  (session?.models?.availableModels ?? session?._meta?.modelState?.availableModels ?? []).map((model) => ({
     id: model.modelId,
     label: model.name,
-    selected: model.modelId === session?._meta?.modelState?.currentModelId,
+    selected:
+      model.modelId ===
+      (session?.models?.currentModelId ?? session?._meta?.modelState?.currentModelId),
   }));
 
 /**
@@ -133,6 +136,38 @@ export function modelOptions(
   }));
 }
 
+/** Switch the session's model. `session/set_model` is ACP's (unstable) method
+ *  and both installed CLIs answer it; an agent that doesn't returns a JSON-RPC
+ *  error, which rejects here rather than pretending the switch took. */
+export const acpSetModel = (
+  id: number,
+  sessionId: string,
+  modelId: string
+): Promise<void> =>
+  invoke("acp_request", {
+    id,
+    method: "session/set_model",
+    params: { sessionId, modelId },
+  }).then(() => undefined);
+
+/**
+ * Read a provider's model catalog without a chat: spawn the agent, open a
+ * session for its `session/new` reply, and kill it. ACP has no list-models
+ * method, so a throwaway session is the only way to ask — the events go to a
+ * channel nobody reads, and the process never outlives the call.
+ */
+export async function readAcpModels(
+  provider: string,
+  cwd: string
+): Promise<{ value: string; label: string }[]> {
+  const spawned = await acpSpawn(provider, cwd, new Channel<AcpEvent>());
+  try {
+    return modelOptions(await acpSessionNew(spawned.id, cwd));
+  } finally {
+    void acpKill(spawned.id);
+  }
+}
+
 /** The model the session opened on, or "" when the agent doesn't say. */
 export const currentModel = (session: AcpSessionResult | undefined): string => {
   const standard = (session?.configOptions ?? []).find(
@@ -140,6 +175,7 @@ export const currentModel = (session: AcpSessionResult | undefined): string => {
   );
   if (standard?.currentValue) return standard.currentValue;
   return (
+    session?.models?.currentModelId ??
     session?._meta?.modelState?.currentModelId ??
     vendorModels(session).find((o) => o.selected)?.id ??
     grokModels(session).find((o) => o.selected)?.id ??

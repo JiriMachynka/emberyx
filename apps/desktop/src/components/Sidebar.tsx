@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { Plus, SquarePen, PanelLeftClose, PanelLeftOpen, Settings, FolderOpen, FolderPlus, GitBranch, Bell, Search, ChevronDown, Clock, Check, Laptop, LoaderCircle, SquareTerminal, MoreHorizontal, Pin, ChartColumn } from "lucide-react";
+import { ArrowLeft, Plus, SquarePen, PanelLeftClose, PanelLeftOpen, Settings, FolderOpen, FolderPlus, GitBranch, Bell, Search, ChevronDown, Clock, Check, Laptop, LoaderCircle, SquareTerminal, MoreHorizontal, Pin, ChartColumn } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -72,6 +72,8 @@ interface SidebarProps {
   onNewAgent: () => void;
   onOpenSearch: () => void;
   onOpenSettings: () => void;
+  settingsOpen: boolean;
+  onBackFromSettings: () => void;
   onOpenUsage: () => void;
   notificationCount: number;
   onOpenNotifications: () => void;
@@ -81,7 +83,7 @@ interface SidebarProps {
  *  plus a project-scoped action row. Collapses to an icon rail (status dots
  *  survive) via the header toggle / ⌘B. */
 export function Sidebar(props: SidebarProps) {
-  const { collapsed, fontFamily } = props;
+  const { collapsed, fontFamily, settingsOpen } = props;
   // Status is read by the dots themselves, so one session going working
   // re-renders that dot instead of the whole sidebar.
   return (
@@ -94,7 +96,13 @@ export function Sidebar(props: SidebarProps) {
     >
       <SidebarHeader {...props} />
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1.5">
-        {collapsed ? <Rail {...props} /> : <Tree {...props} />}
+        {settingsOpen ? (
+          <div id="settings-navigation" className="flex min-h-full flex-col" />
+        ) : collapsed ? (
+          <Rail {...props} />
+        ) : (
+          <Tree {...props} />
+        )}
       </div>
       <SidebarFooter {...props} />
     </aside>
@@ -1114,6 +1122,8 @@ function Rail({
 function SidebarFooter({
   collapsed,
   onOpenSettings,
+  settingsOpen,
+  onBackFromSettings,
   onOpenUsage,
   notificationCount,
   onOpenNotifications,
@@ -1128,20 +1138,33 @@ function SidebarFooter({
       )}
     >
       <div className={cn("flex items-center", collapsed && "flex-col")}>
-      <button
-        onClick={onOpenSettings}
-        className="flex items-center gap-2 rounded-md p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title="Settings"
-      >
-        <Settings className="size-5" />
-      </button>
-      <button
-        onClick={onOpenUsage}
-        className="flex items-center gap-2 rounded-md p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title="Usage"
-      >
-        <ChartColumn className="size-5" />
-      </button>
+      {settingsOpen ? (
+        <button
+          onClick={onBackFromSettings}
+          className="flex items-center gap-2 rounded-md p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title="Back"
+        >
+          <ArrowLeft className="size-5" />
+          {!collapsed && <span>Back</span>}
+        </button>
+      ) : (
+        <>
+          <button
+            onClick={onOpenSettings}
+            className="flex items-center gap-2 rounded-md p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            title="Settings"
+          >
+            <Settings className="size-5" />
+          </button>
+          <button
+            onClick={onOpenUsage}
+            className="flex items-center gap-2 rounded-md p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            title="Usage"
+          >
+            <ChartColumn className="size-5" />
+          </button>
+        </>
+      )}
       </div>
       <button
         onClick={onOpenNotifications}

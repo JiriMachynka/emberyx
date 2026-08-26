@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import {
-  ArrowLeft,
   Bell,
   Boxes,
   ChevronDown,
@@ -206,6 +206,7 @@ export function SettingsPage({
   const [startingDaemon, setStartingDaemon] = useState(false);
 
   const meta = TAB_META(tab);
+  const navigationTarget = document.getElementById("settings-navigation");
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -268,11 +269,9 @@ export function SettingsPage({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 bg-background">
-      <nav className="flex w-72 shrink-0 flex-col border-r bg-sidebar">
-        <div className="flex h-14 shrink-0 items-center px-4 text-sm font-semibold tracking-tight">
-          <span className="ember-text">Emberyx</span>
-        </div>
-
+      {navigationTarget &&
+        createPortal(
+          <nav className="flex min-h-full w-full flex-col bg-sidebar">
         <div className="px-3 pb-2">
           <div className="flex h-9 items-center gap-2 rounded-lg bg-secondary px-2.5">
             <Search className="size-4 shrink-0 text-muted-foreground" />
@@ -313,15 +312,9 @@ export function SettingsPage({
           )}
         </div>
 
-        <button
-          type="button"
-          onClick={onBack}
-          className="flex shrink-0 items-center gap-2.5 border-t px-5 py-4 text-sm text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ArrowLeft className="size-4" />
-          Back
-        </button>
-      </nav>
+          </nav>,
+          navigationTarget
+        )}
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-14 shrink-0 items-center justify-between px-6">

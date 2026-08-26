@@ -88,6 +88,7 @@ let openApprovals: Record<string, unknown>[] = [];
 
 /** Overrides for what `agent_spawn` answers, per test. */
 let spawnReply: Record<string, unknown> = {};
+let threadWindow = { text: "", hasMore: false, startByte: 0 };
 
 beforeEach(() => {
   channels.length = 0;
@@ -97,11 +98,12 @@ beforeEach(() => {
   queueSeq = 0;
   openApprovals = [];
   spawnReply = {};
+  threadWindow = { text: "", hasMore: false, startByte: 0 };
   invoke.mockReset();
   invoke.mockImplementation((command: string, args: Record<string, unknown>) => {
     if (command === "agent_spawn")
       return Promise.resolve({ id: 1, reattached: false, truncated: false, ...spawnReply });
-    if (command === "read_thread") return Promise.resolve("");
+    if (command === "read_thread") return Promise.resolve(threadWindow);
     if (command === "title_thread") return Promise.resolve("A title");
     if (command === "agent_attach_thread") return Promise.resolve(undefined);
     if (command === "agent_approvals_pending") return Promise.resolve(openApprovals);
@@ -619,6 +621,52 @@ describe("useAgentChat persistent agents", () => {
   it("still prefills from the transcript when the agent is window-scoped", async () => {
     await mount({ resume: "old-thread" });
     await waitFor(() => expect(sentTo("read_thread")).toHaveLength(1));
+    expect(sentTo("read_thread")[0][1]).toMatchObject({
+      sessionId: "old-thread",
+      turnLimit: 10,
+    });
+  });
+
+  it("hydrates the windowed transcript, not a full file", async () => {
+    threadWindow = {
+      text:
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "from-disk" },
+        }) + "\n",
+      hasMore: true,
+      startByte: 48,
+    };
+    const { result } = await mount({ resume: "old-thread" });
+    await waitFor(() =>
+      expect(result.current.messages.map((m) => m.text)).toEqual(["from-disk"])
+    );
+    expect(result.current.hasMore).toBe(true);
+  });
+
+  it("prepends the previous page onto the window", async () => {
+    const userLine = (text: string) =>
+      JSON.stringify({
+        type: "user",
+        message: { role: "user", content: text },
+      }) + "\n";
+    threadWindow = {
+      text: userLine("new"),
+      hasMore: true,
+      startByte: 20,
+    };
+    const { result } = await mount({ resume: "old-thread" });
+    await waitFor(() => expect(result.current.hasMore).toBe(true));
+    threadWindow = {
+      text: userLine("old"),
+      hasMore: false,
+      startByte: 0,
+    };
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+    expect(result.current.messages.map((m) => m.text)).toEqual(["old", "new"]);
+    expect(result.current.hasMore).toBe(false);
   });
 
   // A partial transcript has to say so; silently starting mid-conversation is

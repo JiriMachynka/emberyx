@@ -20,6 +20,7 @@ import type {
   UsageSummary,
 } from "@/types";
 import { listCodexModels, listCodexSkills } from "@/lib/codex/transport";
+import { readAcpModels } from "@/lib/acp/transport";
 import type { AgentBackend } from "@/lib/agentBackend";
 import type { ProviderStatus } from "@/lib/providers";
 import { forgeCommands, type RemoteHost } from "@/lib/forge";
@@ -563,6 +564,21 @@ export const useCodexModels = (cwd: string, enabled: boolean) =>
   useQuery({
     queryKey: codexKeys.models,
     queryFn: () => listCodexModels(cwd),
+    enabled,
+    staleTime: Infinity,
+  });
+
+export const acpKeys = {
+  models: (provider: string, cwd: string) => ["acp", "models", provider, cwd] as const,
+};
+
+/** An ACP provider's model catalog, read from a throwaway session. Keyed by
+ *  project too — OpenCode's catalog is configurable per project
+ *  (opencode.json), so one project's list must not answer for another's. */
+export const useAcpModels = (provider: string, cwd: string, enabled: boolean) =>
+  useQuery({
+    queryKey: acpKeys.models(provider, cwd),
+    queryFn: () => readAcpModels(provider, cwd),
     enabled,
     staleTime: Infinity,
   });

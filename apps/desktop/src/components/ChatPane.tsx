@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { diffLines } from "diff";
 import {
@@ -81,6 +81,8 @@ import {
   restoreCheckpoint,
 } from "@/lib/checkpoints";
 import type { PermissionMode } from "@/lib/settings";
+import type { Project } from "@/types";
+import { projectLabel } from "@/lib/worktree";
 import { PROVIDER_LABEL } from "@/lib/providers";
 import { useGitChanges } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
@@ -113,6 +115,11 @@ interface ChatPaneProps {
   effort: string;
   /** Persist a new default when the user switches this pane's effort. */
   onEffortChange: (effort: string) => void;
+  /** Projects available to the empty-thread project switcher. */
+  projects: Project[];
+  recentProjects: string[];
+  onSelectProject: (projectId: string) => void;
+  onOpenProject: (path: string) => void;
   onTitled?: (title: string) => void;
 }
 
@@ -143,6 +150,10 @@ export const ChatPane = memo(function ChatPane({
   onModelChange,
   effort,
   onEffortChange,
+  projects,
+  recentProjects,
+  onSelectProject,
+  onOpenProject,
   onTitled,
 }: ChatPaneProps) {
   // Seed from the global default but keep the running model local so switching
@@ -173,7 +184,7 @@ export const ChatPane = memo(function ChatPane({
   // produced stay in the same visual transcript, stamped with who made them.
   const [activeBackend, setActiveBackend] = useState<AgentBackend>(backend);
   const [carried, setCarried] = useState<CarriedThread>(EMPTY_THREAD);
-  const {
+  const { 
     messages,
     status,
     usage,
@@ -189,6 +200,9 @@ export const ChatPane = memo(function ChatPane({
     respond,
     pendingAsk,
     answerAsk,
+    hasMore,
+    loadingOlder,
+    loadOlder,
   } = useChatSession({
     cwd,
     emberyxSessionId: sessionId,
@@ -249,6 +263,9 @@ export const ChatPane = memo(function ChatPane({
 
   const [preview, setPreview] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Byte-height captured before prepending an older page, so the viewport
+  // stays on the same turn instead of jumping to the new top.
+  const prependHeightRef = useRef<number | null>(null);
   // Auto-scroll only while the user is parked at the bottom: reading
   // scrollHeight forces layout of the whole transcript, and doing that per
   // token is what makes a long thread stutter.
@@ -375,6 +392,22 @@ export const ChatPane = memo(function ChatPane({
   // tools, subagents) can collapse under one "Worked for Ns" header.
   const turns = useMemo(() => groupTurns(thread), [thread]);
 
+  const loadEarlier = useCallback(() => {
+    const el = scrollRef.current;
+    prependHeightRef.current = el ? el.scrollHeight : 0;
+    void loadOlder().then((did) => {
+      if (!did) prependHeightRef.current = null;
+    });
+  }, [loadOlder]);
+
+  useLayoutEffect(() => {
+    const prev = prependHeightRef.current;
+    if (prev == null) return;
+    prependHeightRef.current = null;
+    const el = scrollRef.current;
+    if (el) el.scrollTop += el.scrollHeight - prev;
+  }, [thread]);
+
   // Latest plan for the in-flight turn — pinned above the composer like T3,
   // not buried in a generic tool card.
   const liveTodos = useMemo(() => {
@@ -385,6 +418,52 @@ export const ChatPane = memo(function ChatPane({
   const todosSig = liveTodos?.map((t) => `${t.status}\0${t.text}`).join("\n") ?? "";
   const [tasksHidden, setTasksHidden] = useState(false);
   useEffect(() => setTasksHidden(false), [todosSig]);
+
+  const openProjectPaths = new Set(projects.map((project) => project.path));
+  const recentOnly = recentProjects.filter(
+    (path) => !openProjectPaths.has(path)
+  );
+  const newThreadHeading = (
+    <h2 className="text-center text-3xl font-normal tracking-tight text-foreground">
+      {ready ? (
+        <>
+          What should we build in{" "}
+          <DropdownMenu>
+            <DropdownMenuTrigger className="inline-flex items-center gap-1 underline decoration-border underline-offset-4 outline-none transition-colors hover:decoration-foreground focus-visible:rounded focus-visible:ring-1 focus-visible:ring-ring">
+              {basename(cwd)}
+              <ChevronDown className="size-4 no-underline opacity-60" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="center">
+              {projects.map((project) => (
+                <DropdownMenuItem
+                  key={project.id}
+                  disabled={project.path === cwd}
+                  onSelect={() => onSelectProject(project.id)}
+                >
+                  {projectLabel(project)}
+                </DropdownMenuItem>
+              ))}
+              {recentOnly.length > 0 && projects.length > 0 && (
+                <DropdownMenuSeparator />
+              )}
+              {recentOnly.map((path) => (
+                <DropdownMenuItem
+                  key={path}
+                  onSelect={() => onOpenProject(path)}
+                  title={path}
+                >
+                  {basename(path)}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          ?
+        </>
+      ) : (
+        "Starting agent…"
+      )}
+    </h2>
+  );
 
 
   return (
@@ -399,27 +478,19 @@ export const ChatPane = memo(function ChatPane({
         style={{ fontSize: `${fontSize}px` }}
       >
         <div className="chat-content-width mx-auto flex min-h-full flex-col gap-8 px-5 pb-64 pt-10">
-          {/* Kept mounted even when hidden so switching is pure show/hide, not a
-              transcript rebuild + re-highlight on every reveal. Isolated per-pane
-              state and memoized rows keep a hidden pane from re-rendering on any
-              render but its own stream. Auto-scroll stays gated on `active`. */}
-          {thread.length === 0 && (
-            <div className="mt-28 text-center">
-              {/* One heading, no supporting line — the composer under it is the
-                  instruction. Naming the project is what makes it useful. */}
-              <h2 className="text-2xl font-medium tracking-tight text-foreground">
-                {ready ? (
-                  <>
-                    What should we build in{" "}
-                    <span className="underline decoration-border underline-offset-4">
-                      {basename(cwd)}
-                    </span>
-                    ?
-                  </>
-                ) : (
-                  "Starting agent…"
-                )}
-              </h2>
+          {/* Settled panes unmount when hidden; a working one stays mounted so
+              the process and any approval prompt survive a tab switch.
+              Auto-scroll stays gated on `active`. */}
+          {hasMore && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                disabled={loadingOlder}
+                onClick={loadEarlier}
+                className="text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+              >
+                {loadingOlder ? "Loading…" : "Load earlier messages"}
+              </button>
             </div>
           )}
           {turns.map((turn, i) => {
@@ -456,8 +527,16 @@ export const ChatPane = memo(function ChatPane({
         )}
       </div>
 
-      <div className="absolute inset-x-0 bottom-0 z-10 shrink-0 px-5 pb-5 pt-3">
+      <div
+        className={cn(
+          "absolute inset-x-0 z-10 shrink-0 px-5 pb-5 pt-3",
+          thread.length === 0
+            ? "top-1/2 -translate-y-1/2"
+            : "bottom-0"
+        )}
+      >
         <div className="chat-content-width mx-auto">
+          {thread.length === 0 && <div className="mb-8">{newThreadHeading}</div>}
           {terminal &&
             (accountIssue ? (
               <AccountNotice issue={accountIssue} />

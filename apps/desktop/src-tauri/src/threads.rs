@@ -19,6 +19,17 @@ pub struct Thread {
     pub modified: u64,
 }
 
+/// A window of a transcript jsonl, read from the end so a long thread does not
+/// cross the IPC boundary in full. `start_byte` is the file offset of the first
+/// included line — pass it as `before_byte` to fetch the previous page.
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadWindow {
+    pub text: String,
+    pub has_more: bool,
+    pub start_byte: u64,
+}
+
 /// How much of each transcript's tail to read. The `ai-title` / `last-prompt`
 /// lines are rewritten every turn, so they live near the end of the file.
 const TAIL_BYTES: u64 = 262_144;
@@ -81,6 +92,19 @@ pub(crate) fn is_machine_prompt(text: &str) -> bool {
         || t.contains("you must call the structuredoutput tool")
         || t.starts_with("<command-name>")
         || t.starts_with("caveat: the messages below")
+}
+
+/// Meta text Claude Code injects as a "user" turn. Mirrors the JS `isSynthetic`
+/// check so a window counted here is the same set of turns the UI will render.
+fn is_synthetic(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with("<local-command-")
+        || t.starts_with("<command-")
+        || t.starts_with("<bash-")
+        || t.starts_with("<user-prompt-submit-hook>")
+        || t.starts_with("<task-notification>")
+        || t.starts_with("<system-reminder>")
+        || t.starts_with("Caveat: The messages below")
 }
 
 /// Everything between `open` and `close` removed, repeatedly. An unclosed
@@ -151,6 +175,9 @@ fn user_text(line: &str) -> Option<String> {
         return None;
     }
     let v: Value = serde_json::from_str(line).ok()?;
+    if v.get("isSidechain").and_then(|x| x.as_bool()) == Some(true) {
+        return None;
+    }
     let content = &v["message"]["content"];
     if let Some(s) = content.as_str() {
         return Some(s.to_string());
@@ -205,22 +232,178 @@ fn scan(text: &str) -> (String, String) {
     (title, last_prompt)
 }
 
-/// Read a thread's full transcript (the raw JSONL) so the chat UI can replay
-/// prior turns on resume — headless `--resume` loads context but never re-emits
-/// past messages to stdout. Runs off the main thread: a transcript is a whole
-/// file read, and a sync command would freeze the UI while a resumed pane
-/// fetches it.
-#[tauri::command]
-pub async fn read_thread(cwd: String, session_id: String) -> Result<String> {
-    tauri::async_runtime::spawn_blocking(move || read_thread_impl(&cwd, &session_id))
-        .await
-        .map_err(|e| crate::err!("read_thread join failed: {e}"))?
+/// A user-anchored turn the chat UI will actually render. Tool-result echoes
+/// and synthetic harness turns are skipped so the window size matches the pane.
+fn is_user_turn_line(line: &str) -> bool {
+    match user_text(line) {
+        Some(text) => !is_synthetic(&text),
+        None => false,
+    }
 }
 
-fn read_thread_impl(cwd: &str, session_id: &str) -> Result<String> {
+/// One jsonl line plus its byte offset in the file, so a later page can start
+/// exactly where this window began.
+struct Line {
+    start: u64,
+    text: String,
+}
+
+/// Split `data` (the bytes of `[origin, origin+data.len())`) into complete
+/// lines. When `origin > 0` the first line is assumed to be a mid-line tail
+/// fragment and is dropped.
+fn lines_in(data: &[u8], origin: u64) -> Vec<Line> {
+    let mut offset = 0usize;
+    if origin > 0 {
+        match data.iter().position(|&b| b == b'\n') {
+            Some(i) => offset = i + 1,
+            None => return Vec::new(),
+        }
+    }
+    let mut lines = Vec::new();
+    let mut start = offset;
+    for (i, &b) in data.iter().enumerate().skip(offset) {
+        if b != b'\n' {
+            continue;
+        }
+        lines.push(Line {
+            start: origin + start as u64,
+            text: String::from_utf8_lossy(&data[start..i]).into_owned(),
+        });
+        start = i + 1;
+    }
+    if start < data.len() {
+        lines.push(Line {
+            start: origin + start as u64,
+            text: String::from_utf8_lossy(&data[start..]).into_owned(),
+        });
+    }
+    lines
+}
+
+fn count_user_turns(lines: &[Line]) -> u32 {
+    lines.iter().filter(|l| is_user_turn_line(&l.text)).count() as u32
+}
+
+/// Last `turn_limit` user-anchored turns, walking from the end of `lines`.
+fn take_last_user_turns(lines: &[Line], turn_limit: u32) -> &[Line] {
+    if turn_limit == 0 || lines.is_empty() {
+        return &[];
+    }
+    let mut taken = 0u32;
+    let mut start_idx = 0;
+    for i in (0..lines.len()).rev() {
+        if is_user_turn_line(&lines[i].text) {
+            taken += 1;
+            if taken == turn_limit {
+                start_idx = i;
+                break;
+            }
+        }
+    }
+    &lines[start_idx..]
+}
+
+fn join_lines(lines: &[Line]) -> String {
+    if lines.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    for line in lines {
+        out.push_str(&line.text);
+        out.push('\n');
+    }
+    out
+}
+
+/// Read backwards from `before_byte` (or EOF) until `turn_limit` user turns
+/// are in hand, or the start of the file. Never sends the unread prefix.
+fn read_window_from_path(
+    path: &Path,
+    turn_limit: u32,
+    before_byte: Option<u64>,
+) -> Result<ThreadWindow> {
+    let file_len = fs::metadata(path)?.len();
+    let end = before_byte.unwrap_or(file_len).min(file_len);
+    if end == 0 || turn_limit == 0 {
+        return Ok(ThreadWindow {
+            text: String::new(),
+            has_more: false,
+            start_byte: 0,
+        });
+    }
+
+    const CHUNK: u64 = 65_536;
+    let mut origin = end;
+    let mut data = Vec::new();
+
+    loop {
+        if origin == 0 {
+            break;
+        }
+        let start = origin.saturating_sub(CHUNK);
+        let mut f = File::open(path)?;
+        f.seek(SeekFrom::Start(start))?;
+        let mut chunk = vec![0u8; (origin - start) as usize];
+        f.read_exact(&mut chunk)?;
+        chunk.extend_from_slice(&data);
+        data = chunk;
+        origin = start;
+
+        let lines = lines_in(&data, origin);
+        if count_user_turns(&lines) >= turn_limit || origin == 0 {
+            let window = take_last_user_turns(&lines, turn_limit);
+            let start_byte = window.first().map(|l| l.start).unwrap_or(0);
+            return Ok(ThreadWindow {
+                text: join_lines(window),
+                has_more: start_byte > 0,
+                start_byte,
+            });
+        }
+    }
+
+    Ok(ThreadWindow {
+        text: String::new(),
+        has_more: false,
+        start_byte: 0,
+    })
+}
+
+/// Read a thread's transcript so the chat UI can replay prior turns. Headless
+/// `--resume` loads context but never reprints them. `turn_limit` windows from
+/// the end (last N user-anchored turns); omit it for the whole file. Pass
+/// `before_byte` (a previous window's `start_byte`) to load the page above.
+#[tauri::command]
+pub async fn read_thread(
+    cwd: String,
+    session_id: String,
+    turn_limit: Option<u32>,
+    before_byte: Option<u64>,
+) -> Result<ThreadWindow> {
+    tauri::async_runtime::spawn_blocking(move || {
+        read_thread_impl(&cwd, &session_id, turn_limit, before_byte)
+    })
+    .await
+    .map_err(|e| crate::err!("read_thread join failed: {e}"))?
+}
+
+fn read_thread_impl(
+    cwd: &str,
+    session_id: &str,
+    turn_limit: Option<u32>,
+    before_byte: Option<u64>,
+) -> Result<ThreadWindow> {
     let base = projects_dir().ok_or("no home dir")?;
-    let path = base.join(encode_cwd(cwd)).join(format!("{session_id}.jsonl"));
-    Ok(fs::read_to_string(&path)?)
+    let path = base
+        .join(encode_cwd(cwd))
+        .join(format!("{session_id}.jsonl"));
+    match turn_limit {
+        Some(n) => read_window_from_path(&path, n, before_byte),
+        None => Ok(ThreadWindow {
+            text: fs::read_to_string(&path)?,
+            has_more: false,
+            start_byte: 0,
+        }),
+    }
 }
 
 /// List the Claude Code threads recorded for `cwd`, newest first. Runs off the
@@ -476,5 +659,114 @@ mod tests {
             "\n",
         );
         assert_eq!(scan(text).0, "Good title");
+    }
+
+    fn user_line(text: &str) -> String {
+        format!(
+            r#"{{"type":"user","message":{{"role":"user","content":{}}}}}"#,
+            serde_json::to_string(text).unwrap()
+        )
+    }
+
+    fn assistant_line(text: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":{}}}]}}}}"#,
+            serde_json::to_string(text).unwrap()
+        )
+    }
+
+    fn write_turns(path: &Path, turns: &[(&str, &str)]) {
+        let mut body = String::new();
+        for (user, assistant) in turns {
+            body.push_str(&user_line(user));
+            body.push('\n');
+            body.push_str(&assistant_line(assistant));
+            body.push('\n');
+        }
+        std::fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn windows_the_last_n_user_turns_and_leaves_the_prefix() {
+        let path = temp("window_last_n");
+        write_turns(
+            &path,
+            &[
+                ("q0", "a0"),
+                ("q1", "a1"),
+                ("q2", "a2"),
+                ("q3", "a3"),
+                ("q4", "a4"),
+            ],
+        );
+
+        let window = read_window_from_path(&path, 2, None).unwrap();
+        assert!(window.has_more);
+        assert!(window.start_byte > 0);
+        assert!(window.text.contains("q3"));
+        assert!(window.text.contains("q4"));
+        assert!(!window.text.contains("q0"));
+        assert!(!window.text.contains("q1"));
+
+        let older = read_window_from_path(&path, 2, Some(window.start_byte)).unwrap();
+        assert!(older.text.contains("q1"));
+        assert!(older.text.contains("q2"));
+        assert!(!older.text.contains("q3"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_short_thread_is_the_whole_file() {
+        let path = temp("window_short");
+        write_turns(&path, &[("only", "reply")]);
+
+        let window = read_window_from_path(&path, 10, None).unwrap();
+        assert!(!window.has_more);
+        assert_eq!(window.start_byte, 0);
+        assert!(window.text.contains("only"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn tool_results_and_synthetic_turns_do_not_fill_the_window() {
+        let path = temp("window_skip_meta");
+        let body = [
+            user_line("real-old"),
+            assistant_line("old-a"),
+            user_line("<system-reminder>note</system-reminder>"),
+            format!(
+                r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t1","content":"x"}}]}}}}"#
+            ),
+            user_line("real-new"),
+            assistant_line("new-a"),
+        ]
+        .join("\n")
+            + "\n";
+        std::fs::write(&path, body).unwrap();
+
+        let window = read_window_from_path(&path, 1, None).unwrap();
+        assert!(window.has_more);
+        assert!(window.text.contains("real-new"));
+        assert!(!window.text.contains("real-old"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_chunk_that_starts_mid_line_does_not_drop_the_user_turn() {
+        let path = temp("window_mid_line");
+        // Prefix larger than CHUNK would be overkill; a seek into the middle of
+        // the first line is what `origin > 0` has to survive when growing left.
+        let first = user_line("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let rest = format!("{}\n{}\n", user_line("kept"), assistant_line("ok"));
+        std::fs::write(&path, format!("{first}\n{rest}")).unwrap();
+
+        let window = read_window_from_path(&path, 1, None).unwrap();
+        assert!(window.text.contains("kept"));
+        assert!(!window.text.contains("aaaaaaaa"));
+
+        let _ = std::fs::remove_file(&path);
     }
 }

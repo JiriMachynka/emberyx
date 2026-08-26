@@ -426,6 +426,8 @@ function App() {
             setUsageOpen(false);
             setSettingsOpen(true);
           }}
+           settingsOpen={settingsOpen}
+           onBackFromSettings={() => setSettingsOpen(false)}
           onOpenUsage={() => {
             setSettingsOpen(false);
             setUsageOpen(true);
@@ -492,8 +494,12 @@ function App() {
               activeId={activeId}
               settings={settings}
               onModelChange={onModelChange}
-              onEffortChange={onEffortChange}
-              onTitled={onTitled}
+             onEffortChange={onEffortChange}
+             projects={projects}
+             recentProjects={recents}
+             onSelectProject={ws.setActiveProjectId}
+             onOpenProject={ws.openProjectAt}
+             onTitled={onTitled}
             />
             {/* The editor is an overlay, not a tab: it covers the active pane
                 while open and keeps its buffers when hidden. */}

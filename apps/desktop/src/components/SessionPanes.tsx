@@ -1,8 +1,10 @@
 import { useCallback, useRef } from "react";
 import { ChatPane } from "@/components/ChatPane";
 import { DokployLogsPane } from "@/components/DokployLogsPane";
+import { useAgentStore } from "@/lib/agentStore";
+import { paneShouldMount } from "@/lib/paneMount";
 import { cn } from "@/lib/utils";
-import type { Session } from "@/types";
+import type { Project, Session } from "@/types";
 import type { Settings } from "@/lib/settings";
 
 interface SessionPanesProps {
@@ -13,14 +15,20 @@ interface SessionPanesProps {
   onModelChange: (model: string) => void;
   /** Persist a new default reasoning effort when a chat pane switches it. */
   onEffortChange: (effort: string) => void;
+  projects: Project[];
+  recentProjects: string[];
+  onSelectProject: (projectId: string) => void;
+  onOpenProject: (path: string) => void;
   /** Chat sessions rename themselves once Claude titles the thread. */
   onTitled: (session: Session, title: string) => void;
 }
 
 /**
- * Every non-dev session, mounted at once and revealed by tab. Panes stay
- * mounted so a pre-warmed project keeps booting in the background and switching
- * tabs never restarts a process (dev servers live in the Dev panel instead).
+ * Non-dev sessions, mounted when focused or still mid-turn. A settled hidden
+ * pane remounts from a windowed transcript; keeping it alive would parse and
+ * hold every project's chat at once. A working/waiting pane stays mounted
+ * (hidden) so unmount cannot kill the process or drop an approval prompt.
+ * Dev servers live in the Dev panel instead.
  */
 export function SessionPanes({
   sessions,
@@ -28,12 +36,18 @@ export function SessionPanes({
   settings,
   onModelChange,
   onEffortChange,
+  projects,
+  recentProjects,
+  onSelectProject,
+  onOpenProject,
   onTitled,
 }: SessionPanesProps) {
+  const statuses = useAgentStore((s) => s.statuses);
   return (
     <>
       {sessions
         .filter((s) => s.kind !== "dev")
+        .filter((s) => paneShouldMount(s.id, activeId, statuses[s.id]))
         .map((s) => (
           <SessionPaneRow
             key={s.id}
@@ -42,6 +56,10 @@ export function SessionPanes({
             settings={settings}
             onModelChange={onModelChange}
             onEffortChange={onEffortChange}
+            projects={projects}
+            recentProjects={recentProjects}
+            onSelectProject={onSelectProject}
+            onOpenProject={onOpenProject}
             onTitled={onTitled}
           />
         ))}
@@ -58,6 +76,10 @@ function SessionPaneRow({
   settings,
   onModelChange,
   onEffortChange,
+  projects,
+  recentProjects,
+  onSelectProject,
+  onOpenProject,
   onTitled,
 }: {
   session: Session;
@@ -65,6 +87,10 @@ function SessionPaneRow({
   settings: Settings;
   onModelChange: (model: string) => void;
   onEffortChange: (effort: string) => void;
+  projects: Project[];
+  recentProjects: string[];
+  onSelectProject: (projectId: string) => void;
+  onOpenProject: (path: string) => void;
   onTitled: (session: Session, title: string) => void;
 }) {
   const active = session.id === activeId;
@@ -94,6 +120,10 @@ function SessionPaneRow({
           onModelChange={onModelChange}
           effort={settings.effort}
           onEffortChange={onEffortChange}
+          projects={projects}
+          recentProjects={recentProjects}
+          onSelectProject={onSelectProject}
+          onOpenProject={onOpenProject}
           onTitled={handleTitled}
         />
       ) : session.kind === "dokploy-logs" ? (

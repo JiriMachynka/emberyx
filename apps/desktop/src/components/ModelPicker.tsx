@@ -6,6 +6,7 @@ import { BACKEND_LABEL, isAgentBackend, type AgentBackend } from "@/lib/agentBac
 import { PROVIDERS, PROVIDER_LABEL, type Provider } from "@/lib/providers";
 import {
   CLAUDE_MODELS,
+  acpModelEntries,
   codexModelEntries,
   labelForModel,
   orderByFavorites,
@@ -14,7 +15,7 @@ import {
 } from "@/lib/modelCatalog";
 import { getFavorites, shortcutFor, toggleFavorite } from "@/lib/modelFavorites";
 import { codexEffortForModel } from "@/lib/codex/models";
-import { useCodexModels, useProviderStatus } from "@/lib/queries";
+import { useAcpModels, useCodexModels, useProviderStatus } from "@/lib/queries";
 import type { ChatUsage } from "@/hooks/useAgentChat";
 
 /** The rail's first entry: whatever the user starred, across providers. */
@@ -22,9 +23,9 @@ const FAVORITES = "favorites" as const;
 type Rail = typeof FAVORITES | Provider;
 
 /** Providers whose models Emberyx can actually enumerate. Claude's list is
- *  hand-written (the CLI has none to ask); Codex's comes off its app-server.
- *  ACP providers have no model catalog yet, but their provider-only default is
- *  still selectable. */
+ *  hand-written (the CLI has none to ask); Codex's comes off its app-server;
+ *  the ACP providers answer with theirs on `session/new`, read here from a
+ *  throwaway session. */
 const isLiveProvider = (p: Provider) => isAgentBackend(p);
 
 interface ModelPickerProps {
@@ -87,11 +88,41 @@ export const ModelPicker = memo(function ModelPicker({
       favorites.some((id) => !CLAUDE_MODELS.some((m) => m.id === id)));
   const codexCatalog = useCodexModels(cwd, wantsCodex && open);
   const codexModels = useMemo(() => codexCatalog.data ?? [], [codexCatalog.data]);
+  // The ACP catalogs are read just as lazily — each needs a throwaway agent
+  // session — and only when that provider's rail is showing. The provider a
+  // live chat runs on already carries its list in `usage.models`, so it is
+  // never probed a second time.
+  const wantsGrok =
+    rail === "grok" && backend !== "grok" && installed.some((s) => s.id === "grok" && s.installed);
+  const wantsOpencode =
+    rail === "opencode" &&
+    backend !== "opencode" &&
+    installed.some((s) => s.id === "opencode" && s.installed);
+  const grokCatalog = useAcpModels("grok", cwd, wantsGrok && open);
+  const opencodeCatalog = useAcpModels("opencode", cwd, wantsOpencode && open);
 
-  const all = useMemo<ModelEntry[]>(
-    () => [...CLAUDE_MODELS, ...codexModelEntries(codexModels)],
-    [codexModels]
-  );
+  const all = useMemo<ModelEntry[]>(() => {
+    const entries = [
+      ...CLAUDE_MODELS,
+      ...codexModelEntries(codexModels),
+      ...acpModelEntries("grok", grokCatalog.data ?? []),
+      ...acpModelEntries("opencode", opencodeCatalog.data ?? []),
+      ...(usage.models ?? []).map((entry) => ({
+        id: entry.value,
+        label: entry.label,
+        provider: backend,
+        legacy: false,
+      })),
+    ];
+    // A cached ACP catalog and the live chat's `usage.models` name the same
+    // models; each id renders once, first entry wins.
+    const seen = new Set<string>();
+    return entries.filter((e) => {
+      if (seen.has(e.id)) return false;
+      seen.add(e.id);
+      return true;
+    });
+  }, [backend, codexModels, grokCatalog.data, opencodeCatalog.data, usage.models]);
 
   const shown = useMemo(() => {
     const scoped =
@@ -227,7 +258,9 @@ export const ModelPicker = memo(function ModelPicker({
               <p className="px-2 py-8 text-center text-xs text-muted-foreground">
                 {rail === FAVORITES
                   ? "Star a model to keep it here"
-                  : wantsCodex && codexCatalog.isPending
+                  : (wantsCodex && codexCatalog.isPending) ||
+                      (wantsGrok && grokCatalog.isPending) ||
+                      (wantsOpencode && opencodeCatalog.isPending)
                     ? "Reading the catalog…"
                     : "No models match"}
               </p>

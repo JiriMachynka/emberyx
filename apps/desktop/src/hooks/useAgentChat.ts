@@ -20,6 +20,12 @@ import { notifyNative } from "@/lib/notifications";
 import { loadSettings } from "@/lib/settings";
 import { basename } from "@/lib/path";
 import { usePromptQueue } from "@/lib/promptQueue";
+import {
+  INITIAL_THREAD_USER_TURN_LIMIT,
+  OLDER_THREAD_PAGE_USER_TURN_LIMIT,
+  windowByUserTurns,
+  type ThreadWindow,
+} from "@/lib/transcriptWindow";
 
 /** A stream-json line from the headless `claude` process (Rust AgentEvent). */
 type AgentEvent =
@@ -155,6 +161,8 @@ export interface ChatQuota {
 }
 
 export interface ChatUsage {
+  /** Models offered by a provider session, when its protocol exposes a catalog. */
+  models?: { value: string; label: string }[];
   costUsd?: number;
   /** `costUsd` was derived from token counts here, not reported by the
    *  backend. Presenting an estimate as a billed figure would mislead. */
@@ -391,6 +399,10 @@ export function useAgentChat({
   // the callback re-created — and thus the composer re-rendered — every token.
   const messagesRef = useRef<ChatMessage[]>(messages);
   messagesRef.current = messages;
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const startByteRef = useRef(0);
+  const loadingOlderRef = useRef(false);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
   // Live token tally for the turn in flight. A turn is several assistant
@@ -945,7 +957,8 @@ export function useAgentChat({
 
   // On resume, hydrate prior turns from the on-disk transcript (headless
   // --resume never replays them). Only fills when the list is still empty so it
-  // can't clobber freshly streamed messages.
+  // can't clobber freshly streamed messages. The file is windowed in Rust —
+  // last N user-anchored turns — so a long thread is not parsed or held whole.
   //
   // Skipped in persistent mode: the daemon replays its own buffer, and the two
   // overlap — the CLI writes the same turns to disk as they stream. Rendering
@@ -956,17 +969,30 @@ export function useAgentChat({
     let cancelled = false;
     void (async () => {
       try {
-        const text = await invoke<string>("read_thread", {
+        const page = await invoke<ThreadWindow>("read_thread", {
           cwd,
           sessionId: resume,
+          turnLimit: INITIAL_THREAD_USER_TURN_LIMIT,
         });
         if (cancelled) return;
-        const hist = parseTranscript(text);
+        const parsed = parseTranscript(page.text);
+        const { messages: hist, clipped } = windowByUserTurns(
+          parsed,
+          INITIAL_THREAD_USER_TURN_LIMIT
+        );
+        startByteRef.current = page.startByte;
+        setHasMore(page.hasMore || (clipped && page.startByte > 0));
         if (hist.length) setMessages((prev) => (prev.length ? prev : hist));
-        const hu = parseTranscriptUsage(text);
+        const hu = parseTranscriptUsage(page.text);
         setUsage((prev) => {
           if (prev.model || prev.costUsd != null || prev.outputTokens != null) {
             return prev;
+          }
+          // A windowed read is not the session total — only commit tokens when
+          // the whole file was in the page, otherwise keep the model and wait
+          // for a live turn to restate usage.
+          if (page.hasMore || clipped) {
+            return hu.model ? { model: hu.model } : prev;
           }
           sessionUsageRef.current = {
             input: hu.inputTokens ?? 0,
@@ -981,6 +1007,32 @@ export function useAgentChat({
     return () => {
       cancelled = true;
     };
+  }, [enabled, resume, cwd, persistent]);
+
+  const loadOlder = useCallback(async () => {
+    if (!enabled || !resume || persistent) return false;
+    if (loadingOlderRef.current || startByteRef.current === 0) return false;
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    try {
+      const page = await invoke<ThreadWindow>("read_thread", {
+        cwd,
+        sessionId: resume,
+        turnLimit: OLDER_THREAD_PAGE_USER_TURN_LIMIT,
+        beforeByte: startByteRef.current,
+      });
+      const older = parseTranscript(page.text);
+      startByteRef.current = page.startByte;
+      setHasMore(page.hasMore);
+      if (older.length) setMessages((prev) => [...older, ...prev]);
+      return true;
+    } catch (e) {
+      console.error("[emberyx] read_thread older failed", e);
+      return false;
+    } finally {
+      loadingOlderRef.current = false;
+      setLoadingOlder(false);
+    }
   }, [enabled, resume, cwd, persistent]);
 
   // Spawn the process once per (cwd, resume) target.
@@ -1396,6 +1448,9 @@ export function useAgentChat({
     respond,
     pendingAsk,
     answerAsk,
+    hasMore,
+    loadingOlder,
+    loadOlder,
   };
 }
 

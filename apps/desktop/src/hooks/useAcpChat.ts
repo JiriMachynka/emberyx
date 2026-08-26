@@ -34,8 +34,10 @@ import {
   acpRespond,
   acpSessionLoad,
   acpSessionNew,
+  acpSetModel,
   acpSpawn,
   currentModel,
+  modelOptions,
   type AcpEvent,
   type AcpServerRequest,
 } from "@/lib/acp/transport";
@@ -60,6 +62,9 @@ interface Options {
   provider: string;
   /** ACP session id to resume; omit to open a fresh one. */
   resume?: string;
+  /** Model to run, from the picker; "" lets the agent decide. Applied over
+   *  `session/set_model` — ACP has no model parameter on `session/new`. */
+  model?: string;
   enabled: boolean;
   onTitled?: (title: string) => void;
 }
@@ -72,6 +77,7 @@ export function useAcpChat({
   emberyxSessionId,
   provider,
   resume,
+  model,
   enabled,
 }: Options) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -93,6 +99,9 @@ export function useAcpChat({
   const channelRef = useRef<Channel<AcpEvent> | null>(null);
   /** The agent request a permission prompt is answering, kept for the reply. */
   const permissionRef = useRef<AcpPermission | null>(null);
+  /** The model the session is actually on, so a re-render never re-sends
+   *  `session/set_model` for a switch that already took. */
+  const appliedModelRef = useRef("");
 
   const setSessionStatus = useAgentStore((s) => s.setStatus);
 
@@ -276,7 +285,12 @@ export function useAcpChat({
           return;
         }
         sessionRef.current = session.sessionId;
-        setUsage((u) => ({ ...u, model: currentModel(session) }));
+        appliedModelRef.current = currentModel(session);
+        setUsage((u) => ({
+          ...u,
+          model: currentModel(session),
+          models: modelOptions(session),
+        }));
         setReady(true);
       } catch (e) {
         if (disposed) return;
@@ -306,6 +320,22 @@ export function useAcpChat({
     schedulePublish,
     commitTurn,
   ]);
+
+  // Pin the picked model, at open and on a mid-session switch alike. "" means
+  // the agent decides, and there is no id to hand back — the agent just keeps
+  // whatever it is on. A refusal leaves `usage.model` naming what actually
+  // runs; retrying it every render would hammer an agent that already said no.
+  useEffect(() => {
+    if (!enabled || !ready || !model) return;
+    if (model === appliedModelRef.current) return;
+    const id = processRef.current;
+    const sessionId = sessionRef.current;
+    if (id === null || !sessionId) return;
+    appliedModelRef.current = model;
+    void acpSetModel(id, sessionId, model)
+      .then(() => setUsage((u) => ({ ...u, model })))
+      .catch((e) => console.error(`session/set_model ${model} failed:`, e));
+  }, [enabled, ready, model]);
 
   const send = useCallback(
     (text: string) => {
@@ -390,5 +420,8 @@ export function useAcpChat({
     // pane only calls this while a question is showing, and none ever is.
     pendingAsk: null as PendingAsk | null,
     answerAsk: () => {},
+    hasMore: false,
+    loadingOlder: false,
+    loadOlder: async () => false,
   };
 }
