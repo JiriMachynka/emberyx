@@ -33,6 +33,11 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # The version lives in three manifests and drift is silent until a
+      # release ships wrong. Cheap, so it runs before the long steps.
+      - name: Version consistency
+        run: bun run version:check
+
       - name: Typecheck
         run: bunx tsc --noEmit
         working-directory: apps/desktop

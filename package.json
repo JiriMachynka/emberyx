@@ -11,6 +11,7 @@
     "test": "turbo run test",
     "release": "bun scripts/release-version.ts",
     "release:check": "bun scripts/validate-release.ts",
+    "version:check": "bun scripts/validate-release.ts",
     "desktop": "turbo run dev --filter=@emberyx/desktop",
     "web": "turbo run dev --filter=@emberyx/web",
     "tauri": "bun run --cwd apps/desktop tauri"
