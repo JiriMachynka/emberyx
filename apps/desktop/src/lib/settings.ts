@@ -6,6 +6,12 @@ import {
 } from "@/lib/agentBackend";
 import { tokenize } from "@/lib/ide";
 import type { IdeId } from "@/lib/ide";
+import {
+  DEFAULT_THEME,
+  applyTheme,
+  isThemeId,
+  type ThemeId,
+} from "@/lib/themes";
 
 /** Claude Code's own permission modes, in increasing order of autonomy. */
 export const PERMISSION_MODES = [
@@ -86,6 +92,9 @@ export interface Settings {
   agentBackend: AgentBackend;
   /** Agent CLI binary (used to resolve auth flows and backend inference). */
   agentCommand: string;
+  /** Which dark theme paints the surfaces and the accent. All are dark —
+   *  Emberyx is terminal-first and has no light mode. */
+  theme: ThemeId;
   /** Monospace stack for PTY output logs (dev servers, Dokploy). */
   fontFamily: string;
   /** Chat, composer and thread-list font stack. Its own axis: logs need a
@@ -158,6 +167,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   agentBackend: "claude",
   agentCommand: "claude",
+  theme: DEFAULT_THEME,
   fontFamily: '"Geist Mono Variable", ui-monospace, Menlo, monospace',
   chatFontFamily: '"DM Sans Variable", ui-sans-serif, system-ui, sans-serif',
   editorFontFamily:
@@ -210,6 +220,11 @@ const splitStoredEffort = (s: Settings): Settings => {
   return { ...s, model: s.model.slice(0, at), effort: s.model.slice(at + 1) };
 };
 
+/** A theme that no longer ships would leave every themed token unset and the
+ *  app painted in whatever `index.css` declared last, so fall back to Ember. */
+const dropStoredUnknownTheme = (s: Settings): Settings =>
+  isThemeId(s.theme) ? s : { ...s, theme: DEFAULT_SETTINGS.theme };
+
 /** Dropped settings: OpenRouter commit generate, first-party Dokploy API. */
 const dropStoredRemovedKeys = (
   s: Settings & {
@@ -235,8 +250,10 @@ export function loadSettings(): Settings {
     if (!raw) return DEFAULT_SETTINGS;
     const stored = JSON.parse(raw) as Partial<Settings>;
     const merged = dropStoredRemovedKeys(
-      dropStoredPlanMode(
-        splitStoredEffort({ ...DEFAULT_SETTINGS, ...stored })
+      dropStoredUnknownTheme(
+        dropStoredPlanMode(
+          splitStoredEffort({ ...DEFAULT_SETTINGS, ...stored })
+        )
       )
     );
     // Settings written before the backend was explicit only recorded the
@@ -310,6 +327,14 @@ export function useSettings() {
   useLayoutEffect(() => {
     applyFontFamilies(settings);
   }, [settings.chatFontFamily, settings.editorFontFamily]);
+
+  useLayoutEffect(() => {
+    applyTheme(settings.theme);
+  }, [settings.theme]);
+
+  useLayoutEffect(() => {
+    applyTheme(settings.theme);
+  }, [settings.theme]);
 
   function update(patch: Partial<Settings>) {
     setSettings((prev) => {

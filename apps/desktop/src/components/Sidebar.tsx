@@ -325,8 +325,10 @@ function AllThreads(props: SidebarProps) {
     setMeta({ ...setThreadMeta(key, patch) });
 
   const row = (data: ThreadRowData) => {
+    // A thread the pane opened itself is matched by the id it reported, not by
+    // `resume` — a fresh chat was spawned without one.
     const session = sessionsFor(data.project.id).find(
-      (s) => s.resume === data.thread.id
+      (s) => s.resume === data.thread.id || s.threadId === data.thread.id
     );
     return (
       <ThreadRow

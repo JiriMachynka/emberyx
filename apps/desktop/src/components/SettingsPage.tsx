@@ -12,6 +12,7 @@ import {
   Info,
   Keyboard,
   Plus,
+  Palette,
   Plug,
   Puzzle,
   RotateCcw,
@@ -79,6 +80,7 @@ import {
   isAgentBackend,
   type AgentBackend,
 } from "@/lib/agentBackend";
+import { THEMES, type Theme } from "@/lib/themes";
 import type { LucideIcon } from "lucide-react";
 import type { Settings } from "@/lib/settings";
 
@@ -90,6 +92,7 @@ interface SettingsPageProps {
 
 type Tab =
   | "general"
+  | "themes"
   | "appearance"
   | "shortcuts"
   | "providers"
@@ -128,6 +131,13 @@ const TABS: TabMeta[] = [
     finds: "thread list sidebar settle merge group project dev panel",
   },
   {
+    id: "themes",
+    label: "Themes",
+    icon: Palette,
+    keys: ["theme"],
+    finds: "theme themes color colour accent dark palette ember graphite phosphor crimson sandstone",
+  },
+  {
     id: "appearance",
     label: "Appearance",
     icon: Type,
@@ -139,7 +149,7 @@ const TABS: TabMeta[] = [
       "editorFontSize",
       "scrollback",
     ],
-    finds: "font family size chat terminal editor scrollback theme typography",
+    finds: "font family size chat terminal editor scrollback typography",
   },
   {
     id: "shortcuts",
@@ -489,6 +499,24 @@ export function SettingsPage({
                   checked={settings.autoOpenDevPanel}
                   onChange={(v) => onUpdate({ autoOpenDevPanel: v })}
                 />
+              </Group>
+            )}
+
+            {tab === "themes" && (
+              <Group
+                title="Theme"
+                hint="Every theme is dark — Emberyx is terminal-first and has no light mode. A theme sets the surfaces and the single accent; type, spacing and borders never change."
+              >
+                <div className="grid grid-cols-2 gap-2.5">
+                  {THEMES.map((t) => (
+                    <ThemeCard
+                      key={t.id}
+                      theme={t}
+                      selected={settings.theme === t.id}
+                      onSelect={() => onUpdate({ theme: t.id })}
+                    />
+                  ))}
+                </div>
               </Group>
             )}
 
@@ -1404,6 +1432,66 @@ function ShortcutsSection() {
 /** Faces offered for the chat, composer and thread list. Sans first: the
  *  conversation is prose, not a terminal grid, but a monospace chat is a real
  *  preference so the mono stacks stay on the list. */
+/** A theme's own tokens, drawn as a miniature of the app: sidebar rail, chat
+ *  canvas, composer, accent. Painted from the theme's values rather than the
+ *  live variables, so an unselected card still shows what it would look like. */
+function ThemeCard({
+  theme,
+  selected,
+  onSelect,
+}: {
+  theme: Theme;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const t = theme.tokens;
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className={cn(
+        "group rounded-lg border p-2 text-left transition-colors",
+        selected ? "border-primary" : "hover:border-foreground/20"
+      )}
+    >
+      <div
+        className="flex h-20 gap-1 overflow-hidden rounded-md p-1"
+        style={{ backgroundColor: t["--background"] }}
+      >
+        <div
+          className="w-1/4 rounded-sm"
+          style={{ backgroundColor: t["--sidebar"] }}
+        />
+        <div
+          className="flex flex-1 flex-col justify-between rounded-sm p-1"
+          style={{ backgroundColor: t["--chat-canvas"] }}
+        >
+          <div
+            className="h-1.5 w-2/3 rounded-full"
+            style={{ backgroundColor: t["--primary"] }}
+          />
+          <div
+            className="h-5 rounded-sm"
+            style={{
+              backgroundColor: t["--composer"],
+              boxShadow: `0 0 10px -4px ${t["--glow"]}`,
+            }}
+          />
+        </div>
+      </div>
+      <div className="mt-2 flex items-center gap-2 px-0.5">
+        <span
+          className="size-2 shrink-0 rounded-full"
+          style={{ backgroundColor: t["--primary"] }}
+        />
+        <span className="text-sm font-medium">{theme.label}</span>
+      </div>
+      <p className="mt-0.5 px-0.5 text-xs text-muted-foreground">{theme.hint}</p>
+    </button>
+  );
+}
+
 const INTERFACE_FONT_OPTIONS: { label: string; value: string }[] = [
   { label: "DM Sans", value: '"DM Sans Variable", ui-sans-serif, system-ui, sans-serif' },
   { label: "Geist", value: '"Geist Variable", ui-sans-serif, system-ui, sans-serif' },

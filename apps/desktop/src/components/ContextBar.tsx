@@ -7,6 +7,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ProjectMark } from "@/components/ProjectMark";
 import { ActionsMenu } from "@/components/ActionsMenu";
+import { GitCommitMenu } from "@/components/GitCommitMenu";
 import type { ProjectAction } from "@/lib/actions";
 import { basename } from "@/lib/path";
 import { glyphFor } from "@/lib/projectGlyph";
@@ -105,6 +106,12 @@ export function ContextBar({
             onEdit={onEditAction}
             onAdd={onAddAction}
             onStop={onStopDev}
+          />
+        )}
+        {activeProject && (
+          <GitCommitMenu
+            projectPath={activeProject.path}
+            remoteHost={remoteHost}
           />
         )}
         {devCount > 0 && (

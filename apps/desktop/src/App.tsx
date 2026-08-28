@@ -137,6 +137,17 @@ function App() {
     (session: Session, title: string) => titledRef.current(session, title),
     []
   );
+  const threadStartedRef = useRef<
+    (session: Session, threadId: string, firstMessage: string) => void
+  >(() => {});
+  threadStartedRef.current = (session, threadId, firstMessage) => {
+    ws.registerThread(session.id, session.projectId, threadId, firstMessage);
+  };
+  const onThreadStarted = useCallback(
+    (session: Session, threadId: string, firstMessage: string) =>
+      threadStartedRef.current(session, threadId, firstMessage),
+    []
+  );
 
   // Project-scoped panels close when switching projects, so a panel opened
   // for one project doesn't linger empty over the next. Output stays — it
@@ -503,6 +514,7 @@ function App() {
              onSelectProject={ws.setActiveProjectId}
              onOpenProject={ws.openProjectAt}
              onTitled={onTitled}
+             onThreadStarted={onThreadStarted}
             />
             {/* The editor is an overlay, not a tab: it covers the active pane
                 while open and keeps its buffers when hidden. */}
