@@ -13,6 +13,7 @@ import {
   Gauge,
   GitBranch,
   Lock,
+  Minimize2,
   Pause,
   PencilLine,
   Play,
@@ -20,6 +21,7 @@ import {
   Unlock,
   X,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import {
@@ -40,12 +42,18 @@ import {
   capabilitiesOf,
   type AgentBackend,
 } from "@/lib/agentBackend";
+import type { ClaudeProfile } from "@/lib/settings";
 import {
   codexDefaultEffort,
   codexEfforts,
   titleCase,
 } from "@/lib/codex/models";
 import { applyMention, mentionAt, type Mention } from "@/lib/mentions";
+import {
+  compactDisabledReason,
+  formatResumeCompactionQuestion,
+  shouldOfferResumeCompaction,
+} from "@/lib/compact";
 import { pasteInsertion } from "@/lib/fileRef";
 import { applySlash, filterCommands, slashAt, type SlashToken } from "@/lib/slash";
 import {
@@ -211,6 +219,45 @@ const AccessChip = memo(function AccessChip({
   );
 });
 
+const ClaudeProfileChip = memo(function ClaudeProfileChip({
+  profiles,
+  profileId,
+  onChange,
+}: {
+  profiles: ClaudeProfile[];
+  profileId: string | null;
+  onChange?: (id: string | null) => void;
+}) {
+  const current = profiles.find((p) => p.id === profileId);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger className={chipTrigger}>
+        <span>{current?.name ?? "Claude"}</span>
+        <ChevronDown className="size-3.5 shrink-0 opacity-50" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-44">
+        <DropdownMenuItem
+          onSelect={() => onChange?.(null)}
+          className="justify-between gap-4"
+        >
+          Claude
+          {!profileId && <Check className="size-3.5" />}
+        </DropdownMenuItem>
+        {profiles.map((profile) => (
+          <DropdownMenuItem
+            key={profile.id}
+            onSelect={() => onChange?.(profile.id)}
+            className="justify-between gap-4"
+          >
+            {profile.name}
+            {profileId === profile.id && <Check className="size-3.5" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+});
+
 /** Current branch, click to checkout another local one. Hidden when the cwd
  *  isn't a git repo. */
 const BranchChip = memo(function BranchChip({
@@ -310,16 +357,23 @@ const ContextMeter = memo(function ContextMeter({
   backend,
   resolved,
   contextWindow,
+  onCompact,
+  compactDisabled,
+  compactDisabledReason: disabledReason,
 }: {
   contextTokens?: number;
   model: string;
   backend: AgentBackend;
   resolved?: string;
   contextWindow?: number;
+  onCompact?: () => void;
+  compactDisabled?: boolean;
+  compactDisabledReason?: string | null;
 }) {
   const max = resolveContextWindow(model, backend, resolved, contextWindow);
   const used = contextTokens ?? 0;
   const pct = max > 0 ? Math.min(100, Math.round((used / max) * 100)) : 0;
+  const overloaded = pct > 90;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -344,7 +398,11 @@ const ContextMeter = memo(function ContextMeter({
             strokeLinecap="round"
             strokeDasharray={RING}
             strokeDashoffset={RING * (1 - pct / 100)}
-            className="stroke-primary transition-[stroke-dashoffset]"
+            className={
+              overloaded
+                ? "stroke-destructive transition-[stroke-dashoffset]"
+                : "stroke-primary transition-[stroke-dashoffset]"
+            }
           />
         </svg>
       </DropdownMenuTrigger>
@@ -357,7 +415,11 @@ const ContextMeter = memo(function ContextMeter({
         </div>
         <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
           <div
-            className="h-full rounded-full bg-primary transition-[width]"
+            className={
+              overloaded
+                ? "h-full rounded-full bg-destructive transition-[width]"
+                : "h-full rounded-full bg-primary transition-[width]"
+            }
             style={{ width: `${pct}%` }}
           />
         </div>
@@ -365,6 +427,24 @@ const ContextMeter = memo(function ContextMeter({
           {backend === "claude" ? "Claude" : "Codex"} automatically compacts its
           context when needed.
         </p>
+        {onCompact && (
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-2 w-full"
+              disabled={compactDisabled}
+              onClick={onCompact}
+            >
+              <Minimize2 className="size-3.5" />
+              Compact context
+            </Button>
+            {compactDisabled && disabledReason && (
+              <p className="mt-1.5 text-xs text-muted-foreground">{disabledReason}</p>
+            )}
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -579,6 +659,9 @@ interface UsageFooterProps {
   /** Move the thread to another provider in place — picking a model that
    *  belongs to one is how that happens. */
   onSwitchBackend: (backend: AgentBackend) => void;
+  claudeProfiles: ClaudeProfile[];
+  claudeProfileId: string | null;
+  onClaudeProfileChange?: (id: string | null) => void;
   /** Runtime-owned prompt queue; null when the backend has none (Codex steers). */
   queue?: PromptQueue | null;
 }
@@ -598,6 +681,9 @@ const UsageFooter = memo(function UsageFooter({
   fullAccess,
   onFullAccessChange,
   onSwitchBackend,
+  claudeProfiles,
+  claudeProfileId,
+  onClaudeProfileChange,
   queue,
 }: UsageFooterProps) {
   return (
@@ -627,6 +713,13 @@ const UsageFooter = memo(function UsageFooter({
       )}
       {capabilitiesOf(backend).permissions && (
         <AccessChip fullAccess={fullAccess} onChange={onFullAccessChange} />
+      )}
+      {backend === "claude" && claudeProfiles.length > 0 && (
+        <ClaudeProfileChip
+          profiles={claudeProfiles}
+          profileId={claudeProfileId}
+          onChange={onClaudeProfileChange}
+        />
       )}
       {/* Raw token counts belong in the usage panel, not under every prompt. */}
       {capabilitiesOf(backend).usage && usage.costUsd != null && (
@@ -665,12 +758,20 @@ interface ChatComposerProps {
   onFullAccessChange: (v: boolean) => void;
   /** Move the thread to another provider in place. */
   onSwitchBackend: (backend: AgentBackend) => void;
+  /** Extra named Claude setups. Empty = the default Claude only. */
+  claudeProfiles?: ClaudeProfile[];
+  claudeProfileId?: string | null;
+  onClaudeProfileChange?: (id: string | null) => void;
   /** Runtime-owned prompt queue for reorder/edit/delete/pause/run-next. */
   queue?: PromptQueue | null;
   /** Text handed to this chat from elsewhere, to drop into the box unsent. */
   draft?: string;
   onDraftConsumed: () => void;
   onSend: (text: string, images: ChatImage[]) => void;
+  /** Compact the live context window. Absent when this backend cannot. */
+  onCompact?: () => void;
+  /** Wall-clock of the newest turn, for the idle-session compact ask. */
+  lastActivityAt?: number;
   onStop: () => void;
   /** Un-send the newest in-flight turn; returns its text/images to restore. */
   onRewind: () => { text: string; images?: ChatImage[] } | null;
@@ -700,10 +801,15 @@ export const ChatComposer = memo(function ChatComposer({
   fullAccess,
   onFullAccessChange,
   onSwitchBackend,
+  claudeProfiles = [],
+  claudeProfileId = null,
+  onClaudeProfileChange,
   queue,
   draft,
   onDraftConsumed,
   onSend,
+  onCompact,
+  lastActivityAt,
   onStop,
   onRewind,
   onPreview,
@@ -715,6 +821,11 @@ export const ChatComposer = memo(function ChatComposer({
   const [mention, setMention] = useState<Mention | null>(null);
   const [slash, setSlash] = useState<SlashToken | null>(null);
   const [menuIndex, setMenuIndex] = useState(0);
+  const [resumeOffer, setResumeOffer] = useState<{
+    ageMinutes: number;
+    usedTokens: number;
+  } | null>(null);
+  const neverResumeAsk = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const heightRef = useRef("");
   const lengthRef = useRef(0);
@@ -783,11 +894,37 @@ export const ChatComposer = memo(function ChatComposer({
 
   const submit = () => {
     if ((!input.trim() && images.length === 0) || !ready) return;
+    if (
+      onCompact &&
+      !neverResumeAsk.current &&
+      !resumeOffer &&
+      shouldOfferResumeCompaction({
+        backend,
+        usedTokens: usage.contextTokens ?? 0,
+        lastActivityAt,
+        now: Date.now(),
+      })
+    ) {
+      const ageMinutes = Math.max(
+        0,
+        Math.round((Date.now() - (lastActivityAt ?? Date.now())) / 60_000)
+      );
+      setResumeOffer({ ageMinutes, usedTokens: usage.contextTokens ?? 0 });
+      return;
+    }
     onSend(input, images);
     setInput("");
     setImages([]);
+    setResumeOffer(null);
     closeMenus();
   };
+
+  const canCompact = capabilitiesOf(backend).compact && onCompact;
+  const compactBlocked = compactDisabledReason({
+    busy,
+    ready: ready && !exited,
+    usedTokens: usage.contextTokens ?? 0,
+  });
 
   /** Escape while a turn is in flight: pull the just-sent message back into the
    *  box to edit. A draft already typed is kept, below the restored text. */
@@ -1040,6 +1177,37 @@ export const ChatComposer = memo(function ChatComposer({
           // box instead of wrapping. `break-words` wraps the token itself.
            className="block max-h-40 min-h-24 resize-none overscroll-contain overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent px-5 pb-1 pt-5 text-[15px] leading-6 shadow-none placeholder:text-muted-foreground/80 focus-visible:ring-0"
         />
+          {resumeOffer && (
+            <div className="flex flex-col gap-2 border-t border-border px-4 py-2">
+              <p className="text-sm">{formatResumeCompactionQuestion(resumeOffer)}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!!compactBlocked}
+                  onClick={() => {
+                    onCompact?.();
+                    setResumeOffer(null);
+                  }}
+                >
+                  Compact
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={submit}>
+                  Send anyway
+                </Button>
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => {
+                    neverResumeAsk.current = true;
+                    submit();
+                  }}
+                >
+                  Don't ask again
+                </button>
+              </div>
+            </div>
+          )}
           {/* pl-2.5 rather than the textarea's px-5: each chip carries its own
               px-2.5, so this is what puts the first chip's glyph on the same
               left edge as the prompt text above it. */}
@@ -1056,6 +1224,9 @@ export const ChatComposer = memo(function ChatComposer({
             fullAccess={fullAccess}
             onFullAccessChange={onFullAccessChange}
             onSwitchBackend={onSwitchBackend}
+            claudeProfiles={claudeProfiles}
+            claudeProfileId={claudeProfileId}
+            onClaudeProfileChange={onClaudeProfileChange}
             queue={queue}
           />
           <div className="flex shrink-0 items-center gap-1.5">
@@ -1068,6 +1239,9 @@ export const ChatComposer = memo(function ChatComposer({
                   backend={backend}
                   resolved={usage.model}
                   contextWindow={usage.contextWindow}
+                  onCompact={canCompact ? onCompact : undefined}
+                  compactDisabled={!!compactBlocked}
+                  compactDisabledReason={compactBlocked}
                 />
                 {usage.quota && <QuotaChip quota={usage.quota} />}
               </>

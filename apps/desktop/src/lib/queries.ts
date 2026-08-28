@@ -15,7 +15,6 @@ import type {
   GitRepoRoot,
   GitStash,
   GitWorktree,
-  OpenRouterModel,
   SearchFile,
   SlashCommand,
   UsageSummary,
@@ -31,7 +30,7 @@ import type {
   McpServerInfo,
 } from "@/lib/mcp";
 import type { SkillAddSpec, SkillInfo } from "@/lib/skills";
-import { forgeCommands, type RemoteHost } from "@/lib/forge";
+import { forgeCommands, type LinkedPr, type RemoteHost } from "@/lib/forge";
 import type {
   ConflictStages,
   MergeRequest,
@@ -253,6 +252,33 @@ export const useBranchMap = (paths: string[]): Record<string, string> => {
   return map;
 };
 
+/** Merged PR/MR iids for linked-thread settle. One detail fetch per link —
+ *  linked threads are few, and the list endpoint is the wrong grain. */
+export const useLinkedPrMerged = (
+  links: Array<{ path: string; pr: LinkedPr }>,
+  enabled: boolean
+): Set<string> => {
+  const results = useQueries({
+    queries: links.map(({ path, pr }) => ({
+      queryKey: ["forge", "linkedPr", path, pr.host, pr.iid] as const,
+      queryFn: () =>
+        invoke<{ state: string }>(forgeCommands(pr.host).detail, {
+          path,
+          iid: pr.iid,
+        }),
+      enabled,
+      staleTime: 60_000,
+    })),
+  });
+  const merged = new Set<string>();
+  links.forEach(({ path, pr }, i) => {
+    if (results[i]?.data?.state === "merged") {
+      merged.add(`${path}:${pr.host}:${pr.iid}`);
+    }
+  });
+  return merged;
+};
+
 export const useMergedBranchesMap = (
   roots: string[],
   enabled: boolean
@@ -313,6 +339,7 @@ export const useInvalidateGit = () => {
         "conflicts",
         "mergeState",
         "conflictStages",
+        "remoteHost",
       ];
       for (const key of views) {
         qc.invalidateQueries({ queryKey: ["git", key, p] });
@@ -698,14 +725,4 @@ export const useUsageSummary = (days: number, enabled: boolean) =>
     queryFn: () => invoke<UsageSummary>("usage_summary", { days }),
     enabled,
     staleTime: 60_000,
-  });
-
-export const openRouterKeys = { models: () => ["openrouter", "models"] as const };
-
-export const useOpenRouterModels = (enabled: boolean) =>
-  useQuery({
-    queryKey: openRouterKeys.models(),
-    queryFn: () => invoke<OpenRouterModel[]>("openrouter_models"),
-    enabled,
-    staleTime: 60 * 60 * 1000, // Model list rarely changes.
   });

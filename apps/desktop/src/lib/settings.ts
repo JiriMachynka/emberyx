@@ -20,12 +20,32 @@ export type ThreadView = "project" | "all";
 
 export type ThreadGrouping = "none" | "repository";
 
+/** One name/value injected into the agent process. Empty names are dropped. */
+export interface LaunchEnv {
+  name: string;
+  value: string;
+}
+
 /** Per-backend launch override: a binary to use instead of the backend's own,
  *  plus extra CLI args (tokenized, appended after the built-in flags so a
  *  repeated flag wins). Empty strings mean "no override". */
 export interface ProviderLaunch {
   command: string;
   args: string;
+  /** `CLAUDE_CONFIG_DIR` for Claude. Empty uses the CLI default (~/.claude). */
+  configDir?: string;
+  env?: LaunchEnv[];
+}
+
+/** An extra named Claude: work vs personal, OpenRouter, a local router. The
+ *  default Claude is `providerLaunch.claude`; these sit beside it in the picker. */
+export interface ClaudeProfile {
+  id: string;
+  name: string;
+  command: string;
+  args: string;
+  configDir: string;
+  env: LaunchEnv[];
 }
 
 /** Codex's sandbox posture; "" keeps the current behavior, which derives it
@@ -110,17 +130,9 @@ export interface Settings {
   threadGrouping: ThreadGrouping;
   /** Open the dev output panel automatically when a dev/build/start run starts. */
   autoOpenDevPanel: boolean;
-  /** Dokploy server base URL, e.g. https://dokploy.example.com. */
-  dokployUrl: string;
-  /** Dokploy API key (sent as x-api-key). */
-  dokployApiKey: string;
   /** Git remote used for GitLab fetch/checkout. The token itself lives in the
    *  OS keychain, never here. */
   gitlabRemote: string;
-  /** OpenRouter API key for generating commit messages. */
-  openRouterApiKey: string;
-  /** OpenRouter model slug, e.g. anthropic/claude-3.5-haiku. */
-  openRouterModel: string;
   /** Notify when the agent finishes a turn. */
   notifyOnDone: boolean;
   /** Notify when an agent run ends in an error. */
@@ -133,6 +145,8 @@ export interface Settings {
   notifySound: boolean;
   /** Per-backend binary + extra launch args for chat agents. */
   providerLaunch: Partial<Record<AgentBackend, ProviderLaunch>>;
+  /** Extra named Claude setups; the default Claude is `providerLaunch.claude`. */
+  claudeProfiles: ClaudeProfile[];
   /** Codex sandbox posture; "" follows the permission switches. */
   codexSandbox: CodexSandbox;
   /** Working-tree diffs hide whitespace-only changes. */
@@ -164,17 +178,14 @@ export const DEFAULT_SETTINGS: Settings = {
   threadAutoSettleOnMerge: true,
   threadGrouping: "none",
   autoOpenDevPanel: false,
-  dokployUrl: "",
-  dokployApiKey: "",
   gitlabRemote: "origin",
-  openRouterApiKey: "",
-  openRouterModel: "",
   notifyOnDone: true,
   notifyOnError: true,
   notifyOnAccountIssue: true,
   notifyOnlyWhenUnfocused: false,
   notifySound: false,
   providerLaunch: {},
+  claudeProfiles: [],
   codexSandbox: "",
   diffIgnoreWhitespace: false,
   wordWrap: false,
@@ -199,6 +210,23 @@ const splitStoredEffort = (s: Settings): Settings => {
   return { ...s, model: s.model.slice(0, at), effort: s.model.slice(at + 1) };
 };
 
+/** Dropped settings: OpenRouter commit generate, first-party Dokploy API. */
+const dropStoredRemovedKeys = (
+  s: Settings & {
+    openRouterApiKey?: string;
+    openRouterModel?: string;
+    dokployUrl?: string;
+    dokployApiKey?: string;
+  }
+): Settings => {
+  const next = { ...s };
+  delete next.openRouterApiKey;
+  delete next.openRouterModel;
+  delete next.dokployUrl;
+  delete next.dokployApiKey;
+  return next;
+};
+
 /** Reads the stored settings. Exported for callbacks that outlive a render and
  *  so must not close over a `useSettings` snapshot. */
 export function loadSettings(): Settings {
@@ -206,8 +234,10 @@ export function loadSettings(): Settings {
     const raw = localStorage.getItem(KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const stored = JSON.parse(raw) as Partial<Settings>;
-    const merged = dropStoredPlanMode(
-      splitStoredEffort({ ...DEFAULT_SETTINGS, ...stored })
+    const merged = dropStoredRemovedKeys(
+      dropStoredPlanMode(
+        splitStoredEffort({ ...DEFAULT_SETTINGS, ...stored })
+      )
     );
     // Settings written before the backend was explicit only recorded the
     // command; keep those users on exactly the surface they had.
@@ -219,17 +249,48 @@ export function loadSettings(): Settings {
   }
 }
 
-/** Resolved launch override for one backend: the command when overridden
- *  (null = the backend's own binary) and the tokenized extra args. A fresh
- *  object per call — memoize at the call site if it feeds an effect. */
+export interface ResolvedLaunch {
+  command: string | null;
+  args: string[];
+  configDir: string | null;
+  env: Record<string, string>;
+}
+
+const envMap = (rows: LaunchEnv[] | undefined): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const row of rows ?? []) {
+    const name = row.name.trim();
+    if (name) out[name] = row.value;
+  }
+  return out;
+};
+
+const resolveLaunch = (launch:
+  | {
+      command: string;
+      args: string;
+      configDir?: string;
+      env?: LaunchEnv[];
+    }
+  | undefined): ResolvedLaunch => ({
+  command: launch?.command.trim() || null,
+  args: tokenize(launch?.args ?? ""),
+  configDir: launch?.configDir?.trim() || null,
+  env: envMap(launch?.env),
+});
+
+/** Resolved launch override for one backend (or a named Claude profile). A
+ *  fresh object per call — memoize at the call site if it feeds an effect. */
 export const launchFor = (
-  settings: Pick<Settings, "providerLaunch">,
-  backend: AgentBackend
-): { command: string | null; args: string[] } => {
-  const launch = settings.providerLaunch[backend];
-  const command = launch?.command.trim() || null;
-  const args = tokenize(launch?.args ?? "");
-  return { command, args };
+  settings: Pick<Settings, "providerLaunch" | "claudeProfiles">,
+  backend: AgentBackend,
+  profileId?: string | null
+): ResolvedLaunch => {
+  if (backend === "claude" && profileId) {
+    const profile = settings.claudeProfiles.find((p) => p.id === profileId);
+    if (profile) return resolveLaunch(profile);
+  }
+  return resolveLaunch(settings.providerLaunch[backend]);
 };
 
 /** Push the chosen stacks onto `:root` so Tailwind `font-sans` / `font-mono`

@@ -2,6 +2,7 @@ import { memo, type ComponentProps } from "react";
 import { Streamdown, type ThemeInput } from "streamdown";
 import { code, type CodeHighlighterPlugin } from "@streamdown/code";
 import { FileRef } from "@/components/FileRef";
+import { PrLink } from "@/components/PrLink";
 import { fileRefPath, isFileReference } from "@/lib/fileRef";
 import { cn } from "@/lib/utils";
 
@@ -71,15 +72,9 @@ const components = {
   },
   a({ children, href, ...rest }: ComponentProps<"a">) {
     return (
-      <a
-        {...rest}
-        href={href}
-        target="_blank"
-        rel="noreferrer"
-        className="text-primary underline underline-offset-2"
-      >
+      <PrLink href={href} {...rest}>
         {children}
-      </a>
+      </PrLink>
     );
   },
 };

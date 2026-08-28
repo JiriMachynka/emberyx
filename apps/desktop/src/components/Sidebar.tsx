@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowLeft, Plus, SquarePen, PanelLeftClose, PanelLeftOpen, Settings, FolderOpen, FolderPlus, GitBranch, Bell, Search, ChevronDown, Clock, Check, Laptop, LoaderCircle, SquareTerminal, MoreHorizontal, Pin, ChartColumn } from "lucide-react";
+import { ArrowLeft, Plus, SquarePen, PanelLeftClose, PanelLeftOpen, Settings, FolderOpen, FolderPlus, GitBranch, GitPullRequest, Bell, Search, ChevronDown, Clock, Check, Laptop, LoaderCircle, SquareTerminal, MoreHorizontal, Pin, ChartColumn } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -16,6 +16,7 @@ import {
   useGitBranches,
   useInvalidateGit,
   useMachineName,
+  useLinkedPrMerged,
   useMergedBranchesMap,
 } from "@/lib/queries";
 import {
@@ -34,6 +35,7 @@ import {
   type ThreadMeta,
   type ThreadState,
 } from "@/lib/threadMeta";
+import type { LinkedPr } from "@/lib/forge";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -186,7 +188,7 @@ function SidebarHeader(props: SidebarProps) {
         </button>
         <button
           onClick={onToggleCollapse}
-          className="shrink-0 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground active:scale-95"
+          className="shrink-0 rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           title="Collapse sidebar (⌘B)"
         >
           <PanelLeftClose className="size-4" />
@@ -212,7 +214,7 @@ function SidebarHeader(props: SidebarProps) {
       )}
       <button
         onClick={onToggleCollapse}
-        className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground active:scale-95"
+        className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
       >
         {collapsed ? (
@@ -237,6 +239,8 @@ interface ThreadRowData {
   state: ThreadState;
   /** Worktree branch, else the project's current branch. */
   branch: string | undefined;
+  /** PR/MR the user linked from the transcript, if any. */
+  linkedPr?: LinkedPr;
 }
 
 /** Cross-project thread inbox: pinned first, then live threads, with the ones
@@ -251,6 +255,11 @@ function AllThreads(props: SidebarProps) {
     threadGrouping,
   } = props;
   const [meta, setMeta] = useState(getAllThreadMeta);
+  useEffect(() => {
+    const sync = () => setMeta(getAllThreadMeta());
+    window.addEventListener("emberyx-thread-meta", sync);
+    return () => window.removeEventListener("emberyx-thread-meta", sync);
+  }, []);
   // Which project the inbox is showing. Null = every open project, which is the
   // point of this view; the filter is for when one repo is the whole day.
   const [scope, setScope] = useState<string | null>(null);
@@ -268,23 +277,35 @@ function AllThreads(props: SidebarProps) {
 
   const now = Date.now();
   const scoped = scope ? projects.filter((p) => p.id === scope) : projects;
+  const linked = scoped.flatMap((project) =>
+    project.threads.flatMap((thread) => {
+      const pr = meta[threadMetaKey(project.path, thread.id)]?.linkedPr;
+      return pr ? [{ path: project.path, pr }] : [];
+    })
+  );
+  const mergedPrs = useLinkedPrMerged(linked, threadAutoSettleOnMerge);
   const rows: ThreadRowData[] = scoped
     .flatMap((project) =>
       project.threads.map((thread) => {
         const key = threadMetaKey(project.path, thread.id);
         const root = project.worktree?.repoRoot ?? project.path;
         const branch = project.worktree?.branch;
+        const pr = meta[key]?.linkedPr;
+        const branchMerged = !!branch && (merged[root] ?? []).includes(branch);
+        const prMerged =
+          !!pr && mergedPrs.has(`${project.path}:${pr.host}:${pr.iid}`);
         return {
           project,
           thread,
           key,
           branch: branch ?? branches[project.path],
+          linkedPr: pr,
           state: deriveThreadState({
             modified: thread.modified,
             meta: meta[key] ?? {},
             now,
             settleDays: threadSettleDays,
-            merged: !!branch && (merged[root] ?? []).includes(branch),
+            merged: branchMerged || prMerged,
           }),
         };
       })
@@ -597,7 +618,7 @@ function ThreadRow({
   onResume: () => void;
   onApply: (key: string, patch: ThreadMeta) => void;
 }) {
-  const { project, thread, key, state, branch } = data;
+  const { project, thread, key, state, branch, linkedPr } = data;
   const pinned = state === "pinned";
   const archived = state === "archived";
   const settled = state === "settled";
@@ -721,6 +742,18 @@ function ThreadRow({
                     >
                       {archived ? "Unarchive" : "Archive"}
                     </DropdownMenuItem>
+                    {linkedPr && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onSelect={() =>
+                            onApply(key, { linkedPr: undefined })
+                          }
+                        >
+                          Unlink #{linkedPr.iid}
+                        </DropdownMenuItem>
+                      </>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
                 </span>
@@ -737,13 +770,20 @@ function ThreadRow({
             </span>
 
             <div className="flex min-w-0 items-center gap-1.5">
-              {branch && (
+              {branch ? (
                 <span className="flex min-w-0 flex-1 items-center gap-1 text-[11px] text-muted-foreground/70">
                   <GitBranch className="size-3 shrink-0" />
                   <span className="truncate">{branch}</span>
                 </span>
+              ) : (
+                <span className="min-w-0 flex-1" />
               )}
-              {!branch && <span className="min-w-0 flex-1" />}
+              {linkedPr && (
+                <span className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground/70">
+                  <GitPullRequest className="size-3 shrink-0" />
+                  #{linkedPr.iid}
+                </span>
+              )}
               {pinned && <Pin className="size-3 shrink-0 text-muted-foreground/70" />}
               {terminals > 0 && (
                 <SquareTerminal className="size-3.5 shrink-0 text-muted-foreground/70" />

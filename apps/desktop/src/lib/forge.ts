@@ -48,6 +48,37 @@ export const forgeCommands = (host: RemoteHost): ForgeCommands => COMMANDS[host]
 export const isRemoteHost = (value: string): value is RemoteHost =>
   value === "github" || value === "gitlab";
 
+/** A pull/merge request attached to a thread. */
+export interface LinkedPr {
+  host: RemoteHost;
+  iid: number;
+  url: string;
+}
+
+const GITHUB_PR = /^\/[^/]+\/[^/]+\/pull\/(\d+)/i;
+const GITLAB_MR = /\/(?:-\/)?merge_requests\/(\d+)/i;
+
+/** Pull a GitHub PR or GitLab MR out of a URL. Hosted GitLab (not gitlab.com)
+ *  still matches on the `/merge_requests/N` path. */
+export const parsePrUrl = (href: string): LinkedPr | null => {
+  try {
+    const url = new URL(href);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    const github =
+      url.hostname === "github.com" || url.hostname.endsWith(".github.com");
+    if (github) {
+      const m = GITHUB_PR.exec(url.pathname);
+      if (!m) return null;
+      return { host: "github", iid: Number(m[1]), url: href };
+    }
+    const m = GITLAB_MR.exec(url.pathname);
+    if (!m) return null;
+    return { host: "gitlab", iid: Number(m[1]), url: href };
+  } catch {
+    return null;
+  }
+};
+
 /**
  * A repo whose remote isn't on this service is a normal state, not a failure.
  * Both backends phrase it the same way, so one check covers them.

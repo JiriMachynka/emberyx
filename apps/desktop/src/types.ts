@@ -37,13 +37,11 @@ export interface Session {
   cwd: string;
   /** Shell command the session runs (dev kind only). */
   command?: string;
-  kind: "dev" | "chat" | "dokploy-logs";
+  kind: "dev" | "chat";
   /** Agent CLI this session drives (chat kind). */
   backend?: AgentBackend;
   /** Claude session id to resume (chat kind only). */
   resume?: string;
-  /** Service to stream logs for (dokploy-logs kind only). */
-  dokployLog?: { kind: string; id: string; name: string };
 }
 
 /** One entry in a listed directory (editor file tree). */
@@ -80,8 +78,6 @@ export interface Project {
   icon: string | null;
   /** Cached Claude Code threads, fetched on open + refreshed on demand. */
   threads: Thread[];
-  /** Matched Dokploy deployment, or null if not deployed / not configured. */
-  dokploy: DokployMatch | null;
   /** Set when the path is a git worktree, so the UI can label it by branch. */
   worktree: { repoRoot: string; branch: string } | null;
 }
@@ -213,12 +209,6 @@ export interface GitStash {
   label: string;
 }
 
-/** An OpenRouter model option (slug + human label). */
-export interface OpenRouterModel {
-  id: string;
-  name: string;
-}
-
 /** A Claude Code conversation thread (resumable via its id). */
 export interface Thread {
   id: string;
@@ -226,21 +216,4 @@ export interface Thread {
   modified: number;
 }
 
-/** One service in a Dokploy project (app, compose, or a database). */
-export interface DokployService {
-  name: string;
-  /** application | compose | postgres | mysql | mariadb | mongo | redis */
-  kind: string;
-  /** The app/compose service id; null for databases (no redeploy/logs). */
-  id: string | null;
-  /** Deploy status (idle | running | done | error), if reported. */
-  status: string | null;
-}
 
-/** The Dokploy project deploying this repo, matched by git remote. */
-export interface DokployMatch {
-  projectName: string;
-  /** The service whose git repo matched the project's remote. */
-  matchedService: string;
-  services: DokployService[];
-}

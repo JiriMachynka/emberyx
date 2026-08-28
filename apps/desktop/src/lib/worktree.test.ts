@@ -9,7 +9,6 @@ function project(path: string, worktree: Project["worktree"] = null): Project {
     workspace: null,
     icon: null,
     threads: [],
-    dokploy: null,
     worktree,
   };
 }

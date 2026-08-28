@@ -623,6 +623,59 @@ pub fn git_push_to(path: String, remote: String, branch: String) -> Result<Strin
     run_git(&path, &["push", "-u", &remote, &branch])
 }
 
+/// Parent exists (created if needed) and `dest` is missing or an empty
+/// directory, so `git clone` has somewhere to land.
+pub(crate) fn prepare_clone_destination(dest: &Path) -> Result<()> {
+    if dest.as_os_str().is_empty() {
+        return Err(Error::new("Choose a destination path before cloning."));
+    }
+    if dest.exists() {
+        if !dest.is_dir() {
+            return Err(Error::new("Destination exists and is not a directory."));
+        }
+        if dest.read_dir()?.next().is_some() {
+            return Err(Error::new("Destination already exists and is not empty."));
+        }
+        return Ok(());
+    }
+    if let Some(parent) = dest.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    Ok(())
+}
+
+fn clone_into(url: String, destination: String) -> Result<String> {
+    let dest = PathBuf::from(destination.trim());
+    prepare_clone_destination(&dest)?;
+    let parent = dest.parent().ok_or_else(|| Error::new("Destination has no parent directory."))?;
+    let name = dest
+        .file_name()
+        .ok_or_else(|| Error::new("Destination has no directory name."))?
+        .to_string_lossy()
+        .into_owned();
+    let out = Command::new("git")
+        .current_dir(parent)
+        .args(["clone", "--", url.trim(), &name])
+        .output()?;
+    if out.status.success() {
+        Ok(dest.to_string_lossy().to_string())
+    } else {
+        Err(failure(&out))
+    }
+}
+
+/// Clone `url` into `destination`. The last path segment is the new folder.
+#[tauri::command]
+pub async fn git_clone(url: String, destination: String) -> Result<String> {
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || clone_into(url, destination))
+            .await
+            .map_err(|e| e.to_string())??,
+    )
+}
+
 /// What a combined commit-and-push actually did. The two halves are reported
 /// separately on purpose: a commit that landed and a push that didn't is the
 /// one outcome the user must not mistake for "nothing happened".
@@ -1490,6 +1543,43 @@ mod tests {
         // Degenerate input must not panic.
         assert_eq!(unquote_path("\""), "\"");
         assert_eq!(unquote_path(""), "");
+    }
+
+    #[test]
+    fn prepare_clone_destination_accepts_missing_or_empty() {
+        let dest = std::env::temp_dir().join(format!(
+            "emberyx_test_git_clone_empty_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dest);
+        prepare_clone_destination(&dest).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        prepare_clone_destination(&dest).unwrap();
+        std::fs::write(dest.join("x"), "y").unwrap();
+        assert!(prepare_clone_destination(&dest).is_err());
+        let _ = std::fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn clones_a_local_repo() {
+        let src = Repo::new("clone_src");
+        src.write("a.txt", "hi");
+        src.commit("init");
+        let dest = std::env::temp_dir().join(format!(
+            "emberyx_test_git_clone_dest_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dest);
+        clone_into(src.path(), dest.to_string_lossy().to_string()).unwrap();
+        assert!(dest.join(".git").is_dir());
+        assert_eq!(std::fs::read_to_string(dest.join("a.txt")).unwrap(), "hi");
+        let _ = std::fs::remove_dir_all(&dest);
     }
 
     #[test]

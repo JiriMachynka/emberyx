@@ -29,7 +29,6 @@ import { cachedThreads, cacheThreads } from "@/lib/threadCache";
 import { disposeLog, killLog, spawnLog } from "@/lib/ptyLog";
 import { useProjects } from "@/hooks/useProjects";
 import { useSessions } from "@/hooks/useSessions";
-import { useDokploy } from "@/hooks/useDokploy";
 import type {
   DirEntry,
   GitBranch,
@@ -123,7 +122,6 @@ export function useWorkspace(settings: Settings) {
     setWorkspace,
     setIcon,
     setThreads,
-    setDokploy,
     closeProject,
   } = useProjects();
 
@@ -139,21 +137,9 @@ export function useWorkspace(settings: Settings) {
     activeByProject,
     setActive,
     startChat,
-    startDokployLogs,
     closeProjectSessions,
     sessionsFor,
   } = sessionApi;
-
-  const dokploy = useDokploy({
-    url: settings.dokployUrl,
-    apiKey: settings.dokployApiKey,
-    setMatch: setDokploy,
-    openLogs: (projectId, cwd, service) => {
-      setRevealed(true);
-      setActiveProjectId(projectId);
-      startDokployLogs(projectId, cwd, service);
-    },
-  });
 
   const uiActiveProjectId = revealed ? activeProjectId : null;
   const activeProject = projects.find((p) => p.id === uiActiveProjectId) ?? null;
@@ -334,9 +320,6 @@ export function useWorkspace(settings: Settings) {
         .then((icon) => setIcon(id, icon))
         .catch((e) => console.error("project_icon failed:", e));
     }
-    // Skip the Dokploy network probe for a hidden pre-warmed project; it runs
-    // when the user actually reveals it.
-    if (!prewarm) dokploy.refresh(id, path);
     return id;
   }
 
@@ -576,7 +559,6 @@ export function useWorkspace(settings: Settings) {
     activeId,
     revealed,
     recents,
-    dokploy,
     refreshThreads,
     openProjectAt,
     openWorktree,

@@ -87,6 +87,8 @@ impl AgentManager {
         command: Option<String>,
         // Appended after every built-in flag, so a repeated flag overrides it.
         extra_args: Vec<String>,
+        config_dir: Option<String>,
+        env: HashMap<String, String>,
         on_event: AgentSink,
     ) -> Result<u32> {
         let mut cmd = Command::new(command.as_deref().unwrap_or("claude"));
@@ -165,6 +167,7 @@ impl AgentManager {
                 cmd.env(k, v);
             }
         }
+        apply_launch_env(&mut cmd, config_dir.as_deref(), &env);
 
         let mut child = cmd.spawn().map_err(|e| e.to_string())?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
@@ -418,6 +421,8 @@ pub async fn agent_spawn(
     after_frame_id: Option<u64>,
     command: Option<String>,
     extra_args: Option<Vec<String>>,
+    config_dir: Option<String>,
+    env: Option<HashMap<String, String>>,
     on_event: tauri::ipc::Channel<AgentEvent>,
 ) -> Result<AgentHandle> {
     let mcp_config = ask.mcp_config(&emberyx_session_id);
@@ -445,6 +450,8 @@ pub async fn agent_spawn(
                 emberyx_session_id,
                 command,
                 extra_args: extra_args.unwrap_or_default(),
+                config_dir,
+                env: env.unwrap_or_default(),
             };
             let (id, outcome) = daemon.spawn(spec, after_frame_id, channel_sink(on_event))?;
             return Ok(AgentHandle {
@@ -466,6 +473,8 @@ pub async fn agent_spawn(
             emberyx_session_id,
             command,
             extra_args.unwrap_or_default(),
+            config_dir,
+            env.unwrap_or_default(),
             channel_sink(on_event),
         )?;
         Ok(AgentHandle {
@@ -476,6 +485,24 @@ pub async fn agent_spawn(
     })
     .await
     .map_err(|e| crate::err!("agent_spawn join failed: {e}"))?
+}
+
+/// User launch env after the login-shell capture so PATH still finds `claude`,
+/// and `CLAUDE_CONFIG_DIR` last so the dedicated field wins over a same-named
+/// env row.
+fn apply_launch_env(
+    cmd: &mut Command,
+    config_dir: Option<&str>,
+    env: &HashMap<String, String>,
+) {
+    for (k, v) in env {
+        if !k.is_empty() {
+            cmd.env(k, v);
+        }
+    }
+    if let Some(dir) = config_dir.map(str::trim).filter(|d| !d.is_empty()) {
+        cmd.env("CLAUDE_CONFIG_DIR", dir);
+    }
 }
 
 /// Adapt a Tauri IPC channel to an `AgentSink`. A closed channel reports `false`

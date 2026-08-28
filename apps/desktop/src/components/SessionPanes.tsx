@@ -1,6 +1,5 @@
 import { useCallback, useRef } from "react";
 import { ChatPane } from "@/components/ChatPane";
-import { DokployLogsPane } from "@/components/DokployLogsPane";
 import { useAgentStore } from "@/lib/agentStore";
 import { paneShouldMount } from "@/lib/paneMount";
 import { cn } from "@/lib/utils";
@@ -121,22 +120,13 @@ function SessionPaneRow({
           effort={settings.effort}
           onEffortChange={onEffortChange}
           providerLaunch={settings.providerLaunch}
+          claudeProfiles={settings.claudeProfiles}
           codexSandbox={settings.codexSandbox}
           projects={projects}
           recentProjects={recentProjects}
           onSelectProject={onSelectProject}
           onOpenProject={onOpenProject}
           onTitled={handleTitled}
-        />
-      ) : session.kind === "dokploy-logs" ? (
-        <DokployLogsPane
-          sessionId={session.id}
-          url={settings.dokployUrl}
-          apiKey={settings.dokployApiKey}
-          service={session.dokployLog!}
-          active={active}
-          fontFamily={settings.fontFamily}
-          fontSize={settings.fontSize}
         />
       ) : null}
     </div>

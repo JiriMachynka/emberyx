@@ -28,6 +28,7 @@ describe("capabilitiesOf", () => {
       modelPicker: true,
       reasoningEffort: true,
       steering: true,
+      compact: true,
     });
   });
 

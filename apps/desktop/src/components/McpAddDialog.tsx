@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { useMcpAdd, useProviderStatus } from "@/lib/queries";
 import {
   buildMcpTransport,
+  DOKPLOY_MCP_PRESET,
   isValidMcpName,
   MCP_HARNESS_LABEL,
   MCP_HARNESS_ORDER,
@@ -74,6 +75,14 @@ export function McpAddDialog({ open, onOpenChange }: McpAddDialogProps) {
     );
   };
 
+  const applyDokploy = () => {
+    setName(DOKPLOY_MCP_PRESET.name);
+    setKind("stdio");
+    setCommandLine(DOKPLOY_MCP_PRESET.commandLine);
+    setEnv(DOKPLOY_MCP_PRESET.env.map((row) => ({ ...row })));
+    setHeaders([]);
+  };
+
   const mutationError = addMcp.error;
   const errorText =
     mutationError instanceof Error
@@ -94,6 +103,17 @@ export function McpAddDialog({ open, onOpenChange }: McpAddDialogProps) {
         </DialogHeader>
 
         <div className="grid gap-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground">Start from</span>
+            <button
+              type="button"
+              onClick={applyDokploy}
+              className="rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
+            >
+              Dokploy
+            </button>
+          </div>
+
           <label className="grid gap-1.5">
             <span className="text-sm font-medium">Name</span>
             <Input
@@ -176,12 +196,20 @@ export function McpAddDialog({ open, onOpenChange }: McpAddDialogProps) {
           )}
 
           {kind === "stdio" ? (
-            <PairRows
-              label="Environment variables"
-              addLabel="Add variable"
-              rows={env}
-              setRows={setEnv}
-            />
+            <>
+              <PairRows
+                label="Environment variables"
+                addLabel="Add variable"
+                rows={env}
+                setRows={setEnv}
+              />
+              {env.some((row) => row.name === "DOKPLOY_URL") && (
+                <p className="text-xs text-muted-foreground">
+                  DOKPLOY_URL needs the /api path, e.g.
+                  https://dokploy.example.com/api
+                </p>
+              )}
+            </>
           ) : (
             <PairRows
               label="Headers"

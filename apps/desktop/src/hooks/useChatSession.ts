@@ -26,7 +26,12 @@ interface Options {
    *  per turn, so only Claude respawns when it changes. */
   effort?: string;
   /** Binary override + extra args from Settings → Providers. */
-  launch?: { command: string | null; args: string[] };
+  launch?: {
+    command: string | null;
+    args: string[];
+    configDir?: string | null;
+    env?: Record<string, string>;
+  };
   /** Codex sandbox posture; "" derives it from the permission switches. */
   codexSandbox?: CodexSandbox;
   onTitled?: (title: string) => void;

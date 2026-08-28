@@ -38,9 +38,9 @@ Built with Tauri v2 + React. A lighter, purpose-built alternative to cmux.
 - **Changes panel** — git working-tree diffs plus a live feed of the agent's
   edits; stage by hunk and commit inline.
 - **Git menu** — branches, stash, checkout, pull/push.
+- **Clone & publish** — clone GitHub, GitLab, or a git URL from ⌘K; publish a local repo with `gh`/`glab`.
 - **Git rewind** — per-file history and pickaxe search to find when a line
   appeared or vanished.
-- **AI commit messages** — generated via OpenRouter from the staged diff.
 
 ### Operations
 
@@ -48,8 +48,8 @@ Built with Tauri v2 + React. A lighter, purpose-built alternative to cmux.
   package or all, in background tabs, with start/stop.
 - **Usage dashboard** — running token usage and estimated cost, per session and
   over time.
-- **Dokploy integration** — matches the repo to its Dokploy deployment (by git
-  remote), shows service status, streams logs, and triggers redeploys.
+- **MCP servers** — connect harness MCP configs, including Dokploy as an agent
+  tool.
 - **Auto-updates** — checks GitHub releases on launch and installs signed
   updates in place.
 
@@ -93,7 +93,7 @@ Live process migration is the next daemon increment.
 
 ⌘K command palette · ⌘O open project · ⌘T new agent tab · ⌘B toggle sidebar ·
 ⇧⌘F project search. Settings (chat vs terminal surface, agent command, fonts,
-scrollback, skip-permissions, thread resume, Dokploy, OpenRouter) persist
+scrollback, skip-permissions, thread resume) persist
 locally.
 
 ## Stack
@@ -158,8 +158,6 @@ apps/desktop/
     files.rs defs.rs   file IO, go-to-definition, hover
     usage.rs           incremental token-usage parsing
     threads.rs         Claude Code thread listing
-    dokploy.rs         Dokploy deployment matching
-    openrouter.rs      commit-message generation
 apps/web/            Astro marketing site
 docs/design-log.md   why each decision was made
 CLAUDE.md            orientation for coding agents

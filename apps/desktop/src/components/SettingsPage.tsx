@@ -11,6 +11,7 @@ import {
   GitBranch,
   Info,
   Keyboard,
+  Plus,
   Plug,
   Puzzle,
   RotateCcw,
@@ -19,6 +20,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Type,
+  X,
 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { Input } from "@/components/ui/input";
@@ -36,7 +38,6 @@ import {
   invalidateDaemon,
   useDaemonHealth,
   useForgeCliStatus,
-  useOpenRouterModels,
   useProviderStatus,
 } from "@/lib/queries";
 import { IDES, IDE_LABEL, type IdeId } from "@/lib/ide";
@@ -151,15 +152,15 @@ const TABS: TabMeta[] = [
     id: "providers",
     label: "Providers",
     icon: Boxes,
-    keys: ["agentBackend", "agentCommand", "providerLaunch", "codexSandbox"],
-    finds: "claude codex backend cli command installed version sandbox launch binary args model list hidden custom",
+    keys: ["agentBackend", "agentCommand", "providerLaunch", "claudeProfiles", "codexSandbox"],
+    finds: "claude codex backend cli command installed version sandbox launch binary args model list hidden custom config dir env profile",
   },
   {
     id: "mcp",
     label: "MCP",
     icon: Puzzle,
     keys: [],
-    finds: "mcp servers tools connect stdio http context7",
+    finds: "mcp servers tools connect stdio http context7 dokploy",
   },
   {
     id: "skills",
@@ -183,12 +184,8 @@ const TABS: TabMeta[] = [
       "persistentAgents",
       "ide",
       "ideCustomCommand",
-      "dokployUrl",
-      "dokployApiKey",
-      "openRouterApiKey",
-      "openRouterModel",
     ],
-    finds: "daemon emberyxd persistent background editor ide vscode dokploy openrouter api key",
+    finds: "daemon emberyxd persistent background editor ide vscode",
   },
   {
     id: "sourceControl",
@@ -229,7 +226,7 @@ export function SettingsPage({
   const [version, setVersion] = useState("");
   const [checking, setChecking] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
-  const capabilities = capabilitiesOf(settings.agentBackend);  const models = useOpenRouterModels(true).data ?? [];
+  const capabilities = capabilitiesOf(settings.agentBackend);
   const qc = useQueryClient();
   const providers = useProviderStatus().data ?? [];
   const forgeClis = useForgeCliStatus().data ?? [];
@@ -824,13 +821,22 @@ export function SettingsPage({
                 >
                   {AGENT_BACKENDS.map((b) => {
                     const launch = settings.providerLaunch[b];
-                    const setLaunch = (patch: Partial<{ command: string; args: string }>) =>
+                    const setLaunch = (
+                      patch: Partial<{
+                        command: string;
+                        args: string;
+                        configDir: string;
+                        env: { name: string; value: string }[];
+                      }>
+                    ) =>
                       onUpdate({
                         providerLaunch: {
                           ...settings.providerLaunch,
                           [b]: {
                             command: launch?.command ?? "",
                             args: launch?.args ?? "",
+                            configDir: launch?.configDir ?? "",
+                            env: launch?.env ?? [],
                             ...patch,
                           },
                         },
@@ -869,9 +875,121 @@ export function SettingsPage({
                             onChange={(e) => setLaunch({ args: e.target.value })}
                           />
                         </Field>
+                        {b === "claude" && (
+                          <Field
+                            label="Config directory"
+                            hint="CLAUDE_CONFIG_DIR. Empty uses ~/.claude — set this for a second account or a router."
+                          >
+                            <Input
+                              value={launch?.configDir ?? ""}
+                              placeholder="~/.claude_work"
+                              spellCheck={false}
+                              className="font-mono text-sm"
+                              onChange={(e) =>
+                                setLaunch({ configDir: e.target.value })
+                              }
+                            />
+                          </Field>
+                        )}
+                        <LaunchEnvRows
+                          rows={launch?.env ?? []}
+                          onChange={(env) => setLaunch({ env })}
+                        />
                       </div>
                     );
                   })}
+                </Group>
+
+                <Group
+                  title="Claude profiles"
+                  hint="Extra named Claudes — work vs personal, OpenRouter, a local router. The Launch section above is the default."
+                >
+                  {settings.claudeProfiles.map((profile) => {
+                    const patch = (next: Partial<typeof profile>) =>
+                      onUpdate({
+                        claudeProfiles: settings.claudeProfiles.map((p) =>
+                          p.id === profile.id ? { ...p, ...next } : p
+                        ),
+                      });
+                    return (
+                      <div
+                        key={profile.id}
+                        className="grid gap-3 border-b pb-5 last:border-0 last:pb-0"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <Input
+                            value={profile.name}
+                            onChange={(e) => patch({ name: e.target.value })}
+                            placeholder="Personal"
+                            className="h-8 max-w-56"
+                          />
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() =>
+                              onUpdate({
+                                claudeProfiles: settings.claudeProfiles.filter(
+                                  (p) => p.id !== profile.id
+                                ),
+                              })
+                            }
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                        <Field label="Command">
+                          <Input
+                            value={profile.command}
+                            placeholder="claude"
+                            spellCheck={false}
+                            className="font-mono text-sm"
+                            onChange={(e) => patch({ command: e.target.value })}
+                          />
+                        </Field>
+                        <Field
+                          label="Config directory"
+                          hint="CLAUDE_CONFIG_DIR for this profile."
+                        >
+                          <Input
+                            value={profile.configDir}
+                            placeholder="~/.claude_personal"
+                            spellCheck={false}
+                            className="font-mono text-sm"
+                            onChange={(e) =>
+                              patch({ configDir: e.target.value })
+                            }
+                          />
+                        </Field>
+                        <LaunchEnvRows
+                          rows={profile.env}
+                          onChange={(env) => patch({ env })}
+                        />
+                      </div>
+                    );
+                  })}
+                  <div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        onUpdate({
+                          claudeProfiles: [
+                            ...settings.claudeProfiles,
+                            {
+                              id: `claude-${Date.now().toString(36)}`,
+                              name: "Personal",
+                              command: "",
+                              args: "",
+                              configDir: "",
+                              env: [],
+                            },
+                          ],
+                        })
+                      }
+                    >
+                      Add Claude profile
+                    </Button>
+                  </div>
                 </Group>
               </>
             )}
@@ -1010,81 +1128,6 @@ export function SettingsPage({
                   )}
                 </Group>
 
-                <Group title="Dokploy">
-                  <Row
-                    wide
-                    label="Server URL"
-                    hint="Projects are matched to Dokploy services by git remote."
-                    control={
-                      <Input
-                        value={settings.dokployUrl}
-                        onChange={(e) => onUpdate({ dokployUrl: e.target.value })}
-                        placeholder="https://dokploy.example.com"
-                        spellCheck={false}
-                      />
-                    }
-                  />
-                  <Row
-                    wide
-                    label="API key"
-                    hint="Sent as the x-api-key header."
-                    control={
-                      <Input
-                        type="password"
-                        value={settings.dokployApiKey}
-                        onChange={(e) =>
-                          onUpdate({ dokployApiKey: e.target.value })
-                        }
-                        spellCheck={false}
-                      />
-                    }
-                  />
-                </Group>
-
-                <Group title="OpenRouter">
-                  <Row
-                    wide
-                    label="API key"
-                    hint="Enables the Generate button on the commit box to draft messages from your diff."
-                    control={
-                      <Input
-                        type="password"
-                        value={settings.openRouterApiKey}
-                        onChange={(e) =>
-                          onUpdate({ openRouterApiKey: e.target.value })
-                        }
-                        placeholder="sk-or-…"
-                        spellCheck={false}
-                      />
-                    }
-                  />
-                  <Row
-                    wide
-                    label="Model"
-                    hint="OpenRouter model slug. Defaults to google/gemini-3.5-flash."
-                    control={
-                      <>
-                        <Input
-                          list="openrouter-models"
-                          value={settings.openRouterModel}
-                          onChange={(e) =>
-                            onUpdate({ openRouterModel: e.target.value })
-                          }
-                          placeholder="google/gemini-3.5-flash"
-                          spellCheck={false}
-                        />
-                        <datalist id="openrouter-models">
-                          {models.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.name}
-                            </option>
-                          ))}
-                        </datalist>
-                      </>
-                    }
-                  />
-                </Group>
-
                 <Group
                   title="Diagnostics"
                   hint="A bug-report snapshot: versions, platform, provider and daemon state. No conversation content ever leaves with it unless you paste it."
@@ -1110,7 +1153,7 @@ export function SettingsPage({
               <>
                 <Group
                   title="CLIs"
-                  hint="Reviews use the GitHub (gh) and GitLab (glab) CLIs on your PATH. Log in with gh auth login or glab auth login — Emberyx never stores a PAT of its own."
+                  hint="Reviews, clone, and publish use the GitHub (gh) and GitLab (glab) CLIs on your PATH. Log in with gh auth login or glab auth login — Emberyx never stores a PAT of its own."
                 >
                   <div className="grid gap-1.5">
                     {forgeClis.map((p) => {
@@ -1477,6 +1520,74 @@ function NumberStepper({
         >
           <ChevronDown className="size-3.5" />
         </button>
+      </div>
+    </div>
+  );
+}
+
+function LaunchEnvRows({
+  rows,
+  onChange,
+}: {
+  rows: { name: string; value: string }[];
+  onChange: (rows: { name: string; value: string }[]) => void;
+}) {
+  return (
+    <div className="grid gap-1.5">
+      <span className="text-sm font-medium">Environment</span>
+      <span className="text-xs text-muted-foreground">
+        Injected into the agent process. Use this for ANTHROPIC_BASE_URL /
+        ANTHROPIC_AUTH_TOKEN.
+      </span>
+      <div className="grid gap-1.5">
+        {rows.map((row, index) => (
+          <div key={index} className="flex items-center gap-1.5">
+            <Input
+              value={row.name}
+              onChange={(e) =>
+                onChange(
+                  rows.map((r, i) =>
+                    i === index ? { ...r, name: e.target.value } : r
+                  )
+                )
+              }
+              placeholder="NAME"
+              spellCheck={false}
+              className="font-mono text-sm"
+            />
+            <Input
+              value={row.value}
+              onChange={(e) =>
+                onChange(
+                  rows.map((r, i) =>
+                    i === index ? { ...r, value: e.target.value } : r
+                  )
+                )
+              }
+              placeholder="value"
+              spellCheck={false}
+              className="font-mono text-sm"
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Remove variable"
+              onClick={() => onChange(rows.filter((_, i) => i !== index))}
+            >
+              <X className="size-3.5" />
+            </Button>
+          </div>
+        ))}
+        <div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onChange([...rows, { name: "", value: "" }])}
+          >
+            <Plus className="size-3.5" />
+            Add variable
+          </Button>
+        </div>
       </div>
     </div>
   );

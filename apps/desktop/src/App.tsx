@@ -15,6 +15,8 @@ import { TerminalPane } from "@/components/TerminalPane";
 import { ContextBar } from "@/components/ContextBar";
 import { Sidebar } from "@/components/Sidebar";
 import { CommandPalette } from "@/components/CommandPalette";
+import { CloneDialog } from "@/components/CloneDialog";
+import { PublishDialog } from "@/components/PublishDialog";
 import { UsagePanel } from "@/components/UsagePanel";
 import { SlashCommandsPanel } from "@/components/SlashCommandsPanel";
 import { WelcomeScreen } from "@/components/WelcomeScreen";
@@ -40,6 +42,7 @@ import { requestSearch } from "@/lib/searchRequest";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import type { Session } from "@/types";
 import { FORGE_NOUN, isRemoteHost, type RemoteHost } from "@/lib/forge";
+import type { CloneSource } from "@/lib/clone";
 import { PreviewPanel } from "@/components/PreviewPanel";
 import { useGitRemoteHost } from "@/lib/queries";
 import { useDevServers } from "@/hooks/useDevServers";
@@ -64,6 +67,8 @@ const EditorPane = lazy(() =>
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [cloneSource, setCloneSource] = useState<CloneSource | null>(null);
+  const [publishOpen, setPublishOpen] = useState(false);
   // Every right-hand surface is a tab of one dock, so a diff and a terminal are
   // a click apart instead of mutually exclusive asides.
   const [dock, setDock] = useState<DockState>(EMPTY_DOCK);
@@ -108,7 +113,6 @@ function App() {
     projectSessions,
     revealed,
     recents,
-    dokploy,
   } = ws;
 
   // ChatPanes are memoized, so their callbacks must keep a stable identity
@@ -321,8 +325,6 @@ function App() {
         embedded
         projectPath={activeProject.path}
         sessionIds={projectSessionIds}
-        openRouterApiKey={settings.openRouterApiKey}
-        openRouterModel={settings.openRouterModel}
         ignoreWhitespace={settings.diffIgnoreWhitespace}
         onClose={() => hideTab("diff")}
         onOpenWorktree={openWorktreeAndRun}
@@ -375,14 +377,8 @@ function App() {
           startCommand={dev.startCommandOverride}
           onSetStartCommand={dev.setStartCommand}
           detectedStartCommand={dev.detectedStartCommand}
-          onRefreshDokploy={() =>
-            dokploy.refresh(activeProject.id, activeProject.path)
-          }
           onOpenWorktree={openWorktreeAndRun}
           onRemoveWorktree={ws.removeWorktree}
-          dokployConfigured={Boolean(
-            settings.dokployUrl && settings.dokployApiKey
-          )}
         />
       </div>
     ),
@@ -609,6 +605,10 @@ function App() {
           ws.newAgent();
         }}
         onPickProject={ws.pickProject}
+        onCloneGithub={() => setCloneSource("github")}
+        onCloneGitlab={() => setCloneSource("gitlab")}
+        onCloneUrl={() => setCloneSource("url")}
+        onPublish={() => setPublishOpen(true)}
         onOpenSettings={() => {
           setUsageOpen(false);
           setSettingsOpen(true);
@@ -622,13 +622,21 @@ function App() {
         }}
         onOpenNotifications={toggleNotifications}
         onOpenSlash={() => setSlashOpen(true)}
-        onRedeployDokploy={dokploy.redeploy}
-        onViewDokployLogs={(service) => {
-          if (activeProject) dokploy.viewLogs(activeProject, service);
-        }}
       />
 
-
+      <CloneDialog
+        open={cloneSource !== null}
+        source={cloneSource}
+        onOpenChange={(o) => {
+          if (!o) setCloneSource(null);
+        }}
+        onCloned={(path) => void ws.openProjectAt(path)}
+      />
+      <PublishDialog
+        open={publishOpen}
+        projectPath={activeProject?.path ?? null}
+        onOpenChange={setPublishOpen}
+      />
 
       <ActionDialog
         open={actionEdit !== null}

@@ -10,6 +10,8 @@
  * tested at their boundaries without faking a clock.
  */
 
+import type { LinkedPr } from "@/lib/forge";
+
 const KEY = "emberyx.threadMeta";
 
 export type ThreadState =
@@ -28,6 +30,11 @@ export interface ThreadMeta {
   snoozedUntil?: number;
   /** Manual settle decision, which outranks every automatic rule below it. */
   settledOverride?: "settled" | "active";
+  /** A PR/MR the user linked from the transcript. Auto-settle on merge uses
+   *  this iid when present, instead of only the worktree branch. */
+  linkedPr?: LinkedPr;
+  /** Named Claude profile this thread was last spawned with. */
+  claudeProfileId?: string;
 }
 
 type Store = Record<string, ThreadMeta>;
@@ -50,6 +57,7 @@ function writeStore(store: Store): void {
   } catch {
     // Ignore storage failures; inbox state just won't persist.
   }
+  window.dispatchEvent(new Event("emberyx-thread-meta"));
 }
 
 export function getThreadMeta(key: string): ThreadMeta {
@@ -83,6 +91,8 @@ export function clearThreadMeta(key: string): Store {
     archivedAt: undefined,
     snoozedUntil: undefined,
     settledOverride: undefined,
+    linkedPr: undefined,
+    claudeProfileId: undefined,
   });
 }
 

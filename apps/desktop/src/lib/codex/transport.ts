@@ -55,6 +55,9 @@ export const codexThreadResume = (id: number, params: Params) =>
 export const codexTurnStart = (id: number, params: Params) =>
   invoke<unknown>("codex_turn_start", { id, params });
 
+export const codexThreadCompact = (id: number, params: Params) =>
+  invoke<unknown>("codex_thread_compact", { id, params });
+
 export const codexTurnSteer = (id: number, params: Params) =>
   invoke<unknown>("codex_turn_steer", { id, params });
 

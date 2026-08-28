@@ -93,6 +93,9 @@ import {
 } from "@/lib/checkpoints";
 import type { PermissionMode, Settings } from "@/lib/settings";
 import { launchFor } from "@/lib/settings";
+import { getThreadMeta, setThreadMeta, threadMetaKey } from "@/lib/threadMeta";
+import { lastActivityAt } from "@/lib/compact";
+import { ThreadLinkProvider } from "@/components/PrLink";
 import type { Project } from "@/types";
 import { projectLabel } from "@/lib/worktree";
 import { PROVIDER_LABEL } from "@/lib/providers";
@@ -129,6 +132,8 @@ interface ChatPaneProps {
   onEffortChange: (effort: string) => void;
   /** Per-backend launch overrides; the active backend's is resolved here. */
   providerLaunch: Settings["providerLaunch"];
+  /** Extra named Claude setups, shown in the composer when any exist. */
+  claudeProfiles: Settings["claudeProfiles"];
   /** Codex sandbox posture; "" derives it from the permission switches. */
   codexSandbox: Settings["codexSandbox"];
   /** Projects available to the empty-thread project switcher. */
@@ -167,6 +172,7 @@ export const ChatPane = memo(function ChatPane({
   effort,
   onEffortChange,
   providerLaunch,
+  claudeProfiles,
   codexSandbox,
   projects,
   recentProjects,
@@ -197,16 +203,22 @@ export const ChatPane = memo(function ChatPane({
   // Approval posture is a spawn-time flag, kept local so switching it respawns
   // just this pane (via --resume), like the model.
   const [fullAccess, setFullAccess] = useState(skipPermissions);
-  // The active backend's launch override, memoized so its identity survives
-  // renders — it rides the transport hooks' spawn-effect deps.
-  const launch = useMemo(
-    () => launchFor({ providerLaunch }, backend),
-    [providerLaunch, backend]
-  );
   // The provider this thread is on *right now*. It starts as the session's, but
   // a thread can change hands mid-conversation — the turns each provider
   // produced stay in the same visual transcript, stamped with who made them.
   const [activeBackend, setActiveBackend] = useState<AgentBackend>(backend);
+  const [claudeProfileId, setClaudeProfileId] = useState<string | null>(() =>
+    resume
+      ? getThreadMeta(threadMetaKey(cwd, resume)).claudeProfileId ?? null
+      : null
+  );
+  // The active backend's launch override, memoized so its identity survives
+  // renders — it rides the transport hooks' spawn-effect deps.
+  const launch = useMemo(
+    () =>
+      launchFor({ providerLaunch, claudeProfiles }, activeBackend, claudeProfileId),
+    [providerLaunch, claudeProfiles, activeBackend, claudeProfileId]
+  );
   const [carried, setCarried] = useState<CarriedThread>(EMPTY_THREAD);
   const { 
     messages,
@@ -214,6 +226,7 @@ export const ChatPane = memo(function ChatPane({
     usage,
     ready,
     send,
+    compact,
     rewind,
     queued,
     queue,
@@ -616,6 +629,11 @@ export const ChatPane = memo(function ChatPane({
 
   return (
     <FileRefProject value={cwd}>
+    <ThreadLinkProvider
+      value={
+        resume ? { projectPath: cwd, threadId: resume } : null
+      }
+    >
     <div
       className="chat-pane relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
       style={{ fontFamily }}
@@ -761,10 +779,22 @@ export const ChatPane = memo(function ChatPane({
                   fullAccess={fullAccess}
                   onFullAccessChange={setFullAccess}
                   onSwitchBackend={(to) => switchProvider(to, false)}
+                  claudeProfiles={claudeProfiles}
+                  claudeProfileId={claudeProfileId}
+                  onClaudeProfileChange={(id) => {
+                    setClaudeProfileId(id);
+                    if (resume) {
+                      setThreadMeta(threadMetaKey(cwd, resume), {
+                        claudeProfileId: id ?? undefined,
+                      });
+                    }
+                  }}
                   queue={queue}
                   draft={draft}
                   onDraftConsumed={consumeDraft}
                   onSend={send}
+                  onCompact={compact}
+                  lastActivityAt={lastActivityAt(messages)}
                   onStop={stop}
                   onRewind={rewind}
                   onPreview={setPreview}
@@ -789,6 +819,7 @@ export const ChatPane = memo(function ChatPane({
         </DialogContent>
       </Dialog>
     </div>
+    </ThreadLinkProvider>
     </FileRefProject>
   );
 });

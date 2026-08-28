@@ -8,7 +8,7 @@ mod ask;
 mod checkpoints;
 mod codex;
 mod defs;
-mod dokploy;
+
 pub mod error;
 mod files;
 mod fs_walk;
@@ -22,7 +22,6 @@ mod ingest;
 mod menu;
 mod mcp;
 pub mod models;
-mod openrouter;
 pub mod pty;
 mod preview;
 mod providers;
@@ -220,7 +219,10 @@ pub fn run() {
             git::git_merge_continue,
             git::git_merge_state,
             git::git_remote_host,
+            git::git_clone,
             forge_cli::forge_cli_status,
+            forge_cli::forge_clone,
+            forge_cli::forge_publish,
             github::github_prs,
             github::github_pr,
             github::github_pr_diff,
@@ -235,11 +237,7 @@ pub fn run() {
             ingest::transcripts_ingest,
             ingest::thread_messages_page,
             ingest::thread_turns_page,
-            dokploy::dokploy_services,
-            dokploy::dokploy_redeploy,
-            dokploy::dokploy_logs,
-            openrouter::generate_commit_message,
-            openrouter::openrouter_models,
+
             providers::provider_status,
             mcp::mcp_list,
             mcp::mcp_add,

@@ -76,6 +76,10 @@ pub struct AgentSpec {
     pub command: Option<String>,
     #[serde(default)]
     pub extra_args: Vec<String>,
+    #[serde(default)]
+    pub config_dir: Option<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
 }
 
 /// One buffered frame of agent output. `frameId` is monotonic per agent, so a

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { GitBranch, RotateCw } from "lucide-react";
+import { GitBranch } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,19 +39,16 @@ interface ProjectSettingsPaneProps {
   onSetStartCommand: (command: string) => void;
   /** Detected start command, shown as the input placeholder. */
   detectedStartCommand: string;
-  onRefreshDokploy: () => void;
   onOpenWorktree: (path: string, repoRoot: string, branch: string) => void;
   onRemoveWorktree: (
     worktreePath: string,
     repoRoot: string
   ) => void | Promise<void>;
-  /** Dokploy credentials are set globally; without them nothing can match. */
-  dokployConfigured: boolean;
 }
 
-/** Per-project configuration collected in one place: the dev command, the
- *  matched Dokploy deployment, and the git worktree this project sits in.
- *  Reads only what the caller already holds — no fetching on mount. */
+/** Per-project configuration collected in one place: the dev command and the
+ *  git worktree this project sits in. Reads only what the caller already
+ *  holds — no fetching on mount. */
 /** Sentinel for "no pin" — Radix Select can't hold an empty string value. */
 const FOLLOW_DEFAULT = "default";
 
@@ -68,15 +65,12 @@ export function ProjectSettingsPane({
   startCommand,
   onSetStartCommand,
   detectedStartCommand,
-  onRefreshDokploy,
   onOpenWorktree,
   onRemoveWorktree,
-  dokployConfigured,
 }: ProjectSettingsPaneProps) {
   const [draft, setDraft] = useState(devCommand);
   const [buildDraft, setBuildDraft] = useState(buildCommand);
   const [startDraft, setStartDraft] = useState(startCommand);
-  const dokploy = project.dokploy;
   const worktree = project.worktree;
 
   const commit = () => {
@@ -164,54 +158,6 @@ export function ProjectSettingsPane({
             spellCheck={false}
           />
         </Field>
-      </section>
-
-      <section className="grid gap-3 border-t pt-4">
-        <div className="flex items-center gap-2">
-          <div className="flex-1 text-sm font-semibold">Dokploy</div>
-          <Button variant="outline" size="sm" onClick={onRefreshDokploy}>
-            <RotateCw className="size-3.5" />
-            Refresh
-          </Button>
-        </div>
-        {!dokployConfigured ? (
-          <p className="text-xs text-muted-foreground">
-            Set a Dokploy server URL and API key in global Settings →
-            Integrations, then refresh to match this project by git remote.
-          </p>
-        ) : !dokploy ? (
-          <p className="text-xs text-muted-foreground">
-            No Dokploy project matched this repo's git remote.
-          </p>
-        ) : (
-          <div className="grid gap-2">
-            <div className="text-sm">
-              <span className="font-medium">{dokploy.projectName}</span>
-              <span className="text-muted-foreground">
-                {" "}
-                · matched via {dokploy.matchedService}
-              </span>
-            </div>
-            <ul className="grid gap-1">
-              {dokploy.services.map((s) => (
-                <li
-                  key={`${s.kind}:${s.name}`}
-                  className="flex items-center gap-2 rounded border px-2 py-1.5 text-sm"
-                >
-                  <span className="flex-1 truncate">{s.name}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {s.kind}
-                  </span>
-                  {s.status && (
-                    <span className="rounded bg-secondary px-1 py-px text-xs text-muted-foreground">
-                      {s.status}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
       </section>
 
       <section className="grid gap-3 border-t pt-4">

@@ -29,6 +29,8 @@ export interface AgentCapabilities {
   reasoningEffort: boolean;
   /** A message sent mid-turn steers the running turn instead of queueing. */
   steering: boolean;
+  /** Context can be compacted on demand (`/compact` or `thread/compact/start`). */
+  compact: boolean;
 }
 
 export const AGENT_BACKENDS: readonly AgentBackend[] = [
@@ -80,6 +82,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     modelPicker: true,
     reasoningEffort: true,
     steering: true,
+    compact: true,
   },
   // Codex reaches all of these over the app-server rather than Claude's
   // out-of-band surfaces: hook runs arrive in-band as `hook/started` /
@@ -96,6 +99,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     modelPicker: true,
     reasoningEffort: true,
     steering: true,
+    compact: true,
   },
   // Driven over ACP. The protocol carries prompts, streamed updates, tool calls
   // and permission requests — and nothing else here, so the rest stay off until
@@ -117,6 +121,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     reasoningEffort: false,
     // A prompt sent mid-turn is rejected; the turn is cancelled and re-sent.
     steering: false,
+    compact: false,
   },
   // Also ACP, over `grok agent stdio`. Grok advertises more than OpenCode does
   // — reasoning effort and a session list among them — but each still needs the
@@ -135,6 +140,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     // wired, and a control that doesn't change the run is worse than none.
     reasoningEffort: false,
     steering: false,
+    compact: false,
   },
 };
 

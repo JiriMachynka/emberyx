@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { DEFAULT_SETTINGS, loadSettings, useSettings } from "@/lib/settings";
+import {
+  DEFAULT_SETTINGS,
+  launchFor,
+  loadSettings,
+  useSettings,
+} from "@/lib/settings";
 
 beforeEach(() => {
   localStorage.clear();
@@ -29,6 +34,23 @@ describe("agentBackend migration", () => {
     expect(loadSettings().agentBackend).toBe("codex");
     store({ agentCommand: "codex", agentBackend: "gemini" });
     expect(loadSettings().agentBackend).toBe("codex");
+  });
+
+  it("drops stored OpenRouter and first-party Dokploy keys", () => {
+    store({
+      fontSize: 16,
+      openRouterApiKey: "sk-or-stale",
+      openRouterModel: "google/gemini-3.5-flash",
+      dokployUrl: "https://dokploy.example.com",
+      dokployApiKey: "stale",
+    });
+    const loaded = loadSettings();
+    expect(loaded.fontSize).toBe(16);
+    expect(
+      (loaded as { openRouterApiKey?: string }).openRouterApiKey
+    ).toBeUndefined();
+    expect((loaded as { dokployUrl?: string }).dokployUrl).toBeUndefined();
+    expect((loaded as { dokployApiKey?: string }).dokployApiKey).toBeUndefined();
   });
 });
 
@@ -77,7 +99,66 @@ describe("useSettings", () => {
     const { result } = renderHook(() => useSettings());
     expect(result.current.settings).toEqual(DEFAULT_SETTINGS);
   });
+});
 
+describe("launchFor", () => {
+  it("treats empty command as the CLI on PATH", () => {
+    expect(launchFor(DEFAULT_SETTINGS, "claude")).toEqual({
+      command: null,
+      args: [],
+      configDir: null,
+      env: {},
+    });
+  });
+
+  it("tokenizes args and maps env, dropping blank names", () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      providerLaunch: {
+        claude: {
+          command: "/opt/claude",
+          args: '--flag "a b"',
+          configDir: "~/.claude_work",
+          env: [
+            { name: "ANTHROPIC_BASE_URL", value: "https://openrouter.ai/api" },
+            { name: "  ", value: "ignored" },
+          ],
+        },
+      },
+    };
+    expect(launchFor(settings, "claude")).toEqual({
+      command: "/opt/claude",
+      args: ["--flag", "a b"],
+      configDir: "~/.claude_work",
+      env: { ANTHROPIC_BASE_URL: "https://openrouter.ai/api" },
+    });
+  });
+
+  it("resolves a named Claude profile over the default launch", () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      providerLaunch: {
+        claude: { command: "claude", args: "", configDir: "", env: [] },
+      },
+      claudeProfiles: [
+        {
+          id: "personal",
+          name: "Personal",
+          command: "claude",
+          args: "",
+          configDir: "~/.claude_personal",
+          env: [],
+        },
+      ],
+    };
+    expect(launchFor(settings, "claude", "personal").configDir).toBe(
+      "~/.claude_personal"
+    );
+    expect(launchFor(settings, "claude").configDir).toBeNull();
+  });
+});
+
+describe("useSettings", () => {
   it("writes the chat and editor stacks onto :root so font-mono follows Appearance", () => {
     const { result } = renderHook(() => useSettings());
     expect(document.documentElement.style.getPropertyValue("--chat-font")).toBe(

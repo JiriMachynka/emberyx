@@ -214,7 +214,12 @@ interface Options {
   effort?: string;
   /** Binary override + extra args from Settings → Providers. Identity-stable
    *  at the call site — it rides the spawn effect's deps. */
-  launch?: { command: string | null; args: string[] };
+  launch?: {
+    command: string | null;
+    args: string[];
+    configDir?: string | null;
+    env?: Record<string, string>;
+  };
   /** Called with the generated title once a fresh chat has been auto-titled. */
   onTitled?: (title: string) => void;
   /** False while a session of another backend owns this pane — the hook still
@@ -1142,6 +1147,8 @@ export function useAgentChat({
           effort: effort || null,
           command: launch?.command ?? null,
           extraArgs: launch?.args ?? [],
+          configDir: launch?.configDir ?? null,
+          env: launch?.env ?? {},
           emberyxSessionId,
           persistent,
           // Always replay the daemon's whole buffer: in persistent mode it is
@@ -1430,6 +1437,10 @@ export function useAgentChat({
     [deliver, promptQueue, emberyxSessionId]
   );
 
+  const compact = useCallback(() => {
+    send("/compact");
+  }, [send]);
+
   // Drain one queued turn each time the agent goes idle. The runtime queue pops
   // the head — and stays paused while the agent is blocked — so this only
   // dispatches what the supervisor is ready for. The count drops optimistically;
@@ -1475,6 +1486,7 @@ export function useAgentChat({
     usage,
     ready,
     send,
+    compact,
     queued,
     queue: promptQueue,
     stop,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMcpTransport,
+  DOKPLOY_MCP_PRESET,
   entryFor,
   isValidMcpName,
   transportSummary,
@@ -68,6 +69,25 @@ describe("buildMcpTransport", () => {
 
   it("is null until a remote url exists", () => {
     expect(buildMcpTransport({ ...base, kind: "http", url: "" })).toBeNull();
+  });
+});
+
+describe("DOKPLOY_MCP_PRESET", () => {
+  it("tokenizes to npx -y @ahdev/dokploy-mcp with empty env slots", () => {
+    expect(
+      buildMcpTransport({
+        kind: "stdio",
+        commandLine: DOKPLOY_MCP_PRESET.commandLine,
+        url: "",
+        env: [...DOKPLOY_MCP_PRESET.env],
+        headers: [],
+      })
+    ).toEqual({
+      kind: "stdio",
+      command: "npx",
+      args: ["-y", "@ahdev/dokploy-mcp"],
+      env: { DOKPLOY_URL: "", DOKPLOY_API_KEY: "" },
+    });
   });
 });
 

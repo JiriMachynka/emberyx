@@ -235,8 +235,6 @@ interface ChangesPanelProps {
   projectPath: string;
   /** Session ids in this project — selects its slice of the agent edit feed. */
   sessionIds: string[];
-  openRouterApiKey: string;
-  openRouterModel: string;
   /** Hide whitespace-only changes in the working-tree diff. */
   ignoreWhitespace: boolean;
   onClose: () => void;
@@ -249,8 +247,6 @@ interface ChangesPanelProps {
 export function ChangesPanel({
   projectPath,
   sessionIds,
-  openRouterApiKey,
-  openRouterModel,
   ignoreWhitespace,
   onClose,
   onOpenWorktree,
@@ -306,7 +302,6 @@ export function ChangesPanel({
   const [commitMsg, setCommitMsg] = useState("");
   const [committing, setCommitting] = useState(false);
   const [commitErr, setCommitErr] = useState<string | null>(null);
-  const [generating, setGenerating] = useState(false);
 
   // Agent tab state.
   const [agentSelId, setAgentSelId] = useState<number | null>(null);
@@ -396,26 +391,6 @@ export function ChangesPanel({
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   };
-
-  async function generateMessage() {
-    const files = stagedFiles.map((f) => f.path);
-    if (!files.length || generating) return;
-    setGenerating(true);
-    setCommitErr(null);
-    try {
-      const msg = await invoke<string>("generate_commit_message", {
-        path: projectPath,
-        files,
-        apiKey: openRouterApiKey,
-        model: openRouterModel,
-      });
-      setCommitMsg(msg);
-    } catch (e) {
-      setCommitErr(String(e));
-    } finally {
-      setGenerating(false);
-    }
-  }
 
   /** Commit, then push in the same action. The Rust side does the safety
    *  checks before it commits, so a refusal never strands a commit here. */
@@ -610,21 +585,6 @@ export function ChangesPanel({
                     </p>
                   )}
                   <div className="flex justify-end gap-2">
-                    {openRouterApiKey.trim() && (
-                      <button
-                        onClick={() => void generateMessage()}
-                        disabled={generating}
-                        title="Draft a commit message from the staged diff"
-                        className="mr-auto flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
-                      >
-                        {generating ? (
-                          <RefreshCw className="size-3.5 animate-spin" />
-                        ) : (
-                          <Bot className="size-3.5" />
-                        )}
-                        Generate
-                      </button>
-                    )}
                     <button
                       onClick={unstageAll}
                       className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"

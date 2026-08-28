@@ -63,6 +63,16 @@ export interface McpAddSpec {
   transport: McpTransport;
 }
 
+/** Stdio template for Dokploy. Agents call it; Emberyx does not wrap the API. */
+export const DOKPLOY_MCP_PRESET = {
+  name: "dokploy",
+  commandLine: "npx -y @ahdev/dokploy-mcp",
+  env: [
+    { name: "DOKPLOY_URL", value: "" },
+    { name: "DOKPLOY_API_KEY", value: "" },
+  ],
+} as const;
+
 /** Same restriction as the backend, so bad names fail before the write. */
 const MCP_NAME = /^[a-zA-Z0-9_-]+$/;
 export const isValidMcpName = (name: string): boolean => MCP_NAME.test(name);

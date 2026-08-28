@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import {
   APPROVAL_METHODS,
   ASK_METHODS,
@@ -31,6 +32,7 @@ import {
   codexRespond,
   codexSetThreadName,
   codexSpawn,
+  codexThreadCompact,
   codexThreadResume,
   codexThreadStart,
   codexTurnInterrupt,
@@ -575,6 +577,22 @@ export function useCodexChat({
     [deliver, publish]
   );
 
+  const compact = useCallback(() => {
+    const id = idRef.current;
+    const threadId = threadRef.current;
+    if (id === null || !threadId) return;
+    const s = stateRef.current;
+    stateRef.current = {
+      ...s,
+      status: BUSY_STATUS.has(s.status) ? s.status : "thinking",
+      errorMessage: null,
+    };
+    publish();
+    void codexThreadCompact(id, { threadId }).catch((e) => {
+      toast.error("Compact failed", { description: String(e) });
+    });
+  }, [publish]);
+
   /**
    * Stop the newest turn. A turn that produced nothing is un-sent: it leaves
    * the transcript and its text is handed back for the composer to restore.
@@ -641,6 +659,7 @@ export function useCodexChat({
     usage,
     ready,
     send,
+    compact,
     queued: 0,
     // Codex steers instead of queueing, so it has no runtime queue to manage.
     queue: null,

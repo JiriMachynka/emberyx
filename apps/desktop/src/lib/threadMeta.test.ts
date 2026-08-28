@@ -83,6 +83,18 @@ describe("the meta store", () => {
     expect(getThreadMeta(key)).toEqual({ pinnedAt: 1, snoozedUntil: 2 });
   });
 
+  it("stores a linked PR and clears it", () => {
+    const pr = {
+      host: "github" as const,
+      iid: 12,
+      url: "https://github.com/acme/app/pull/12",
+    };
+    setThreadMeta(key, { linkedPr: pr });
+    expect(getThreadMeta(key).linkedPr).toEqual(pr);
+    setThreadMeta(key, { linkedPr: undefined });
+    expect(getThreadMeta(key)).toEqual({});
+  });
+
   it("clears a field passed as undefined, and drops an emptied entry", () => {
     setThreadMeta(key, { pinnedAt: 1 });
     setThreadMeta(key, { pinnedAt: undefined });

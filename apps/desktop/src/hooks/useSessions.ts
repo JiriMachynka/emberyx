@@ -36,28 +36,6 @@ export function useSessions() {
     return id;
   }
 
-  /** Open a Dokploy logs pane for a service and focus it. */
-  function startDokployLogs(
-    projectId: string,
-    cwd: string,
-    service: { kind: string; id: string; name: string }
-  ): string {
-    const id = nextId();
-    setSessions((s) => [
-      ...s,
-      {
-        id,
-        projectId,
-        label: `logs: ${service.name}`,
-        cwd,
-        kind: "dokploy-logs",
-        dokployLog: service,
-      },
-    ]);
-    setActive(projectId, id);
-    return id;
-  }
-
   /** Add a background dev-server session (does not steal focus). */
   function addDev(
     projectId: string,
@@ -160,7 +138,6 @@ export function useSessions() {
     activeByProject,
     setActive,
     startChat,
-    startDokployLogs,
     renameSession,
     addDev,
     closeSession,

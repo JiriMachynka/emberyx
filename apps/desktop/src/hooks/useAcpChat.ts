@@ -414,6 +414,7 @@ export function useAcpChat({
     usage,
     ready,
     send,
+    compact: () => {},
     queued: 0,
     // ACP has no queue of its own; a turn is cancelled and re-sent instead.
     queue: null,

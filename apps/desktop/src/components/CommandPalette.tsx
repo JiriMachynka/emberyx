@@ -3,21 +3,21 @@ import * as Dialog from "@radix-ui/react-dialog";
 import {
   Bell,
   CircleDollarSign,
+  CloudUpload,
   FileCode,
   FileDiff,
   FolderOpen,
   History,
+  Link,
   MessageSquare,
   Plus,
-  RotateCw,
-  ScrollText,
   Search,
   Settings,
   SlashSquare,
   Terminal,
 } from "lucide-react";
 import { projectLabel } from "@/lib/worktree";
-import type { DokployService, Project, Session, Thread } from "@/types";
+import type { Project, Session, Thread } from "@/types";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -31,6 +31,10 @@ interface CommandPaletteProps {
   onResumeThread: (projectId: string, path: string, thread: Thread) => void;
   onNewAgent: () => void;
   onPickProject: () => void;
+  onCloneGithub: () => void;
+  onCloneGitlab: () => void;
+  onCloneUrl: () => void;
+  onPublish: () => void;
   onOpenSettings: () => void;
   onOpenEditor: () => void;
   onToggleChanges: () => void;
@@ -38,8 +42,6 @@ interface CommandPaletteProps {
   onOpenUsage: () => void;
   onOpenNotifications: () => void;
   onOpenSlash: () => void;
-  onRedeployDokploy: (service: DokployService) => void;
-  onViewDokployLogs: (service: DokployService) => void;
 }
 
 /** ⌘K launcher: fuzzy-search open sessions + recent threads, or run a quick
@@ -55,6 +57,10 @@ export function CommandPalette({
   onResumeThread,
   onNewAgent,
   onPickProject,
+  onCloneGithub,
+  onCloneGitlab,
+  onCloneUrl,
+  onPublish,
   onOpenSettings,
   onOpenEditor,
   onToggleChanges,
@@ -62,8 +68,6 @@ export function CommandPalette({
   onOpenUsage,
   onOpenNotifications,
   onOpenSlash,
-  onRedeployDokploy,
-  onViewDokployLogs,
 }: CommandPaletteProps) {
   const run = (fn: () => void) => {
     onOpenChange(false);
@@ -121,6 +125,41 @@ export function CommandPalette({
                   <FolderOpen className="size-4 text-muted-foreground" />
                   Open project…
                 </Item>
+                <Item
+                  value="action clone github repository"
+                  onSelect={() => run(onCloneGithub)}
+                >
+                  <img
+                    src="/source-control-icons/github.svg"
+                    alt=""
+                    className="size-4 shrink-0"
+                  />
+                  Clone GitHub repository
+                </Item>
+                <Item
+                  value="action clone gitlab repository"
+                  onSelect={() => run(onCloneGitlab)}
+                >
+                  <img
+                    src="/source-control-icons/gitlab.svg"
+                    alt=""
+                    className="size-4 shrink-0"
+                  />
+                  Clone GitLab repository
+                </Item>
+                <Item value="action clone git url repository" onSelect={() => run(onCloneUrl)}>
+                  <Link className="size-4 text-muted-foreground" />
+                  Clone from Git URL
+                </Item>
+                {activeProject && (
+                  <Item
+                    value="action publish repository github gitlab"
+                    onSelect={() => run(onPublish)}
+                  >
+                    <CloudUpload className="size-4 text-muted-foreground" />
+                    Publish repository
+                  </Item>
+                )}
                 {activeProject && (
                   <Item value="action files editor" onSelect={() => run(onOpenEditor)}>
                     <FileCode className="size-4 text-muted-foreground" />
@@ -157,42 +196,6 @@ export function CommandPalette({
                   Settings
                 </Item>
               </Command.Group>
-
-              {activeProject?.dokploy && (
-                <Command.Group heading="Dokploy">
-                  {activeProject.dokploy.services.flatMap((s) => {
-                    const deployable =
-                      s.id !== null && (s.kind === "application" || s.kind === "compose");
-                    const loggable = s.id !== null && s.kind === "application";
-                    const items: React.ReactElement[] = [];
-                    if (deployable) {
-                      items.push(
-                        <Item
-                          key={`redeploy ${s.name}`}
-                          value={`dokploy redeploy ${s.name}`}
-                          onSelect={() => run(() => onRedeployDokploy(s))}
-                        >
-                          <RotateCw className="size-4 text-muted-foreground" />
-                          Dokploy: Redeploy {s.name}
-                        </Item>
-                      );
-                    }
-                    if (loggable) {
-                      items.push(
-                        <Item
-                          key={`logs ${s.name}`}
-                          value={`dokploy logs ${s.name}`}
-                          onSelect={() => run(() => onViewDokployLogs(s))}
-                        >
-                          <ScrollText className="size-4 text-muted-foreground" />
-                          Dokploy: Logs {s.name}
-                        </Item>
-                      );
-                    }
-                    return items;
-                  })}
-                </Command.Group>
-              )}
 
               {openSessions.length > 0 && (
                 <Command.Group heading="Open sessions">
