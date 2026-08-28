@@ -306,10 +306,15 @@ export function parseTranscript(text: string): ChatMessage[] {
 
 /** Sum token usage and capture the model from a transcript. The transcript
  *  stores per-turn `message.usage` + `message.model` but no cost, so a resumed
- *  thread shows model + tokens; cost fills in after the next live turn. */
+ *  thread shows model + tokens; cost fills in after the next live turn.
+ *
+ *  Context occupancy is not a sum: it is what the *last* turn carried into the
+ *  model, cached reads included. Without it a reopened thread reads 0k however
+ *  long it is, and the ring only fills once you send again. */
 export function parseTranscriptUsage(text: string): ChatUsage {
   let inputTokens = 0;
   let outputTokens = 0;
+  let contextTokens = 0;
   let model: string | undefined;
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
@@ -327,9 +332,17 @@ export function parseTranscriptUsage(text: string): ChatUsage {
     if (u) {
       inputTokens += u.input_tokens ?? 0;
       outputTokens += u.output_tokens ?? 0;
+      const ctx =
+        (u.input_tokens ?? 0) +
+        (u.cache_read_input_tokens ?? 0) +
+        (u.cache_creation_input_tokens ?? 0);
+      // Later lines overwrite earlier ones, so this ends on the last turn.
+      if (ctx) contextTokens = ctx;
     }
   }
-  return { model, inputTokens, outputTokens };
+  return contextTokens
+    ? { model, inputTokens, outputTokens, contextTokens }
+    : { model, inputTokens, outputTokens };
 }
 
 /** CC injects wrapped meta text as "user" turns (slash-command expansions,
@@ -428,6 +441,8 @@ export function useAgentChat({
   const oldestCursorRef = useRef<{ createdAt: number; messageId: string } | null>(
     null
   );
+  /** `cwd::resume` this pane has already hydrated, so the page is read once. */
+  const hydratedRef = useRef<string | null>(null);
   const loadingOlderRef = useRef(false);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
@@ -527,6 +542,9 @@ export function useAgentChat({
   // the headless CLI exit, and "Session ended." is the wrong story for that.
   const interruptedRef = useRef(false);
   const sessionRef = useRef<string | undefined>(resume);
+  // The CLI's own thread id, published so the pane can register the thread with
+  // the sidebar before the first turn (and its transcript on disk) exists.
+  const [threadId, setThreadId] = useState<string | undefined>(resume);
   // The assistant message currently being streamed, plus block-index → tool map.
   const draftRef = useRef<ChatMessage | null>(null);
   const blockToolRef = useRef<Record<number, number>>({});
@@ -699,7 +717,10 @@ export function useAgentChat({
 
       if (type === "system" && msg.subtype === "init") {
         const sid = msg.session_id as string | undefined;
-        if (sid) sessionRef.current = sid;
+        if (sid) {
+          sessionRef.current = sid;
+          setThreadId(sid);
+        }
         return;
       }
 
@@ -918,8 +939,14 @@ export function useAgentChat({
         t.curOutput = 0;
         // The CLI names the failure ("error_max_turns", "error_during_execution"),
         // it never emits a bare "error".
+        // A turn the user stopped ends as `error_during_execution` too. That is
+        // not a failed session — the process is alive and sendable — so it must
+        // not raise an error notice or the pane's "Session failed" dead end.
         const subtype = msg.subtype;
-        const failed = typeof subtype === "string" && subtype.startsWith("error");
+        const failed =
+          typeof subtype === "string" &&
+          subtype.startsWith("error") &&
+          !interruptedRef.current;
         setStatus(failed ? "error" : "idle");
         // Only the failure is announced here; the Stop hook covers success.
         if (failed) {
@@ -993,6 +1020,12 @@ export function useAgentChat({
   // source and resuming an older thread starts visually empty.
   useEffect(() => {
     if (!enabled || !resume || persistent) return;
+    // Prepending is not idempotent, so a re-run for a target already hydrated
+    // (a dependency identity change, StrictMode's second mount) must not
+    // stack the same page on top of itself.
+    const target = `${cwd}::${resume}`;
+    if (hydratedRef.current === target) return;
+    hydratedRef.current = target;
     let cancelled = false;
     void (async () => {
       try {
@@ -1012,11 +1045,20 @@ export function useAgentChat({
           ? { createdAt: oldest.createdAt, messageId: oldest.messageId }
           : null;
         setHasMore(page.hasMore);
-        if (parsed.length) setMessages((prev) => (prev.length ? prev : parsed));
+        // Prepend, never discard. The page is this thread's history up to the
+        // resume point and the CLI never replays it on stdout, so anything
+        // already in `messages` is strictly newer — dropping the page because
+        // a live event won the race is how a resumed thread lost every turn
+        // before the one you just sent.
+        if (parsed.length) setMessages((prev) => [...parsed, ...prev]);
         const hu = parseTranscriptUsage(transcript);
         setUsage((prev) => {
           if (prev.model || prev.costUsd != null || prev.outputTokens != null) {
-            return prev;
+            // A live turn already restated everything except this: the meter
+            // reads 0k until the *next* message_start otherwise.
+            return prev.contextTokens != null || hu.contextTokens == null
+              ? prev
+              : { ...prev, contextTokens: hu.contextTokens };
           }
           // A partial page is not the session total — only commit tokens when
           // everything fit in this page, otherwise keep the model and wait for
@@ -1031,6 +1073,8 @@ export function useAgentChat({
           return hu;
         });
       } catch (e) {
+        // Let a later mount retry; a failed read must not look hydrated.
+        hydratedRef.current = null;
         console.error("[emberyx] thread_messages_page failed", e);
       }
     })();
@@ -1485,6 +1529,7 @@ export function useAgentChat({
     status,
     usage,
     ready,
+    threadId,
     send,
     compact,
     queued,

@@ -817,6 +817,17 @@ describe("useAgentChat sending", () => {
     expect(sentTo("agent_send")).toEqual([]);
   });
 
+  // The sidebar registers a fresh thread from this id, before any transcript
+  // for it exists on disk.
+  it("publishes the CLI's thread id as soon as the session announces it", async () => {
+    const { result, emit } = await mount();
+    expect(result.current.threadId).toBeUndefined();
+
+    emit({ type: "system", subtype: "init", session_id: "sess-77" });
+
+    expect(result.current.threadId).toBe("sess-77");
+  });
+
   it("interrupts the turn without killing the session", async () => {
     const { result } = await mount();
     act(() => result.current.stop());
@@ -827,6 +838,42 @@ describe("useAgentChat sending", () => {
     });
     expect(sentTo("agent_kill")).toEqual([]);
     expect(result.current.status).toBe("idle");
+  });
+
+  // The CLI reports a stopped turn as `error_during_execution`. Reading that as
+  // a failure put the pane in its "Session failed / Restart session" dead end
+  // for a session that was still alive.
+  // Only the stopped turn is excused — the next one reports failures normally.
+  it("reports a failure on the turn after a stop", async () => {
+    const { result, emit } = await mount();
+    act(() => result.current.send("first"));
+    act(() => result.current.stop());
+    emit({ type: "result", subtype: "error_during_execution", usage: {} });
+    act(() => result.current.send("second"));
+    emit({ type: "result", subtype: "error_max_turns", usage: {} });
+
+    expect(result.current.status).toBe("error");
+  });
+
+  it("does not fail the session when the stopped turn reports an error result", async () => {
+    const { result, emit } = await mount();
+    act(() => result.current.send("work on it"));
+    act(() => result.current.stop());
+    emit({ type: "result", subtype: "error_during_execution", usage: {} });
+
+    expect(result.current.status).toBe("idle");
+  });
+
+  // The stop only excuses the turn it aborted, not the next one.
+  it("still fails the session when a later turn errors on its own", async () => {
+    const { result, emit } = await mount();
+    act(() => result.current.send("work on it"));
+    act(() => result.current.stop());
+    emit({ type: "result", subtype: "error_during_execution", usage: {} });
+    act(() => result.current.send("try again"));
+    emit({ type: "result", subtype: "error_during_execution", usage: {} });
+
+    expect(result.current.status).toBe("error");
   });
 });
 

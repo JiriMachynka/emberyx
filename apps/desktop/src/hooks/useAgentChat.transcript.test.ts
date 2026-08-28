@@ -218,3 +218,37 @@ describe("parseTranscriptUsage", () => {
     });
   });
 });
+
+describe("parseTranscriptUsage — context occupancy", () => {
+  const turn = (input: number, cacheRead: number, output: number) =>
+    JSON.stringify({
+      type: "assistant",
+      message: {
+        model: "claude-opus-4-5",
+        usage: {
+          input_tokens: input,
+          cache_read_input_tokens: cacheRead,
+          output_tokens: output,
+        },
+      },
+    });
+
+  it("reports the last turn's prompt, cached reads included", () => {
+    const usage = parseTranscriptUsage([turn(10, 900, 50), turn(20, 4000, 60)].join("\n"));
+    expect(usage.contextTokens).toBe(4020);
+  });
+
+  it("still sums billed tokens across turns", () => {
+    const usage = parseTranscriptUsage([turn(10, 900, 50), turn(20, 4000, 60)].join("\n"));
+    expect(usage.inputTokens).toBe(30);
+    expect(usage.outputTokens).toBe(110);
+  });
+
+  it("leaves context unset when the transcript carries no usage", () => {
+    const line = JSON.stringify({
+      type: "assistant",
+      message: { model: "claude-opus-4-5", content: [{ type: "text", text: "hi" }] },
+    });
+    expect(parseTranscriptUsage(line).contextTokens).toBeUndefined();
+  });
+});
