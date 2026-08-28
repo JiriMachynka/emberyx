@@ -1,10 +1,57 @@
 import { memo, type ComponentProps } from "react";
-import { Streamdown, type ThemeInput } from "streamdown";
-import { code, type CodeHighlighterPlugin } from "@streamdown/code";
+import { Streamdown } from "streamdown";
+import type { CodeHighlighterPlugin, HighlightOptions, ThemeInput } from "streamdown";
+import { highlightTokens, supportedLanguages } from "@/lib/codeHighlighter";
+
+/** Streamdown types the result inline rather than exporting it. */
+type HighlightResult = NonNullable<ReturnType<CodeHighlighterPlugin["highlight"]>>;
 import { FileRef } from "@/components/FileRef";
 import { PrLink } from "@/components/PrLink";
 import { fileRefPath, isFileReference } from "@/lib/fileRef";
 import { cn } from "@/lib/utils";
+
+/** Both slots take the same dark theme. Streamdown picks its dark colors
+ *  behind a `dark:` variant, and nothing in this app ever sets the `dark`
+ *  class — the window is dark, full stop — so the light slot is the one that
+ *  actually paints. Pairing it with a light theme is what put GitHub-light's
+ *  blues and reds on the plum canvas. Vesper is warm and low-saturation, which
+ *  is the same family as the ember accent. */
+const shikiTheme: [ThemeInput, ThemeInput] = ["vesper", "vesper"];
+
+/** Vesper, loaded with the highlighter rather than bundled: it is the only
+ *  theme this app renders, so the name below and the registration are the same
+ *  decision written twice. */
+const THEME_NAME = "vesper";
+const loadTheme = () => import("@shikijs/themes/vesper");
+
+/** Highlighting for fences, over the curated grammar set in lib/codeHighlighter
+ *  rather than Shiki's full bundle. Streamdown treats a null return as "not
+ *  ready" and re-renders from the callback, which is how the first fence pays
+ *  for the grammar load without blocking. */
+const shikiPlugin: CodeHighlighterPlugin = {
+  name: "shiki",
+  type: "code-highlighter",
+  supportsLanguage(language) {
+    return supportedLanguages().includes(language.trim().toLowerCase());
+  },
+  getSupportedLanguages() {
+    return supportedLanguages();
+  },
+  getThemes() {
+    return shikiTheme;
+  },
+  highlight(options: HighlightOptions, callback?: (result: HighlightResult) => void) {
+    return highlightTokens(
+      {
+        code: options.code,
+        language: options.language,
+        themeName: THEME_NAME,
+        loadTheme,
+      },
+      callback
+    );
+  },
+};
 
 /** T3 skips the Shiki LRU while a fence is still growing so every token
  *  doesn't write a unique partial into the cache. We go one step further:
@@ -15,17 +62,7 @@ import { cn } from "@/lib/utils";
 const deferredHighlight = new Map<string, ReturnType<typeof setTimeout>>();
 
 const deferredCode: CodeHighlighterPlugin = {
-  name: "shiki",
-  type: "code-highlighter",
-  supportsLanguage(language) {
-    return code.supportsLanguage(language);
-  },
-  getSupportedLanguages() {
-    return code.getSupportedLanguages();
-  },
-  getThemes() {
-    return code.getThemes();
-  },
+  ...shikiPlugin,
   highlight(options, callback) {
     const key = `${options.language}:${options.code.slice(0, 80)}`;
     const prev = deferredHighlight.get(key);
@@ -34,7 +71,7 @@ const deferredCode: CodeHighlighterPlugin = {
       key,
       setTimeout(() => {
         deferredHighlight.delete(key);
-        const result = code.highlight(options, callback);
+        const result = shikiPlugin.highlight(options, callback);
         if (result) callback?.(result);
       }, 80),
     );
@@ -42,16 +79,8 @@ const deferredCode: CodeHighlighterPlugin = {
   },
 };
 
-/** Both slots take the same dark theme. Streamdown picks its dark colors
- *  behind a `dark:` variant, and nothing in this app ever sets the `dark`
- *  class — the window is dark, full stop — so the light slot is the one that
- *  actually paints. Pairing it with a light theme is what put GitHub-light's
- *  blues and reds on the plum canvas. Vesper is warm and low-saturation, which
- *  is the same family as the ember accent. */
-const shikiTheme: [ThemeInput, ThemeInput] = ["vesper", "vesper"];
-
 const streamingPlugins = { code: deferredCode };
-const staticPlugins = { code };
+const staticPlugins = { code: shikiPlugin };
 
 const components = {
   /** Streamdown routes only inline spans here, so fences keep their own

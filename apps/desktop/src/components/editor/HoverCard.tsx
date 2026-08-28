@@ -33,10 +33,16 @@ export function HoverCard({
           <span className="shrink-0">+{hover.info.others} more</span>
         )}
       </button>
-      <div
-        className="overflow-x-auto p-2 font-mono text-xs [&_pre]:m-0 [&_pre]:!bg-transparent"
-        dangerouslySetInnerHTML={{ __html: hover.html }}
-      />
+      <div className="overflow-x-auto p-2 font-mono text-xs">
+        {/* hljs emits bare token spans, so the block element is ours. */}
+        <pre className="m-0">
+          <code
+            className="hljs"
+            style={{ background: "transparent", padding: 0 }}
+            dangerouslySetInnerHTML={{ __html: hover.html }}
+          />
+        </pre>
+      </div>
     </div>
   );
 }

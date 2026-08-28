@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isLookupWorthy, wordAt } from "@/lib/clickTarget";
-import { langFromPath } from "@/lib/highlight";
-import { highlightSnippet } from "@/lib/shiki";
+import { highlightCached, langFromPath } from "@/lib/highlight";
 import type { HoverInfo } from "@/types";
 
-/** A resolved hover, with its snippet already rendered by shiki. */
+/** A resolved hover, with its snippet already rendered to hljs token spans. */
 export interface Hover {
   symbol: string;
   info: HoverInfo;
@@ -65,8 +64,11 @@ export function useSymbolHover({
     }
     // The pointer may have moved on while the lookup ran.
     if (!info || word.current !== symbol) return;
-    const html = await highlightSnippet(info.code, langFromPath(info.path));
-    if (word.current !== symbol) return;
+    // Highlighting is synchronous and shares the transcript's LRU, so a
+    // re-hover paints from cache. It also drops the app's second highlighter:
+    // this card used to name the language with highlight.js and paint it with
+    // shiki.
+    const html = highlightCached(info.code, langFromPath(info.path));
     setHover({ symbol, info, html, x, y });
   }
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Square, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { AnsiLog } from "@/components/AnsiLog";
+import { LogPane } from "@/components/LogPane";
 import { SidePanel } from "@/components/SidePanel";
 import type { Session } from "@/types";
 
@@ -86,7 +86,7 @@ export function DevPanel({
 
       <div className="relative min-h-0 flex-1 p-1">
         {active && (
-          <AnsiLog
+          <LogPane
             sessionId={active.id}
             fontFamily={fontFamily}
             fontSize={fontSize}
