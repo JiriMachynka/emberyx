@@ -93,12 +93,14 @@ export function openTab(state: DockState, kind: DockKind): DockState {
 
 /** Close a tab. The selection falls to its left-hand neighbour, so closing the
  *  rightmost tab doesn't jump the dock back to the first one. Closing the last
- *  tab returns to the chooser rather than hiding the panel — picking something
- *  else is the next move, not dismissing the dock. */
+ *  tab closes the dock: with nothing left to show, holding the panel open on
+ *  the chooser keeps width from the chat for a surface the user just dismissed.
+ *  The chooser is still where an explicitly opened, empty dock lands. */
 export function closeTab(state: DockState, kind: DockKind): DockState {
   const at = state.tabs.indexOf(kind);
   if (at === -1) return state;
   const tabs = state.tabs.filter((t) => t !== kind);
+  if (tabs.length === 0) return { tabs, active: null, open: false };
   if (state.active !== kind) return { ...state, tabs };
   return { tabs, active: tabs[at - 1] ?? tabs[at] ?? null, open: true };
 }

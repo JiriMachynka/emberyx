@@ -44,9 +44,9 @@ describe("closeTab", () => {
     expect(closeTab(state, "dev")).toEqual(dock(["files"], "files"));
   });
 
-  it("returns to the chooser when the last tab goes", () => {
-    expect(closeTab(dock(["diff"], "diff"), "diff")).toEqual(dock([], null, true));
-    expect(isChooser(closeTab(dock(["diff"], "diff"), "diff"))).toBe(true);
+  it("closes the dock when the last tab goes", () => {
+    expect(closeTab(dock(["diff"], "diff"), "diff")).toEqual(dock([], null, false));
+    expect(isChooser(closeTab(dock(["diff"], "diff"), "diff"))).toBe(false);
   });
 
   it("leaves the selection alone when a background tab closes", () => {
@@ -62,7 +62,13 @@ describe("closeTab", () => {
 
 describe("toggleTab", () => {
   it("closes the tab that is already showing", () => {
-    expect(toggleTab(dock(["diff"], "diff"), "diff")).toEqual(dock([], null, true));
+    expect(toggleTab(dock(["dev", "diff"], "diff"), "diff")).toEqual(
+      dock(["dev"], "dev")
+    );
+  });
+
+  it("closes the dock when it toggles off the only tab", () => {
+    expect(toggleTab(dock(["diff"], "diff"), "diff")).toEqual(dock([], null, false));
   });
 
   // A toolbar button on a hidden-but-open tab means "show me this", not "close

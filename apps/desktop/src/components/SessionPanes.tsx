@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import { ChatPane } from "@/components/ChatPane";
 import { useAgentStore } from "@/lib/agentStore";
-import { paneShouldMount } from "@/lib/paneMount";
+import { paneShouldMount, pushRecent } from "@/lib/paneMount";
 import { cn } from "@/lib/utils";
 import type { Project, Session } from "@/types";
 import type { Settings } from "@/lib/settings";
@@ -20,14 +20,17 @@ interface SessionPanesProps {
   onOpenProject: (path: string) => void;
   /** Chat sessions rename themselves once Claude titles the thread. */
   onTitled: (session: Session, title: string) => void;
+  /** A fresh chat named its thread — list it before its transcript exists. */
+  onThreadStarted: (session: Session, threadId: string, firstMessage: string) => void;
 }
 
 /**
- * Non-dev sessions, mounted when focused or still mid-turn. A settled hidden
- * pane remounts from a windowed transcript; keeping it alive would parse and
- * hold every project's chat at once. A working/waiting pane stays mounted
- * (hidden) so unmount cannot kill the process or drop an approval prompt.
- * Dev servers live in the Dev panel instead.
+ * Non-dev sessions, mounted when focused, still mid-turn, or recently visited.
+ * A working/waiting pane stays mounted (hidden) so unmount cannot kill the
+ * process or drop an approval prompt; the last few settled panes stay mounted
+ * because remounting one respawns the CLI and re-renders its whole transcript
+ * cold, which is the lag when switching back and forth. `PANE_KEEP_ALIVE`
+ * bounds how many chats are held at once. Dev servers live in the Dev panel.
  */
 export function SessionPanes({
   sessions,
@@ -40,13 +43,21 @@ export function SessionPanes({
   onSelectProject,
   onOpenProject,
   onTitled,
+  onThreadStarted,
 }: SessionPanesProps) {
   const statuses = useAgentStore((s) => s.statuses);
+  // Recency is derived during render, not in an effect: an effect would run
+  // after the new pane already mounted and the old one already unmounted,
+  // which is the cost we are avoiding. `pushRecent` returns the same array
+  // when nothing moved, so mutating the ref here is stable under StrictMode.
+  const recentRef = useRef<string[]>([]);
+  recentRef.current = pushRecent(recentRef.current, activeId);
+  const recent = recentRef.current;
   return (
     <>
       {sessions
         .filter((s) => s.kind !== "dev")
-        .filter((s) => paneShouldMount(s.id, activeId, statuses[s.id]))
+        .filter((s) => paneShouldMount(s.id, activeId, statuses[s.id], recent))
         .map((s) => (
           <SessionPaneRow
             key={s.id}
@@ -60,6 +71,7 @@ export function SessionPanes({
             onSelectProject={onSelectProject}
             onOpenProject={onOpenProject}
             onTitled={onTitled}
+            onThreadStarted={onThreadStarted}
           />
         ))}
     </>
@@ -80,6 +92,7 @@ function SessionPaneRow({
   onSelectProject,
   onOpenProject,
   onTitled,
+  onThreadStarted,
 }: {
   session: Session;
   activeId: string | null;
@@ -91,6 +104,7 @@ function SessionPaneRow({
   onSelectProject: (projectId: string) => void;
   onOpenProject: (path: string) => void;
   onTitled: (session: Session, title: string) => void;
+  onThreadStarted: (session: Session, threadId: string, firstMessage: string) => void;
 }) {
   const active = session.id === activeId;
   // `session` is a new object whenever the workspace list rebuilds. Pin the
@@ -100,6 +114,11 @@ function SessionPaneRow({
   const handleTitled = useCallback(
     (title: string) => onTitled(sessionRef.current, title),
     [onTitled]
+  );
+  const handleThreadStarted = useCallback(
+    (threadId: string, firstMessage: string) =>
+      onThreadStarted(sessionRef.current, threadId, firstMessage),
+    [onThreadStarted]
   );
   return (
     <div className={cn("absolute inset-0", active ? "" : "hidden")}>
@@ -127,6 +146,7 @@ function SessionPaneRow({
           onSelectProject={onSelectProject}
           onOpenProject={onOpenProject}
           onTitled={handleTitled}
+          onThreadStarted={handleThreadStarted}
         />
       ) : null}
     </div>
