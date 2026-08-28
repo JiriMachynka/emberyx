@@ -8,7 +8,6 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
-  Coins,
   Forward,
   Gauge,
   GitBranch,
@@ -720,12 +719,6 @@ const UsageFooter = memo(function UsageFooter({
           profileId={claudeProfileId}
           onChange={onClaudeProfileChange}
         />
-      )}
-      {/* Raw token counts belong in the usage panel, not under every prompt. */}
-      {capabilitiesOf(backend).usage && usage.costUsd != null && (
-        <span className="flex items-center gap-1 px-1 font-mono text-sm tabular-nums text-primary">
-          <Coins className="size-3.5 opacity-70" />${usage.costUsd.toFixed(4)}
-        </span>
       )}
     </div>
   );

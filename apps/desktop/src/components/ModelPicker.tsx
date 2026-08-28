@@ -88,6 +88,13 @@ export const ModelPicker = memo(function ModelPicker({
   const [customModels] = useState(getCustomModels);
 
   const installed = useProviderStatus().data ?? [];
+  // Reading a catalog means opening an app-server (Codex) or a throwaway
+  // session (ACP), which is why it isn't done at startup for every project.
+  // Pointing at the chip is a reliable "about to open" signal, so the fetches
+  // start there and the list is already populated by the time it opens.
+  // `staleTime: Infinity` means this is paid once per provider per project.
+  const [warm, setWarm] = useState(false);
+  const prefetch = () => setWarm(true);
   // Opening an app-server to read the catalog is real work — only when Codex
   // models can actually appear: this chat is on Codex, the Codex rail is
   // showing, or Favourites includes an id that isn't in Claude's list.
@@ -96,7 +103,11 @@ export const ModelPicker = memo(function ModelPicker({
     rail === "codex" ||
     (rail === FAVORITES &&
       favorites.some((id) => !CLAUDE_MODELS.some((m) => m.id === id)));
-  const codexCatalog = useCodexModels(cwd, wantsCodex && open);
+  const codexCatalog = useCodexModels(
+    cwd,
+    (wantsCodex && open) ||
+      (warm && installed.some((s) => s.id === "codex" && s.installed))
+  );
   const codexModels = useMemo(() => codexCatalog.data ?? [], [codexCatalog.data]);
   // The ACP catalogs are read just as lazily — each needs a throwaway agent
   // session — and only when that provider's rail is showing. The provider a
@@ -108,8 +119,20 @@ export const ModelPicker = memo(function ModelPicker({
     rail === "opencode" &&
     backend !== "opencode" &&
     installed.some((s) => s.id === "opencode" && s.installed);
-  const grokCatalog = useAcpModels("grok", cwd, wantsGrok && open);
-  const opencodeCatalog = useAcpModels("opencode", cwd, wantsOpencode && open);
+  const grokCatalog = useAcpModels(
+    "grok",
+    cwd,
+    (wantsGrok && open) ||
+      (warm && backend !== "grok" && installed.some((s) => s.id === "grok" && s.installed))
+  );
+  const opencodeCatalog = useAcpModels(
+    "opencode",
+    cwd,
+    (wantsOpencode && open) ||
+      (warm &&
+        backend !== "opencode" &&
+        installed.some((s) => s.id === "opencode" && s.installed))
+  );
 
   const all = useMemo<ModelEntry[]>(() => {
     const entries = [
@@ -151,6 +174,10 @@ export const ModelPicker = memo(function ModelPicker({
         : all.filter((e) => e.provider === rail);
     return orderByFavorites(searchModels(scoped, query), favorites);
   }, [all, favorites, query, rail]);
+
+  // Favourites is the only list that spans providers, so it is the only one
+  // where naming each row's provider tells the user something.
+  const mixed = rail === FAVORITES;
 
   const current = shown.filter((e) => !e.legacy);
   const legacy = shown.filter((e) => e.legacy);
@@ -199,7 +226,11 @@ export const ModelPicker = memo(function ModelPicker({
         if (next) setRail(isLiveProvider(backend) ? backend : FAVORITES);
       }}
     >
-      <PopoverTrigger className={TRIGGER}>
+      <PopoverTrigger
+        className={TRIGGER}
+        onMouseEnter={prefetch}
+        onFocus={prefetch}
+      >
         <ProviderIcon provider={backend} className="size-4" />
         <span className="truncate">{label}</span>
         <ChevronsUpDown className="size-3.5 shrink-0 opacity-50" />
@@ -264,7 +295,7 @@ export const ModelPicker = memo(function ModelPicker({
               <Row
                 key={entry.id}
                 title={entry.label}
-                subtitle={BACKEND_LABEL[entry.provider]}
+                subtitle={mixed ? BACKEND_LABEL[entry.provider] : undefined}
                 provider={entry.provider}
                 shortcut={shortcutFor(i) ?? undefined}
                 selected={entry.id === model}
@@ -313,7 +344,7 @@ export const ModelPicker = memo(function ModelPicker({
                     <Row
                       key={entry.id}
                       title={entry.label}
-                      subtitle={BACKEND_LABEL[entry.provider]}
+                      subtitle={mixed ? BACKEND_LABEL[entry.provider] : undefined}
                       provider={entry.provider}
                       selected={entry.id === model}
                       starred={favorites.includes(entry.id)}
@@ -370,6 +401,10 @@ function RailButton({
   );
 }
 
+/** One model. Laid out like T3 Code's `ModelListRow`: the name on its own
+ *  line at `text-xs`, the provider as a quiet footer *only when the list mixes
+ *  providers* — repeating "OpenCode" under every row of the OpenCode rail is
+ *  noise, and it is what squeezed the names into an ellipsis. */
 function Row({
   title,
   subtitle,
@@ -381,7 +416,8 @@ function Row({
   onSelect,
 }: {
   title: string;
-  subtitle: string;
+  /** Provider footer. Omitted when the list is already scoped to one. */
+  subtitle?: string;
   provider: string;
   shortcut?: string;
   selected: boolean;
@@ -392,32 +428,44 @@ function Row({
   return (
     <div
       className={cn(
-        "group/model flex items-center gap-2 rounded-lg px-3 py-2 transition-colors",
-        selected ? "bg-secondary" : "hover:bg-secondary/50"
+        "group/model flex w-full min-w-0 items-center gap-3 rounded-md px-2 py-2 transition-colors",
+        selected ? "bg-foreground/[0.08]" : "hover:bg-secondary/50"
       )}
     >
       <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
-        <span className="block truncate text-sm font-medium text-foreground">{title}</span>
-        <span className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-          <ProviderIcon provider={provider} className="size-3" />
-          {subtitle}
-        </span>
-      </button>
-      {shortcut && (
-        <kbd className="shrink-0 rounded border border-border bg-background/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-          {shortcut}
-        </kbd>
-      )}
-      {onStar && (
-        <button
-          type="button"
-          onClick={onStar}
-          title={starred ? "Unstar" : "Star"}
-          className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:text-foreground"
+        <span
+          className="block truncate text-xs font-medium leading-snug text-foreground"
+          title={title}
         >
-          <Star className={cn("size-3.5", starred && "fill-primary text-primary")} />
-        </button>
-      )}
+          {title}
+        </span>
+        {subtitle && (
+          <span className="mt-1 flex items-center gap-1.5 text-xs font-normal leading-snug text-muted-foreground/70">
+            <ProviderIcon provider={provider} className="size-3" />
+            <span className="truncate">{subtitle}</span>
+          </span>
+        )}
+      </button>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {shortcut && (
+          <kbd className="h-4 shrink-0 rounded-sm border border-border bg-background/60 px-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
+            {shortcut}
+          </kbd>
+        )}
+        {onStar && (
+          <button
+            type="button"
+            onClick={onStar}
+            title={starred ? "Remove from favorites" : "Add to favorites"}
+            className={cn(
+              "-mr-1 shrink-0 rounded p-1 text-muted-foreground/70 opacity-0 transition-[color,opacity] hover:text-foreground group-hover/model:opacity-100 focus-visible:opacity-100",
+              starred && "opacity-100"
+            )}
+          >
+            <Star className={cn("size-3.5", starred && "fill-primary text-primary")} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }

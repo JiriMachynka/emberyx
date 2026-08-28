@@ -40,7 +40,10 @@
 
 /* Dark only — Emberyx is a terminal-first app. Base is true-black neutral;
    surfaces are white-alpha translucency layered over it. The single ember
-   (orange, hue 52) accent is the only chroma — it carries the brand. */
+   (orange, hue 52) accent is the only chroma — it carries the brand.
+   These are the Ember theme's values, duplicated here so the first paint is
+   right before `applyTheme` runs; the surface + accent subset is overwritten
+   at runtime from `lib/themes.ts`. */
 :root {
   --radius: 0.625rem;
   --background: oklch(0.145 0 0);
@@ -66,6 +69,14 @@
   --canvas: oklch(0.12 0 0);
   /* Ember accent glow, reused by .ember-glow and status dots. */
   --glow: oklch(0.73 0.163 52 / 0.5);
+  /* The chat's own two surfaces, and the accent gradient stops. Their own
+     tokens rather than shades of --card: the chat tints them, and a theme has
+     to be able to. `lib/themes.ts` overwrites all four on :root. */
+  --composer: oklch(0.18 0.025 315 / 98%);
+  --chat-canvas: oklch(0.16 0.016 315);
+  --bubble: oklch(0.245 0.022 315);
+  --accent-hi: oklch(0.83 0.14 68);
+  --accent-lo: oklch(0.7 0.19 38);
   /* Defaults match DEFAULT_SETTINGS; useSettings writes the live stacks here. */
   --chat-font: "DM Sans Variable", ui-sans-serif, system-ui, sans-serif;
   --code-font: "JetBrains Mono Variable", "Geist Mono Variable", ui-monospace, Menlo,
@@ -135,13 +146,24 @@
   }
 
   /* The composer is a distinct working surface rather than another generic
-     card, matching the focused plum treatment used by the chat reference. */
+     card, matching the focused treatment used by the chat reference. */
   .chat-composer-surface {
-    background-color: oklch(0.18 0.025 315 / 98%);
+    background-color: var(--composer);
     border-color: oklch(1 0 0 / 6%);
     box-shadow:
       inset 0 1px 0 0 oklch(1 0 0 / 5%),
       0 12px 30px -18px oklch(0 0 0 / 80%);
+  }
+
+  /* What you typed, as a bubble. Its own token rather than --card: a card sits
+     one step over the app background, but this sits over the lighter chat
+     canvas, and the same value there is invisible. Top-edge highlight for the
+     same reason — the step alone is subtle at small sizes. */
+  .chat-bubble {
+    background-color: var(--bubble);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 6%),
+      0 1px 2px 0 oklch(0 0 0 / 25%);
   }
 
   /* Keep the compact T3-style control row horizontally scrollable on narrow
@@ -154,47 +176,30 @@
     display: none;
   }
 
-  /* PTY log view: shiki's `ansi` output arrives as a themed <pre> with its
-     own background — the pane's surface wins, the spans keep their colors. */
-  .ansi-log pre {
-    margin: 0;
-    padding: 0.75rem;
-    background-color: transparent !important;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font-family: inherit;
-    font-size: inherit;
-  }
-
-  .ansi-log code {
-    font-family: inherit;
-    font-size: inherit;
-  }
-
-  /* Chat follows the reference's soft plum canvas without changing the
-     terminal-first black used by the rest of the application. */
+  /* Chat sits on its own softer canvas rather than the terminal-first black
+     used by the rest of the application. */
   .chat-pane {
-    background-color: oklch(0.16 0.016 315);
+    background-color: var(--chat-canvas);
   }
 
   .chat-content-width {
     max-width: 52.5rem;
   }
 
-  /* Ember halo for the active tab / primary CTA / a working status dot. */
+  /* Accent halo for the active tab / primary CTA / a working status dot. */
   .ember-glow {
     box-shadow:
       inset 0 1px 0 0 oklch(1 0 0 / 8%),
-      0 0 0 1px oklch(0.73 0.163 52 / 0.28),
+      0 0 0 1px color-mix(in oklch, var(--primary) 28%, transparent),
       0 0 14px -3px var(--glow);
   }
 
-  /* Ember gradient clipped to text — brand wordmark, accents. */
+  /* Accent gradient clipped to text — brand wordmark, accents. */
   .ember-text {
     background-image: linear-gradient(
       118deg,
-      oklch(0.83 0.14 68),
-      oklch(0.7 0.19 38)
+      var(--accent-hi),
+      var(--accent-lo)
     );
     -webkit-background-clip: text;
     background-clip: text;
@@ -206,7 +211,7 @@
     background-color: var(--canvas);
     background-image: radial-gradient(
       120% 80% at 50% -10%,
-      oklch(0.73 0.163 52 / 6%),
+      color-mix(in oklch, var(--primary) 6%, transparent),
       transparent 60%
     );
   }
@@ -298,52 +303,38 @@
   animation: ember-pulse 1.8s ease-in-out infinite;
 }
 
-/* Traveling ember on a running tool card's border — the header spinner is
-   easy to miss once a turn has several calls stacked. @property is required
-   or the angle snaps instead of interpolating. */
-@property --tool-angle {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
-
-@keyframes tool-border-spin {
+/* A running tool says so in its label, not on its frame: the text is masked
+   over a gradient that sweeps across it, the way T3 Code marks live work. The
+   old spinning conic border drew a moving ring around every card in a stacked
+   turn, which is a lot of motion for "one Bash call is in flight". */
+@keyframes tool-shimmer {
+  0% {
+    background-position: 150% 0;
+  }
   to {
-    --tool-angle: 360deg;
+    background-position: -150% 0;
   }
 }
 
-.tool-running {
-  position: relative;
-}
-
-.tool-running::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  border-radius: inherit;
-  padding: 1px;
-  pointer-events: none;
-  background: conic-gradient(
-    from var(--tool-angle),
-    transparent 30%,
-    var(--primary) 50%,
-    transparent 70%
+.tool-running-label {
+  background: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--foreground) 40%,
+    var(--muted-foreground) 80%
   );
-  -webkit-mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  animation: tool-border-spin 1.8s linear infinite;
+  background-size: 250% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: tool-shimmer 2.2s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tool-running::before {
+  .tool-running-label {
     animation: none;
-    background: var(--primary);
-    opacity: 0.55;
+    background: none;
+    color: var(--muted-foreground);
   }
 }
 
