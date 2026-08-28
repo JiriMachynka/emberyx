@@ -51,6 +51,14 @@ export function useSessions() {
     return id;
   }
 
+  /** Record which thread a live session ended up on, so resuming that thread
+   *  returns to this pane instead of opening a second one for the same
+   *  conversation. Not `resume`: that is a spawn argument, and changing it
+   *  under a mounted pane respawns the agent mid-turn. */
+  function setSessionThread(id: string, threadId: string) {
+    setSessions((s) => s.map((x) => (x.id === id ? { ...x, threadId } : x)));
+  }
+
   /** Rename a session's sidebar label (e.g. after a chat is auto-titled). */
   function renameSession(id: string, label: string) {
     setSessions((s) => s.map((x) => (x.id === id ? { ...x, label } : x)));
@@ -139,6 +147,7 @@ export function useSessions() {
     setActive,
     startChat,
     renameSession,
+    setSessionThread,
     addDev,
     closeSession,
     moveSession,

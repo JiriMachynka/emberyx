@@ -367,3 +367,65 @@ describe("useWorkspace thread resume", () => {
     expect(result.current.activeId).toBe(opened!.id);
   });
 });
+
+
+describe("useWorkspace registerThread", () => {
+  const openProject = async () => {
+    const { result } = renderHook(() => useWorkspace(DEFAULT_SETTINGS));
+    await act(() => result.current.openProjectAt("/p"));
+    const projectId = result.current.projects[0].id;
+    await waitFor(() =>
+      expect(result.current.sessionsFor(projectId)).toHaveLength(1)
+    );
+    return { result, projectId };
+  };
+
+  // The transcript scan can't see a thread until the CLI writes its first turn,
+  // which left a chat you were already talking to missing from the sidebar.
+  it("lists a fresh thread under the message that started it", async () => {
+    const { result, projectId } = await openProject();
+    const session = result.current.sessionsFor(projectId)[0];
+
+    act(() =>
+      result.current.registerThread(session.id, projectId, "t9", "Fix the parser\nplease")
+    );
+
+    const project = result.current.projects.find((p) => p.id === projectId);
+    expect(project?.threads[0]).toMatchObject({
+      id: "t9",
+      title: "Fix the parser",
+    });
+    // Recorded on the session too, so resuming that thread comes back here.
+    expect(result.current.sessionsFor(projectId)[0].threadId).toBe("t9");
+  });
+
+  it("does not duplicate a thread the scan already listed", async () => {
+    const { result, projectId } = await openProject();
+    const session = result.current.sessionsFor(projectId)[0];
+
+    act(() => result.current.registerThread(session.id, projectId, "t9", "first"));
+    act(() => result.current.registerThread(session.id, projectId, "t9", "first"));
+
+    expect(
+      result.current.projects.find((p) => p.id === projectId)?.threads
+    ).toHaveLength(1);
+  });
+
+  // The pane is already on that thread — resuming it must focus, not respawn.
+  it("focuses the pane that started the thread instead of opening a second", async () => {
+    const { result, projectId } = await openProject();
+    const session = result.current.sessionsFor(projectId)[0];
+    act(() => result.current.registerThread(session.id, projectId, "t9", "first"));
+
+    act(() =>
+      result.current.resumeThreadIn(projectId, "/p", {
+        id: "t9",
+        title: "first",
+        modified: 100,
+      })
+    );
+
+    expect(result.current.sessionsFor(projectId)).toHaveLength(1);
+    expect(result.current.activeId).toBe(session.id);
+  });
+});

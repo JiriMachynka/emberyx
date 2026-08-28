@@ -183,6 +183,9 @@ export function useCodexChat({
   const stateRef = useRef<CodexChatState>(initialCodexState());
   const idRef = useRef<number | null>(null);
   const threadRef = useRef<string | undefined>(resume);
+  // The app-server's own thread id, published so the pane can register the
+  // thread with the sidebar as soon as it exists.
+  const [liveThreadId, setLiveThreadId] = useState<string | undefined>(resume);
   // The server->client request each prompt was built from, kept so the answer
   // can be routed back to the right JSON-RPC id.
   const approvalRef = useRef<CodexServerRequest | null>(null);
@@ -433,6 +436,7 @@ export function useCodexChat({
         const thread = decodeThreadStart(opened);
         if (!thread) throw new Error("codex opened no thread");
         threadRef.current = thread.threadId;
+        setLiveThreadId(thread.threadId);
         void invoke("agent_attach_thread", {
           agentId: emberyxSessionId,
           threadId: thread.threadId,
@@ -658,6 +662,7 @@ export function useCodexChat({
     status,
     usage,
     ready,
+    threadId: liveThreadId,
     send,
     compact,
     queued: 0,

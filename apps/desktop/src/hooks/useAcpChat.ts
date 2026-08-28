@@ -106,6 +106,10 @@ export function useAcpChat({
   /** The model the session is actually on, so a re-render never re-sends
    *  `session/set_model` for a switch that already took. */
   const appliedModelRef = useRef("");
+  /** Set while the turn ending is the user's own doing. Agents answer a
+   *  cancelled `session/prompt` either way — some with `cancelled`, some with an
+   *  error — and a stop the user asked for is not a failed session. */
+  const stoppedRef = useRef(false);
 
   const setSessionStatus = useAgentStore((s) => s.setStatus);
 
@@ -245,10 +249,18 @@ export function useAcpChat({
           break;
         case "turnEnded": {
           const result = ev.data.result as { stopReason?: string } | null;
-          commitTurn(result?.stopReason ?? "end_turn");
+          commitTurn(stoppedRef.current ? "cancelled" : result?.stopReason ?? "end_turn");
+          stoppedRef.current = false;
           break;
         }
         case "turnFailed":
+          // A stop the user asked for is not a failure, whatever the agent
+          // called it — leave the session idle and sendable.
+          if (stoppedRef.current) {
+            stoppedRef.current = false;
+            commitTurn("cancelled");
+            break;
+          }
           setExitReason(ev.data.message);
           commitTurn("refusal");
           break;
@@ -364,6 +376,8 @@ export function useAcpChat({
           streaming: false,
         },
       ];
+      // A new turn outlives the last stop; its ending is the agent's own.
+      stoppedRef.current = false;
       turnRef.current = { message: null, status: "thinking" };
       publish();
       void acpPrompt(id, sessionId, text, channel);
@@ -375,6 +389,7 @@ export function useAcpChat({
     const id = processRef.current;
     const sessionId = sessionRef.current;
     if (id === null || !sessionId) return;
+    stoppedRef.current = true;
     void acpCancel(id, sessionId);
   }, []);
 
@@ -413,6 +428,9 @@ export function useAcpChat({
     status,
     usage,
     ready,
+    // ACP agents keep no listable thread store, so there is no id the sidebar
+    // could resume — see `capabilitiesOf(...).threads`.
+    threadId: undefined as string | undefined,
     send,
     compact: () => {},
     queued: 0,

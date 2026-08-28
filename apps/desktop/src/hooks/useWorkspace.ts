@@ -190,6 +190,30 @@ export function useWorkspace(settings: Settings) {
     return scan;
   }
 
+  /** List a thread the moment its pane names it, before any transcript for it
+   *  exists on disk. The scan behind `refreshThreads` only sees a thread once
+   *  the CLI has written its first turn, which left a chat you are already
+   *  talking to missing from the sidebar. The user's own message stands in as
+   *  the title until auto-titling replaces it, and the session is pointed at the
+   *  thread so resuming it comes back to this pane. */
+  function registerThread(
+    sessionId: string,
+    projectId: string,
+    threadId: string,
+    firstMessage: string
+  ) {
+    sessionApi.setSessionThread(sessionId, threadId);
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return;
+    if (project.threads.some((t) => t.id === threadId)) return;
+    const thread: Thread = {
+      id: threadId,
+      title: firstMessage.trim().split("\n")[0],
+      modified: Date.now(),
+    };
+    setThreads(projectId, [thread, ...project.threads]);
+  }
+
   /** Launch a project's primary agent: a chat pane resuming the most recent
    *  thread, falling back to a fresh one if there is none / on error.
    *
@@ -411,7 +435,9 @@ export function useWorkspace(settings: Settings) {
     // A thread that's already open gets focused, not opened again — a second
     // session with the same resume id also breaks the sidebar highlight, which
     // pairs each row with the first matching session.
-    const existing = sessionsFor(projectId).find((s) => s.resume === thread.id);
+    const existing = sessionsFor(projectId).find(
+      (s) => s.resume === thread.id || s.threadId === thread.id
+    );
     if (existing) {
       setActive(projectId, existing.id);
       return;
@@ -560,6 +586,7 @@ export function useWorkspace(settings: Settings) {
     revealed,
     recents,
     refreshThreads,
+    registerThread,
     openProjectAt,
     openWorktree,
     removeWorktree,
