@@ -42,6 +42,10 @@ export interface Session {
   backend?: AgentBackend;
   /** Claude session id to resume (chat kind only). */
   resume?: string;
+  /** The thread this session is actually on, learnt from the running agent.
+   *  Kept apart from `resume` — that one is a spawn argument, and changing it
+   *  under a live pane would respawn the CLI mid-turn. */
+  threadId?: string;
 }
 
 /** One entry in a listed directory (editor file tree). */
@@ -201,6 +205,16 @@ export interface ProviderSessions {
 export interface UsageSummary {
   rows: UsageRow[];
   sessions: ProviderSessions[];
+}
+
+/** What `git_commit_and_push` did — the two halves are reported separately so a
+ *  landed commit with a failed push can be told apart from a no-op. */
+export interface CommitPush {
+  committed: boolean;
+  pushed: boolean;
+  branch: string;
+  needsUpstream: boolean;
+  message: string;
 }
 
 /** A saved stash entry from `git stash list`. */

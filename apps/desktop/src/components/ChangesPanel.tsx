@@ -1,4 +1,6 @@
 import { memo, useEffect, useMemo, useState } from "react";
+import { isStaged, isUnstaged } from "@/lib/gitStatus";
+import type { CommitPush } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -18,15 +20,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-/** What `git_commit_and_push` did — the two halves are reported separately so a
- *  landed commit with a failed push can be told apart from a no-op. */
-interface CommitPush {
-  committed: boolean;
-  pushed: boolean;
-  branch: string;
-  needsUpstream: boolean;
-  message: string;
-}
 import { Input } from "@/components/ui/input";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { basename } from "@/lib/path";
@@ -222,14 +215,6 @@ interface Selection {
   path: string;
   staged: boolean;
 }
-
-/** Index column dirty (porcelain X): the file has something staged. */
-const isStaged = (f: GitFile) =>
-  !f.untracked && f.status[0] !== " " && f.status[0] !== "?";
-
-/** Worktree column dirty (porcelain Y), or the file is untracked. */
-const isUnstaged = (f: GitFile) =>
-  f.untracked || (f.status[1] !== " " && f.status[1] !== "?");
 
 interface ChangesPanelProps {
   projectPath: string;

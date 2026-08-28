@@ -584,6 +584,14 @@ fn merge_base_ref(path: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The branch this repo's work merges into, short name (no remote prefix).
+/// None when it can't be told — a caller must not guess, since "are we on the
+/// default branch?" gates a push confirmation.
+#[tauri::command]
+pub fn git_default_branch(path: String) -> Result<Option<String>> {
+    Ok(merge_base_ref(&path).map(|base| base.rsplit('/').next().unwrap_or(&base).to_string()))
+}
+
 /// Local branches already merged into the repo's default branch, which the
 /// sidebar reads as "this thread's work is done". One call per repo root, not
 /// one per thread. The base itself is always reachable from itself, so it is

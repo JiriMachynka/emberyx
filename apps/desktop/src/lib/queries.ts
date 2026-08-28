@@ -81,6 +81,7 @@ export const gitKeys = {
     ["git", "commits", path, limit] as const,
   commitDiff: (path: string, sha: string, file: string) =>
     ["git", "commitDiff", path, sha, file] as const,
+  defaultBranch: (path: string) => ["git", "defaultBranch", path] as const,
 };
 
 export const useGitChanges = (path: string, enabled = true) =>
@@ -218,6 +219,16 @@ export const useGitBranch = (path: string) =>
 export type GitRemoteHost = "github" | "gitlab" | "other";
 
 /** Classifies the origin remote's host. Effectively immutable for a checkout. */
+/** The branch this repo's work merges into. Null when it can't be told, which
+ *  callers must read as "not the default branch" rather than guessing. */
+export const useGitDefaultBranch = (path: string) =>
+  useQuery({
+    queryKey: gitKeys.defaultBranch(path),
+    queryFn: () => invoke<string | null>("git_default_branch", { path }),
+    staleTime: Infinity,
+    retry: false,
+  });
+
 export const useGitRemoteHost = (path: string) =>
   useQuery({
     queryKey: gitKeys.remoteHost(path),
@@ -340,6 +351,7 @@ export const useInvalidateGit = () => {
         "mergeState",
         "conflictStages",
         "remoteHost",
+        "defaultBranch",
       ];
       for (const key of views) {
         qc.invalidateQueries({ queryKey: ["git", key, p] });
@@ -397,6 +409,22 @@ export interface ForgeCliStatus {
   version: string | null;
   authenticated: boolean;
 }
+
+/** The open PR/MR for a branch, or null. Never throws: it only decides a button
+ *  label, so a missing or unauthenticated CLI must not surface as an error. */
+export const useForgeOpenPr = (
+  path: string,
+  provider: RemoteHost | undefined,
+  branch: string | undefined
+) =>
+  useQuery({
+    queryKey: ["forgeCli", "openPr", path, provider ?? "", branch ?? ""],
+    queryFn: () =>
+      invoke<string | null>("forge_pr_for_branch", { path, provider, branch }),
+    enabled: !!path && !!branch && (provider === "github" || provider === "gitlab"),
+    staleTime: 30_000,
+    retry: false,
+  });
 
 /** Install + login probe for `gh` and `glab`, Settings → Source Control. */
 export const useForgeCliStatus = () =>

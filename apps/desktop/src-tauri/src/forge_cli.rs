@@ -364,6 +364,111 @@ pub async fn forge_publish(
     .map_err(|e| e.to_string())??)
 }
 
+/// The PR/MR already open for a branch: its URL, or None when there is none.
+/// A missing CLI or a failed lookup is also None — "we don't know of one" is
+/// the honest answer, and the caller only uses it to pick a button label.
+fn open_pr_for_branch(path: &str, provider: &str, branch: &str) -> Option<String> {
+    let cli = cli_for(provider).ok()?;
+    let env = shell_env();
+    let binary = resolve_binary(cli.binary, &env)?;
+    let out = if cli.id == "github" {
+        run_checked(
+            &binary,
+            &["pr", "list", "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url"],
+            &env,
+            Some(path),
+        )
+    } else {
+        // glab has no --jq; the URL is the last field of the plain listing.
+        run_checked(
+            &binary,
+            &["mr", "list", "--source-branch", branch, "--per-page", "1"],
+            &env,
+            Some(path),
+        )
+    }
+    .ok()?;
+    let url = first_http_url(&out);
+    (!url.is_empty()).then_some(url)
+}
+
+/// URL of the open PR/MR for `branch`, or null. Never errors: this only picks
+/// a button label, and a forge that can't answer must not block committing.
+#[tauri::command]
+pub async fn forge_pr_for_branch(
+    path: String,
+    provider: String,
+    branch: String,
+) -> Result<Option<String>> {
+    Ok(tauri::async_runtime::spawn_blocking(move || {
+        open_pr_for_branch(&path, &provider, &branch)
+    })
+    .await
+    .map_err(|e| e.to_string())?)
+}
+
+fn create_pr_with_cli(
+    path: String,
+    provider: String,
+    title: String,
+    body: String,
+    base: Option<String>,
+) -> Result<String> {
+    let cli = cli_for(&provider)?;
+    if !crate::git::is_repo(&path) {
+        return Err(Error::new("Not a git repository."));
+    }
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(Error::new("A pull request needs a title."));
+    }
+    let env = shell_env();
+    let binary = resolve_binary(cli.binary, &env).ok_or_else(|| {
+        crate::err!("{} CLI (`{}`) is not installed", cli.label, cli.binary)
+    })?;
+    // Fail on the login rather than half-way through the create.
+    auth_token(cli.binary, cli.label, cli.login)?;
+    let body = body.trim();
+    let out = if cli.id == "github" {
+        let mut args = vec!["pr", "create", "--title", title, "--body", body];
+        if let Some(base) = base.as_deref() {
+            args.extend(["--base", base]);
+        }
+        run_checked(&binary, &args, &env, Some(&path))?
+    } else {
+        // `--yes` skips glab's interactive prompts; without it the command
+        // blocks forever on a stdin nobody is attached to.
+        let mut args = vec![
+            "mr", "create", "--title", title, "--description", body, "--yes",
+        ];
+        if let Some(base) = base.as_deref() {
+            args.extend(["--target-branch", base]);
+        }
+        run_checked(&binary, &args, &env, Some(&path))?
+    };
+    let url = first_http_url(&out);
+    if url.is_empty() {
+        return Err(Error::new(out));
+    }
+    Ok(url)
+}
+
+/// Open a pull/merge request for the current branch and return its URL.
+#[tauri::command]
+pub async fn forge_pr_create(
+    path: String,
+    provider: String,
+    title: String,
+    body: String,
+    base: Option<String>,
+) -> Result<String> {
+    Ok(tauri::async_runtime::spawn_blocking(move || {
+        create_pr_with_cli(path, provider, title, body, base)
+    })
+    .await
+    .map_err(|e| e.to_string())??)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,6 +506,18 @@ mod tests {
             "https://github.com/acme/app"
         );
         assert_eq!(first_http_url("ok"), "");
+    }
+
+    #[test]
+    fn a_pull_request_needs_a_title() {
+        let err = create_pr_with_cli(
+            std::env::temp_dir().to_string_lossy().into_owned(),
+            "github".into(),
+            "   ".into(),
+            "body".into(),
+            None,
+        );
+        assert!(err.is_err());
     }
 
     #[test]
