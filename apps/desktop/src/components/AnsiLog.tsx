@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { logLines, logVersion, resizeLog, subscribeLog } from "@/lib/ptyLog";
 import { highlightAnsi } from "@/lib/shiki";
 import { stripAnsi } from "@/lib/accountState";
+import { withGlyphFallback } from "@/lib/terminalFont";
 
 interface AnsiLogProps {
   sessionId: string;
@@ -106,7 +107,7 @@ export function AnsiLog({ sessionId, fontFamily, fontSize, active, plain }: Ansi
       ref={scrollRef}
       onScroll={onScroll}
       className="ansi-log h-full w-full overflow-auto rounded-md bg-background"
-      style={{ fontFamily, fontSize: `${fontSize}px` }}
+      style={{ fontFamily: withGlyphFallback(fontFamily), fontSize: `${fontSize}px` }}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
@@ -148,7 +149,7 @@ function PlainLog({ sessionId, fontFamily, fontSize, active }: Omit<AnsiLogProps
         if (el) pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       }}
       className="ansi-log h-full w-full overflow-auto rounded-md bg-background"
-      style={{ fontFamily, fontSize: `${fontSize}px` }}
+      style={{ fontFamily: withGlyphFallback(fontFamily), fontSize: `${fontSize}px` }}
     >
       <pre className="m-0 whitespace-pre-wrap break-words p-3 font-inherit">
         {logLines(sessionId).map(stripAnsi).join("\n")}

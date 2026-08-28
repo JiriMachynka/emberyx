@@ -237,6 +237,8 @@ interface ChangesPanelProps {
   sessionIds: string[];
   openRouterApiKey: string;
   openRouterModel: string;
+  /** Hide whitespace-only changes in the working-tree diff. */
+  ignoreWhitespace: boolean;
   onClose: () => void;
   onOpenWorktree: (path: string, repoRoot: string, branch: string) => void;
   onRemoveWorktree: (worktreePath: string, repoRoot: string) => void | Promise<void>;
@@ -249,6 +251,7 @@ export function ChangesPanel({
   sessionIds,
   openRouterApiKey,
   openRouterModel,
+  ignoreWhitespace,
   onClose,
   onOpenWorktree,
   onRemoveWorktree,
@@ -280,7 +283,8 @@ export function ChangesPanel({
     projectPath,
     gitSel?.path ?? null,
     selFile?.untracked ?? false,
-    gitSel?.staged ?? false
+    gitSel?.staged ?? false,
+    ignoreWhitespace
   );
   const gitDiff = diffQuery.data ?? "";
   const invalidateGit = useInvalidateGit();

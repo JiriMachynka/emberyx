@@ -1,6 +1,15 @@
 import { useEffect, useRef } from "react";
-import { AnsiLog } from "@/components/AnsiLog";
-import { killLog, spawnLog, writeLog } from "@/lib/ptyLog";
+import type { FitAddon, Terminal } from "ghostty-web";
+import { loadGhostty, terminalTheme } from "@/lib/ghostty";
+import {
+  killLog,
+  rawLog,
+  resizeLog,
+  spawnLog,
+  subscribeRaw,
+  writeLog,
+} from "@/lib/ptyLog";
+import { withGlyphFallback } from "@/lib/terminalFont";
 
 interface TerminalPaneProps {
   cwd: string;
@@ -12,45 +21,14 @@ interface TerminalPaneProps {
 
 const terminalSessionId = (cwd: string) => `shell:${cwd}`;
 
-const keyInput = (event: React.KeyboardEvent<HTMLDivElement>): string | null => {
-  if (event.metaKey || event.altKey) return null;
-
-  if (event.ctrlKey) {
-    const key = event.key.toLowerCase();
-    if (key.length === 1 && key >= "a" && key <= "z") {
-      return String.fromCharCode(key.charCodeAt(0) - 96);
-    }
-    return null;
-  }
-
-  switch (event.key) {
-    case "Enter":
-      return "\r";
-    case "Backspace":
-      return "\x7f";
-    case "Tab":
-      return "\t";
-    case "Escape":
-      return "\x1b";
-    case "ArrowUp":
-      return "\x1b[A";
-    case "ArrowDown":
-      return "\x1b[B";
-    case "ArrowRight":
-      return "\x1b[C";
-    case "ArrowLeft":
-      return "\x1b[D";
-    case "Home":
-      return "\x1b[H";
-    case "End":
-      return "\x1b[F";
-    case "Delete":
-      return "\x1b[3~";
-    default:
-      return event.key.length === 1 ? event.key : null;
-  }
-};
-
+/**
+ * An interactive shell, rendered by Ghostty's VT.
+ *
+ * The PTY belongs to lib/ptyLog, so this can unmount without killing the shell;
+ * on the way back it replays the buffered stream into a fresh grid. What it
+ * cannot do is share ptyLog's *line* buffer — a terminal is a screen, and the
+ * sequences that move a cursor around it are exactly what a line buffer drops.
+ */
 export function TerminalPane({
   cwd,
   fontFamily,
@@ -59,56 +37,86 @@ export function TerminalPane({
   active,
 }: TerminalPaneProps) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
   const sessionId = terminalSessionId(cwd);
 
   useEffect(() => {
-    void spawnLog({
-      sessionId,
-      cwd,
-      maxLines: scrollback,
-    });
+    void spawnLog({ sessionId, cwd, maxLines: scrollback });
+    // The dock keeps this pane mounted after its tab closes precisely so the
+    // shell survives; unmounting means the project is going away.
     return () => {
       void killLog(sessionId);
     };
   }, [cwd, scrollback, sessionId]);
 
   useEffect(() => {
-    if (!active) return;
-    const frame = window.requestAnimationFrame(() => rootRef.current?.focus());
-    return () => window.cancelAnimationFrame(frame);
-  }, [active]);
+    const root = rootRef.current;
+    if (!root) return;
+    let disposed = false;
+    let unsubscribe: (() => void) | null = null;
 
-  const write = (data: string) => {
-    void writeLog(sessionId, data);
-  };
+    void loadGhostty().then(({ Terminal, FitAddon }) => {
+      if (disposed || !rootRef.current) return;
+      const term = new Terminal({
+        fontFamily: withGlyphFallback(fontFamily),
+        fontSize,
+        scrollback,
+        theme: terminalTheme(),
+        cursorBlink: true,
+      });
+      const fit = new FitAddon();
+      term.loadAddon(fit);
+      term.open(rootRef.current);
+      fit.fit();
+      fit.observeResize();
+
+      // Keys go to the child, and the child's echo comes back as output — the
+      // grid never draws a keystroke it hasn't been told to.
+      term.onData((data) => void writeLog(sessionId, data));
+      term.onResize(({ cols, rows }) => void resizeLog(sessionId, cols, rows));
+
+      // Replay first, then live: subscribing before the replay would interleave
+      // a chunk into the middle of the history it already contains.
+      const backlog = rawLog(sessionId);
+      if (backlog.length > 0) term.write(backlog);
+      unsubscribe = subscribeRaw(sessionId, (chunk) => term.write(chunk));
+
+      termRef.current = term;
+      fitRef.current = fit;
+    });
+
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+      fitRef.current?.dispose();
+      termRef.current?.dispose();
+      termRef.current = null;
+      fitRef.current = null;
+    };
+  }, [sessionId, scrollback]);
+
+  // Appearance changes in place: a rebuilt terminal would lose the screen.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+    term.options.fontFamily = withGlyphFallback(fontFamily);
+    term.options.fontSize = fontSize;
+    fitRef.current?.fit();
+  }, [fontFamily, fontSize]);
+
+  useEffect(() => {
+    if (!active) return;
+    // A hidden tab can't measure itself, so the fit it missed happens here.
+    fitRef.current?.fit();
+    termRef.current?.focus();
+  }, [active]);
 
   return (
     <div
       ref={rootRef}
-      tabIndex={0}
-      role="application"
-      aria-label="Terminal"
-      className="h-full w-full overflow-hidden outline-none focus-visible:ring-1 focus-visible:ring-ring"
-      onClick={() => rootRef.current?.focus()}
-      onKeyDown={(event) => {
-        if (event.repeat) return;
-        const data = keyInput(event);
-        if (data === null) return;
-        event.preventDefault();
-        write(data);
-      }}
-      onPaste={(event) => {
-        event.preventDefault();
-        write(event.clipboardData.getData("text"));
-      }}
-    >
-      <AnsiLog
-        sessionId={sessionId}
-        fontFamily={fontFamily}
-        fontSize={fontSize}
-        active={active}
-        plain
-      />
-    </div>
+      onClick={() => termRef.current?.focus()}
+      className="h-full w-full overflow-hidden rounded-md bg-canvas p-2"
+    />
   );
 }

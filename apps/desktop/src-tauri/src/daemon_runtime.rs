@@ -117,6 +117,8 @@ impl Runtime {
                 spec.model,
                 spec.effort,
                 spec.emberyx_session_id,
+                spec.command,
+                spec.extra_args,
                 sink,
             )
             .map_err(|e| e.to_string())?;

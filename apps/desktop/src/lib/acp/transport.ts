@@ -66,9 +66,10 @@ export interface AcpSessionResult {
 export const acpSpawn = (
   provider: string,
   cwd: string,
+  command: string | null,
   onEvent: Channel<AcpEvent>
 ): Promise<AcpSpawnResult> =>
-  invoke<AcpSpawnResult>("acp_spawn", { provider, cwd, onEvent });
+  invoke<AcpSpawnResult>("acp_spawn", { provider, cwd, command, onEvent });
 
 export const acpKill = (id: number): Promise<void> => invoke("acp_kill", { id });
 
@@ -160,7 +161,7 @@ export async function readAcpModels(
   provider: string,
   cwd: string
 ): Promise<{ value: string; label: string }[]> {
-  const spawned = await acpSpawn(provider, cwd, new Channel<AcpEvent>());
+  const spawned = await acpSpawn(provider, cwd, null, new Channel<AcpEvent>());
   try {
     return modelOptions(await acpSessionNew(spawned.id, cwd));
   } finally {

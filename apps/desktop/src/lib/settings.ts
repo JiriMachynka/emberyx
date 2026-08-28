@@ -4,6 +4,7 @@ import {
   isAgentBackend,
   type AgentBackend,
 } from "@/lib/agentBackend";
+import { tokenize } from "@/lib/ide";
 import type { IdeId } from "@/lib/ide";
 
 /** Claude Code's own permission modes, in increasing order of autonomy. */
@@ -18,6 +19,40 @@ export type PermissionMode = (typeof PERMISSION_MODES)[number];
 export type ThreadView = "project" | "all";
 
 export type ThreadGrouping = "none" | "repository";
+
+/** Per-backend launch override: a binary to use instead of the backend's own,
+ *  plus extra CLI args (tokenized, appended after the built-in flags so a
+ *  repeated flag wins). Empty strings mean "no override". */
+export interface ProviderLaunch {
+  command: string;
+  args: string;
+}
+
+/** Codex's sandbox posture; "" keeps the current behavior, which derives it
+ *  from the permission switches. The other values mirror `codex --sandbox`. */
+export type CodexSandbox =
+  | ""
+  | "read-only"
+  | "workspace-write"
+  | "danger-full-access";
+
+export const CODEX_SANDBOXES: readonly CodexSandbox[] = [
+  "",
+  "read-only",
+  "workspace-write",
+  "danger-full-access",
+];
+
+export const CODEX_SANDBOX_LABEL: Record<CodexSandbox, string> = {
+  "": "Default",
+  "read-only": "Read-only",
+  "workspace-write": "Workspace writes",
+  "danger-full-access": "Full access",
+};
+
+// Membership, not `in`: "toString" is on every object's prototype chain.
+export const isCodexSandbox = (value: string): value is CodexSandbox =>
+  CODEX_SANDBOXES.some((s) => s === value);
 
 export const PERMISSION_MODE_LABEL: Record<PermissionMode, string> = {
   default: "Ask every time",
@@ -96,6 +131,14 @@ export interface Settings {
   notifyOnlyWhenUnfocused: boolean;
   /** Play the system sound with OS notifications. */
   notifySound: boolean;
+  /** Per-backend binary + extra launch args for chat agents. */
+  providerLaunch: Partial<Record<AgentBackend, ProviderLaunch>>;
+  /** Codex sandbox posture; "" follows the permission switches. */
+  codexSandbox: CodexSandbox;
+  /** Working-tree diffs hide whitespace-only changes. */
+  diffIgnoreWhitespace: boolean;
+  /** Wrap long lines in the built-in editor. */
+  wordWrap: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -131,6 +174,10 @@ export const DEFAULT_SETTINGS: Settings = {
   notifyOnAccountIssue: true,
   notifyOnlyWhenUnfocused: false,
   notifySound: false,
+  providerLaunch: {},
+  codexSandbox: "",
+  diffIgnoreWhitespace: false,
+  wordWrap: false,
 };
 
 const KEY = "emberyx.settings";
@@ -171,6 +218,19 @@ export function loadSettings(): Settings {
     return DEFAULT_SETTINGS;
   }
 }
+
+/** Resolved launch override for one backend: the command when overridden
+ *  (null = the backend's own binary) and the tokenized extra args. A fresh
+ *  object per call — memoize at the call site if it feeds an effect. */
+export const launchFor = (
+  settings: Pick<Settings, "providerLaunch">,
+  backend: AgentBackend
+): { command: string | null; args: string[] } => {
+  const launch = settings.providerLaunch[backend];
+  const command = launch?.command.trim() || null;
+  const args = tokenize(launch?.args ?? "");
+  return { command, args };
+};
 
 /** Push the chosen stacks onto `:root` so Tailwind `font-sans` / `font-mono`
  *  and Streamdown code fences follow Appearance instead of the hardcoded

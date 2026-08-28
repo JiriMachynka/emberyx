@@ -21,6 +21,9 @@ import {
 import { issueTitle, resetLabel, type AccountIssue } from "@/lib/accountState";
 import { basename } from "@/lib/path";
 import { Button } from "@/components/ui/button";
+import { FileRefProject, TextWithFileRefs } from "@/components/FileRef";
+import { FileTypeIcon } from "@/components/FileTypeIcon";
+import { isFileReference } from "@/lib/fileRef";
 import { BACKEND_LABEL, type AgentBackend } from "@/lib/agentBackend";
 import {
   describeResult,
@@ -32,6 +35,14 @@ import {
   type ToolBodyPart,
 } from "@/lib/toolDisplay";
 import { TOOL_ICONS, TOOL_TINT } from "@/lib/toolIcons";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  anchorCorrection,
+  isPinnedAtBottom,
+  nextPinState,
+  showLoadOlder,
+  type PrependAnchor,
+} from "@/lib/chatVirtual";
 import { useChatSession } from "@/hooks/useChatSession";
 import {
   type ChatImage,
@@ -80,7 +91,8 @@ import {
   describeRestore,
   restoreCheckpoint,
 } from "@/lib/checkpoints";
-import type { PermissionMode } from "@/lib/settings";
+import type { PermissionMode, Settings } from "@/lib/settings";
+import { launchFor } from "@/lib/settings";
 import type { Project } from "@/types";
 import { projectLabel } from "@/lib/worktree";
 import { PROVIDER_LABEL } from "@/lib/providers";
@@ -115,6 +127,10 @@ interface ChatPaneProps {
   effort: string;
   /** Persist a new default when the user switches this pane's effort. */
   onEffortChange: (effort: string) => void;
+  /** Per-backend launch overrides; the active backend's is resolved here. */
+  providerLaunch: Settings["providerLaunch"];
+  /** Codex sandbox posture; "" derives it from the permission switches. */
+  codexSandbox: Settings["codexSandbox"];
   /** Projects available to the empty-thread project switcher. */
   projects: Project[];
   recentProjects: string[];
@@ -150,6 +166,8 @@ export const ChatPane = memo(function ChatPane({
   onModelChange,
   effort,
   onEffortChange,
+  providerLaunch,
+  codexSandbox,
   projects,
   recentProjects,
   onSelectProject,
@@ -179,6 +197,12 @@ export const ChatPane = memo(function ChatPane({
   // Approval posture is a spawn-time flag, kept local so switching it respawns
   // just this pane (via --resume), like the model.
   const [fullAccess, setFullAccess] = useState(skipPermissions);
+  // The active backend's launch override, memoized so its identity survives
+  // renders — it rides the transport hooks' spawn-effect deps.
+  const launch = useMemo(
+    () => launchFor({ providerLaunch }, backend),
+    [providerLaunch, backend]
+  );
   // The provider this thread is on *right now*. It starts as the session's, but
   // a thread can change hands mid-conversation — the turns each provider
   // produced stay in the same visual transcript, stamped with who made them.
@@ -213,6 +237,8 @@ export const ChatPane = memo(function ChatPane({
     permissionMode,
     model: activeModel,
     effort: activeEffort,
+    launch,
+    codexSandbox,
     onTitled,
   });
   // The transcript is read at switch/handoff time, not published per token —
@@ -263,13 +289,16 @@ export const ChatPane = memo(function ChatPane({
 
   const [preview, setPreview] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Byte-height captured before prepending an older page, so the viewport
-  // stays on the same turn instead of jumping to the new top.
-  const prependHeightRef = useRef<number | null>(null);
+  // Prepend anchor: which virtual row owned the top of the viewport and how far
+  // down it sat. After older pages commit, putting that row back at the same
+  // offset keeps the view pixel-fixed (see chatVirtual.anchorCorrection).
+  const prependAnchorRef = useRef<PrependAnchor | null>(null);
+  const settleRaf = useRef<number | null>(null);
   // Auto-scroll only while the user is parked at the bottom: reading
   // scrollHeight forces layout of the whole transcript, and doing that per
   // token is what makes a long thread stutter.
   const pinnedRef = useRef(true);
+  const userScrollRef = useRef(false);
   const scrollRaf = useRef<number | null>(null);
   const [showScrollEnd, setShowScrollEnd] = useState(false);
 
@@ -313,10 +342,47 @@ export const ChatPane = memo(function ChatPane({
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    // Consumed per scroll event: one gesture unpins once, and the measurement
+    // corrections that follow it can't re-decide what the user meant.
+    const userDriven = userScrollRef.current;
+    userScrollRef.current = false;
+    const pinned = nextPinState({
+      pinned: pinnedRef.current,
+      atBottom: isPinnedAtBottom(el.scrollHeight, el.scrollTop, el.clientHeight),
+      userDriven,
+    });
     pinnedRef.current = pinned;
     setShowScrollEnd(!pinned);
   }, []);
+
+  // Which scrolls came from the user. Virtualized rows re-measure after paint
+  // and each correction fires a scroll event, so geometry alone can't tell a
+  // drag from the pane settling into place.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const mark = () => {
+      userScrollRef.current = true;
+    };
+    el.addEventListener("wheel", mark, { passive: true });
+    el.addEventListener("touchmove", mark, { passive: true });
+    el.addEventListener("mousedown", mark);
+    el.addEventListener("keydown", mark);
+    return () => {
+      el.removeEventListener("wheel", mark);
+      el.removeEventListener("touchmove", mark);
+      el.removeEventListener("mousedown", mark);
+      el.removeEventListener("keydown", mark);
+    };
+  }, []);
+
+  // A different thread in the same pane starts at its end, like a freshly
+  // opened one — the previous thread's scroll position says nothing about it.
+  useEffect(() => {
+    pinnedRef.current = true;
+    userScrollRef.current = false;
+    setShowScrollEnd(false);
+  }, [sessionId]);
 
   const scrollToEnd = useCallback(() => {
     const el = scrollRef.current;
@@ -341,6 +407,7 @@ export const ChatPane = memo(function ChatPane({
   useEffect(
     () => () => {
       if (scrollRaf.current !== null) cancelAnimationFrame(scrollRaf.current);
+      if (settleRaf.current !== null) cancelAnimationFrame(settleRaf.current);
     },
     []
   );
@@ -392,21 +459,102 @@ export const ChatPane = memo(function ChatPane({
   // tools, subagents) can collapse under one "Worked for Ns" header.
   const turns = useMemo(() => groupTurns(thread), [thread]);
 
+  // The scroll stream as virtual slots: optional load-earlier bookend, one
+  // entry per turn (its provider-switch divider travels with it), and the
+  // busy footer. Keys are stable across prepends, which is what lets the
+  // virtualizer reuse measured heights for already-seen rows.
+  type Slot =
+    | { key: string; kind: "load" }
+    | {
+        key: string;
+        kind: "turn";
+        turn: (typeof turns)[number];
+        mark: ProviderSwitchMark | null;
+      }
+    | { key: string; kind: "busy" };
+  const slots = useMemo<Slot[]>(() => {
+    const list: Slot[] = [];
+    if (showLoadOlder(hasMore)) list.push({ key: "load", kind: "load" });
+    for (const turn of turns) {
+      list.push({
+        key: `turn:${turn.key}`,
+        kind: "turn",
+        turn,
+        mark: switchBefore(carried, turn.key, thread),
+      });
+    }
+    if (busy) list.push({ key: "busy", kind: "busy" });
+    return list;
+  }, [turns, hasMore, busy, carried, thread]);
+
+  // Read by the prepend settle loop below, which runs off rAF and so cannot
+  // close over the render's `slots`.
+  const slotsRef = useRef(slots);
+  slotsRef.current = slots;
+
+  // The busy footer is a slot of its own, so the last slot is not the last
+  // turn — the streaming turn is the one before it.
+  const lastTurnIndex = useMemo(() => {
+    for (let i = slots.length - 1; i >= 0; i -= 1) {
+      if (slots[i].kind === "turn") return i;
+    }
+    return -1;
+  }, [slots]);
+
+  const rowVirt = useVirtualizer({
+    count: slots.length,
+    getScrollElement: () => scrollRef.current,
+    // Turns dominate; a rough midpoint is fine — measureElement corrects.
+    estimateSize: (index) => (slots[index]?.kind === "turn" ? 340 : 52),
+    getItemKey: (index) => slots[index]?.key ?? String(index),
+    overscan: 6,
+  });
+
   const loadEarlier = useCallback(() => {
     const el = scrollRef.current;
-    prependHeightRef.current = el ? el.scrollHeight : 0;
+    // Anchor on the first turn, not the first row: the load bookend keeps
+    // index 0 and start 0 across a prepend, so holding *it* still would pin
+    // the view to the top instead of to the content the user was reading.
+    const first = rowVirt
+      .getVirtualItems()
+      .find((item) => slots[item.index]?.kind === "turn");
+    prependAnchorRef.current =
+      el && first
+        ? { key: String(first.key), offsetInView: first.start - el.scrollTop }
+        : null;
     void loadOlder().then((did) => {
-      if (!did) prependHeightRef.current = null;
+      if (!did) prependAnchorRef.current = null;
     });
-  }, [loadOlder]);
+  }, [loadOlder, rowVirt, slots]);
+
+  // Prepended rows arrive at their estimate and only reach their real height
+  // once the ResizeObserver has seen them, so a single correction is computed
+  // from fiction. Re-anchor every frame until the watched row's start holds.
+  const settlePrepend = useCallback(() => {
+    settleRaf.current = null;
+    const el = scrollRef.current;
+    const anchor = prependAnchorRef.current;
+    if (!el || !anchor) {
+      prependAnchorRef.current = null;
+      return;
+    }
+    // Re-runs the measurement pass, so `measurementsCache` below reflects
+    // whatever landed since the last render rather than that render's guess.
+    rowVirt.getTotalSize();
+    const index = slotsRef.current.findIndex((slot) => slot.key === anchor.key);
+    const start = index < 0 ? null : rowVirt.measurementsCache[index]?.start ?? null;
+    const correction = anchorCorrection(anchor, start);
+    prependAnchorRef.current = correction?.next ?? null;
+    if (correction) el.scrollTop = correction.scrollTop;
+    if (prependAnchorRef.current) {
+      settleRaf.current = requestAnimationFrame(settlePrepend);
+    }
+  }, [rowVirt]);
 
   useLayoutEffect(() => {
-    const prev = prependHeightRef.current;
-    if (prev == null) return;
-    prependHeightRef.current = null;
-    const el = scrollRef.current;
-    if (el) el.scrollTop += el.scrollHeight - prev;
-  }, [thread]);
+    // First pass runs before paint, so the prepend never shows its jump.
+    if (prependAnchorRef.current && settleRaf.current === null) settlePrepend();
+  }, [thread, settlePrepend]);
 
   // Latest plan for the in-flight turn — pinned above the composer like T3,
   // not buried in a generic tool card.
@@ -467,6 +615,7 @@ export const ChatPane = memo(function ChatPane({
 
 
   return (
+    <FileRefProject value={cwd}>
     <div
       className="chat-pane relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
       style={{ fontFamily }}
@@ -477,43 +626,61 @@ export const ChatPane = memo(function ChatPane({
         className="contain-layout contain-style absolute inset-0 min-h-0 overflow-y-auto overscroll-contain"
         style={{ fontSize: `${fontSize}px` }}
       >
-        <div className="chat-content-width mx-auto flex min-h-full flex-col gap-8 px-5 pb-64 pt-10">
-          {/* Settled panes unmount when hidden; a working one stays mounted so
-              the process and any approval prompt survive a tab switch.
-              Auto-scroll stays gated on `active`. */}
-          {hasMore && (
-            <div className="flex justify-center">
-              <button
-                type="button"
-                disabled={loadingOlder}
-                onClick={loadEarlier}
-                className="text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-              >
-                {loadingOlder ? "Loading…" : "Load earlier messages"}
-              </button>
-            </div>
-          )}
-          {turns.map((turn, i) => {
-            const mark = switchBefore(carried, turn.key, thread);
-            return (
-              <Fragment key={turn.key}>
-                {mark && <ProviderSwitchDivider mark={mark} />}
-                <TurnRow
-                  turn={turn}
-                  live={busy && i === turns.length - 1}
-                  fontSize={fontSize}
-                  chat={chat}
-                  onPreview={openPreview}
-                />
-              </Fragment>
-            );
-          })}
-          {busy && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="size-3.5 animate-spin" />
-              <span className="min-w-0 truncate">{statusLabel}</span>
-            </div>
-          )}
+        {/* Padding stays outside the sized box: folding it in would put the
+            bottom gutter *inside* getTotalSize() and leave the last turn ending
+            flush with the scroll end, hidden under the composer. */}
+        <div className="mx-auto min-h-full w-full max-w-3xl px-5 pb-64 pt-10">
+          <div className="relative w-full" style={{ height: rowVirt.getTotalSize() }}>
+            {rowVirt.getVirtualItems().map((vItem) => {
+              const slot = slots[vItem.index];
+              if (!slot) return null;
+              return (
+                <div
+                  key={slot.key}
+                  // measureElement resolves the row by data-index; without it
+                  // nothing is ever measured and every row keeps its estimate.
+                  data-index={vItem.index}
+                  data-vkey={slot.key}
+                  ref={rowVirt.measureElement}
+                  className="absolute inset-x-0 will-change-transform"
+                  style={{ transform: `translateY(${vItem.start}px)` }}
+                >
+                  <div className="chat-content-width mx-auto flex flex-col gap-8 pt-8">
+                    {slot.kind === "load" && (
+                      <div className="flex justify-center">
+                        <button
+                          type="button"
+                          disabled={loadingOlder}
+                          onClick={loadEarlier}
+                          className="text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                        >
+                          {loadingOlder ? "Loading…" : "Load earlier messages"}
+                        </button>
+                      </div>
+                    )}
+                    {slot.kind === "turn" && (
+                      <Fragment>
+                        {slot.mark && <ProviderSwitchDivider mark={slot.mark} />}
+                        <TurnRow
+                          turn={slot.turn}
+                          live={busy && vItem.index === lastTurnIndex}
+                          fontSize={fontSize}
+                          chat={chat}
+                          onPreview={openPreview}
+                        />
+                      </Fragment>
+                    )}
+                    {slot.kind === "busy" && (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Loader2 className="size-3.5 animate-spin" />
+                        <span className="min-w-0 truncate">{statusLabel}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
         {showScrollEnd && (
           <button
@@ -622,6 +789,7 @@ export const ChatPane = memo(function ChatPane({
         </DialogContent>
       </Dialog>
     </div>
+    </FileRefProject>
   );
 });
 
@@ -1055,7 +1223,7 @@ const MessageRow = memo(function MessageRow({
         )}
         {message.text && (
           <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-card px-4 py-2.5">
-            {message.text}
+            <TextWithFileRefs text={message.text} />
           </div>
         )}
         {message.checkpointId && (
@@ -1426,6 +1594,10 @@ const ToolCard = memo(function ToolCard({ tool }: { tool: ToolCall }) {
           )}
         />
         <span className="shrink-0 font-medium">{display.label}</span>
+        {/* Most tool titles are the file the tool touched — say which kind. */}
+        {display.title && isFileReference(display.title) && (
+          <FileTypeIcon path={display.title} />
+        )}
         {display.title && (
           <span
             className={cn(

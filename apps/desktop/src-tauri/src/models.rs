@@ -137,6 +137,12 @@ pub struct TimelineEvent {
     pub timestamp: u64,
     /// Opaque payload: message text, tool invocation, diff, approval, etc.
     pub payload: String,
+    /// Original provider line this event was derived from, when it was
+    /// extracted from a transcript (ingest sets this; live supervisor appends
+    /// don't). Projections keep it so pages can be handed back verbatim and
+    /// the UI's own transcript parser can rebuild rich messages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_line: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -155,6 +161,10 @@ pub enum TimelineEventKind {
     AgentDelegation,
     ProviderSwitch,
     ModelResolution,
+    /// A thread's display title as the provider rewrote it (Claude Code's
+    /// `ai-title` lines). Transcript ingest emits these so projections hold
+    /// one canonical title; the UI never renders it as a turn.
+    ThreadTitle,
     PromptQueued,
     PromptReordered,
     /// Queue gating is part of the durable story of a thread: a follow-up that

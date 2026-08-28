@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, Folder, FolderOpen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
@@ -53,6 +53,14 @@ function TreeDir({
 }: TreeProps) {
   const [open, setOpen] = useState(defaultOpen);
   const entries = useDirEntries(path, open).data ?? [];
+
+  // A file opened from somewhere else — a chat reference, the finder — has to
+  // be visible in the tree, not just loaded in the editor. Each ancestor opens
+  // itself, and its children mount and do the same, so the chain unfolds.
+  const holdsSelection = selected !== null && selected.startsWith(`${path}/`);
+  useEffect(() => {
+    if (holdsSelection) setOpen(true);
+  }, [holdsSelection]);
 
   return (
     <>

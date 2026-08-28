@@ -41,6 +41,28 @@ describe("Markdown code rendering", () => {
     expect(el.querySelector("pre")).toBeNull();
     expect(el.querySelector("code")?.textContent).toBe("find src");
   });
+
+  it("gives an inline file reference its filetype icon", async () => {
+    const el = await md("look at `src/components/ChatPane.tsx` now");
+    // Streamdown's `inlineCode` slot only sees inline spans, so the fence
+    // renderer stays untouched — that separation is what this guards.
+    expect(el.querySelector("img")?.getAttribute("src")).toBe(
+      "/file-icons/react_ts.svg",
+    );
+    expect(el.textContent).toContain("src/components/ChatPane.tsx");
+  });
+
+  it("leaves inline code that only looks dotted alone", async () => {
+    const el = await md("call `React.useState` here");
+    expect(el.querySelector("img")).toBeNull();
+    expect(el.querySelector("code")?.textContent).toBe("React.useState");
+  });
+
+  it("keeps a fenced block out of the file-reference path", async () => {
+    const el = await md("```ts\nsrc/a.ts\n```");
+    expect(el.querySelector("pre")).not.toBeNull();
+    expect(el.querySelector("img")).toBeNull();
+  });
 });
 
 describe("Markdown GFM", () => {

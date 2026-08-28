@@ -59,6 +59,12 @@ impl From<std::string::FromUtf8Error> for Error {
     }
 }
 
+impl From<rusqlite::Error> for Error {
+    fn from(e: rusqlite::Error) -> Self {
+        Error(e.to_string())
+    }
+}
+
 /// `format!`-style bail: `err!("not a directory: {}", path)`.
 #[macro_export]
 macro_rules! err {

@@ -152,13 +152,15 @@ pub fn git_changes(path: String) -> Result<Vec<GitFile>> {
 
 /// Unified diff for one file: the index diff (`--cached`) when `staged`, else
 /// what the working tree has on top of the index. Untracked files have no diff,
-/// so their contents are rendered as one big addition.
+/// so their contents are rendered as one big addition. `ignore_whitespace`
+/// passes `-w`, the diff viewer's "hide whitespace changes" toggle.
 #[tauri::command]
 pub fn git_file_diff(
     path: String,
     file: String,
     untracked: bool,
     staged: bool,
+    ignore_whitespace: Option<bool>,
 ) -> Result<String> {
     if untracked {
         let content =
@@ -171,6 +173,9 @@ pub fn git_file_diff(
     }
 
     let mut args = vec!["diff", "--no-color"];
+    if ignore_whitespace.unwrap_or(false) {
+        args.push("-w");
+    }
     if staged {
         args.push("--cached");
     }
@@ -1595,7 +1600,7 @@ mod tests {
         let files = git_changes(repo.path()).unwrap();
         assert_eq!(files[0].path, "a file with spaces.txt");
         // The unquoted path must be usable as-is by the follow-up diff call.
-        let diff = git_file_diff(repo.path(), files[0].path.clone(), true, false).unwrap();
+        let diff = git_file_diff(repo.path(), files[0].path.clone(), true, false, None).unwrap();
         assert_eq!(diff, "+x");
     }
 
@@ -1603,7 +1608,7 @@ mod tests {
     fn renders_an_untracked_file_as_one_big_addition() {
         let repo = Repo::new("untracked_diff");
         repo.write("new.txt", "one\ntwo\n");
-        let diff = git_file_diff(repo.path(), "new.txt".into(), true, false).unwrap();
+        let diff = git_file_diff(repo.path(), "new.txt".into(), true, false, None).unwrap();
         assert_eq!(diff, "+one\n+two");
     }
 
@@ -1617,10 +1622,10 @@ mod tests {
         repo.run(&["add", "a.txt"]);
         repo.write("a.txt", "three\n");
 
-        let staged = git_file_diff(repo.path(), "a.txt".into(), false, true).unwrap();
+        let staged = git_file_diff(repo.path(), "a.txt".into(), false, true, None).unwrap();
         assert!(staged.contains("+two") && !staged.contains("+three"));
 
-        let unstaged = git_file_diff(repo.path(), "a.txt".into(), false, false).unwrap();
+        let unstaged = git_file_diff(repo.path(), "a.txt".into(), false, false, None).unwrap();
         assert!(unstaged.contains("+three") && unstaged.contains("-two"));
     }
 
@@ -1684,7 +1689,7 @@ mod tests {
         git_apply(repo.path(), patch.to_string(), true, false).unwrap();
 
         // Staged in the index; the working tree still holds the original.
-        let staged = git_file_diff(repo.path(), "a.txt".into(), false, true).unwrap();
+        let staged = git_file_diff(repo.path(), "a.txt".into(), false, true, None).unwrap();
         assert!(staged.contains("+ONE"));
         assert_eq!(
             std::fs::read_to_string(repo.0.join("a.txt")).unwrap(),

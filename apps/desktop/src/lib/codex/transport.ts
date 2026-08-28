@@ -36,8 +36,11 @@ export interface CodexSpawnResult {
   version: string | null;
 }
 
-export const codexSpawn = (cwd: string, onEvent: Channel<CodexEvent>) =>
-  invoke<CodexSpawnResult>("codex_spawn", { cwd, onEvent });
+export const codexSpawn = (
+  cwd: string,
+  command: string | null,
+  onEvent: Channel<CodexEvent>
+) => invoke<CodexSpawnResult>("codex_spawn", { cwd, command, onEvent });
 
 export const codexKill = (id: number) => invoke("codex_kill", { id });
 
@@ -80,7 +83,7 @@ const THREAD_PAGE = 50;
  */
 export async function listCodexThreads(cwd: string): Promise<Thread[]> {
   const channel = new Channel<CodexEvent>();
-  const { id } = await codexSpawn(cwd, channel);
+  const { id } = await codexSpawn(cwd, null, channel);
   try {
     const result = await invoke<unknown>("codex_thread_list", {
       id,
@@ -104,7 +107,7 @@ export async function listCodexThreads(cwd: string): Promise<Thread[]> {
  */
 export async function listCodexModels(cwd: string): Promise<CodexModel[]> {
   const channel = new Channel<CodexEvent>();
-  const { id } = await codexSpawn(cwd, channel);
+  const { id } = await codexSpawn(cwd, null, channel);
   try {
     return decodeModels(await codexRequest(id, "model/list", {}));
   } finally {
@@ -120,7 +123,7 @@ export async function listCodexModels(cwd: string): Promise<CodexModel[]> {
  */
 export async function listCodexSkills(cwd: string): Promise<SlashCommand[]> {
   const channel = new Channel<CodexEvent>();
-  const { id } = await codexSpawn(cwd, channel);
+  const { id } = await codexSpawn(cwd, null, channel);
   try {
     const result = await codexRequest(id, "skills/list", { cwds: [cwd] });
     return decodeSkills(result).map((s) => ({
@@ -175,7 +178,7 @@ export async function generateCodexTitle(
     if (ev.type === "exit") settle(text);
   };
 
-  const { id } = await codexSpawn(cwd, channel);
+  const { id } = await codexSpawn(cwd, null, channel);
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const opened = await codexThreadStart(id, {

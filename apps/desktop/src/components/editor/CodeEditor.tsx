@@ -38,6 +38,8 @@ interface CodeEditorProps {
   onChange: (next: string) => void;
   fontFamily: string;
   fontSize: number;
+  /** Wrap long lines instead of scrolling sideways. */
+  wordWrap: boolean;
   handle: RefObject<EditorHandle | null>;
   /** ⌘/Ctrl-click on a document position. */
   onFollow: (pos: number) => void;
@@ -61,6 +63,7 @@ export function CodeEditor({
   onChange,
   fontFamily,
   fontSize,
+  wordWrap,
   handle,
   onFollow,
   onHover,
@@ -73,6 +76,7 @@ export function CodeEditor({
   const view = useRef<EditorView | null>(null);
   const language = useRef(new Compartment());
   const theme = useRef(new Compartment());
+  const wrap = useRef(new Compartment());
   // Callbacks live in a ref so the view is built once and never torn down for
   // an identity change — rebuilding it would drop undo history and scroll.
   const callbacks = useRef({ onChange, onFollow, onHover, onHoverEnd, onSave, onBack, onHistory });
@@ -99,6 +103,7 @@ export function CodeEditor({
         highlightSelectionMatches(),
         oneDark,
         theme.current.of(themeFor(fontFamily, fontSize)),
+        wrap.current.of(wordWrap ? EditorView.lineWrapping : []),
         language.current.of([]),
         keymap.of([
           { key: "Mod-s", run: () => (callbacks.current.onSave(), true) },
@@ -180,6 +185,12 @@ export function CodeEditor({
       effects: theme.current.reconfigure(themeFor(fontFamily, fontSize)),
     });
   }, [fontFamily, fontSize]);
+
+  useEffect(() => {
+    view.current?.dispatch({
+      effects: wrap.current.reconfigure(wordWrap ? EditorView.lineWrapping : []),
+    });
+  }, [wordWrap]);
 
   useImperativeHandle(handle, () => ({
     currentLine: () => {

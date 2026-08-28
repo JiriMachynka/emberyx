@@ -7,6 +7,8 @@ import {
   labelForModel,
   orderByFavorites,
   searchModels,
+  withModelPrefs,
+  type ModelEntry,
 } from "./modelCatalog";
 import type { CodexModel } from "@/lib/codex/protocol";
 
@@ -109,5 +111,54 @@ describe("labelForModel", () => {
   it("names a known model and admits an unknown one", () => {
     expect(labelForModel("claude-opus-5", CLAUDE_MODELS)).toBe("Claude Opus 5");
     expect(labelForModel("nope", CLAUDE_MODELS)).toBeUndefined();
+  });
+});
+
+describe("withModelPrefs", () => {
+  const catalog: ModelEntry[] = [
+    { id: "claude-sonnet-5", label: "Claude Sonnet 5", provider: "claude", legacy: false },
+    { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", provider: "claude", legacy: false },
+  ];
+
+  it("drops hidden ids", () => {
+    expect(withModelPrefs(catalog, ["claude-haiku-4-5"], {}).map((e) => e.id)).toEqual([
+      "claude-sonnet-5",
+    ]);
+  });
+
+  it("appends custom slugs under their provider", () => {
+    const withCustom = withModelPrefs(catalog, [], {
+      claude: ["my-proxy-sonnet"],
+      codex: ["gpt-6-secret"],
+    });
+    expect(withCustom.map((e) => e.id)).toEqual([
+      "claude-sonnet-5",
+      "claude-haiku-4-5",
+      "my-proxy-sonnet",
+      "gpt-6-secret",
+    ]);
+    const custom = withCustom.find((e) => e.id === "gpt-6-secret");
+    expect(custom?.provider).toBe("codex");
+    expect(custom?.legacy).toBe(false);
+  });
+
+  it("ignores unknown providers and blank slugs", () => {
+    const out = withModelPrefs(
+      catalog,
+      [],
+      { cursor: ["not-a-backend"] } as never
+    );
+    expect(out).toEqual(catalog);
+    expect(withModelPrefs(catalog, [], { claude: ["  "] }).map((e) => e.id)).toEqual([
+      "claude-sonnet-5",
+      "claude-haiku-4-5",
+    ]);
+  });
+
+  it("lets a hidden id remove a custom slug too", () => {
+    const out = withModelPrefs(catalog, ["proxy"], {
+      claude: ["proxy"],
+    });
+    expect(out.map((e) => e.id)).toEqual(["claude-sonnet-5", "claude-haiku-4-5"]);
   });
 });

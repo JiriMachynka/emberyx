@@ -88,7 +88,26 @@ let openApprovals: Record<string, unknown>[] = [];
 
 /** Overrides for what `agent_spawn` answers, per test. */
 let spawnReply: Record<string, unknown> = {};
-let threadWindow = { text: "", hasMore: false, startByte: 0 };
+
+/** Scripted replies for `thread_messages_page`, shifted oldest-first per call. */
+type FakePage = {
+  rows: {
+    messageId: string;
+    createdAt: number;
+    payloadJson: string;
+  }[];
+  hasMore: boolean;
+};
+let messagePages: FakePage[] = [];
+const userRow = (id: string, text: string, createdAt: number) => ({
+  messageId: id,
+  createdAt,
+  payloadJson:
+    JSON.stringify({
+      type: "user",
+      message: { role: "user", content: text },
+    }) + "\n",
+});
 
 beforeEach(() => {
   channels.length = 0;
@@ -98,12 +117,13 @@ beforeEach(() => {
   queueSeq = 0;
   openApprovals = [];
   spawnReply = {};
-  threadWindow = { text: "", hasMore: false, startByte: 0 };
+  messagePages = [];
   invoke.mockReset();
   invoke.mockImplementation((command: string, args: Record<string, unknown>) => {
     if (command === "agent_spawn")
       return Promise.resolve({ id: 1, reattached: false, truncated: false, ...spawnReply });
-    if (command === "read_thread") return Promise.resolve(threadWindow);
+    if (command === "thread_messages_page")
+      return Promise.resolve(messagePages.shift() ?? { rows: [], hasMore: false });
     if (command === "title_thread") return Promise.resolve("A title");
     if (command === "agent_attach_thread") return Promise.resolve(undefined);
     if (command === "agent_approvals_pending") return Promise.resolve(openApprovals);
@@ -613,30 +633,28 @@ describe("useAgentChat persistent agents", () => {
 
   // The daemon's replay and the on-disk transcript carry the same turns; taking
   // both would render the conversation twice.
-  it("does not prefill from the transcript when the daemon replays", async () => {
+  it("does not prefill from the event store when the daemon replays", async () => {
     await mount({ persistent: true, resume: "old-thread" });
-    expect(sentTo("read_thread")).toEqual([]);
+    expect(sentTo("thread_messages_page")).toEqual([]);
   });
 
-  it("still prefills from the transcript when the agent is window-scoped", async () => {
+  it("still prefills from the event store when the agent is window-scoped", async () => {
     await mount({ resume: "old-thread" });
-    await waitFor(() => expect(sentTo("read_thread")).toHaveLength(1));
-    expect(sentTo("read_thread")[0][1]).toMatchObject({
-      sessionId: "old-thread",
-      turnLimit: 10,
+    await waitFor(() => expect(sentTo("thread_messages_page")).toHaveLength(1));
+    expect(sentTo("thread_messages_page")[0][1]).toMatchObject({
+      cwd: "/repo",
+      threadId: "old-thread",
+      limit: 60,
     });
   });
 
-  it("hydrates the windowed transcript, not a full file", async () => {
-    threadWindow = {
-      text:
-        JSON.stringify({
-          type: "user",
-          message: { role: "user", content: "from-disk" },
-        }) + "\n",
-      hasMore: true,
-      startByte: 48,
-    };
+  it("hydrates the newest page of raw transcript lines", async () => {
+    messagePages = [
+      {
+        rows: [userRow("m2", "from-disk", 1000)],
+        hasMore: true,
+      },
+    ];
     const { result } = await mount({ resume: "old-thread" });
     await waitFor(() =>
       expect(result.current.messages.map((m) => m.text)).toEqual(["from-disk"])
@@ -644,28 +662,29 @@ describe("useAgentChat persistent agents", () => {
     expect(result.current.hasMore).toBe(true);
   });
 
-  it("prepends the previous page onto the window", async () => {
-    const userLine = (text: string) =>
-      JSON.stringify({
-        type: "user",
-        message: { role: "user", content: text },
-      }) + "\n";
-    threadWindow = {
-      text: userLine("new"),
-      hasMore: true,
-      startByte: 20,
-    };
+  it("prepends older pages using the keyset cursor, without a seam gap", async () => {
+    messagePages = [
+      { rows: [userRow("m5", "new", 5000)], hasMore: true },
+      { rows: [userRow("m2", "old", 2000), userRow("m3", "older", 3000)], hasMore: false },
+    ];
     const { result } = await mount({ resume: "old-thread" });
     await waitFor(() => expect(result.current.hasMore).toBe(true));
-    threadWindow = {
-      text: userLine("old"),
-      hasMore: false,
-      startByte: 0,
-    };
     await act(async () => {
       await result.current.loadOlder();
     });
-    expect(result.current.messages.map((m) => m.text)).toEqual(["old", "new"]);
+
+    // Cursor for the second call came from the oldest row held, and the
+    // stitched history keeps every message exactly once, in order.
+    const calls = sentTo("thread_messages_page");
+    expect(calls[1][1]).toMatchObject({
+      beforeCreatedAt: 5000,
+      beforeMessageId: "m5",
+    });
+    expect(result.current.messages.map((m) => m.text)).toEqual([
+      "old",
+      "older",
+      "new",
+    ]);
     expect(result.current.hasMore).toBe(false);
   });
 

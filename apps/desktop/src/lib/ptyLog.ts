@@ -19,16 +19,42 @@ export type PtyLogStatus = "starting" | "running" | "exited";
 interface Entry {
   ptyId: number | null;
   screen: AnsiScreen;
+  /** The stream as it arrived, for a view that owns a terminal grid: line
+   *  buffers can't feed one, because a redraw is cursor motion, not lines. */
+  raw: RawBuffer;
   decoder: TextDecoder;
   status: PtyLogStatus;
   exitCode: number | null;
   subs: Set<() => void>;
+  rawSubs: Set<(chunk: string) => void>;
   onExit?: (code: number | null) => void;
   /** False on the placeholder a subscriber creates ahead of the spawn. */
   spawned: boolean;
   /** Kill requested before the spawn resolved — honored as soon as it does. */
   killWhenSpawned: boolean;
 }
+
+/** Replay budget for a reopened view. The terminal keeps its own scrollback
+ *  once attached, so this only has to cover what it missed while unmounted. */
+const RAW_MAX_CHARS = 256 * 1024;
+
+interface RawBuffer {
+  chunks: string[];
+  chars: number;
+}
+
+const createRawBuffer = (): RawBuffer => ({ chunks: [], chars: 0 });
+
+const pushRaw = (buf: RawBuffer, chunk: string): void => {
+  buf.chunks.push(chunk);
+  buf.chars += chunk.length;
+  // Dropping from the front loses the oldest escape sequences, so a replay can
+  // start mid-state. The emulator recovers on the next full redraw, which is
+  // the honest trade for a bounded buffer.
+  while (buf.chars > RAW_MAX_CHARS && buf.chunks.length > 1) {
+    buf.chars -= buf.chunks.shift()!.length;
+  }
+};
 
 const sessions = new Map<string, Entry>();
 
@@ -63,10 +89,12 @@ export async function spawnLog(opts: SpawnLogOptions): Promise<void> {
   const entry: Entry = {
     ptyId: null,
     screen: createAnsiScreen(opts.maxLines),
+    raw: existing?.raw ?? createRawBuffer(),
     decoder: new TextDecoder(),
     status: "starting",
     exitCode: null,
     subs: existing?.subs ?? new Set(),
+    rawSubs: existing?.rawSubs ?? new Set(),
     onExit: opts.onExit,
     spawned: true,
     killWhenSpawned: false,
@@ -77,7 +105,10 @@ export async function spawnLog(opts: SpawnLogOptions): Promise<void> {
   channel.onmessage = (event) => {
     if (sessions.get(opts.sessionId) !== entry) return;
     if (event.type === "output") {
-      entry.screen.push(entry.decoder.decode(base64ToBytes(event.data), { stream: true }));
+      const chunk = entry.decoder.decode(base64ToBytes(event.data), { stream: true });
+      entry.screen.push(chunk);
+      pushRaw(entry.raw, chunk);
+      for (const cb of entry.rawSubs) cb(chunk);
       notify(entry);
     } else {
       entry.status = "exited";
@@ -124,10 +155,12 @@ export const subscribeLog = (sessionId: string, cb: () => void): (() => void) =>
     entry = {
       ptyId: null,
       screen: createAnsiScreen(1),
+      raw: createRawBuffer(),
       decoder: new TextDecoder(),
       status: "starting",
       exitCode: null,
       subs: new Set(),
+      rawSubs: new Set(),
       spawned: false,
       killWhenSpawned: false,
     };
@@ -136,6 +169,24 @@ export const subscribeLog = (sessionId: string, cb: () => void): (() => void) =>
   entry.subs.add(cb);
   return () => {
     sessions.get(sessionId)?.subs.delete(cb);
+  };
+};
+
+/** Everything the session has emitted that is still buffered, for a view
+ *  attaching after the fact. */
+export const rawLog = (sessionId: string): string =>
+  sessions.get(sessionId)?.raw.chunks.join("") ?? "";
+
+/** Stream new output to a terminal grid. Returns an unsubscribe. */
+export const subscribeRaw = (
+  sessionId: string,
+  cb: (chunk: string) => void
+): (() => void) => {
+  const entry = sessions.get(sessionId);
+  if (!entry) return () => {};
+  entry.rawSubs.add(cb);
+  return () => {
+    sessions.get(sessionId)?.rawSubs.delete(cb);
   };
 };
 

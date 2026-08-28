@@ -20,12 +20,25 @@ import { notifyNative } from "@/lib/notifications";
 import { loadSettings } from "@/lib/settings";
 import { basename } from "@/lib/path";
 import { usePromptQueue } from "@/lib/promptQueue";
-import {
-  INITIAL_THREAD_USER_TURN_LIMIT,
-  OLDER_THREAD_PAGE_USER_TURN_LIMIT,
-  windowByUserTurns,
-  type ThreadWindow,
-} from "@/lib/transcriptWindow";
+
+/** One projected message row from `thread_messages_page`. */
+interface ProjectedMessageRow {
+  messageId: string;
+  threadId: string;
+  role: string;
+  text: string;
+  provider?: string | null;
+  createdAt: number;
+  payloadJson: string | null;
+}
+
+interface MessagePage {
+  rows: ProjectedMessageRow[];
+  hasMore: boolean;
+}
+
+/** Messages fetched per "load older" page from the local event store. */
+const THREAD_PAGE_LIMIT = 60;
 
 /** A stream-json line from the headless `claude` process (Rust AgentEvent). */
 type AgentEvent =
@@ -199,6 +212,9 @@ interface Options {
   /** `--effort` level; "" / undefined lets the CLI pick. It is a session-scoped
    *  launch flag, so changing it respawns the same way the model does. */
   effort?: string;
+  /** Binary override + extra args from Settings → Providers. Identity-stable
+   *  at the call site — it rides the spawn effect's deps. */
+  launch?: { command: string | null; args: string[] };
   /** Called with the generated title once a fresh chat has been auto-titled. */
   onTitled?: (title: string) => void;
   /** False while a session of another backend owns this pane — the hook still
@@ -391,6 +407,7 @@ export function useAgentChat({
   permissionMode = "acceptEdits",
   model = "",
   effort = "",
+  launch,
   onTitled,
   enabled = true,
 }: Options) {
@@ -401,7 +418,11 @@ export function useAgentChat({
   messagesRef.current = messages;
   const [hasMore, setHasMore] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const startByteRef = useRef(0);
+  // Keyset cursor for paging older history out of the local event store:
+  // the position of the oldest message currently held.
+  const oldestCursorRef = useRef<{ createdAt: number; messageId: string } | null>(
+    null
+  );
   const loadingOlderRef = useRef(false);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
@@ -955,10 +976,11 @@ export function useAgentChat({
     ]
   );
 
-  // On resume, hydrate prior turns from the on-disk transcript (headless
+  // On resume, hydrate prior turns from the local event store (headless
   // --resume never replays them). Only fills when the list is still empty so it
-  // can't clobber freshly streamed messages. The file is windowed in Rust —
-  // last N user-anchored turns — so a long thread is not parsed or held whole.
+  // can't clobber freshly streamed messages. Rows carry raw provider lines, so
+  // `parseTranscript` — the same parser the live stream feeds — rebuilds rich
+  // messages (tools, thinking) without a second implementation.
   //
   // Skipped in persistent mode: the daemon replays its own buffer, and the two
   // overlap — the CLI writes the same turns to disk as they stream. Rendering
@@ -969,29 +991,32 @@ export function useAgentChat({
     let cancelled = false;
     void (async () => {
       try {
-        const page = await invoke<ThreadWindow>("read_thread", {
+        const page = await invoke<MessagePage>("thread_messages_page", {
           cwd,
-          sessionId: resume,
-          turnLimit: INITIAL_THREAD_USER_TURN_LIMIT,
+          threadId: resume,
+          limit: THREAD_PAGE_LIMIT,
         });
         if (cancelled) return;
-        const parsed = parseTranscript(page.text);
-        const { messages: hist, clipped } = windowByUserTurns(
-          parsed,
-          INITIAL_THREAD_USER_TURN_LIMIT
-        );
-        startByteRef.current = page.startByte;
-        setHasMore(page.hasMore || (clipped && page.startByte > 0));
-        if (hist.length) setMessages((prev) => (prev.length ? prev : hist));
-        const hu = parseTranscriptUsage(page.text);
+        const lines = page.rows
+          .map((row) => row.payloadJson)
+          .filter((line): line is string => typeof line === "string");
+        const transcript = lines.join("\n");
+        const parsed = parseTranscript(transcript);
+        const oldest = page.rows[0];
+        oldestCursorRef.current = oldest
+          ? { createdAt: oldest.createdAt, messageId: oldest.messageId }
+          : null;
+        setHasMore(page.hasMore);
+        if (parsed.length) setMessages((prev) => (prev.length ? prev : parsed));
+        const hu = parseTranscriptUsage(transcript);
         setUsage((prev) => {
           if (prev.model || prev.costUsd != null || prev.outputTokens != null) {
             return prev;
           }
-          // A windowed read is not the session total — only commit tokens when
-          // the whole file was in the page, otherwise keep the model and wait
-          // for a live turn to restate usage.
-          if (page.hasMore || clipped) {
+          // A partial page is not the session total — only commit tokens when
+          // everything fit in this page, otherwise keep the model and wait for
+          // a live turn to restate usage.
+          if (page.hasMore) {
             return hu.model ? { model: hu.model } : prev;
           }
           sessionUsageRef.current = {
@@ -1001,7 +1026,7 @@ export function useAgentChat({
           return hu;
         });
       } catch (e) {
-        console.error("[emberyx] read_thread failed", e);
+        console.error("[emberyx] thread_messages_page failed", e);
       }
     })();
     return () => {
@@ -1011,23 +1036,32 @@ export function useAgentChat({
 
   const loadOlder = useCallback(async () => {
     if (!enabled || !resume || persistent) return false;
-    if (loadingOlderRef.current || startByteRef.current === 0) return false;
+    // No cursor yet means hydration hasn't run (or the thread has no history).
+    if (loadingOlderRef.current || !oldestCursorRef.current) return false;
     loadingOlderRef.current = true;
     setLoadingOlder(true);
     try {
-      const page = await invoke<ThreadWindow>("read_thread", {
+      const cursor = oldestCursorRef.current;
+      const page = await invoke<MessagePage>("thread_messages_page", {
         cwd,
-        sessionId: resume,
-        turnLimit: OLDER_THREAD_PAGE_USER_TURN_LIMIT,
-        beforeByte: startByteRef.current,
+        threadId: resume,
+        beforeCreatedAt: cursor.createdAt,
+        beforeMessageId: cursor.messageId,
+        limit: THREAD_PAGE_LIMIT,
       });
-      const older = parseTranscript(page.text);
-      startByteRef.current = page.startByte;
+      const first = page.rows[0];
+      oldestCursorRef.current = first
+        ? { createdAt: first.createdAt, messageId: first.messageId }
+        : null;
       setHasMore(page.hasMore);
+      const lines = page.rows
+        .map((row) => row.payloadJson)
+        .filter((line): line is string => typeof line === "string");
+      const older = parseTranscript(lines.join("\n"));
       if (older.length) setMessages((prev) => [...older, ...prev]);
       return true;
     } catch (e) {
-      console.error("[emberyx] read_thread older failed", e);
+      console.error("[emberyx] thread_messages_page older failed", e);
       return false;
     } finally {
       loadingOlderRef.current = false;
@@ -1106,6 +1140,8 @@ export function useAgentChat({
           settings: null,
           model: model || null,
           effort: effort || null,
+          command: launch?.command ?? null,
+          extraArgs: launch?.args ?? [],
           emberyxSessionId,
           persistent,
           // Always replay the daemon's whole buffer: in persistent mode it is
@@ -1167,6 +1203,7 @@ export function useAgentChat({
     skipPermissions,
     model,
     effort,
+    launch,
     emberyxSessionId,
     persistent,
     permissionMode,

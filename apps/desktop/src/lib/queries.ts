@@ -1,5 +1,6 @@
 import {
   QueryClient,
+  useMutation,
   useQueries,
   useQuery,
   useQueryClient,
@@ -21,8 +22,15 @@ import type {
 } from "@/types";
 import { listCodexModels, listCodexSkills } from "@/lib/codex/transport";
 import { readAcpModels } from "@/lib/acp/transport";
+import { loadSettings } from "@/lib/settings";
 import type { AgentBackend } from "@/lib/agentBackend";
 import type { ProviderStatus } from "@/lib/providers";
+import type {
+  McpAddSpec,
+  McpHarness,
+  McpServerInfo,
+} from "@/lib/mcp";
+import type { SkillAddSpec, SkillInfo } from "@/lib/skills";
 import { forgeCommands, type RemoteHost } from "@/lib/forge";
 import type {
   ConflictStages,
@@ -47,8 +55,13 @@ export const queryClient = new QueryClient({
 // ChangesPanel, GitActions) share one cache entry and one fetch per path.
 export const gitKeys = {
   changes: (path: string) => ["git", "changes", path] as const,
-  diff: (path: string, file: string, untracked: boolean, staged: boolean) =>
-    ["git", "diff", path, file, untracked, staged] as const,
+  diff: (
+    path: string,
+    file: string,
+    untracked: boolean,
+    staged: boolean,
+    ignoreWhitespace = false
+  ) => ["git", "diff", path, file, untracked, staged, ignoreWhitespace] as const,
   branch: (path: string) => ["git", "branch", path] as const,
   remoteHost: (path: string) => ["git", "remoteHost", path] as const,
   branches: (path: string) => ["git", "branches", path] as const,
@@ -78,21 +91,29 @@ export const useGitChanges = (path: string, enabled = true) =>
     enabled,
   });
 
-const fileDiff = (path: string, file: GitFile, staged: boolean) =>
+const fileDiff = (
+  path: string,
+  file: GitFile,
+  staged: boolean,
+  ignoreWhitespace: boolean
+) =>
   queryClient.fetchQuery({
-    queryKey: gitKeys.diff(path, file.path, file.untracked, staged),
+    queryKey: gitKeys.diff(path, file.path, file.untracked, staged, ignoreWhitespace),
     queryFn: () =>
       invoke<string>("git_file_diff", {
         path,
         file: file.path,
         untracked: file.untracked,
         staged,
+        ignoreWhitespace,
       }),
   });
 
 /** The whole working tree's diff, per file, staged parts included. Goes through
- *  the same cache entries the changes panel fills, so an open panel pays once. */
+ *  the same cache entries the changes panel fills, so an open panel pays once.
+ *  Read outside the render tree, so the whitespace setting comes from storage. */
 export const fetchWorkingDiff = async (path: string): Promise<string> => {
+  const ignoreWhitespace = loadSettings().diffIgnoreWhitespace;
   const files = await queryClient.fetchQuery({
     queryKey: gitKeys.changes(path),
     queryFn: () => invoke<GitFile[]>("git_changes", { path }),
@@ -102,8 +123,10 @@ export const fetchWorkingDiff = async (path: string): Promise<string> => {
       // The index column is blank for a purely unstaged edit; anything else
       // means part of the change only shows under `--cached`.
       const staged =
-        !f.untracked && f.status[0] !== " " ? await fileDiff(path, f, true) : "";
-      const unstaged = await fileDiff(path, f, false);
+        !f.untracked && f.status[0] !== " "
+          ? await fileDiff(path, f, true, ignoreWhitespace)
+          : "";
+      const unstaged = await fileDiff(path, f, false, ignoreWhitespace);
       const body = [staged, unstaged].map((d) => d.trim()).filter(Boolean).join("\n");
       return body ? `--- ${f.path}\n${body}` : "";
     })
@@ -117,12 +140,19 @@ export const useGitFileDiff = (
   path: string,
   file: string | null,
   untracked: boolean,
-  staged: boolean
+  staged: boolean,
+  ignoreWhitespace = false
 ) =>
   useQuery({
-    queryKey: gitKeys.diff(path, file ?? "", untracked, staged),
+    queryKey: gitKeys.diff(path, file ?? "", untracked, staged, ignoreWhitespace),
     queryFn: () =>
-      invoke<string>("git_file_diff", { path, file, untracked, staged }),
+      invoke<string>("git_file_diff", {
+        path,
+        file,
+        untracked,
+        staged,
+        ignoreWhitespace,
+      }),
     enabled: !!file,
   });
 
@@ -435,6 +465,82 @@ export const useProviderStatus = () =>
 
 export const invalidateProviders = (qc: QueryClient) => {
   qc.invalidateQueries({ queryKey: ["providers"] });
+};
+
+// MCP servers across harness configs, for the Settings → MCP surface. The
+// harness files are the source of truth, so the list is a read-back, not
+// state Emberyx owns.
+export const mcpKeys = {
+  all: () => ["mcp", "servers"] as const,
+};
+
+export const useMcpServers = () =>
+  useQuery({
+    queryKey: mcpKeys.all(),
+    queryFn: () => invoke<McpServerInfo[]>("mcp_list"),
+    staleTime: 10_000,
+    retry: false,
+  });
+
+export const invalidateMcp = (qc: QueryClient) => {
+  qc.invalidateQueries({ queryKey: ["mcp"] });
+};
+
+export const useMcpAdd = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (spec: McpAddSpec) => invoke<void>("mcp_add", { spec }),
+    onSuccess: () => invalidateMcp(qc),
+  });
+};
+
+export const useMcpRemove = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, harness }: { name: string; harness: McpHarness }) =>
+      invoke<void>("mcp_remove", { name, harness }),
+    onSuccess: () => invalidateMcp(qc),
+  });
+};
+
+// Agent skills across harness skill folders, for the Settings → Skills
+// surface. The folders are the source of truth and several harnesses read
+// the same ones, so removal is folder-scoped, not per harness.
+export const skillsKeys = {
+  all: () => ["skills", "list"] as const,
+};
+
+export const useSkills = () =>
+  useQuery({
+    queryKey: skillsKeys.all(),
+    queryFn: () => invoke<SkillInfo[]>("skills_list"),
+    staleTime: 10_000,
+    retry: false,
+  });
+
+export const useSkillAdd = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (spec: SkillAddSpec) => invoke<void>("skills_add", { spec }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["skills"] }),
+  });
+};
+
+export const useSkillCopy = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ skillDir, harness }: { skillDir: string; harness: McpHarness }) =>
+      invoke<void>("skills_copy", { skillDir, harness }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["skills"] }),
+  });
+};
+
+export const useSkillRemove = () => {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (skillDir: string) => invoke<void>("skills_remove", { skillDir }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["skills"] }),
+  });
 };
 
 /** The persistent-agent daemon, if one is running. */

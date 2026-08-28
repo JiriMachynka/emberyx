@@ -184,14 +184,17 @@ pub fn acp_command(provider: &str) -> Result<(&'static str, &'static [&'static s
 
 impl Inner {
     /// Spawn the provider's ACP command, complete `initialize`, and stream.
+    /// `command` overrides the binary (Settings → Providers); the per-provider
+    /// subcommand stays.
     fn spawn(
         self: &Arc<Self>,
         provider: String,
         cwd: String,
+        command: Option<String>,
         on_event: Channel<AcpEvent>,
     ) -> Result<SpawnResult> {
         let (binary, args) = acp_command(&provider)?;
-        let mut cmd = Command::new(binary);
+        let mut cmd = Command::new(command.as_deref().unwrap_or(binary));
         cmd.args(args)
             .current_dir(&cwd)
             .stdin(Stdio::piped())
@@ -472,13 +475,16 @@ pub async fn acp_spawn(
     manager: tauri::State<'_, AcpManager>,
     provider: String,
     cwd: String,
+    command: Option<String>,
     on_event: Channel<AcpEvent>,
 ) -> Result<SpawnResult> {
     // Blocks on the initialize round trip, so keep it off the runtime's workers.
     let inner = manager.shared();
-    tauri::async_runtime::spawn_blocking(move || inner.spawn(provider, cwd, on_event))
-        .await
-        .map_err(|e| crate::err!("ACP spawn join failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        inner.spawn(provider, cwd, command, on_event)
+    })
+    .await
+    .map_err(|e| crate::err!("ACP spawn join failed: {e}"))?
 }
 
 #[tauri::command]

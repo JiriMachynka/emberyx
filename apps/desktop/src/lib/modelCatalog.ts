@@ -12,6 +12,7 @@
  */
 
 import type { AgentBackend } from "@/lib/agentBackend";
+import { isAgentBackend } from "@/lib/agentBackend";
 import type { CodexModel } from "@/lib/codex/protocol";
 
 export interface ModelEntry {
@@ -115,3 +116,24 @@ export const labelForModel = (
   id: string,
   entries: ModelEntry[]
 ): string | undefined => entries.find((e) => e.id === id)?.label;
+
+/** Apply the picker's stored preferences: drop hidden ids, then append the
+ *  per-provider custom slugs (a custom sharing an id with a catalog entry is
+ *  dropped — the catalog entry wins, first-seen). */
+export function withModelPrefs(
+  entries: ModelEntry[],
+  hidden: string[],
+  custom: Partial<Record<AgentBackend, string[]>>
+): ModelEntry[] {
+  const hide = new Set(hidden);
+  const customs: ModelEntry[] = Object.entries(custom).flatMap(
+    ([providerKey, ids]) => {
+      if (!isAgentBackend(providerKey)) return [];
+      return (ids ?? [])
+        .map((id) => id.trim())
+        .filter((id) => id !== "" && !hide.has(id))
+        .map((id) => ({ id, label: id, provider: providerKey, legacy: false }));
+    }
+  );
+  return [...entries, ...customs].filter((e) => !hide.has(e.id));
+}

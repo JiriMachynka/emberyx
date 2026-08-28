@@ -11,9 +11,16 @@ import {
   labelForModel,
   orderByFavorites,
   searchModels,
+  withModelPrefs,
   type ModelEntry,
 } from "@/lib/modelCatalog";
-import { getFavorites, shortcutFor, toggleFavorite } from "@/lib/modelFavorites";
+import {
+  getCustomModels,
+  getFavorites,
+  getHiddenModels,
+  shortcutFor,
+  toggleFavorite,
+} from "@/lib/modelFavorites";
 import { codexEffortForModel } from "@/lib/codex/models";
 import { useAcpModels, useCodexModels, useProviderStatus } from "@/lib/queries";
 import type { ChatUsage } from "@/hooks/useAgentChat";
@@ -76,6 +83,9 @@ export const ModelPicker = memo(function ModelPicker({
   const [query, setQuery] = useState("");
   const [showLegacy, setShowLegacy] = useState(false);
   const [favorites, setFavorites] = useState(getFavorites);
+  // Read once per mount, like favourites — the Settings surface owns edits.
+  const [hiddenModels] = useState(getHiddenModels);
+  const [customModels] = useState(getCustomModels);
 
   const installed = useProviderStatus().data ?? [];
   // Opening an app-server to read the catalog is real work — only when Codex
@@ -115,14 +125,24 @@ export const ModelPicker = memo(function ModelPicker({
       })),
     ];
     // A cached ACP catalog and the live chat's `usage.models` name the same
-    // models; each id renders once, first entry wins.
+    // models; each id renders once, first entry wins. Stored preferences go
+    // last: hidden ids drop out, custom slugs join their provider's rail.
     const seen = new Set<string>();
-    return entries.filter((e) => {
+    const deduped = entries.filter((e) => {
       if (seen.has(e.id)) return false;
       seen.add(e.id);
       return true;
     });
-  }, [backend, codexModels, grokCatalog.data, opencodeCatalog.data, usage.models]);
+    return withModelPrefs(deduped, hiddenModels, customModels);
+  }, [
+    backend,
+    codexModels,
+    grokCatalog.data,
+    opencodeCatalog.data,
+    usage.models,
+    hiddenModels,
+    customModels,
+  ]);
 
   const shown = useMemo(() => {
     const scoped =

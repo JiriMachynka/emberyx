@@ -16,14 +16,34 @@ use crate::models::{
     AgentLifecycle, Provider, TimelineEvent, TimelineEventKind, TurnAttribution,
 };
 use crate::queue::{PromptQueue, QueuedPrompt};
+use crate::store::Store;
 
 pub const MAX_TRANSCRIPT: usize = 400;
 pub const AGENT_EVENT: &str = "agent-event";
-/// A thread outlives the agents (and providers) that served it, so its durable
-/// timeline is kept deeper than any single agent transcript. This is what a
-/// reconnecting client backfills from.
-pub const MAX_TIMELINE: usize = 1000;
+/// The thread timeline is durable in SQLite (`events` table), so history is
+/// unbounded and survives restarts — what a reconnecting client backfills from.
 pub const TIMELINE_EVENT: &str = "timeline-event";
+
+/// How often the flusher wakes to drain buffered timeline events and write a
+/// state snapshot if the registry changed. A crash loses at most this interval.
+const FLUSH_INTERVAL_MS: u64 = 250;
+
+/// Buffer up to this many events before the timer gets a say — a chatty turn
+/// must not accumulate without bound.
+const FLUSH_BUFFER_SOFT_CAP: usize = 64;
+
+/// Kinds that end a unit of work. When one is appended, the whole buffer —
+/// including the prompt that started the turn — commits as a single
+/// transaction, which is what makes a turn atomic for readers.
+fn flushes_immediately(kind: &TimelineEventKind) -> bool {
+    matches!(
+        kind,
+        TimelineEventKind::Completion
+            | TimelineEventKind::Error
+            | TimelineEventKind::ApprovalRequest
+            | TimelineEventKind::ApprovalResponse
+    )
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -147,8 +167,9 @@ struct Inner {
     delegations: HashMap<String, Delegation>,
     /// Per-thread prompt queues, owned here so they survive app restarts.
     queues: HashMap<String, PromptQueue>,
-    /// Per-thread durable timelines, ordered by the server-assigned `seq`.
-    timeline: HashMap<String, VecDeque<TimelineEvent>>,
+    /// The durable event log. Attached once the app knows its data dir; every
+    /// timeline append and read goes through it.
+    store: Option<Arc<Store>>,
     /// Questions and permission requests still waiting on the user.
     approvals: HashMap<String, Approval>,
     next_event_id: u64,
@@ -156,6 +177,14 @@ struct Inner {
     /// Next timeline sequence *per thread*. Contiguous within a thread, so a
     /// reconnecting client can tell a missed event from an out-of-order one.
     next_seq: HashMap<String, u64>,
+    /// Timeline events written but not yet flushed to the store. Buffered so
+    /// one turn's events land in a single transaction (Phase 7), and so a
+    /// crash costs at most the in-flight turn.
+    pending: Vec<TimelineEvent>,
+    /// Registry mutations since the last state snapshot — the snapshot timer
+    /// skips ticks that could not have changed anything.
+    mutations: u64,
+    snapshotted_mutations: u64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -165,7 +194,9 @@ struct PersistedRegistry {
     delegations: Vec<Delegation>,
     #[serde(default)]
     queues: HashMap<String, PromptQueue>,
-    #[serde(default)]
+    /// Legacy input only: timelines lived here before the SQLite store. On
+    /// restore they are imported into `events`; new saves stop writing them.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     timeline: HashMap<String, Vec<TimelineEvent>>,
     #[serde(default)]
     approvals: Vec<Approval>,
@@ -187,6 +218,61 @@ fn now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+/// Drain buffered timeline events into the store in ONE transaction. Failure
+/// rolls the whole batch back (the store guarantees that), and the events stay
+/// buffered for the next flush — retry-safe because nothing half-landed.
+fn flush_pending(inner: &mut Inner) -> Result<()> {
+    if inner.pending.is_empty() {
+        return Ok(());
+    }
+    let Some(store) = inner.store.as_ref() else {
+        return Ok(());
+    };
+    let batch = std::mem::take(&mut inner.pending);
+    if let Err(e) = store.append_events(&batch) {
+        inner.pending = batch;
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Serialize the current registry into its persisted form. Callers hold the
+/// inner lock.
+fn registry_snapshot(inner: &Inner) -> PersistedRegistry {
+    PersistedRegistry {
+        agents: inner.agents.values().cloned().collect(),
+        transcript: inner
+            .transcript
+            .iter()
+            .map(|(id, events)| (id.clone(), events.iter().cloned().collect()))
+            .collect(),
+        delegations: inner.delegations.values().cloned().collect(),
+        queues: inner.queues.clone(),
+        approvals: inner.approvals.values().cloned().collect(),
+        // Timelines are durable in the event store; the registry no longer
+        // carries them (the empty map is skipped on serialize).
+        timeline: HashMap::new(),
+        next_event_id: inner.next_event_id,
+        next_delegation_id: inner.next_delegation_id,
+        next_seq: inner.next_seq.clone(),
+    }
+}
+
+/// Write the registry snapshot into the state log (bounded ring) if the
+/// registry changed since the last one.
+fn write_state_snapshot(inner: &mut Inner) -> Result<()> {
+    if inner.mutations == inner.snapshotted_mutations {
+        return Ok(());
+    }
+    let Some(store) = inner.store.as_ref() else {
+        return Ok(());
+    };
+    let json = serde_json::to_string(&registry_snapshot(inner))?;
+    store.save_state_snapshot("registry", &json)?;
+    inner.snapshotted_mutations = inner.mutations;
+    Ok(())
 }
 
 /// Map an agent transcript kind onto its durable timeline kind. Kinds with no
@@ -219,6 +305,56 @@ impl Supervisor {
             .unwrap_or_else(|e| e.into_inner())
             .replace(supervisor.clone());
         supervisor
+    }
+
+    /// Point the supervisor at its durable event log. Called once during
+    /// setup, before restore and before any timeline op can run. Seeds the
+    /// per-thread cursors from recorded history so new appends continue a
+    /// client's sequence instead of colliding with one, and starts the
+    /// background flusher (buffered events drain at FLUSH_INTERVAL_MS).
+    pub fn attach_store(&self, store: Arc<Store>) -> Result<()> {
+        {
+            let (lock, _) = &*self.inner;
+            let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
+            inner.store = Some(store.clone());
+            for (thread_id, seq) in store.max_stream_versions()? {
+                let cursor = inner.next_seq.entry(thread_id).or_insert(0);
+                *cursor = (*cursor).max(seq);
+            }
+            inner.snapshotted_mutations = inner.mutations;
+        }
+        self.spawn_flusher();
+        Ok(())
+    }
+
+    /// Background flusher: drains buffered timeline events and writes a state
+    /// snapshot when the registry changed. Holds the inner state only via a
+    /// Weak reference — when the last supervisor handle drops, the thread
+    /// exits instead of keeping state alive.
+    fn spawn_flusher(&self) {
+        let weak = Arc::downgrade(&self.inner);
+        let _ = std::thread::Builder::new()
+            .name("supervisor-flush".into())
+            .spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(FLUSH_INTERVAL_MS));
+                let Some(shared) = weak.upgrade() else {
+                    break;
+                };
+                let (lock, _) = &*shared;
+                let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
+                let dirty = !inner.pending.is_empty()
+                    || inner.mutations != inner.snapshotted_mutations;
+                if !dirty {
+                    continue;
+                }
+                if let Err(e) = flush_pending(&mut inner) {
+                    eprintln!("[emberyx] timeline flush failed: {e}");
+                    continue;
+                }
+                if let Err(e) = write_state_snapshot(&mut inner) {
+                    eprintln!("[emberyx] state snapshot failed: {e}");
+                }
+            });
     }
 
     pub fn register(
@@ -258,7 +394,9 @@ impl Supervisor {
         record.cwd = cwd;
         record.process_session_id = process_session_id;
         record.updated_at = timestamp;
-        record.clone()
+        let copy = record.clone();
+        inner.mutations += 1;
+        copy
     }
 
     pub fn list(&self) -> Vec<AgentRecord> {
@@ -454,6 +592,7 @@ impl Supervisor {
         change(record);
         record.updated_at = now();
         let copy = record.clone();
+        inner.mutations += 1;
         ready.notify_all();
         Ok(copy)
     }
@@ -516,7 +655,7 @@ impl Supervisor {
                     kind,
                     Some(attribution),
                     event.payload.clone(),
-                ))
+                )?)
             }
             _ => None,
         };
@@ -538,13 +677,20 @@ impl Supervisor {
             .map(|record| record.agent_id.clone())
     }
 
+    /// Build the next event for a thread (assigning its per-thread sequence)
+    /// and buffer it for the durable log. Sequence assignment happens under
+    /// the supervisor lock, so a client can never observe two appends land
+    /// out of stream order; the INSERT lands on flush, whole turns at a time.
     fn push_timeline(
         inner: &mut Inner,
         thread_id: &str,
         kind: TimelineEventKind,
         attribution: Option<TurnAttribution>,
         payload: String,
-    ) -> TimelineEvent {
+    ) -> Result<TimelineEvent> {
+        if inner.store.is_none() {
+            return Err(crate::err!("event store not attached"));
+        }
         let seq = inner.next_seq.entry(thread_id.to_string()).or_insert(0);
         *seq += 1;
         let seq = *seq;
@@ -555,13 +701,14 @@ impl Supervisor {
             attribution,
             timestamp: now(),
             payload,
+            raw_line: None,
         };
-        let events = inner.timeline.entry(thread_id.to_string()).or_default();
-        events.push_back(event.clone());
-        while events.len() > MAX_TIMELINE {
-            events.pop_front();
+        inner.pending.push(event.clone());
+        inner.mutations += 1;
+        if flushes_immediately(&event.kind) || inner.pending.len() >= FLUSH_BUFFER_SOFT_CAP {
+            flush_pending(inner)?;
         }
-        event
+        Ok(event)
     }
 
     /// Append straight to a thread timeline, for events that belong to the
@@ -573,30 +720,75 @@ impl Supervisor {
         kind: TimelineEventKind,
         attribution: Option<TurnAttribution>,
         payload: String,
-    ) -> TimelineEvent {
+    ) -> Result<TimelineEvent> {
         let (lock, ready) = &*self.inner;
         let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let event = Self::push_timeline(&mut inner, thread_id, kind, attribution, payload);
+        let event = Self::push_timeline(&mut inner, thread_id, kind, attribution, payload)?;
         ready.notify_all();
-        event
+        Ok(event)
     }
 
     /// Read a thread timeline ordered by server sequence. `after_seq` is the
     /// last sequence the caller already holds — the backfill cursor a client
     /// uses after a reconnect, so ordering never depends on arrival time.
-    pub fn read_timeline(&self, thread_id: &str, after_seq: Option<u64>) -> Vec<TimelineEvent> {
+    /// Buffered events flush first: a read must never miss what the writer
+    /// already acknowledged.
+    pub fn read_timeline(
+        &self,
+        thread_id: &str,
+        after_seq: Option<u64>,
+    ) -> Result<Vec<TimelineEvent>> {
+        let store = {
+            let (lock, _) = &*self.inner;
+            let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
+            flush_pending(&mut inner)?;
+            inner.store.clone()
+        };
+        match store {
+            Some(store) => store.read_timeline(thread_id, after_seq),
+            // No store yet means nothing was ever appended either: an empty
+            // timeline is the honest reading, not an error to surface.
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Flush buffered timeline events, then write a state snapshot — the
+    /// registry's durability no longer depends on this being called, but the
+    /// exit hook keeps the cost of a clean shutdown at zero drift.
+    pub fn flush_events(&self) -> Result<()> {
+        let store = {
+            let (lock, _) = &*self.inner;
+            let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
+            flush_pending(&mut inner)?;
+            write_state_snapshot(&mut inner)?;
+            inner.store.clone()
+        };
+        match store {
+            Some(store) => store.checkpoint(),
+            None => Ok(()),
+        }
+    }
+
+    /// Force a state snapshot now, regardless of the dirty counter. The
+    /// timer-flush path is what production relies on; tests and explicit
+    /// durability points call this.
+    pub fn snapshot_now(&self) -> Result<()> {
         let (lock, _) = &*self.inner;
-        let inner = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let mut events: Vec<TimelineEvent> = inner
-            .timeline
-            .get(thread_id)
-            .into_iter()
-            .flat_map(|events| events.iter())
-            .filter(|event| after_seq.is_none_or(|seq| event.seq > seq))
-            .cloned()
-            .collect();
-        events.sort_by_key(|event| event.seq);
-        events
+        let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
+        flush_pending(&mut inner)?;
+        inner.mutations += 1; // never skip: the caller asked explicitly
+        write_state_snapshot(&mut inner)
+    }
+
+    /// The durable log, when attached. Ingest commands read through it rather
+    /// than opening a second connection pool against the same file. Buffered
+    /// events flush first — ingest derives stream versions from the log's max,
+    /// which pending-but-unwritten events would skew.
+    pub fn store(&self) -> Option<Arc<Store>> {
+        let (lock, _) = &*self.inner;
+        let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = flush_pending(&mut inner);
+        inner.store.clone()
     }
 
     /// Record a request the agent is blocked on and put it on the thread's
@@ -623,9 +815,10 @@ impl Supervisor {
             let (lock, ready) = &*self.inner;
             let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
             inner.approvals.insert(approval_id, approval.clone());
+            inner.mutations += 1;
             ready.notify_all();
         }
-        self.record_thread_event(
+        self.record_timeline_quietly(
             &thread_id,
             TimelineEventKind::ApprovalRequest,
             None,
@@ -641,6 +834,9 @@ impl Supervisor {
             let (lock, ready) = &*self.inner;
             let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
             let approval = inner.approvals.remove(approval_id);
+            if approval.is_some() {
+                inner.mutations += 1;
+            }
             ready.notify_all();
             approval
         }?;
@@ -649,13 +845,28 @@ impl Supervisor {
             "answer": answer,
         })
         .to_string();
-        self.record_thread_event(
+        self.record_timeline_quietly(
             &approval.thread_id,
             TimelineEventKind::ApprovalResponse,
             None,
             payload,
         );
         Some(approval)
+    }
+
+    /// Best-effort timeline write for paths that must not fail the caller: the
+    /// approval record itself is durable in the registry, and a failed insert
+    /// here is degraded history, not a lost approval. Logged loudly regardless.
+    fn record_timeline_quietly(
+        &self,
+        thread_id: &str,
+        kind: TimelineEventKind,
+        attribution: Option<TurnAttribution>,
+        payload: String,
+    ) {
+        if let Err(e) = self.record_thread_event(thread_id, kind, attribution, payload) {
+            eprintln!("[emberyx] timeline append failed for {thread_id}: {e}");
+        }
     }
 
     /// Requests still worth showing: unanswered and not yet expired. Expired
@@ -700,6 +911,7 @@ impl Supervisor {
         let (lock, _) = &*self.inner;
         let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
         inner.queues.insert(thread_id.to_string(), queue);
+        inner.mutations += 1;
         Ok(())
     }
 
@@ -866,6 +1078,7 @@ impl Supervisor {
             if let Some(agent) = inner.agents.get_mut(target_agent_id) {
                 agent.delegation_id = Some(delegation.delegation_id.clone());
             }
+            inner.mutations += 1;
             delegation
         };
         self.set_task(target_agent_id, Some(task))?;
@@ -907,6 +1120,7 @@ impl Supervisor {
         delegation.error = error;
         delegation.completed_at = Some(now());
         let copy = delegation.clone();
+        inner.mutations += 1;
         let clear_task = inner
             .agents
             .get(target_agent_id)
@@ -983,26 +1197,12 @@ impl Supervisor {
 
     pub fn persist(&self, path: &std::path::Path) -> Result<()> {
         let (lock, _) = &*self.inner;
-        let inner = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let snapshot = PersistedRegistry {
-            agents: inner.agents.values().cloned().collect(),
-            transcript: inner
-                .transcript
-                .iter()
-                .map(|(id, events)| (id.clone(), events.iter().cloned().collect()))
-                .collect(),
-            delegations: inner.delegations.values().cloned().collect(),
-            queues: inner.queues.clone(),
-            approvals: inner.approvals.values().cloned().collect(),
-            timeline: inner
-                .timeline
-                .iter()
-                .map(|(id, events)| (id.clone(), events.iter().cloned().collect()))
-                .collect(),
-            next_event_id: inner.next_event_id,
-            next_delegation_id: inner.next_delegation_id,
-            next_seq: inner.next_seq.clone(),
-        };
+        let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
+        // Anything still buffered must land before either surface is written,
+        // or the registry would claim state the event log doesn't back.
+        flush_pending(&mut inner)?;
+        let snapshot = registry_snapshot(&inner);
+        let _ = write_state_snapshot(&mut inner);
         let data = serde_json::to_vec_pretty(&snapshot)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -1014,8 +1214,22 @@ impl Supervisor {
     }
 
     pub fn restore(&self, path: &std::path::Path) -> Result<()> {
+        // Prefer the periodic state snapshot: it can only be newer than
+        // anything an exit-only registry file holds. registry.json remains
+        // the fallback for one release (fresh installs upgrading from a
+        // pre-store build land here).
+        if let Some(store) = self.store() {
+            if let Some(json) = store.latest_state_snapshot("registry")? {
+                let snapshot: PersistedRegistry = serde_json::from_str(&json)?;
+                return self.apply_snapshot(snapshot);
+            }
+        }
         let data = std::fs::read(path)?;
-        let mut snapshot: PersistedRegistry = serde_json::from_slice(&data)?;
+        let snapshot: PersistedRegistry = serde_json::from_slice(&data)?;
+        self.apply_snapshot(snapshot)
+    }
+
+    fn apply_snapshot(&self, mut snapshot: PersistedRegistry) -> Result<()> {
         for agent in &mut snapshot.agents {
             agent.process_session_id = None;
             agent.turn_id = None;
@@ -1049,30 +1263,26 @@ impl Supervisor {
             .into_iter()
             .map(|approval| (approval.approval_id.clone(), approval))
             .collect();
-        inner.timeline = snapshot
-            .timeline
-            .into_iter()
-            .map(|(id, events)| (id, events.into_iter().collect::<VecDeque<_>>()))
-            .collect();
         inner.next_event_id = snapshot.next_event_id;
         inner.next_delegation_id = snapshot.next_delegation_id;
         // A truncated or hand-edited registry must never reissue a sequence a
         // client has already seen — seq is the client's backfill cursor.
-        inner.next_seq = snapshot.next_seq;
-        let highest: Vec<(String, u64)> = inner
-            .timeline
-            .iter()
-            .map(|(thread_id, events)| {
-                (
-                    thread_id.clone(),
-                    events.iter().map(|event| event.seq).max().unwrap_or(0),
-                )
-            })
-            .collect();
-        for (thread_id, seq) in highest {
+        // Cursors already carry store history from attach; restored ones may
+        // only raise them.
+        for (thread_id, seq) in snapshot.next_seq {
             let cursor = inner.next_seq.entry(thread_id).or_insert(0);
             *cursor = (*cursor).max(seq);
         }
+
+        // Timelines from a pre-store registry migrate into the event log here,
+        // one release's grace period after which old saves carry none.
+        if let Some(store) = inner.store.as_ref() {
+            let mut legacy: Vec<&TimelineEvent> = snapshot.timeline.values().flatten().collect();
+            legacy.sort_by(|a, b| a.thread_id.cmp(&b.thread_id).then(a.seq.cmp(&b.seq)));
+            store.import_events(legacy.into_iter())?;
+        }
+        // Cursors were seeded from the store at attach; the restored counters
+        // (from a possibly-further-along registry) may only raise them.
         Ok(())
     }
 }
@@ -1101,7 +1311,7 @@ pub fn thread_timeline_read(
     supervisor: tauri::State<'_, Supervisor>,
     thread_id: String,
     after_seq: Option<u64>,
-) -> Vec<TimelineEvent> {
+) -> Result<Vec<TimelineEvent>> {
     supervisor.read_timeline(&thread_id, after_seq)
 }
 
@@ -1113,10 +1323,10 @@ pub fn thread_timeline_append(
     kind: TimelineEventKind,
     attribution: Option<TurnAttribution>,
     payload: String,
-) -> TimelineEvent {
-    let event = supervisor.record_thread_event(&thread_id, kind, attribution, payload);
+) -> Result<TimelineEvent> {
+    let event = supervisor.record_thread_event(&thread_id, kind, attribution, payload)?;
     emit_timeline(&app, &event);
-    event
+    Ok(event)
 }
 
 #[tauri::command]
@@ -1360,6 +1570,40 @@ pub fn agent_prompt(
 /// Record a queue mutation on both streams. Queue ops are addressed by thread,
 /// so the owning agent is resolved here; a thread with no live agent still gets
 /// its durable timeline entry rather than losing the event.
+///
+/// Split from the emit below so the failure contract is testable without a
+/// webview: everything that can fail lives here.
+fn queue_event_record(
+    supervisor: &Supervisor,
+    thread_id: &str,
+    agent_id: Option<&str>,
+    kind: &str,
+    payload: impl serde::Serialize,
+) -> Result<(Option<AgentEvent>, Option<TimelineEvent>)> {
+    let payload = serde_json::to_string(&payload).unwrap_or_default();
+    let owner = agent_id
+        .map(str::to_string)
+        .or_else(|| supervisor.agent_for_thread(thread_id));
+    match owner {
+        Some(id) => {
+            let (event, mirrored) = supervisor.append_with_timeline(&id, kind.into(), payload)?;
+            Ok((Some(event), mirrored))
+        }
+        None => match timeline_kind(kind) {
+            Some(kind) => {
+                let event = supervisor.record_thread_event(thread_id, kind, None, payload)?;
+                Ok((None, Some(event)))
+            }
+            None => Ok((None, None)),
+        },
+    }
+}
+
+/// Record and broadcast a queue mutation, best-effort. Every caller has already
+/// applied its mutation by the time it gets here — the prompt is popped, the
+/// item deleted — so a failed append is degraded history, not a failed command.
+/// Returning the error would tell the UI a prompt was never dispatched that in
+/// fact already left the queue.
 fn queue_event(
     app: &tauri::AppHandle,
     supervisor: &Supervisor,
@@ -1368,23 +1612,17 @@ fn queue_event(
     kind: &str,
     payload: impl serde::Serialize,
 ) {
-    let payload = serde_json::to_string(&payload).unwrap_or_default();
-    let appended = agent_id
-        .map(str::to_string)
-        .or_else(|| supervisor.agent_for_thread(thread_id))
-        .and_then(|id| supervisor.append_with_timeline(&id, kind.into(), payload.clone()).ok());
-    match appended {
-        Some((event, mirrored)) => {
-            emit(app, &event);
+    match queue_event_record(supervisor, thread_id, agent_id, kind, payload) {
+        Ok((event, mirrored)) => {
+            if let Some(event) = event {
+                emit(app, &event);
+            }
             if let Some(mirrored) = mirrored {
                 emit_timeline(app, &mirrored);
             }
         }
-        None => {
-            if let Some(kind) = timeline_kind(kind) {
-                let event = supervisor.record_thread_event(thread_id, kind, None, payload);
-                emit_timeline(app, &event);
-            }
+        Err(e) => {
+            eprintln!("[emberyx] queue timeline append failed for {thread_id} ({kind}): {e}")
         }
     }
 }
@@ -1587,8 +1825,33 @@ pub fn agent_delegation_cancel(
 mod tests {
     use super::*;
 
+    fn supervisor_at(db_path: &std::path::Path) -> Supervisor {
+        let s = Supervisor::new();
+        s.attach_store(std::sync::Arc::new(Store::open(db_path).unwrap()))
+            .unwrap();
+        s
+    }
+
+    /// Unique throwaway directory per test — parallel tests share nothing.
+    fn fresh_dir(name: &str) -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("emberyx-supervisor-{name}-{}-{n}", now()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A supervisor with its durable log in a throwaway SQLite file. Every
+    /// timeline op requires a store — appends fail loudly without one, which is
+    /// the production contract too (`attach_store` runs during setup).
     fn supervisor() -> Supervisor {
-        Supervisor::new()
+        // Tests run in parallel threads; ms timestamps collide.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("emberyx-supervisor-db-{}-{n}", now()));
+        let _ = std::fs::remove_dir_all(&dir);
+        supervisor_at(&dir.join("emberyx.db"))
     }
 
     fn register(s: &Supervisor, agent_id: &str, thread_id: Option<&str>) {
@@ -1894,7 +2157,7 @@ mod tests {
         s.append("a", "thread-attached".into(), "{}".into()).unwrap();
         s.append("a", "turn-completed".into(), "{}".into()).unwrap();
 
-        let events = s.read_timeline("t1", None);
+        let events = s.read_timeline("t1", None).unwrap();
         let kinds: Vec<_> = events.iter().map(|event| event.kind.clone()).collect();
         assert_eq!(
             kinds,
@@ -1913,13 +2176,13 @@ mod tests {
         let s = supervisor();
         register(&s, "a", Some("t1"));
         s.append("a", "prompt".into(), "one".into()).unwrap();
-        let first = s.read_timeline("t1", None)[0].seq;
+        let first = s.read_timeline("t1", None).unwrap()[0].seq;
         s.append("a", "prompt".into(), "two".into()).unwrap();
 
-        let missed = s.read_timeline("t1", Some(first));
+        let missed = s.read_timeline("t1", Some(first)).unwrap();
         assert_eq!(missed.len(), 1);
         assert_eq!(missed[0].payload, "two");
-        assert!(s.read_timeline("t1", Some(missed[0].seq)).is_empty());
+        assert!(s.read_timeline("t1", Some(missed[0].seq)).unwrap().is_empty());
     }
 
     #[test]
@@ -1930,34 +2193,100 @@ mod tests {
         // The failed append must not have consumed an event id or a sequence.
         let event = s.append("a", "prompt".into(), "x".into()).unwrap();
         assert_eq!(event.event_id, 1);
-        assert_eq!(s.read_timeline("t1", None)[0].seq, 1);
+        assert_eq!(s.read_timeline("t1", None).unwrap()[0].seq, 1);
     }
 
     #[test]
     fn thread_events_without_an_agent_still_land_on_the_timeline() {
         let s = supervisor();
         assert_eq!(s.agent_for_thread("t1"), None);
-        s.record_thread_event("t1", TimelineEventKind::ProviderSwitch, None, "{}".into());
+        s.record_thread_event("t1", TimelineEventKind::ProviderSwitch, None, "{}".into())
+            .unwrap();
         register(&s, "a", Some("t1"));
         assert_eq!(s.agent_for_thread("t1").as_deref(), Some("a"));
-        assert_eq!(s.read_timeline("t1", None).len(), 1);
+        assert_eq!(s.read_timeline("t1", None).unwrap().len(), 1);
     }
 
     #[test]
-    fn timeline_survives_persistence_and_never_reissues_a_sequence() {
-        let path = std::env::temp_dir().join(format!("emberyx-registry-tl-{}.json", now()));
-        let s = supervisor();
-        register(&s, "a", Some("t1"));
-        s.append("a", "prompt".into(), "before".into()).unwrap();
-        let last = s.read_timeline("t1", None)[0].seq;
-        s.persist(&path).unwrap();
+    fn timeline_survives_a_supervisor_restart_and_continues_the_sequence() {
+        let dir = std::env::temp_dir().join(format!("emberyx-restart-db-{}", now()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let db = dir.join("emberyx.db");
 
-        let restored = supervisor();
-        restored.restore(&path).unwrap();
-        assert_eq!(restored.read_timeline("t1", None).len(), 1);
-        let next =
-            restored.record_thread_event("t1", TimelineEventKind::Error, None, "after".into());
-        assert!(next.seq > last);
+        let first = supervisor_at(&db);
+        register(&first, "a", Some("t1"));
+        first.append("a", "prompt".into(), "before".into()).unwrap();
+        let before = first.read_timeline("t1", None).unwrap();
+        assert_eq!(before.len(), 1);
+        drop(first);
+
+        // A fresh supervisor over the same event store sees the same history,
+        // and its first new append continues the client's sequence rather than
+        // reissuing one — the seq contract survives the process.
+        let second = supervisor_at(&db);
+        assert_eq!(second.read_timeline("t1", None).unwrap(), before);
+        let next = second
+            .record_thread_event(
+                "t1",
+                TimelineEventKind::Error,
+                None,
+                "after restart".into(),
+            )
+            .unwrap();
+        assert_eq!(next.seq, before[0].seq + 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn restore_imports_legacy_registry_timelines_into_the_store() {
+        let path =
+            std::env::temp_dir().join(format!("emberyx-legacy-tl-{}.json", now()));
+        // A pre-store registry.json: timelines rode along in the snapshot and
+        // `next_seq` guarded the cursor. Restore must land them in the event
+        // log, then keep appending past them without a collision.
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "agents": [],
+                "transcript": {},
+                "delegations": [],
+                "timeline": {
+                    "legacy": [{
+                        "seq": 1,
+                        "threadId": "legacy",
+                        "kind": "userPrompt",
+                        "attribution": null,
+                        "timestamp": 123,
+                        "payload": "from json"
+                    }]
+                },
+                "approvals": [],
+                "next_event_id": 0,
+                "next_delegation_id": 0,
+                "next_seq": { "legacy": 1 }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let s = supervisor();
+        s.restore(&path).unwrap();
+        let events = s.read_timeline("legacy", None).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].payload, "from json");
+        assert_eq!(
+            events[0].kind,
+            TimelineEventKind::UserPrompt
+        );
+        let next = s
+            .record_thread_event(
+                "legacy",
+                TimelineEventKind::Completion,
+                None,
+                "after import".into(),
+            )
+            .unwrap();
+        assert_eq!(next.seq, 2);
         let _ = std::fs::remove_file(path);
     }
 
@@ -2036,7 +2365,7 @@ mod tests {
         // Closing twice is what a timeout racing an answer does.
         assert!(s.close_approval("ask-1", None).is_none());
 
-        let kinds: Vec<_> = s.read_timeline("t1", None).iter().map(|e| e.kind.clone()).collect();
+        let kinds: Vec<_> = s.read_timeline("t1", None).unwrap().iter().map(|e| e.kind.clone()).collect();
         assert_eq!(
             kinds,
             [
@@ -2067,26 +2396,119 @@ mod tests {
 
         // Interleaving threads must not punch holes in either sequence — the
         // client reads a gap as "I missed an event".
-        let one: Vec<u64> = s.read_timeline("t1", None).iter().map(|e| e.seq).collect();
-        let two: Vec<u64> = s.read_timeline("t2", None).iter().map(|e| e.seq).collect();
+        let one: Vec<u64> = s.read_timeline("t1", None).unwrap().iter().map(|e| e.seq).collect();
+        let two: Vec<u64> = s.read_timeline("t2", None).unwrap().iter().map(|e| e.seq).collect();
         assert_eq!(one, [1, 2]);
         assert_eq!(two, [1]);
     }
 
     #[test]
-    fn timeline_is_bounded_per_thread() {
-        let s = supervisor();
-        for index in 0..(MAX_TIMELINE + 5) {
-            s.record_thread_event(
+    fn a_turn_lands_as_one_atomic_write_and_a_crash_only_loses_it() {
+        let dir = fresh_dir("atomic-crash");
+        let db = dir.join("emberyx.db");
+        let s = supervisor_at(&db);
+        register(&s, "a", Some("t1"));
+
+        // The prompt buffers: nothing durable yet, and no DB write happened.
+        // A second store handle on the same file reads what a crashed reader
+        // would see.
+        s.append("a", "prompt".into(), "in-flight".into()).unwrap();
+        let probe = Store::open(&db).unwrap();
+        let rows_in_db: i64 = probe
+            .with_reader(|conn| {
+                Ok(conn.query_row(
+                    "SELECT count(*) FROM events WHERE thread_id='t1'",
+                    [],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(rows_in_db, 0, "a prompt alone must not hit the log yet");
+
+        // A concurrent reader during the flush sees either nothing or the
+        // whole turn — never the prompt without its completion.
+        let reader = std::thread::spawn(move || {
+            for _ in 0..50 {
+                let n: i64 = probe
+                    .with_reader(|conn| {
+                        Ok(conn.query_row(
+                            "SELECT count(*) FROM events WHERE thread_id='t1'",
+                            [],
+                            |r| r.get(0),
+                        )?)
+                    })
+                    .unwrap();
+                assert!(n == 0 || n == 2, "half-written turn observed: {n}");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        });
+
+        // Completion ends the turn: prompt + completion flush together.
+        s.append("a", "turn-completed".into(), "{}".into()).unwrap();
+        reader.join().unwrap();
+        let timeline = s.read_timeline("t1", None).unwrap();
+        assert_eq!(timeline.len(), 2);
+        assert_eq!(timeline[0].payload, "in-flight");
+
+        // Kill simulation: a prompt that never completes is the only thing a
+        // crash may lose, and the restarted supervisor continues from the
+        // log's max rather than reissuing the lost event's version.
+        s.append("a", "prompt".into(), "lost-on-crash".into())
+            .unwrap();
+        drop(s);
+        let second = supervisor_at(&db);
+        let events = second.read_timeline("t1", None).unwrap();
+        assert_eq!(events.len(), 2, "the unflushed prompt is gone, nothing else");
+        let next = second
+            .record_thread_event(
                 "t1",
-                TimelineEventKind::UserPrompt,
+                TimelineEventKind::Error,
                 None,
-                index.to_string(),
-            );
-        }
-        let events = s.read_timeline("t1", None);
-        assert_eq!(events.len(), MAX_TIMELINE);
-        assert_eq!(events[0].payload, "5");
+                "after crash".into(),
+            )
+            .unwrap();
+        assert_eq!(next.seq, 3, "sequence continues past the flushed turn");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_state_snapshot_survives_a_crash_between_exits() {
+        let dir = fresh_dir("snapshot-restart");
+        let db = dir.join("emberyx.db");
+        let registry = dir.join("registry.json");
+
+        let s = supervisor_at(&db);
+        register(&s, "a", Some("t1"));
+        s.enqueue_prompt("t1", "queued work".into(), None).unwrap();
+        s.pause_queue("t1").unwrap();
+        // No Exit hook runs in a crash: only the periodic snapshot exists.
+        s.snapshot_now().unwrap();
+        drop(s);
+
+        let revived = supervisor_at(&db);
+        // A missing registry.json must not matter — the snapshot is newer.
+        revived.restore(&registry).unwrap();
+        let items = revived.list_queue("t1").unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].text, "queued work");
+        assert!(revived.queue_paused("t1").unwrap());
+        assert_eq!(revived.get("a").unwrap().thread_id.as_deref(), Some("t1"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn registry_json_remains_the_fallback_without_a_snapshot() {
+        let dir = fresh_dir("json-fallback");
+        let db = dir.join("emberyx.db");
+        let path = dir.join("registry.json");
+        let s = supervisor_at(&db);
+        s.enqueue_prompt("t1", "survive".into(), None).unwrap();
+        s.persist(&path).unwrap();
+
+        let restored = supervisor_at(&db);
+        restored.restore(&path).unwrap();
+        assert_eq!(restored.list_queue("t1").unwrap()[0].text, "survive");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -2100,5 +2522,48 @@ mod tests {
         s.transition("a", Lifecycle::Working).unwrap();
         assert!(!s.queue_paused("t1").unwrap());
         assert!(s.run_next_prompt("t1").unwrap().is_some());
+    }
+
+    /// `agent_queue_run_next` pops the prompt before it records the dispatch.
+    /// If the record could fail the command, the UI would be told the dispatch
+    /// failed while the prompt is already gone from the queue.
+    #[test]
+    fn a_failed_timeline_record_does_not_undo_a_dispatched_prompt() {
+        // No store attached, which is exactly when the durable append fails.
+        // `Default` rather than `new()`: this one stays out of the ACTIVE slot.
+        let s = Supervisor::default();
+        s.enqueue_prompt("t1", "ship it".into(), None).unwrap();
+
+        // The body of `agent_queue_run_next` minus the Tauri emit: pop first,
+        // then record.
+        let next = s.run_next_prompt("t1").unwrap();
+        let recorded = next
+            .as_ref()
+            .map(|prompt| queue_event_record(&s, "t1", None, "prompt-dispatched", prompt));
+
+        assert!(
+            matches!(recorded, Some(Err(_))),
+            "the record must genuinely fail or this test proves nothing"
+        );
+        assert_eq!(
+            next.map(|p| p.text).as_deref(),
+            Some("ship it"),
+            "the popped prompt is still what the command returns"
+        );
+        assert!(
+            s.list_queue("t1").unwrap().is_empty(),
+            "the pop already happened — an error here would report the opposite"
+        );
+    }
+
+    /// Same contract on the enqueue side: the prompt is in the queue before its
+    /// timeline entry is attempted, so a failed entry must not read as a
+    /// rejected prompt.
+    #[test]
+    fn a_failed_timeline_record_does_not_undo_an_enqueued_prompt() {
+        let s = Supervisor::default();
+        let queued = s.enqueue_prompt("t1", "later".into(), None).unwrap();
+        assert!(queue_event_record(&s, "t1", None, "prompt-queued", &queued).is_err());
+        assert_eq!(s.list_queue("t1").unwrap().len(), 1);
     }
 }

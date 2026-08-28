@@ -1,6 +1,9 @@
 import { memo, type ComponentProps } from "react";
-import { Streamdown } from "streamdown";
+import { Streamdown, type ThemeInput } from "streamdown";
 import { code, type CodeHighlighterPlugin } from "@streamdown/code";
+import { FileRef } from "@/components/FileRef";
+import { fileRefPath, isFileReference } from "@/lib/fileRef";
+import { cn } from "@/lib/utils";
 
 /** T3 skips the Shiki LRU while a fence is still growing so every token
  *  doesn't write a unique partial into the cache. We go one step further:
@@ -38,10 +41,34 @@ const deferredCode: CodeHighlighterPlugin = {
   },
 };
 
+/** Both slots take the same dark theme. Streamdown picks its dark colors
+ *  behind a `dark:` variant, and nothing in this app ever sets the `dark`
+ *  class — the window is dark, full stop — so the light slot is the one that
+ *  actually paints. Pairing it with a light theme is what put GitHub-light's
+ *  blues and reds on the plum canvas. Vesper is warm and low-saturation, which
+ *  is the same family as the ember accent. */
+const shikiTheme: [ThemeInput, ThemeInput] = ["vesper", "vesper"];
+
 const streamingPlugins = { code: deferredCode };
 const staticPlugins = { code };
 
 const components = {
+  /** Streamdown routes only inline spans here, so fences keep their own
+   *  renderer. An inline span that names a file gets the file's icon. */
+  inlineCode({ children, className, ...rest }: ComponentProps<"code">) {
+    const text = typeof children === "string" ? children : null;
+    if (text !== null && isFileReference(text)) {
+      return <FileRef path={fileRefPath(text)} label={text} />;
+    }
+    return (
+      <code
+        {...rest}
+        className={cn("rounded bg-muted px-1.5 py-0.5 font-mono text-sm", className)}
+      >
+        {children}
+      </code>
+    );
+  },
   a({ children, href, ...rest }: ComponentProps<"a">) {
     return (
       <a
@@ -85,6 +112,7 @@ export const Markdown = memo(function Markdown({
         skipHtml
         lineNumbers={false}
         codeBlockMaxHeight={0}
+        shikiTheme={shikiTheme}
         linkSafety={{ enabled: false }}
         controls={controls}
         plugins={streaming ? streamingPlugins : staticPlugins}

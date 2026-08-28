@@ -1,23 +1,7 @@
 import { useEffect, useRef } from "react";
-import {
-  FolderOpen,
-  GitCompare,
-  GitPullRequest,
-  Globe,
-  SquareTerminal,
-  Terminal,
-} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DOCK_LABEL, PICKER_OFFERS, type DockKind } from "@/lib/dock";
-
-const ICONS: Record<(typeof PICKER_OFFERS)[number]["kind"], typeof Globe> = {
-  terminal: Terminal,
-  preview: Globe,
-  files: FolderOpen,
-  diff: GitCompare,
-  mrs: GitPullRequest,
-  dev: SquareTerminal,
-};
+import { DOCK_ICONS } from "@/lib/dockIcons";
 
 interface DockPickerProps {
   onPick: (kind: DockKind) => void;
@@ -69,7 +53,7 @@ export function DockPicker({ onPick, titles, unavailable }: DockPickerProps) {
       </p>
       <div className="mt-8 grid w-full max-w-lg grid-cols-2 gap-3">
         {PICKER_OFFERS.map((offer) => {
-          const Icon = ICONS[offer.kind];
+          const Icon = DOCK_ICONS[offer.kind];
           const blocked = unavailable?.[offer.kind];
           return (
             <button

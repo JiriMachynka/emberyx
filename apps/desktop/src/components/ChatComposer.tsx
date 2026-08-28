@@ -46,6 +46,7 @@ import {
   titleCase,
 } from "@/lib/codex/models";
 import { applyMention, mentionAt, type Mention } from "@/lib/mentions";
+import { pasteInsertion } from "@/lib/fileRef";
 import { applySlash, filterCommands, slashAt, type SlashToken } from "@/lib/slash";
 import {
   useCodexModels,
@@ -861,9 +862,25 @@ export const ChatComposer = memo(function ChatComposer({
       .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
       .map((it) => it.getAsFile())
       .filter((f): f is File => f !== null);
-    if (files.length === 0) return;
+    if (files.length > 0) {
+      e.preventDefault();
+      appendImages(files);
+      return;
+    }
+
+    // A pasted path becomes the mention it means, a pasted snippet gets its
+    // language. Anything else falls through to the browser's own paste.
+    const el = e.currentTarget;
+    const next = pasteInsertion({
+      value: input,
+      selectionStart: el.selectionStart,
+      selectionEnd: el.selectionEnd,
+      pasted: e.clipboardData?.getData("text/plain") ?? "",
+      cwd,
+    });
+    if (!next) return;
     e.preventDefault();
-    appendImages(files);
+    complete(next);
   };
 
   const handleDrop = (e: React.DragEvent) => {

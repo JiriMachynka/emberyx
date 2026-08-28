@@ -12,10 +12,12 @@ import {
   Info,
   Keyboard,
   Plug,
+  Puzzle,
   RotateCcw,
   Search,
   ShieldCheck,
   SlidersHorizontal,
+  Sparkles,
   Type,
 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
@@ -44,7 +46,20 @@ import {
   PERMISSION_MODE_LABEL,
 } from "@/lib/settings";
 import { PROVIDER_LABEL } from "@/lib/providers";
-import { Group, Row, SwitchRow } from "@/components/SettingsFields";
+import {
+  CODEX_SANDBOXES,
+  CODEX_SANDBOX_LABEL,
+  isCodexSandbox,
+} from "@/lib/settings";
+import {
+  getCustomModels,
+  getHiddenModels,
+  setCustomModels,
+  setHiddenModels,
+} from "@/lib/modelFavorites";
+import { Field, Group, Row, SwitchRow } from "@/components/SettingsFields";
+import { McpSection } from "@/components/McpSection";
+import { SkillsSection } from "@/components/SkillsSection";
 import { COMMANDS, type CommandId } from "@/lib/commands";
 import {
   chordFromEvent,
@@ -61,6 +76,7 @@ import {
   BACKEND_LABEL,
   capabilitiesOf,
   isAgentBackend,
+  type AgentBackend,
 } from "@/lib/agentBackend";
 import type { LucideIcon } from "lucide-react";
 import type { Settings } from "@/lib/settings";
@@ -76,6 +92,8 @@ type Tab =
   | "appearance"
   | "shortcuts"
   | "providers"
+  | "mcp"
+  | "skills"
   | "permissions"
   | "connections"
   | "sourceControl"
@@ -133,8 +151,22 @@ const TABS: TabMeta[] = [
     id: "providers",
     label: "Providers",
     icon: Boxes,
-    keys: ["agentBackend", "agentCommand"],
-    finds: "claude codex backend cli command installed version",
+    keys: ["agentBackend", "agentCommand", "providerLaunch", "codexSandbox"],
+    finds: "claude codex backend cli command installed version sandbox launch binary args model list hidden custom",
+  },
+  {
+    id: "mcp",
+    label: "MCP",
+    icon: Puzzle,
+    keys: [],
+    finds: "mcp servers tools connect stdio http context7",
+  },
+  {
+    id: "skills",
+    label: "Skills",
+    icon: Sparkles,
+    keys: [],
+    finds: "skills slash commands abilities create instructions skil",
   },
   {
     id: "permissions",
@@ -162,8 +194,8 @@ const TABS: TabMeta[] = [
     id: "sourceControl",
     label: "Source Control",
     icon: GitBranch,
-    keys: ["gitlabRemote"],
-    finds: "git github gitlab gh glab cli login remote pull request merge request",
+    keys: ["gitlabRemote", "diffIgnoreWhitespace"],
+    finds: "git github gitlab gh glab cli login remote pull request merge request diff whitespace",
   },
   {
     id: "notifications",
@@ -197,13 +229,16 @@ export function SettingsPage({
   const [version, setVersion] = useState("");
   const [checking, setChecking] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
-  const capabilities = capabilitiesOf(settings.agentBackend);
-  const models = useOpenRouterModels(true).data ?? [];
+  const capabilities = capabilitiesOf(settings.agentBackend);  const models = useOpenRouterModels(true).data ?? [];
   const qc = useQueryClient();
   const providers = useProviderStatus().data ?? [];
   const forgeClis = useForgeCliStatus().data ?? [];
   const daemon = useDaemonHealth(true).data ?? null;
   const [startingDaemon, setStartingDaemon] = useState(false);
+  const [hiddenDraft, setHiddenDraft] = useState("");
+  const [customBackend, setCustomBackend] = useState<AgentBackend>("claude");
+  const [customDraft, setCustomDraft] = useState("");
+  const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
 
   const meta = TAB_META(tab);
   const navigationTarget = document.getElementById("settings-navigation");
@@ -255,6 +290,37 @@ export function SettingsPage({
       invalidateDaemon(qc);
     } finally {
       setStartingDaemon(false);
+    }
+  }
+
+  function diagnosticsText(): string {
+    return [
+      `Emberyx ${version || "unknown"}`,
+      `Platform: ${navigator.platform}`,
+      `User agent: ${navigator.userAgent}`,
+      "",
+      "Providers:",
+      ...providers.map(
+        (p) =>
+          `- ${p.label} (${p.binary}): ${
+            p.installed ? (p.version ?? "installed") : "not installed"
+          }`
+      ),
+      "",
+      "Daemon: " +
+        (daemon
+          ? `running v${daemon.version}, pid ${daemon.pid}, ${daemon.agentCount} agent(s), ${daemon.eventCount} event(s)`
+          : "not running"),
+    ].join("\n");
+  }
+
+  async function copyDiagnostics() {
+    try {
+      await navigator.clipboard.writeText(diagnosticsText());
+      setDiagnosticsCopied(true);
+      setTimeout(() => setDiagnosticsCopied(false), 1500);
+    } catch {
+      // Clipboard blocked — nothing sensible to fall back to in a webview.
     }
   }
 
@@ -493,7 +559,7 @@ export function SettingsPage({
                   />
                   <Row
                     label="Font size"
-                    hint="Editor text size, in pixels."
+                    hint="Editor text size in pixels."
                     control={
                       <NumberStepper
                         value={settings.editorFontSize}
@@ -502,6 +568,12 @@ export function SettingsPage({
                         onChange={(n) => onUpdate({ editorFontSize: n })}
                       />
                     }
+                  />
+                  <SwitchRow
+                    label="Wrap long lines"
+                    hint="The editor wraps instead of scrolling sideways."
+                    checked={settings.wordWrap}
+                    onChange={(v) => onUpdate({ wordWrap: v })}
                   />
                 </Group>
               </>
@@ -586,9 +658,227 @@ export function SettingsPage({
                       />
                     }
                   />
+
+                  <Row
+                    label="Codex sandbox"
+                    hint="How much of the machine a Codex thread can touch. Default follows the switches above: full access when permissions are skipped, workspace writes otherwise."
+                    control={
+                      <Select
+                        value={settings.codexSandbox}
+                        onValueChange={(v) => {
+                          if (isCodexSandbox(v)) onUpdate({ codexSandbox: v });
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {CODEX_SANDBOXES.map((s) => (
+                            <SelectItem key={s} value={s}>
+                              {CODEX_SANDBOX_LABEL[s]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    }
+                  />
+                </Group>
+
+                <Group
+                  title="Model list"
+                  hint="What the composer's picker offers. Hidden models drop out of every rail; custom slugs join the provider you assign them to."
+                >
+                  <Row
+                    label="Hidden models"
+                    hint="Model ids the picker never offers, whatever a catalog says."
+                    control={<span />}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        value={hiddenDraft}
+                        onChange={(e) => setHiddenDraft(e.target.value)}
+                        placeholder="provider/model-id"
+                        spellCheck={false}
+                        className="h-7 w-64 font-mono text-xs"
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!hiddenDraft.trim()}
+                        onClick={() => {
+                          const id = hiddenDraft.trim();
+                          if (!id) return;
+                          setHiddenModels([...getHiddenModels(), id]);
+                          setHiddenDraft("");
+                        }}
+                      >
+                        Hide
+                      </Button>
+                    </div>
+                    {getHiddenModels().length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pt-2">
+                        {getHiddenModels().map((id) => (
+                          <span
+                            key={id}
+                            className="flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs"
+                          >
+                            {id}
+                            <button
+                              type="button"
+                              aria-label={`Unhide ${id}`}
+                              className="text-muted-foreground hover:text-foreground"
+                              onClick={() =>
+                                setHiddenModels(getHiddenModels().filter((v) => v !== id))
+                              }
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </Row>
+
+                  <Row
+                    label="Custom models"
+                    hint="Extra slugs offered in the picker — new releases, proxies, private endpoints."
+                    control={<span />}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <Select
+                        value={customBackend}
+                        onValueChange={(v) => {
+                          if (isAgentBackend(v)) setCustomBackend(v);
+                        }}
+                      >
+                        <SelectTrigger className="h-7 w-36 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {AGENT_BACKENDS.map((b) => (
+                            <SelectItem key={b} value={b}>
+                              {BACKEND_LABEL[b]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        value={customDraft}
+                        onChange={(e) => setCustomDraft(e.target.value)}
+                        placeholder="model-id"
+                        spellCheck={false}
+                        className="h-7 w-56 font-mono text-xs"
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!customDraft.trim()}
+                        onClick={() => {
+                          const id = customDraft.trim();
+                          if (!id) return;
+                          const current = getCustomModels();
+                          setCustomModels({
+                            ...current,
+                            [customBackend]: [...(current[customBackend] ?? []), id],
+                          });
+                          setCustomDraft("");
+                        }}
+                      >
+                        Add
+                      </Button>
+                    </div>
+                    {Object.entries(getCustomModels()).some(([, ids]) => ids.length > 0) && (
+                      <div className="flex flex-wrap gap-1.5 pt-2">
+                        {Object.entries(getCustomModels()).flatMap(([b, ids]) => {
+                          if (!isAgentBackend(b)) return [];
+                          return (ids ?? []).map((id) => (
+                            <span
+                              key={`${b}:${id}`}
+                              className="flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs"
+                            >
+                              <span className="text-muted-foreground">{BACKEND_LABEL[b]}</span>
+                              {id}
+                              <button
+                                type="button"
+                                aria-label={`Remove ${id}`}
+                                className="text-muted-foreground hover:text-foreground"
+                                onClick={() => {
+                                  const current = getCustomModels();
+                                  const kept = (current[b] ?? []).filter((v) => v !== id);
+                                  setCustomModels({ ...current, [b]: kept });
+                                }}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ));
+                        })}
+                      </div>
+                    )}
+                  </Row>
+                </Group>
+
+                <Group
+                  title="Launch"
+                  hint="Per-backend binary and extra arguments for chat agents. Arguments run after the built-in flags, so a repeated flag wins. Empty means the CLI on PATH."
+                >
+                  {AGENT_BACKENDS.map((b) => {
+                    const launch = settings.providerLaunch[b];
+                    const setLaunch = (patch: Partial<{ command: string; args: string }>) =>
+                      onUpdate({
+                        providerLaunch: {
+                          ...settings.providerLaunch,
+                          [b]: {
+                            command: launch?.command ?? "",
+                            args: launch?.args ?? "",
+                            ...patch,
+                          },
+                        },
+                      });
+                    return (
+                      <div
+                        key={b}
+                        className="grid gap-3 border-b pb-5 last:border-0 last:pb-0"
+                      >
+                        <div className="flex items-center gap-2">
+                          <img
+                            src={`/provider-icons/${b}.svg`}
+                            alt=""
+                            className="size-4 object-contain"
+                          />
+                          <span className="text-sm font-medium">{BACKEND_LABEL[b]}</span>
+                        </div>
+                        <Field label="Command">
+                          <Input
+                            value={launch?.command ?? ""}
+                            placeholder={b}
+                            spellCheck={false}
+                            className="font-mono text-sm"
+                            onChange={(e) => setLaunch({ command: e.target.value })}
+                          />
+                        </Field>
+                        <Field
+                          label="Extra arguments"
+                          hint="Tokenized like a shell — quotes group, no shell runs."
+                        >
+                          <Input
+                            value={launch?.args ?? ""}
+                            placeholder="--flag value"
+                            spellCheck={false}
+                            className="font-mono text-sm"
+                            onChange={(e) => setLaunch({ args: e.target.value })}
+                          />
+                        </Field>
+                      </div>
+                    );
+                  })}
                 </Group>
               </>
             )}
+
+            {tab === "mcp" && <McpSection />}
+
+            {tab === "skills" && <SkillsSection />}
 
             {tab === "permissions" && (
               <Group>
@@ -794,6 +1084,25 @@ export function SettingsPage({
                     }
                   />
                 </Group>
+
+                <Group
+                  title="Diagnostics"
+                  hint="A bug-report snapshot: versions, platform, provider and daemon state. No conversation content ever leaves with it unless you paste it."
+                >
+                  <Row
+                    label="Copy diagnostics"
+                    hint="Text to paste into a bug report."
+                    control={
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void copyDiagnostics()}
+                      >
+                        {diagnosticsCopied ? "Copied" : "Copy"}
+                      </Button>
+                    }
+                  />
+                </Group>
               </>
             )}
 
@@ -857,6 +1166,12 @@ export function SettingsPage({
                         spellCheck={false}
                       />
                     }
+                  />
+                  <SwitchRow
+                    label="Hide whitespace changes"
+                    hint="Working-tree diffs in the Changes panel skip whitespace-only edits (git -w)."
+                    checked={settings.diffIgnoreWhitespace}
+                    onChange={(v) => onUpdate({ diffIgnoreWhitespace: v })}
                   />
                 </Group>
               </>

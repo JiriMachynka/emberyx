@@ -287,8 +287,15 @@ impl CodexManager {
 impl Inner {
     /// Spawn `codex app-server`, complete the `initialize` handshake, and start
     /// streaming notifications over `on_event`. Returns once initialize replies.
-    fn spawn(self: &Arc<Self>, cwd: String, on_event: Channel<CodexEvent>) -> Result<SpawnResult> {
-        let mut cmd = Command::new("codex");
+    /// `command` overrides the binary (Settings → Providers); the built-in
+    /// `app-server` argument and shell env stay.
+    fn spawn(
+        self: &Arc<Self>,
+        cwd: String,
+        command: Option<String>,
+        on_event: Channel<CodexEvent>,
+    ) -> Result<SpawnResult> {
+        let mut cmd = Command::new(command.as_deref().unwrap_or("codex"));
         cmd.arg("app-server")
             .current_dir(&cwd)
             .stdin(Stdio::piped())
@@ -644,12 +651,13 @@ async fn blocking_request(handle: Handle, method: &'static str, params: Value) -
 pub async fn codex_spawn(
     manager: tauri::State<'_, CodexManager>,
     cwd: String,
+    command: Option<String>,
     on_event: Channel<CodexEvent>,
 ) -> Result<SpawnResult> {
     // Blocks on the initialize round trip and a `codex --version` subprocess,
     // so keep it off the async runtime's worker threads.
     let inner = manager.shared();
-    tauri::async_runtime::spawn_blocking(move || inner.spawn(cwd, on_event))
+    tauri::async_runtime::spawn_blocking(move || inner.spawn(cwd, command, on_event))
         .await
         .map_err(|e| crate::err!("codex spawn join failed: {e}"))?
 }

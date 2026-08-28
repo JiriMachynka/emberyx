@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { toast, Toaster } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { onOpenFileRequest } from "@/lib/openFileRequest";
 import { SessionPanes } from "@/components/SessionPanes";
 import { RightDock } from "@/components/RightDock";
 import { ProjectSettingsPane } from "@/components/ProjectSettingsPane";
@@ -84,6 +85,10 @@ function App() {
   // otherwise hides the panel without dropping the tabs that were showing.
   const toggleDock = () =>
     setDock((s) => (s.open ? hideDock(s) : showDock(s)));
+
+  // Clicking a file in the chat brings the Files tab forward; the editor pane
+  // itself picks the file up from the same request.
+  useEffect(() => onOpenFileRequest(() => showTab("files")), []);
 
   function toggleSidebar() {
     setCollapsed((c) => {
@@ -306,6 +311,7 @@ function App() {
           projectPath={activeProject.path}
           fontFamily={settings.editorFontFamily}
           fontSize={settings.editorFontSize}
+          wordWrap={settings.wordWrap}
           active={dockActive === "files"}
         />
       </Suspense>
@@ -317,6 +323,7 @@ function App() {
         sessionIds={projectSessionIds}
         openRouterApiKey={settings.openRouterApiKey}
         openRouterModel={settings.openRouterModel}
+        ignoreWhitespace={settings.diffIgnoreWhitespace}
         onClose={() => hideTab("diff")}
         onOpenWorktree={openWorktreeAndRun}
         onRemoveWorktree={ws.removeWorktree}
@@ -516,6 +523,7 @@ function App() {
                     projectPath={activeProject.path}
                     fontFamily={settings.editorFontFamily}
                     fontSize={settings.editorFontSize}
+                    wordWrap={settings.wordWrap}
                     active={editorOpen}
                   />
                 </Suspense>

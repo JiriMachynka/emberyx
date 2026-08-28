@@ -18,7 +18,9 @@ mod github;
 mod gitlab;
 mod icon;
 mod ide;
+mod ingest;
 mod menu;
+mod mcp;
 pub mod models;
 mod openrouter;
 pub mod pty;
@@ -27,6 +29,8 @@ mod providers;
 mod queue;
 mod search;
 mod slash;
+mod skills;
+mod store;
 pub mod supervisor;
 mod threads;
 mod usage;
@@ -64,8 +68,27 @@ pub fn run() {
         .manage(Supervisor::new())
         .manage(usage::SummaryCache::default())
         .setup(|app| {
+            // Attach the durable event log first: restore() migrates legacy
+            // registry timelines into it.
+            match app
+                .path()
+                .resolve("emberyx.db", BaseDirectory::AppData)
+                .map_err(|e| e.to_string())
+                .and_then(|path| store::Store::open(&path).map_err(|e| e.to_string()))
+            {
+                Ok(store) => {
+                    if let Err(e) =
+                        app.state::<Supervisor>().attach_store(std::sync::Arc::new(store))
+                    {
+                        eprintln!("[emberyx] event store attach failed: {e}");
+                    }
+                }
+                Err(e) => eprintln!("[emberyx] event store unavailable: {e}"),
+            }
             if let Ok(path) = app.path().resolve("registry.json", BaseDirectory::AppData) {
-                let _ = app.state::<Supervisor>().restore(&path);
+                if let Err(e) = app.state::<Supervisor>().restore(&path) {
+                    eprintln!("[emberyx] registry restore failed: {e}");
+                }
             }
             app.manage(ask::start(app.handle())?);
             Ok(())
@@ -209,12 +232,22 @@ pub fn run() {
             usage::usage_summary,
             threads::list_threads,
             threads::read_thread,
+            ingest::transcripts_ingest,
+            ingest::thread_messages_page,
+            ingest::thread_turns_page,
             dokploy::dokploy_services,
             dokploy::dokploy_redeploy,
             dokploy::dokploy_logs,
             openrouter::generate_commit_message,
             openrouter::openrouter_models,
             providers::provider_status,
+            mcp::mcp_list,
+            mcp::mcp_add,
+            mcp::mcp_remove,
+            skills::skills_list,
+            skills::skills_add,
+            skills::skills_copy,
+            skills::skills_remove,
             preview::preview_ports,
         ])
         .build(tauri::generate_context!())
@@ -231,6 +264,9 @@ pub fn run() {
                 .resolve("registry.json", BaseDirectory::AppData)
             {
                 let _ = app_handle.state::<Supervisor>().persist(&path);
+            }
+            if let Err(e) = app_handle.state::<Supervisor>().flush_events() {
+                eprintln!("[emberyx] event store flush failed: {e}");
             }
             app_handle.state::<AgentManager>().kill_all();
             app_handle.state::<CodexManager>().kill_all();

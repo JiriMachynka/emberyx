@@ -65,6 +65,9 @@ interface Options {
   /** Model to run, from the picker; "" lets the agent decide. Applied over
    *  `session/set_model` — ACP has no model parameter on `session/new`. */
   model?: string;
+  /** Binary override + extra args from Settings → Providers. Identity-stable
+   *  at the call site — it rides the spawn effect's deps. */
+  launch?: { command: string | null; args: string[] };
   enabled: boolean;
   onTitled?: (title: string) => void;
 }
@@ -78,6 +81,7 @@ export function useAcpChat({
   provider,
   resume,
   model,
+  launch,
   enabled,
 }: Options) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -267,7 +271,12 @@ export function useAcpChat({
 
     void (async () => {
       try {
-        const spawned = await acpSpawn(provider, cwd, channel);
+        const spawned = await acpSpawn(
+          provider,
+          cwd,
+          launch?.command ?? null,
+          channel
+        );
         if (disposed) {
           void acpKill(spawned.id);
           return;
@@ -313,6 +322,7 @@ export function useAcpChat({
     provider,
     cwd,
     resume,
+    launch,
     restartNonce,
     applyNotification,
     handleRequest,

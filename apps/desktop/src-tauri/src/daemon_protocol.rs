@@ -70,6 +70,12 @@ pub struct AgentSpec {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub emberyx_session_id: String,
+    /// Binary override from Settings → Providers. Defaults keep the protocol
+    /// compatible with a daemon that predates the field.
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub extra_args: Vec<String>,
 }
 
 /// One buffered frame of agent output. `frameId` is monotonic per agent, so a

@@ -1,4 +1,5 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowLeft, Plus, SquarePen, PanelLeftClose, PanelLeftOpen, Settings, FolderOpen, FolderPlus, GitBranch, Bell, Search, ChevronDown, Clock, Check, Laptop, LoaderCircle, SquareTerminal, MoreHorizontal, Pin, ChartColumn } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -95,7 +96,10 @@ export function Sidebar(props: SidebarProps) {
       )}
     >
       <SidebarHeader {...props} />
-      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1.5">
+      <div
+        data-sidebar-scroll
+        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1.5"
+      >
         {settingsOpen ? (
           <div id="settings-navigation" className="flex min-h-full flex-col" />
         ) : collapsed ? (
@@ -335,6 +339,102 @@ function AllThreads(props: SidebarProps) {
     />
   );
 
+  // Folded piles keep their open/closed state at this level so the whole
+  // stream can be flattened under one virtualizer.
+  const [folds, setFolds] = useState({ snoozed: false, settled: false, archived: false });
+  const toggleFold = (which: keyof typeof folds) =>
+    setFolds((prev) => ({ ...prev, [which]: !prev[which] }));
+
+  // One flat stream of slots — scope row, labels, fold buttons, thread rows —
+  // virtualized against the sidebar's scroller. Keys are stable identities,
+  // not indexes, so re-sorts and folds don't discard measured heights.
+  type Slot =
+    | { key: string; kind: "label"; label: string }
+    | { key: string; kind: "empty"; text: string }
+    | {
+        key: string;
+        kind: "fold";
+        label: string;
+        count: number;
+        which: keyof typeof folds;
+      }
+    | { key: string; kind: "thread"; data: ThreadRowData };
+
+  const listSlots = useMemo<Slot[]>(() => {
+    const out: Slot[] = [];
+    if (pinned.length > 0) {
+      out.push({ key: "label:pinned", kind: "label", label: "Pinned" });
+      pinned.forEach((r) => out.push({ key: r.key, kind: "thread", data: r }));
+    }
+    out.push({ key: "label:threads", kind: "label", label: "Threads" });
+    if (active.length === 0) {
+      out.push({ key: "empty:threads", kind: "empty", text: "Nothing active" });
+    } else if (threadGrouping === "repository") {
+      for (const [label, group] of groupByRepository(active)) {
+        out.push({ key: `label:${label}`, kind: "label", label });
+        group.forEach((r) => out.push({ key: r.key, kind: "thread", data: r }));
+      }
+    } else {
+      active.forEach((r) => out.push({ key: r.key, kind: "thread", data: r }));
+    }
+    const piles: [keyof typeof folds, ThreadRowData[]][] = [
+      ["snoozed", snoozed],
+      ["settled", settled],
+      ["archived", archived],
+    ];
+    for (const [which, pile] of piles) {
+      if (pile.length === 0) continue;
+      out.push({
+        key: `fold:${which}`,
+        kind: "fold",
+        label: which[0]!.toUpperCase() + which.slice(1),
+        count: pile.length,
+        which,
+      });
+      if (folds[which]) {
+        pile.forEach((r) => out.push({ key: `${which}:${r.key}`, kind: "thread", data: r }));
+      }
+    }
+    return out;
+  }, [
+    pinned,
+    active,
+    snoozed,
+    settled,
+    archived,
+    threadGrouping,
+    folds,
+  ]);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setScrollEl(
+      containerRef.current?.closest<HTMLElement>("[data-sidebar-scroll]") ?? null
+    );
+  }, []);
+
+  const rowVirt = useVirtualizer({
+    count: listSlots.length,
+    getScrollElement: () => scrollEl,
+    estimateSize: (index) => {
+      switch (listSlots[index]?.kind) {
+        case "label":
+          return 24;
+        case "fold":
+          return 32;
+        case "empty":
+          return 48;
+        default:
+          return 76;
+      }
+    },
+    getItemKey: (index) => listSlots[index]?.key ?? String(index),
+    overscan: 8,
+  });
+
+  // Below every hook: the list crosses 0 ↔ non-zero on load, scope switch and
+  // archive, and an earlier return would change the hook count across renders.
   if (rows.length === 0) {
     return (
       <div className="px-2 pt-2">
@@ -346,37 +446,59 @@ function AllThreads(props: SidebarProps) {
     );
   }
 
-  return (
-    <div className="grid min-w-0 gap-3 px-2 pt-2">
-      {scopeRow}
-      {pinned.length > 0 && (
-        <section className="grid min-w-0 gap-1.5">
-          <SectionLabel>Pinned</SectionLabel>
-          {pinned.map(row)}
-        </section>
-      )}
-
-      <section className="grid min-w-0 gap-1.5">
-        {pinned.length > 0 && <SectionLabel>Threads</SectionLabel>}
-        {active.length === 0 ? (
+  const renderSlot = (slot: Slot | undefined) => {
+    if (!slot) return null;
+    switch (slot.kind) {
+      case "label":
+        return <SectionLabel>{slot.label}</SectionLabel>;
+      case "empty":
+        return (
           <p className="px-2 py-4 text-center text-xs text-muted-foreground">
-            Nothing active
+            {slot.text}
           </p>
-        ) : threadGrouping === "repository" ? (
-          groupByRepository(active).map(([label, group]) => (
-            <div key={label} className="grid min-w-0 gap-1.5">
-              <SectionLabel>{label}</SectionLabel>
-              {group.map(row)}
-            </div>
-          ))
-        ) : (
-          active.map(row)
-        )}
-      </section>
+        );
+      case "fold": {
+        const open = folds[slot.which];
+        return (
+          <button
+            type="button"
+            onClick={() => toggleFold(slot.which)}
+            className="mt-1 flex w-full items-center justify-between border-t border-white/[0.06] px-1 pt-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <span>
+              {slot.label} ({slot.count})
+            </span>
+            <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} />
+          </button>
+        );
+      }
+      case "thread":
+        return row(slot.data);
+    }
+  };
 
-      <FoldedThreads label="Snoozed" rows={snoozed} render={row} />
-      <FoldedThreads label="Settled" rows={settled} render={row} />
-      <FoldedThreads label="Archived" rows={archived} render={row} />
+  return (
+    <div ref={containerRef} className="grid min-w-0 gap-3 px-2 pt-2">
+      <div>{scopeRow}</div>
+      <div
+        className="relative"
+        style={{ height: rowVirt.getTotalSize() }}
+      >
+        {rowVirt.getVirtualItems().map((vItem) => {
+          const slot = listSlots[vItem.index];
+          return (
+            <div
+              key={vItem.key}
+              data-index={vItem.index}
+              ref={rowVirt.measureElement}
+              className="absolute inset-x-0 pb-1.5 will-change-transform"
+              style={{ transform: `translateY(${vItem.start}px)` }}
+            >
+              {renderSlot(slot)}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -447,38 +569,6 @@ const groupByRepository = (
   }
   return [...groups];
 };
-
-/** A collapsed pile of threads that are out of the way but not gone. Renders
- *  nothing at all when empty, so an unused state never costs a row. */
-function FoldedThreads({
-  label,
-  rows,
-  render,
-}: {
-  label: string;
-  rows: ThreadRowData[];
-  render: (data: ThreadRowData) => React.ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  if (rows.length === 0) return null;
-  return (
-    <section className="grid min-w-0 gap-1.5">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="mt-1 flex items-center justify-between border-t border-white/[0.06] px-1 pt-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <span>
-          {label} ({rows.length})
-        </span>
-        <ChevronDown
-          className={cn("size-3.5 transition-transform", open && "rotate-180")}
-        />
-      </button>
-      {open && rows.map(render)}
-    </section>
-  );
-}
 
 /** One thread, as a card: whose project it is and when it last moved, the
  *  title, and the branch it is on — a cross-project list has to answer "whose

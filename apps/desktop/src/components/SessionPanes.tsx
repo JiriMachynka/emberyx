@@ -120,6 +120,8 @@ function SessionPaneRow({
           onModelChange={onModelChange}
           effort={settings.effort}
           onEffortChange={onEffortChange}
+          providerLaunch={settings.providerLaunch}
+          codexSandbox={settings.codexSandbox}
           projects={projects}
           recentProjects={recentProjects}
           onSelectProject={onSelectProject}

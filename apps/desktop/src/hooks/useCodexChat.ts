@@ -66,6 +66,12 @@ interface Options {
   /** Reasoning effort for each turn; "" lets the CLI pick. It rides
    *  `turn/start`, so changing it never respawns. */
   effort?: string;
+  /** Binary override + extra args from Settings → Providers. Identity-stable
+   *  at the call site — it rides the spawn effect's deps. */
+  launch?: { command: string | null; args: string[] };
+  /** Sandbox posture for the thread; "" derives it from `skipPermissions`.
+   *  Thread-scoped, so changing it respawns. */
+  codexSandbox?: string;
   /** Called once with the title generated for a fresh thread. */
   onTitled?: (title: string) => void;
   /** False while a session of another backend owns this pane — the hook still
@@ -89,10 +95,12 @@ const STDERR_CAP = 8192;
 let counter = 0;
 const localId = () => `codex-m${++counter}`;
 
-/** The approval posture a spawn asks for. */
-const approvalFor = (skipPermissions: boolean) => ({
+/** The approval posture a spawn asks for. A sandbox from settings overrides
+ *  the derived one; the approval policy stays posture-driven. */
+const approvalFor = (skipPermissions: boolean, sandbox: string) => ({
   approvalPolicy: skipPermissions ? "never" : "on-request",
-  sandbox: skipPermissions ? "danger-full-access" : "workspace-write",
+  sandbox:
+    sandbox || (skipPermissions ? "danger-full-access" : "workspace-write"),
 });
 
 const userText = (content: unknown): string =>
@@ -151,6 +159,8 @@ export function useCodexChat({
   skipPermissions = false,
   model = "",
   effort = "",
+  launch,
+  codexSandbox = "",
   onTitled,
   enabled = true,
 }: Options) {
@@ -395,7 +405,11 @@ export function useCodexChat({
 
     void (async () => {
       try {
-        const spawned = await codexSpawn(cwd, channel);
+        const spawned = await codexSpawn(
+          cwd,
+          launch?.command ?? null,
+          channel
+        );
         if (disposed) {
           void codexKill(spawned.id);
           return;
@@ -408,7 +422,7 @@ export function useCodexChat({
         const config = {
           cwd,
           model: model || null,
-          ...approvalFor(skipPermissions),
+          ...approvalFor(skipPermissions, codexSandbox),
         };
         const opened = threadId
           ? await codexThreadResume(spawned.id, { threadId, ...config })
@@ -455,8 +469,11 @@ export function useCodexChat({
     enabled,
     cwd,
     resume,
-    // Effort rides the next turn, so only a model change is worth a respawn.
+    // Effort rides the next turn; model, sandbox and the launch override are
+    // thread-scoped, so each of those changes respawns.
     model,
+    codexSandbox,
+    launch,
     skipPermissions,
     emberyxSessionId,
     attempt,

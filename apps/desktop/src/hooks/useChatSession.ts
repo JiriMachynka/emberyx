@@ -9,7 +9,7 @@ import { isAcpBackend, type AgentBackend } from "@/lib/agentBackend";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import { useCodexChat } from "@/hooks/useCodexChat";
 import { useAcpChat } from "@/hooks/useAcpChat";
-import type { PermissionMode } from "@/lib/settings";
+import type { CodexSandbox, PermissionMode } from "@/lib/settings";
 
 interface Options {
   cwd: string;
@@ -25,6 +25,10 @@ interface Options {
   /** Reasoning effort; "" lets the CLI decide. Claude spends it at spawn, Codex
    *  per turn, so only Claude respawns when it changes. */
   effort?: string;
+  /** Binary override + extra args from Settings → Providers. */
+  launch?: { command: string | null; args: string[] };
+  /** Codex sandbox posture; "" derives it from the permission switches. */
+  codexSandbox?: CodexSandbox;
   onTitled?: (title: string) => void;
 }
 

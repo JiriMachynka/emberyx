@@ -8,6 +8,7 @@ import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { CodeEditor, type EditorHandle } from "@/components/editor/CodeEditor";
 import { SearchPanel } from "@/components/editor/SearchPanel";
 import { onSearchRequest, takeSearchRequest } from "@/lib/searchRequest";
+import { onOpenFileRequest, takeOpenFileRequest } from "@/lib/openFileRequest";
 import { HoverCard } from "@/components/editor/HoverCard";
 import { GitRewind } from "@/components/GitRewind";
 import { DefinitionPicker } from "@/components/editor/DefinitionPicker";
@@ -28,6 +29,8 @@ interface EditorPaneProps {
   projectPath: string;
   fontFamily: string;
   fontSize: number;
+  /** Wrap long lines instead of scrolling sideways. */
+  wordWrap: boolean;
   /** Only the focused editor tab claims ⌘K from the global command palette. */
   active: boolean;
 }
@@ -41,6 +44,7 @@ export function EditorPane({
   projectPath,
   fontFamily,
   fontSize,
+  wordWrap,
   active,
 }: EditorPaneProps) {
   const [finderOpen, setFinderOpen] = useState(false);
@@ -118,6 +122,24 @@ export function EditorPane({
       }),
     []
   );
+
+  // A file reference clicked in the chat. The click opens this tab too, so the
+  // pane may not have existed when the request fired — hence the mount-time
+  // consume alongside the live listener.
+  useEffect(() => {
+    const show = (path: string) => {
+      setSide("files");
+      files.select(path);
+    };
+    const pending = takeOpenFileRequest();
+    if (pending !== null) show(pending);
+    return onOpenFileRequest((path) => {
+      takeOpenFileRequest();
+      show(path);
+    });
+    // Subscribed once: `select` is a setState function, stable for the pane's
+    // lifetime, so re-subscribing per render would only churn listeners.
+  }, []);
 
   return (
     <div className="relative flex h-full min-h-0 w-full overflow-hidden">
@@ -223,6 +245,7 @@ export function EditorPane({
             onChange={edit}
             fontFamily={fontFamily}
             fontSize={fontSize}
+            wordWrap={wordWrap}
             handle={editorRef}
             onFollow={(pos) => void nav.followAt(pos)}
             onHover={hover.onHover}

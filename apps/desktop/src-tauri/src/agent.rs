@@ -83,9 +83,13 @@ impl AgentManager {
         model: Option<String>,
         effort: Option<String>,
         emberyx_session_id: String,
+        // Binary override from Settings → Providers; the default when absent.
+        command: Option<String>,
+        // Appended after every built-in flag, so a repeated flag overrides it.
+        extra_args: Vec<String>,
         on_event: AgentSink,
     ) -> Result<u32> {
-        let mut cmd = Command::new("claude");
+        let mut cmd = Command::new(command.as_deref().unwrap_or("claude"));
         cmd.arg("-p")
             .arg("--input-format")
             .arg("stream-json")
@@ -138,6 +142,12 @@ impl AgentManager {
                 .arg(config)
                 .arg("--allowedTools")
                 .arg("mcp__emberyx__ask_user");
+        }
+
+        // User launch args last: a repeated single-value flag overrides the
+        // built-in above it, which is the point of an override.
+        for arg in &extra_args {
+            cmd.arg(arg);
         }
 
         cmd.current_dir(&cwd)
@@ -406,6 +416,8 @@ pub async fn agent_spawn(
     emberyx_session_id: String,
     persistent: Option<bool>,
     after_frame_id: Option<u64>,
+    command: Option<String>,
+    extra_args: Option<Vec<String>>,
     on_event: tauri::ipc::Channel<AgentEvent>,
 ) -> Result<AgentHandle> {
     let mcp_config = ask.mcp_config(&emberyx_session_id);
@@ -431,6 +443,8 @@ pub async fn agent_spawn(
                 model,
                 effort,
                 emberyx_session_id,
+                command,
+                extra_args: extra_args.unwrap_or_default(),
             };
             let (id, outcome) = daemon.spawn(spec, after_frame_id, channel_sink(on_event))?;
             return Ok(AgentHandle {
@@ -450,6 +464,8 @@ pub async fn agent_spawn(
             model,
             effort,
             emberyx_session_id,
+            command,
+            extra_args.unwrap_or_default(),
             channel_sink(on_event),
         )?;
         Ok(AgentHandle {

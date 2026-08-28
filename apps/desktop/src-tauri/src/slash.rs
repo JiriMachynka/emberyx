@@ -17,9 +17,10 @@ pub struct SlashCommand {
     pub source: String,
 }
 
-/// Pull `description:` out of a markdown file's YAML frontmatter. Returns an
-/// empty string when there's no frontmatter or no description key.
-fn frontmatter_description(text: &str) -> String {
+/// Pull one `key:` out of a markdown file's YAML frontmatter. Returns an
+/// empty string when there's no frontmatter or no such key. Double-quoted
+/// values are unescaped; single-quoted ones lose their outer quotes.
+pub(crate) fn frontmatter_field(text: &str, field: &str) -> String {
     let mut lines = text.lines();
     if lines.next().map(str::trim) != Some("---") {
         return String::new();
@@ -29,11 +30,46 @@ fn frontmatter_description(text: &str) -> String {
         if trimmed == "---" {
             break;
         }
-        if let Some(rest) = trimmed.strip_prefix("description:") {
-            return rest.trim().trim_matches('"').trim_matches('\'').to_string();
+        let Some(rest) = trimmed.strip_prefix(field).and_then(|r| r.strip_prefix(':'))
+        else {
+            continue;
+        };
+        let value = rest.trim();
+        if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+            return unescape_double(&value[1..value.len() - 1]);
         }
+        return value.trim_matches('\'').to_string();
     }
     String::new()
+}
+
+/// Unescape a double-quoted YAML scalar, character-wise so `\\n` stays a
+/// literal backslash-n while `\n` becomes a newline.
+fn unescape_double(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some('n') => out.push('\n'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Pull `description:` out of a markdown file's YAML frontmatter.
+fn frontmatter_description(text: &str) -> String {
+    frontmatter_field(text, "description")
 }
 
 /// Collect `*.md` command files under `dir`. Files in subdirectories become

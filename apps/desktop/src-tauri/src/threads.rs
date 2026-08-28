@@ -1,7 +1,7 @@
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -37,6 +37,17 @@ const TAIL_BYTES: u64 = 262_144;
 /// How much of the head to read when falling back to the opening message. The
 /// first user turn is the first few lines of the file; this is generous.
 const HEAD_BYTES: usize = 65_536;
+
+/// Wall-clock instrumentation for the pre-store scan paths. Off unless
+/// EMBERYX_TIMINGS is set; the same flag measures before (Phase 0) and after
+/// (Phase 8) the SQLite store lands.
+fn timings_on() -> bool {
+    std::env::var_os("EMBERYX_TIMINGS").is_some()
+}
+
+fn ms(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
+}
 
 pub(crate) fn projects_dir() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
@@ -96,7 +107,7 @@ pub(crate) fn is_machine_prompt(text: &str) -> bool {
 
 /// Meta text Claude Code injects as a "user" turn. Mirrors the JS `isSynthetic`
 /// check so a window counted here is the same set of turns the UI will render.
-fn is_synthetic(text: &str) -> bool {
+pub(crate) fn is_synthetic(text: &str) -> bool {
     let t = text.trim_start();
     t.starts_with("<local-command-")
         || t.starts_with("<command-")
@@ -170,7 +181,7 @@ pub(crate) fn clean_title(text: &str) -> String {
 
 /// Text of a transcript line's user message, or None when the line is anything
 /// else — a tool result, an assistant turn, or metadata.
-fn user_text(line: &str) -> Option<String> {
+pub(crate) fn user_text(line: &str) -> Option<String> {
     if !line.contains("\"type\":\"user\"") {
         return None;
     }
@@ -392,18 +403,29 @@ fn read_thread_impl(
     turn_limit: Option<u32>,
     before_byte: Option<u64>,
 ) -> Result<ThreadWindow> {
+    let started = Instant::now();
     let base = projects_dir().ok_or("no home dir")?;
     let path = base
         .join(encode_cwd(cwd))
         .join(format!("{session_id}.jsonl"));
-    match turn_limit {
+    let result = match turn_limit {
         Some(n) => read_window_from_path(&path, n, before_byte),
         None => Ok(ThreadWindow {
             text: fs::read_to_string(&path)?,
             has_more: false,
             start_byte: 0,
         }),
+    };
+    if timings_on() {
+        let bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        eprintln!(
+            "[timing] read_thread limit={:?} before_byte={:?} file_bytes={bytes} took={:.2}ms",
+            turn_limit,
+            before_byte,
+            ms(started.elapsed())
+        );
     }
+    result
 }
 
 /// List the Claude Code threads recorded for `cwd`, newest first. Runs off the
@@ -418,6 +440,14 @@ pub async fn list_threads(cwd: String) -> Result<Vec<Thread>> {
 }
 
 fn list_threads_impl(cwd: &str) -> Result<Vec<Thread>> {
+    let started = Instant::now();
+    let mut tail_time = Duration::ZERO;
+    let mut whole_time = Duration::ZERO;
+    let mut head_time = Duration::ZERO;
+    let mut scan_time = Duration::ZERO;
+    let mut full_fallbacks = 0u32;
+    let mut files = 0u32;
+
     let Some(base) = projects_dir() else {
         return Ok(vec![]);
     };
@@ -434,6 +464,7 @@ fn list_threads_impl(cwd: &str) -> Result<Vec<Thread>> {
         let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
+        files += 1;
         let modified = entry
             .metadata()
             .and_then(|m| m.modified())
@@ -442,16 +473,26 @@ fn list_threads_impl(cwd: &str) -> Result<Vec<Thread>> {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
+        let t0 = Instant::now();
         let Some((text, full)) = read_tail(&path, TAIL_BYTES) else {
             continue;
         };
+        tail_time += t0.elapsed();
+        let t0 = Instant::now();
         let (mut title, mut last_prompt) = scan(&text);
+        scan_time += t0.elapsed();
         // The title could sit before the tail window on a big transcript whose
         // final turn had large attachments; fall back to a full read then.
         let mut whole = None;
         if title.is_empty() && !full {
-            if let Ok(body) = fs::read_to_string(&path) {
+            full_fallbacks += 1;
+            let t0 = Instant::now();
+            let body = fs::read_to_string(&path).ok();
+            whole_time += t0.elapsed();
+            if let Some(body) = body {
+                let t0 = Instant::now();
                 let (t, lp) = scan(&body);
+                scan_time += t0.elapsed();
                 title = t;
                 if last_prompt.is_empty() {
                     last_prompt = lp;
@@ -473,7 +514,10 @@ fn list_threads_impl(cwd: &str) -> Result<Vec<Thread>> {
             } else if let Some(ref body) = whole {
                 label = first_user_prompt(body);
             } else {
-                label = first_user_prompt(&read_head(&path, HEAD_BYTES).unwrap_or_default());
+                let t0 = Instant::now();
+                let head = read_head(&path, HEAD_BYTES).unwrap_or_default();
+                head_time += t0.elapsed();
+                label = first_user_prompt(&head);
             }
         }
         if label.is_empty() {
@@ -494,6 +538,19 @@ fn list_threads_impl(cwd: &str) -> Result<Vec<Thread>> {
     }
 
     out.sort_by(|a, b| b.modified.cmp(&a.modified));
+    if timings_on() {
+        eprintln!(
+            "[timing] list_threads files={files} listed={} total_bytes_scanned~-{} took={:.2}ms \
+             (tail {:.2}ms, scan {:.2}ms, ×{full_fallbacks} whole-file fallbacks {:.2}ms, head reads {:.2}ms)",
+            out.len(),
+            (files as u64) * TAIL_BYTES / 1024 / 1024,
+            ms(started.elapsed()),
+            ms(tail_time),
+            ms(scan_time),
+            ms(whole_time),
+            ms(head_time)
+        );
+    }
     Ok(out)
 }
 
@@ -736,9 +793,7 @@ mod tests {
             user_line("real-old"),
             assistant_line("old-a"),
             user_line("<system-reminder>note</system-reminder>"),
-            format!(
-                r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"t1","content":"x"}}]}}}}"#
-            ),
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"x"}]}}"#.to_string(),
             user_line("real-new"),
             assistant_line("new-a"),
         ]
@@ -768,5 +823,91 @@ mod tests {
         assert!(!window.text.contains("aaaaaaaa"));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Phase 0 baseline / Phase 8 comparison. Run against a real project:
+    ///
+    /// ```text
+    /// EMBERYX_BENCH_CWD=/Users/jiri/Desktop/Personal/emberyx \
+    ///   cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml \
+    ///   bench_real_project -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn bench_real_project_list_and_open() {
+        let cwd = match std::env::var("EMBERYX_BENCH_CWD") {
+            Ok(cwd) => cwd,
+            Err(_) => {
+                println!("bench skipped: set EMBERYX_BENCH_CWD to a project path");
+                return;
+            }
+        };
+
+        let base = projects_dir().expect("no projects dir");
+        let dir = base.join(encode_cwd(&cwd));
+        let mut total_bytes = 0u64;
+        let mut largest: Option<(PathBuf, u64)> = None;
+        let mut count = 0u32;
+        for entry in fs::read_dir(&dir).expect("project dir").flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|x| x.to_str()) != Some("jsonl") {
+                continue;
+            }
+            count += 1;
+            let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            total_bytes += len;
+            let bigger = match &largest {
+                Some((_, max)) => len > *max,
+                None => true,
+            };
+            if bigger {
+                largest = Some((path, len));
+            }
+        }
+        let sessions = fs::read_dir(&dir)
+            .map(|rd| rd.count())
+            .unwrap_or(0);
+        println!(
+            "[bench] {cwd}\n[bench] transcripts={count} other_files={} total_transcript_bytes={total_bytes} ({:.1} MB)",
+            sessions - count as usize,
+            total_bytes as f64 / 1_048_576.0
+        );
+
+        let _ = list_threads_impl(&cwd); // warm-up
+        for i in 0..5 {
+            let t = Instant::now();
+            let n = list_threads_impl(&cwd).map(|v| v.len()).unwrap_or(0);
+            println!("[bench] list_threads #{}: {:.2} ms ({} threads)", i + 1, ms(t.elapsed()), n);
+        }
+
+        if let Some((path, bytes)) = largest {
+            let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            println!("[bench] open-largest id={id} bytes={bytes}");
+            for limit in [10u32, 50] {
+                let mut samples = Vec::new();
+                for i in 0..5 {
+                    let t = Instant::now();
+                    let win = read_thread_impl(&cwd, &id, Some(limit), None).unwrap();
+                    samples.push(ms(t.elapsed()));
+                    println!(
+                        "[bench] open turn_limit={limit} #{}: {:.2} ms ({} turns, starts@{})",
+                        i + 1,
+                        samples[i],
+                        win.text.lines().count(),
+                        win.start_byte
+                    );
+                }
+                samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                println!("[bench] open turn_limit={limit} median: {:.2} ms", samples[2]);
+            }
+            let t = Instant::now();
+            let full = read_thread_impl(&cwd, &id, None, None).unwrap();
+            println!(
+                "[bench] open whole-file reference: {:.2} ms ({:.1} MB, {} lines)",
+                ms(t.elapsed()),
+                full.text.len() as f64 / 1_048_576.0,
+                full.text.lines().count()
+            );
+        }
     }
 }

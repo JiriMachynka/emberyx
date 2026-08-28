@@ -8,6 +8,7 @@ import {
 import { SidePanel } from "@/components/SidePanel";
 import { cn } from "@/lib/utils";
 import { DockPicker } from "@/components/DockPicker";
+import { DOCK_ICONS } from "@/lib/dockIcons";
 import {
   DOCK_LABEL,
   isChooser,
@@ -59,7 +60,9 @@ export function RightDock({
       onClose={onHide}
       header={
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
-          {tabs.map((kind) => (
+          {tabs.map((kind) => {
+            const Icon = DOCK_ICONS[kind];
+            return (
             <div
               key={kind}
               className={cn(
@@ -69,8 +72,13 @@ export function RightDock({
                   : "text-muted-foreground hover:bg-accent hover:text-foreground"
               )}
             >
-              <button type="button" onClick={() => onSelect(kind)} className="max-w-32 truncate">
-                {DOCK_LABEL[kind]}
+              <button
+                type="button"
+                onClick={() => onSelect(kind)}
+                className="flex max-w-32 items-center gap-1.5 truncate"
+              >
+                <Icon className="size-3.5 shrink-0 opacity-70" />
+                <span className="truncate">{DOCK_LABEL[kind]}</span>
               </button>
               <button
                 type="button"
@@ -81,7 +89,8 @@ export function RightDock({
                 <X className="size-3" />
               </button>
             </div>
-          ))}
+            );
+          })}
           {addable.length > 0 && !chooser && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -94,11 +103,15 @@ export function RightDock({
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start">
-                {addable.map((kind) => (
-                  <DropdownMenuItem key={kind} onSelect={() => onAdd(kind)}>
-                    {DOCK_LABEL[kind]}
-                  </DropdownMenuItem>
-                ))}
+                {addable.map((kind) => {
+                  const Icon = DOCK_ICONS[kind];
+                  return (
+                    <DropdownMenuItem key={kind} onSelect={() => onAdd(kind)}>
+                      <Icon className="size-3.5 opacity-70" />
+                      {DOCK_LABEL[kind]}
+                    </DropdownMenuItem>
+                  );
+                })}
               </DropdownMenuContent>
             </DropdownMenu>
           )}

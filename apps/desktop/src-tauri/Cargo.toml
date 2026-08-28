@@ -1,6 +1,6 @@
 [package]
 name = "emberyx"
-version = "0.2.8"
+version = "0.2.9"
 description = "Desktop cockpit for AI coding agents — run Claude Code and Codex across projects in integrated terminals."
 authors = ["Jiri Machynka <machynka.j@gmail.com>"]
 edition = "2021"
@@ -40,6 +40,12 @@ glob = "0.3"
 regex = "1"
 tiny_http = "0.12"
 ureq = { version = "2", features = ["json"] }
+# Harness MCP config files: Codex/Grok TOML (format-preserving writes via
+# toml_edit) and OpenCode/Kilo JSONC (comments allowed, so serde_json alone
+# can't read what their CLIs write).
+toml = "0.8"
+toml_edit = "0.22"
+json5 = "0.4"
 # OpenCode and Kilo store per-turn tokens in sqlite, not JSONL.
 rusqlite = { version = "0.32", features = ["bundled"] }
 
