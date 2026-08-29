@@ -43,7 +43,12 @@ import {
   capabilitiesOf,
   type AgentBackend,
 } from "@/lib/agentBackend";
-import type { ClaudeProfile } from "@/lib/settings";
+import {
+  ACCESS_LEVELS,
+  ACCESS_LEVEL_LABEL,
+  type AccessLevel,
+  type ClaudeProfile,
+} from "@/lib/settings";
 import {
   codexDefaultEffort,
   codexEfforts,
@@ -190,35 +195,39 @@ const EffortPicker = memo(function EffortPicker({
   );
 });
 
-/** Approval posture: Full access (`--dangerously-skip-permissions`) vs
- *  Supervised (edits/commands raise a permission prompt). */
+/** How much the agent may do without asking. One control for what Claude
+ *  splits into `--permission-mode` and `--dangerously-skip-permissions`; the
+ *  split happens at spawn, not here. Full access is the only unlocked posture,
+ *  so it is the only one that gets the accent. */
 const AccessChip = memo(function AccessChip({
-  fullAccess,
+  access,
   onChange,
 }: {
-  fullAccess: boolean;
-  onChange: (v: boolean) => void;
+  access: AccessLevel;
+  onChange: (v: AccessLevel) => void;
 }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className={chipTrigger}>
-        {fullAccess ? (
+        {access === "full" ? (
           <Unlock className="size-4 shrink-0 text-primary" />
         ) : (
           <Lock className="size-4 shrink-0 opacity-70" />
         )}
-        <span>{fullAccess ? "Full access" : "Supervised"}</span>
+        <span>{ACCESS_LEVEL_LABEL[access]}</span>
         <ChevronDown className="size-3.5 shrink-0 opacity-50" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-44">
-        <DropdownMenuItem onSelect={() => onChange(false)} className="justify-between gap-4">
-          Supervised
-          {!fullAccess && <Check className="size-3.5" />}
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => onChange(true)} className="justify-between gap-4">
-          Full access
-          {fullAccess && <Check className="size-3.5" />}
-        </DropdownMenuItem>
+        {ACCESS_LEVELS.map((level) => (
+          <DropdownMenuItem
+            key={level}
+            onSelect={() => onChange(level)}
+            className="justify-between gap-4"
+          >
+            {ACCESS_LEVEL_LABEL[level]}
+            {access === level && <Check className="size-3.5" />}
+          </DropdownMenuItem>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -658,8 +667,8 @@ interface UsageFooterProps {
   /** Selected reasoning effort; "" = let the CLI decide. */
   effort: string;
   onEffortChange: (effort: string) => void;
-  fullAccess: boolean;
-  onFullAccessChange: (v: boolean) => void;
+  access: AccessLevel;
+  onAccessChange: (v: AccessLevel) => void;
   /** Move the thread to another provider in place — picking a model that
    *  belongs to one is how that happens. */
   onSwitchBackend: (backend: AgentBackend) => void;
@@ -682,8 +691,8 @@ const UsageFooter = memo(function UsageFooter({
   onModelChange,
   effort,
   onEffortChange,
-  fullAccess,
-  onFullAccessChange,
+  access,
+  onAccessChange,
   onSwitchBackend,
   claudeProfiles,
   claudeProfileId,
@@ -718,7 +727,7 @@ const UsageFooter = memo(function UsageFooter({
         />
       )}
       {capabilitiesOf(backend).permissions && (
-        <AccessChip fullAccess={fullAccess} onChange={onFullAccessChange} />
+        <AccessChip access={access} onChange={onAccessChange} />
       )}
       {backend === "claude" && claudeProfiles.length > 0 && (
         <ClaudeProfileChip
@@ -754,8 +763,8 @@ interface ChatComposerProps {
   effort: string;
   onEffortChange: (effort: string) => void;
   /** Full access = `--dangerously-skip-permissions`; off = Supervised. */
-  fullAccess: boolean;
-  onFullAccessChange: (v: boolean) => void;
+  access: AccessLevel;
+  onAccessChange: (v: AccessLevel) => void;
   /** Move the thread to another provider in place. */
   onSwitchBackend: (backend: AgentBackend) => void;
   /** Extra named Claude setups. Empty = the default Claude only. */
@@ -798,8 +807,8 @@ export const ChatComposer = memo(function ChatComposer({
   onModelChange,
   effort,
   onEffortChange,
-  fullAccess,
-  onFullAccessChange,
+  access,
+  onAccessChange,
   onSwitchBackend,
   claudeProfiles = [],
   claudeProfileId = null,
@@ -1221,8 +1230,8 @@ export const ChatComposer = memo(function ChatComposer({
             onModelChange={onModelChange}
             effort={effort}
             onEffortChange={onEffortChange}
-            fullAccess={fullAccess}
-            onFullAccessChange={onFullAccessChange}
+            access={access}
+            onAccessChange={onAccessChange}
             onSwitchBackend={onSwitchBackend}
             claudeProfiles={claudeProfiles}
             claudeProfileId={claudeProfileId}

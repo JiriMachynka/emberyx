@@ -51,6 +51,14 @@ export function PreviewPanel({
     setError(null);
   }, [projectPath]);
 
+  // Tell Rust what is being previewed, so the agent's browser tools can default
+  // to it instead of making the agent repeat an address the user already chose.
+  // Not cleared on unmount: the dock keeps the panel's URL across a closed tab,
+  // and so should the agent's idea of "the preview".
+  useEffect(() => {
+    void invoke("preview_set_url", { url }).catch(() => {});
+  }, [url]);
+
   // Probe on open, so the quick picks reflect what is running right now.
   useEffect(() => {
     if (!open) return;

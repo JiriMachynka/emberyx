@@ -1,6 +1,6 @@
 [package]
 name = "emberyx"
-version = "0.2.14"
+version = "0.2.15"
 description = "Desktop cockpit for AI coding agents — run Claude Code and Codex across projects in integrated terminals."
 authors = ["Jiri Machynka <machynka.j@gmail.com>"]
 edition = "2021"
@@ -48,6 +48,7 @@ toml_edit = "0.22"
 json5 = "0.4"
 # OpenCode and Kilo store per-turn tokens in sqlite, not JSONL.
 rusqlite = { version = "0.32", features = ["bundled"] }
+tungstenite = "0.30.0"
 
 # Updater is desktop-only (no Android/iOS build).
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]

@@ -80,7 +80,13 @@ import {
   describeRestore,
   restoreCheckpoint,
 } from "@/lib/checkpoints";
-import type { PermissionMode, Settings } from "@/lib/settings";
+import {
+  accessLevelFrom,
+  accessLevelToSettings,
+  type AccessLevel,
+  type PermissionMode,
+  type Settings,
+} from "@/lib/settings";
 import { launchFor } from "@/lib/settings";
 import { getThreadMeta, setThreadMeta, threadMetaKey } from "@/lib/threadMeta";
 import { lastActivityAt } from "@/lib/compact";
@@ -121,6 +127,8 @@ interface ChatPaneProps {
   effort: string;
   /** Persist a new default when the user switches this pane's effort. */
   onEffortChange: (effort: string) => void;
+  /** Persist a new default when the user switches this pane's access level. */
+  onAccessChange: (level: AccessLevel) => void;
   /** Per-backend launch overrides; the active backend's is resolved here. */
   providerLaunch: Settings["providerLaunch"];
   /** Extra named Claude setups, shown in the composer when any exist. */
@@ -171,6 +179,7 @@ export const ChatPane = memo(function ChatPane({
   onModelChange,
   effort,
   onEffortChange,
+  onAccessChange,
   providerLaunch,
   claudeProfiles,
   codexSandbox,
@@ -202,8 +211,21 @@ export const ChatPane = memo(function ChatPane({
     [onEffortChange]
   );
   // Approval posture is a spawn-time flag, kept local so switching it respawns
-  // just this pane (via --resume), like the model.
-  const [fullAccess, setFullAccess] = useState(skipPermissions);
+  // just this pane (via --resume), like the model. Seeded from the stored
+  // default and written back on change, so the next new thread starts here.
+  const [access, setAccess] = useState(() =>
+    accessLevelFrom(permissionMode, skipPermissions)
+  );
+  const changeAccess = useCallback(
+    (level: AccessLevel) => {
+      setAccess(level);
+      onAccessChange(level);
+    },
+    [onAccessChange]
+  );
+  // Claude takes these as two mutually exclusive flags; the user picks one
+  // thing. Split it here, at the boundary with the transport.
+  const spawnAccess = accessLevelToSettings(access);
   // The provider this thread is on *right now*. It starts as the session's, but
   // a thread can change hands mid-conversation — the turns each provider
   // produced stay in the same visual transcript, stamped with who made them.
@@ -247,9 +269,9 @@ export const ChatPane = memo(function ChatPane({
     emberyxSessionId: sessionId,
     resume,
     backend: activeBackend,
-    skipPermissions: fullAccess,
+    skipPermissions: spawnAccess.skipPermissions,
     persistent,
-    permissionMode,
+    permissionMode: spawnAccess.permissionMode,
     model: activeModel,
     effort: activeEffort,
     launch,
@@ -861,8 +883,8 @@ export const ChatPane = memo(function ChatPane({
                   onModelChange={changeModel}
                   effort={activeEffort}
                   onEffortChange={changeEffort}
-                  fullAccess={fullAccess}
-                  onFullAccessChange={setFullAccess}
+                  access={access}
+                  onAccessChange={changeAccess}
                   onSwitchBackend={switchBackend}
                   claudeProfiles={claudeProfiles}
                   claudeProfileId={claudeProfileId}

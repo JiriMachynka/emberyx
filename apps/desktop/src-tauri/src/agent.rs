@@ -137,13 +137,19 @@ impl AgentManager {
         if let Some(s) = &settings {
             cmd.arg("--settings").arg(s);
         }
-        // Emberyx's own MCP server, which exposes ask_user. Pre-allowed so the
-        // question itself doesn't first raise a permission prompt.
+        // Emberyx's own MCP server: ask_user, plus the browser tools that look
+        // at the dev server. Pre-allowed so using them doesn't first raise a
+        // permission prompt — the browser is read-only and local-only, so there
+        // is nothing here for the user to adjudicate.
         if let Some(config) = &mcp_config {
             cmd.arg("--mcp-config")
                 .arg(config)
                 .arg("--allowedTools")
-                .arg("mcp__emberyx__ask_user");
+                .arg(
+                    "mcp__emberyx__ask_user,\
+mcp__emberyx__preview_screenshot,\
+mcp__emberyx__preview_console",
+                );
         }
 
         // User launch args last: a repeated single-value flag overrides the

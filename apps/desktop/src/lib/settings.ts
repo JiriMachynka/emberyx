@@ -86,6 +86,46 @@ export const PERMISSION_MODE_LABEL: Record<PermissionMode, string> = {
   bypassPermissions: "Bypass permissions",
 };
 
+/** How much the agent may do without asking. Claude splits this across two
+ *  flags — `--permission-mode` and `--dangerously-skip-permissions`, which are
+ *  mutually exclusive — but to the user it is one axis, so the composer offers
+ *  one control and `accessLevelToSettings` splits it apart at spawn time. */
+export const ACCESS_LEVELS = ["ask", "acceptEdits", "full"] as const;
+
+export type AccessLevel = (typeof ACCESS_LEVELS)[number];
+
+export const ACCESS_LEVEL_LABEL: Record<AccessLevel, string> = {
+  ask: "Ask every time",
+  acceptEdits: "Accept edits",
+  full: "Full access",
+};
+
+/** The stored pair as the composer shows it. `bypassPermissions` reads as full
+ *  access whether or not the skip flag is also set — it is the same posture,
+ *  and showing "Accept edits" for it would understate what the agent can do. */
+export const accessLevelFrom = (
+  mode: PermissionMode,
+  skipPermissions: boolean
+): AccessLevel => {
+  if (skipPermissions || mode === "bypassPermissions") return "full";
+  return mode === "acceptEdits" ? "acceptEdits" : "ask";
+};
+
+/** The composer's choice as the pair the spawn needs. Total in both directions:
+ *  `accessLevelFrom` of this result is always the level passed in. */
+export const accessLevelToSettings = (
+  level: AccessLevel
+): { permissionMode: PermissionMode; skipPermissions: boolean } => {
+  if (level === "full") {
+    return { permissionMode: "bypassPermissions", skipPermissions: true };
+  }
+  return {
+    permissionMode: level === "acceptEdits" ? "acceptEdits" : "default",
+    skipPermissions: false,
+  };
+};
+
+
 export interface Settings {
   /** Which agent CLI the command drives, and so which features are offered.
    *  Projects may override it; this is the default for new ones. */

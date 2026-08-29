@@ -5,6 +5,7 @@ pub mod daemon_protocol;
 pub mod daemon_runtime;
 mod machine;
 mod ask;
+mod browser;
 mod checkpoints;
 mod codex;
 mod defs;
@@ -66,6 +67,8 @@ pub fn run() {
         .manage(daemon::Daemon::new())
         .manage(Supervisor::new())
         .manage(usage::SummaryCache::default())
+        .manage(browser::BrowserManager::default())
+        .manage(browser::PreviewUrl::default())
         .setup(|app| {
             // Attach the durable event log first: restore() migrates legacy
             // registry timelines into it.
@@ -251,6 +254,7 @@ pub fn run() {
             skills::skills_copy,
             skills::skills_remove,
             preview::preview_ports,
+            browser::preview_set_url,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -274,6 +278,7 @@ pub fn run() {
             app_handle.state::<CodexManager>().kill_all();
             app_handle.state::<acp::AcpManager>().kill_all();
             app_handle.state::<PtyManager>().kill_all();
+            app_handle.state::<browser::BrowserManager>().kill_all();
             app_handle.state::<Supervisor>().kill_all();
         }
     });

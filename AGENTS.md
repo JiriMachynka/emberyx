@@ -309,10 +309,24 @@ turbo / pnpm / npm workspaces).
   POST here; requests carry `x-emberyx-session` / `x-emberyx-event` /
   `x-emberyx-token` headers and are **rejected unless the token matches**. Drives
   live status, the changes feed, and notifications.
-- `ask.rs` — a local MCP server exposing `ask_user`, wired in via `--mcp-config`
-  plus `--allowedTools mcp__emberyx__ask_user`. Renders the interactive option
-  picker in the chat pane. Answers resolve a pending channel keyed by request id,
-  with a timeout.
+- `ask.rs` — a local MCP server exposing `ask_user`, `preview_screenshot` and
+  `preview_console`, wired in via `--mcp-config` plus a pre-allowed
+  `--allowedTools` list. `ask_user` renders the interactive option picker in the
+  chat pane; answers resolve a pending channel keyed by request id, with a
+  timeout. The two browser tools are read-only and go through `browser.rs`.
+
+`browser.rs` is the agent's own headless Chrome. The dock preview is a
+cross-origin `<iframe>` — the app can neither photograph it nor read its
+console — so the agent gets a separate browser pointed at the same dev server.
+CDP is spoken by hand over a blocking `tungstenite` socket, the way `ask.rs`
+speaks MCP by hand: `chromiumoxide` would pull tokio, reqwest and ~60k generated
+lines in for four commands, into a Rust side that is otherwise synchronous.
+Chrome is found, never bundled, and its absence is reported by name rather than
+degraded around. Loopback URLs only — this is a dev-server viewer, not a web
+fetcher. Its child is killed in `RunEvent::Exit` like every other spawner. The
+live path is covered by an `#[ignore]`d test (`cargo test -- --ignored
+browser_sees`); CI has no browser, and a test that passes without one is worse
+than none.
 
 ### Process lifetime
 

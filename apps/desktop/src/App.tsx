@@ -20,7 +20,11 @@ import { WelcomeScreen } from "@/components/WelcomeScreen";
 import { AttentionBanner } from "@/components/AttentionBanner";
 import { AccountBanner } from "@/components/AccountBanner";
 import { cn } from "@/lib/utils";
-import { useSettings } from "@/lib/settings";
+import {
+  accessLevelToSettings,
+  useSettings,
+  type AccessLevel,
+} from "@/lib/settings";
 import {
   DOCK_KINDS,
   EMPTY_DOCK,
@@ -92,6 +96,8 @@ function App() {
   // a click apart instead of mutually exclusive asides.
   const [dock, setDock] = useState<DockState>(EMPTY_DOCK);
   const [usageOpen, setUsageOpen] = useState(false);
+  // Settings and usage cover the workspace column rather than replacing it.
+  const overlayOpen = settingsOpen || usageOpen;
   const [slashOpen, setSlashOpen] = useState(false);
   const [conflictOpen, setConflictOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -145,6 +151,11 @@ function App() {
   );
   const onEffortChange = useCallback(
     (effort: string) => modelChangeRef.current({ effort }),
+    []
+  );
+  // The composer shows one access level; the stored pair is what a spawn needs.
+  const onAccessChange = useCallback(
+    (level: AccessLevel) => modelChangeRef.current(accessLevelToSettings(level)),
     []
   );
   const titledRef = useRef<(session: Session, title: string) => void>(() => {});
@@ -482,19 +493,7 @@ function App() {
       )}
 
       <div className="relative flex min-w-0 flex-1 flex-col">
-        {settingsOpen ? (
-          <Suspense fallback={null}>
-            <SettingsPage
-              onBack={() => setSettingsOpen(false)}
-              settings={settings}
-              onUpdate={updateSettings}
-            />
-          </Suspense>
-        ) : usageOpen ? (
-          <Suspense fallback={null}>
-            <UsagePanel onBack={() => setUsageOpen(false)} />
-          </Suspense>
-        ) : (
+        {!overlayOpen && (
           <>
             <ContextBar
               activeProject={activeProject}
@@ -530,9 +529,17 @@ function App() {
           </>
         )}
 
-        {/* Hidden rather than unmounted while settings is the page, so chat
-            sessions and dock PTYs keep running. */}
-        <div className={cn("flex min-h-0 flex-1", (settingsOpen || usageOpen) && "hidden")}>
+        {/* Covered by the overlay, never unmounted and never `display:none`.
+            Display-none makes every element a ResizeObserver watches report a
+            height of 0 — including every chat row TanStack Virtual measures —
+            so the transcript's measurement cache collapsed on the way in and
+            was rebuilt in one frame on the way out. That was the stall on the
+            back button. `invisible` keeps the layout boxes, so nothing
+            re-measures, and skips the painting of a surface nobody can see. */}
+        <div
+          className={cn("flex min-h-0 flex-1", overlayOpen && "invisible")}
+          inert={overlayOpen}
+        >
            <main className="canvas-lit relative min-h-0 min-w-0 flex-1 overflow-hidden">
             {/* Panes stay mounted once a session exists, so a pre-warmed
                 project boots in the background. Hidden unless it's the active,
@@ -543,6 +550,7 @@ function App() {
               settings={settings}
               onModelChange={onModelChange}
              onEffortChange={onEffortChange}
+             onAccessChange={onAccessChange}
              projects={projects}
              recentProjects={recents}
              onSelectProject={ws.setActiveProjectId}
@@ -626,6 +634,22 @@ function App() {
             />
           )}
         </div>
+
+        {overlayOpen && (
+          <div className="absolute inset-0 z-20 flex flex-col bg-background">
+            <Suspense fallback={null}>
+              {settingsOpen ? (
+                <SettingsPage
+                  onBack={() => setSettingsOpen(false)}
+                  settings={settings}
+                  onUpdate={updateSettings}
+                />
+              ) : (
+                <UsagePanel onBack={() => setUsageOpen(false)} />
+              )}
+            </Suspense>
+          </div>
+        )}
       </div>
 
       <CommandPalette

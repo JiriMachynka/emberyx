@@ -17,7 +17,6 @@ import {
   Puzzle,
   RotateCcw,
   Search,
-  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Type,
@@ -44,8 +43,6 @@ import {
 import { IDES, IDE_LABEL, type IdeId } from "@/lib/ide";
 import {
   DEFAULT_SETTINGS,
-  PERMISSION_MODES,
-  PERMISSION_MODE_LABEL,
 } from "@/lib/settings";
 import { PROVIDER_LABEL } from "@/lib/providers";
 import {
@@ -77,7 +74,6 @@ import {
 import {
   AGENT_BACKENDS,
   BACKEND_LABEL,
-  capabilitiesOf,
   isAgentBackend,
   type AgentBackend,
 } from "@/lib/agentBackend";
@@ -185,13 +181,6 @@ const TABS: TabMeta[] = [
     finds: "skills slash commands abilities create instructions skil",
   },
   {
-    id: "permissions",
-    label: "Permissions",
-    icon: ShieldCheck,
-    keys: ["permissionMode", "dangerouslySkipPermissions"],
-    finds: "tools approvals permission mode bypass accept edits dangerous",
-  },
-  {
     id: "connections",
     label: "Connections",
     icon: Plug,
@@ -241,7 +230,6 @@ export function SettingsPage({
   const [version, setVersion] = useState("");
   const [checking, setChecking] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
-  const capabilities = capabilitiesOf(settings.agentBackend);
   const qc = useQueryClient();
   // Each of these three is a subprocess sweep on the Rust side — CLI version
   // probes, a keychain read, a socket round trip. They are fetched on the tabs
@@ -1046,55 +1034,6 @@ export function SettingsPage({
             {tab === "mcp" && <McpSection />}
 
             {tab === "skills" && <SkillsSection />}
-
-            {tab === "permissions" && (
-              <Group>
-                {capabilities.permissions ? (
-                  <>
-                    <Row
-                      label="Permission mode"
-                      hint="How Claude handles a tool it hasn't been allowed yet."
-                      control={
-                        <Select
-                          value={settings.permissionMode}
-                          disabled={settings.dangerouslySkipPermissions}
-                          onValueChange={(v) =>
-                            onUpdate({
-                              permissionMode: v as typeof settings.permissionMode,
-                            })
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {PERMISSION_MODES.map((m) => (
-                              <SelectItem key={m} value={m}>
-                                {PERMISSION_MODE_LABEL[m]}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      }
-                    />
-
-                    <SwitchRow
-                      label="Skip permission prompts"
-                      hint="Launch Claude with --dangerously-skip-permissions. The agent won't ask before running commands or edits. This replaces the mode above rather than refining it — the two flags are mutually exclusive."
-                      checked={settings.dangerouslySkipPermissions}
-                      onChange={(v) =>
-                        onUpdate({ dangerouslySkipPermissions: v })
-                      }
-                    />
-                  </>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    {BACKEND_LABEL[settings.agentBackend]} manages approvals
-                    itself; there is nothing here to set.
-                  </p>
-                )}
-              </Group>
-            )}
 
             {tab === "connections" && (
               <>

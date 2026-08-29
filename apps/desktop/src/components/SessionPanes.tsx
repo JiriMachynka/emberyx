@@ -5,7 +5,7 @@ import { useAgentStore } from "@/lib/agentStore";
 import { paneShouldMount, pushRecent } from "@/lib/paneMount";
 import { cn } from "@/lib/utils";
 import type { Project, Session } from "@/types";
-import type { Settings } from "@/lib/settings";
+import type { AccessLevel, Settings } from "@/lib/settings";
 
 interface SessionPanesProps {
   sessions: Session[];
@@ -15,6 +15,7 @@ interface SessionPanesProps {
   onModelChange: (model: string) => void;
   /** Persist a new default reasoning effort when a chat pane switches it. */
   onEffortChange: (effort: string) => void;
+  onAccessChange: (level: AccessLevel) => void;
   projects: Project[];
   recentProjects: string[];
   onSelectProject: (projectId: string) => void;
@@ -39,6 +40,7 @@ export function SessionPanes({
   settings,
   onModelChange,
   onEffortChange,
+  onAccessChange,
   projects,
   recentProjects,
   onSelectProject,
@@ -67,6 +69,7 @@ export function SessionPanes({
             settings={settings}
             onModelChange={onModelChange}
             onEffortChange={onEffortChange}
+            onAccessChange={onAccessChange}
             projects={projects}
             recentProjects={recentProjects}
             onSelectProject={onSelectProject}
@@ -88,6 +91,7 @@ function SessionPaneRow({
   settings,
   onModelChange,
   onEffortChange,
+  onAccessChange,
   projects,
   recentProjects,
   onSelectProject,
@@ -100,6 +104,7 @@ function SessionPaneRow({
   settings: Settings;
   onModelChange: (model: string) => void;
   onEffortChange: (effort: string) => void;
+  onAccessChange: (level: AccessLevel) => void;
   projects: Project[];
   recentProjects: string[];
   onSelectProject: (projectId: string) => void;
@@ -142,6 +147,7 @@ function SessionPaneRow({
           onModelChange={onModelChange}
           effort={settings.effort}
           onEffortChange={onEffortChange}
+          onAccessChange={onAccessChange}
           providerLaunch={settings.providerLaunch}
           claudeProfiles={settings.claudeProfiles}
           codexSandbox={settings.codexSandbox}

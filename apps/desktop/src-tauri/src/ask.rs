@@ -160,6 +160,58 @@ they picked. Do not use it for choices with an obvious default.",
     })
 }
 
+/// The agent's own headless browser, pointed at the dev server. Not the dock
+/// preview — that is a cross-origin iframe the app cannot photograph or read.
+fn screenshot_tool() -> Value {
+    json!({
+        "name": "preview_screenshot",
+        "description": "Take a screenshot of the running dev server so you can \
+see what your UI change actually looks like. Defaults to the address the user \
+is previewing, or the first dev server that answers. Local addresses only. Use \
+it after a visual change instead of describing what you think you rendered.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Local dev server address. Defaults to the user's current preview."
+                },
+                "fullPage": {
+                    "type": "boolean",
+                    "description": "Capture the whole scrollable page instead of one viewport."
+                },
+                "waitMs": {
+                    "type": "number",
+                    "description": "Extra settle time after load, for client-rendered apps. Default 400."
+                }
+            }
+        }
+    })
+}
+
+/// The console half, without paying for a screenshot.
+fn console_tool() -> Value {
+    json!({
+        "name": "preview_console",
+        "description": "Read the browser console of the running dev server: \
+console output, uncaught exceptions, and failed requests. Local addresses only. \
+Use it when a page misbehaves, before guessing at the cause from the source.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Local dev server address. Defaults to the user's current preview."
+                },
+                "waitMs": {
+                    "type": "number",
+                    "description": "How long to keep listening after load. Default 400."
+                }
+            }
+        }
+    })
+}
+
 /// Ids grow monotonically within a run; uniqueness is all that matters.
 fn next_id() -> String {
     let nanos = std::time::SystemTime::now()
@@ -233,7 +285,11 @@ fn serve(mut req: tiny_http::Request, app: &AppHandle, token: &str) {
             "serverInfo": { "name": "emberyx", "version": env!("CARGO_PKG_VERSION") },
         })),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": [tool_definition()] })),
+        "tools/list" => Ok(json!({ "tools": [
+            tool_definition(),
+            screenshot_tool(),
+            console_tool(),
+        ] })),
         "tools/call" => call_tool(app, &url, &rpc["params"]),
         other => Err(format!("unknown method: {other}")),
     };
@@ -294,9 +350,60 @@ fn parse_questions(args: &Value) -> std::result::Result<Vec<AskQuestion>, String
 
 /// Push the questions to the chat pane and block until it answers.
 fn call_tool(app: &AppHandle, url: &str, params: &Value) -> std::result::Result<Value, String> {
-    if params["name"].as_str() != Some("ask_user") {
-        return Err(format!("unknown tool: {}", params["name"]));
+    match params["name"].as_str() {
+        Some("ask_user") => ask_user(app, url, params),
+        Some("preview_screenshot") => look_at_preview(app, &params["arguments"], true),
+        Some("preview_console") => look_at_preview(app, &params["arguments"], false),
+        _ => Err(format!("unknown tool: {}", params["name"])),
     }
+}
+
+/// Both browser tools are one trip through the page; they differ only in
+/// whether the picture comes back. Keeping them as two tools rather than one
+/// with a flag is for the agent's sake — "read the console" should not have to
+/// spend a screenshot's worth of context to do it.
+fn look_at_preview(
+    app: &AppHandle,
+    args: &Value,
+    want_shot: bool,
+) -> std::result::Result<Value, String> {
+    let url = match args["url"].as_str().filter(|u| !u.is_empty()) {
+        Some(url) => url.to_string(),
+        None => crate::browser::default_url(app).ok_or_else(|| {
+            "No preview address set and nothing is listening on the usual dev ports. \
+Start your dev server, or pass `url`."
+                .to_string()
+        })?,
+    };
+    let full_page = args["fullPage"].as_bool().unwrap_or(false);
+    let wait_ms = args["waitMs"].as_u64().unwrap_or(400);
+
+    let look = app
+        .state::<crate::browser::BrowserManager>()
+        .look(&url, full_page, wait_ms, want_shot)
+        .map_err(|e| e.to_string())?;
+
+    let console = if look.console.is_empty() {
+        "No console output.".to_string()
+    } else {
+        look.console.join("\n")
+    };
+    let summary = format!(
+        "{} — {}\n\n{console}",
+        look.final_url, look.status
+    );
+
+    let mut content = Vec::new();
+    // Image first: a client that truncates content shows the picture, which is
+    // the part that cannot be described in the text block.
+    if let Some(data) = look.screenshot {
+        content.push(json!({ "type": "image", "data": data, "mimeType": "image/png" }));
+    }
+    content.push(json!({ "type": "text", "text": summary }));
+    Ok(json!({ "content": content }))
+}
+
+fn ask_user(app: &AppHandle, url: &str, params: &Value) -> std::result::Result<Value, String> {
     let questions = parse_questions(&params["arguments"])?;
 
     let session = url

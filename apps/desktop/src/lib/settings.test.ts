@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import {
+  ACCESS_LEVELS,
   DEFAULT_SETTINGS,
+  accessLevelFrom,
+  accessLevelToSettings,
   launchFor,
   loadSettings,
   useSettings,
@@ -179,5 +182,43 @@ describe("useSettings", () => {
     expect(document.documentElement.style.getPropertyValue("--code-font")).toBe(
       "Menlo, monospace",
     );
+  });
+});
+
+describe("access level", () => {
+  it("round-trips every level through the stored pair", () => {
+    for (const level of ACCESS_LEVELS) {
+      const stored = accessLevelToSettings(level);
+      expect(accessLevelFrom(stored.permissionMode, stored.skipPermissions)).toBe(
+        level
+      );
+    }
+  });
+
+  it("never asks for both flags at once", () => {
+    // `--permission-mode` and `--dangerously-skip-permissions` are mutually
+    // exclusive in the CLI, so only the full-access level may set the skip.
+    for (const level of ACCESS_LEVELS) {
+      const stored = accessLevelToSettings(level);
+      expect(stored.skipPermissions).toBe(level === "full");
+    }
+  });
+
+  it("reads bypassPermissions as full access without the skip flag", () => {
+    // Stored by an older build's Permissions section. Showing it as "Accept
+    // edits" would understate what the agent is allowed to do.
+    expect(accessLevelFrom("bypassPermissions", false)).toBe("full");
+  });
+
+  it("shows the shipped default as full access", () => {
+    // The app ships with the skip flag on, so the composer must open on "Full
+    // access" — the chip is the only place this is visible now, and a chip that
+    // read "Accept edits" while the agent ran unsupervised would be a lie.
+    expect(
+      accessLevelFrom(
+        DEFAULT_SETTINGS.permissionMode,
+        DEFAULT_SETTINGS.dangerouslySkipPermissions
+      )
+    ).toBe("full");
   });
 });
