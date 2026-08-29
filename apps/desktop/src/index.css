@@ -70,11 +70,14 @@
   /* Ember accent glow, reused by .ember-glow and status dots. */
   --glow: oklch(0.73 0.163 52 / 0.5);
   /* The chat's own two surfaces, and the accent gradient stops. Their own
-     tokens rather than shades of --card: the chat tints them, and a theme has
-     to be able to. `lib/themes.ts` overwrites all four on :root. */
-  --composer: oklch(0.18 0.025 315 / 98%);
-  --chat-canvas: oklch(0.16 0.016 315);
-  --bubble: oklch(0.245 0.022 315);
+     tokens rather than shades of --card: the chat sits on a different step of
+     the ramp, and a theme has to be able to move it. They stay on the theme's
+     single hue like every other surface — a surface on its own hue turns muddy
+     the moment an accent overlay lands on it. `lib/themes.ts` overwrites all
+     four on :root. */
+  --composer: oklch(0.185 0 0 / 98%);
+  --chat-canvas: oklch(0.16 0 0);
+  --bubble: oklch(0.235 0 0);
   --accent-hi: oklch(0.83 0.14 68);
   --accent-lo: oklch(0.7 0.19 38);
   /* Defaults match DEFAULT_SETTINGS; useSettings writes the live stacks here. */
