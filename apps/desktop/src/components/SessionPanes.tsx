@@ -1,5 +1,6 @@
 import { useCallback, useRef } from "react";
 import { ChatPane } from "@/components/ChatPane";
+import { PaneErrorBoundary } from "@/components/PaneErrorBoundary";
 import { useAgentStore } from "@/lib/agentStore";
 import { paneShouldMount, pushRecent } from "@/lib/paneMount";
 import { cn } from "@/lib/utils";
@@ -123,6 +124,9 @@ function SessionPaneRow({
   return (
     <div className={cn("absolute inset-0", active ? "" : "hidden")}>
       {session.kind === "chat" ? (
+        // Keyed on the session so one pane's crash never blanks its siblings,
+        // and so re-keying resets a boundary that belonged to a closed session.
+        <PaneErrorBoundary key={session.id} label="This chat">
         <ChatPane
           sessionId={session.id}
           cwd={session.cwd}
@@ -148,6 +152,7 @@ function SessionPaneRow({
           onTitled={handleTitled}
           onThreadStarted={handleThreadStarted}
         />
+        </PaneErrorBoundary>
       ) : null}
     </div>
   );

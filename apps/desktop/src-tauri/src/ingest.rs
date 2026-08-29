@@ -51,13 +51,33 @@ pub async fn transcripts_ingest(
         .map_err(|e| crate::err!("transcripts_ingest join failed: {e}"))?
 }
 
-/// Bring projections for `cwd` up to date before serving a page read. Ingest
-/// is incremental (byte-offset cursors), so for an already-ingested project
-/// this is two cheap no-op queries; that is also what keeps thread-open from
-/// ever rescanning transcripts on the hot path.
+/// Shortest gap between two freshness passes for one project.
+///
+/// "Cheap no-op" still means a `read_dir` over the project's transcripts, a
+/// `stat` per file, a GROUP BY over the whole events table and a projector
+/// drain behind the writer mutex. Opening a thread asks for its first page and
+/// then, as the virtual list settles, for more — each of which used to repeat
+/// that pass. Live turns never arrive through here; they come over the agent's
+/// own event stream, so a few seconds of staleness on *history* costs nothing.
+const FRESHNESS_TTL: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Bring projections for `cwd` up to date before serving a page read. Ingest is
+/// incremental (byte-offset cursors), and repeated within the TTL it is skipped
+/// outright — that is what keeps thread-open off the transcript bytes.
 fn ensure_fresh(store: &Store, cwd: &str) -> Result<()> {
+    static LAST_PASS: OnceLock<Mutex<HashMap<String, std::time::Instant>>> = OnceLock::new();
+    let last = LAST_PASS.get_or_init(|| Mutex::new(HashMap::new()));
+    {
+        let seen = last.lock().unwrap_or_else(|e| e.into_inner());
+        if seen.get(cwd).is_some_and(|at| at.elapsed() < FRESHNESS_TTL) {
+            return Ok(());
+        }
+    }
     ingest_project(store, cwd)?;
     store.run_projectors()?;
+    last.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(cwd.to_string(), std::time::Instant::now());
     Ok(())
 }
 

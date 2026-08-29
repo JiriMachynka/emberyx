@@ -15,6 +15,20 @@ export function useSessions() {
   const counter = useRef(0);
   const nextId = () => `s${++counter.current}`;
 
+  // The list is mirrored in a ref and every mutation goes through `commit`.
+  // Two mutations in the same tick are routine — a monorepo's dev servers all
+  // exit together, each calling `closeSession` — and reading `sessions` from
+  // the render snapshot means the second overwrites the first, resurrecting a
+  // dead tab with no PTY behind it. The ref advances synchronously, so the
+  // second mutation sees the first.
+  const sessionsRef = useRef<Session[]>([]);
+  const commit = (update: (prev: Session[]) => Session[]): Session[] => {
+    const next = update(sessionsRef.current);
+    sessionsRef.current = next;
+    setSessions(next);
+    return next;
+  };
+
   function setActive(projectId: string, id: string) {
     setActiveByProject((m) => ({ ...m, [projectId]: id }));
   }
@@ -28,7 +42,7 @@ export function useSessions() {
     backend: AgentBackend = "claude"
   ): string {
     const id = nextId();
-    setSessions((s) => [
+    commit((s) => [
       ...s,
       { id, projectId, label, cwd, kind: "chat", backend, resume },
     ]);
@@ -44,7 +58,7 @@ export function useSessions() {
     command: string
   ): string {
     const id = nextId();
-    setSessions((s) => [
+    commit((s) => [
       ...s,
       { id, projectId, label, cwd, command, kind: "dev" },
     ]);
@@ -56,12 +70,12 @@ export function useSessions() {
    *  conversation. Not `resume`: that is a spawn argument, and changing it
    *  under a mounted pane respawns the agent mid-turn. */
   function setSessionThread(id: string, threadId: string) {
-    setSessions((s) => s.map((x) => (x.id === id ? { ...x, threadId } : x)));
+    commit((s) => s.map((x) => (x.id === id ? { ...x, threadId } : x)));
   }
 
   /** Rename a session's sidebar label (e.g. after a chat is auto-titled). */
   function renameSession(id: string, label: string) {
-    setSessions((s) => s.map((x) => (x.id === id ? { ...x, label } : x)));
+    commit((s) => s.map((x) => (x.id === id ? { ...x, label } : x)));
   }
 
   /** Repoint any project focused on a now-gone session. A shared chat can be
@@ -85,15 +99,14 @@ export function useSessions() {
   }
 
   function closeSession(id: string) {
-    const next = sessions.filter((s) => s.id !== id);
-    setSessions(next);
+    const next = commit((prev) => prev.filter((s) => s.id !== id));
     repointActive(next, new Set([id]));
   }
 
   /** Reorder a session within its project, dropping it at another tab's slot. */
   function moveSession(projectId: string, draggedId: string, targetId: string) {
     if (draggedId === targetId) return;
-    setSessions((prev) => {
+    commit((prev) => {
       const ids = prev
         .filter((s) => s.projectId === projectId)
         .map((s) => s.id);
@@ -106,18 +119,22 @@ export function useSessions() {
       ids.splice(from < to ? to - 1 : to, 0, moved);
       const byId = new Map(prev.map((s) => [s.id, s]));
       let i = 0;
-      return prev.map((s) =>
-        s.projectId === projectId ? (byId.get(ids[i++]) as Session) : s
-      );
+      // The cast this replaces hid the invariant: a duplicate id collapses in
+      // the Map but not in the array, so the counters diverge and `undefined`
+      // lands in the session list. Keeping the original entry is the safe miss.
+      return prev.map((s) => {
+        if (s.projectId !== projectId) return s;
+        return byId.get(ids[i++]) ?? s;
+      });
     });
   }
 
   function stopAllDev(projectId: string) {
-    const agent = sessions.find(
+    const agent = sessionsRef.current.find(
       (s) => s.projectId === projectId && s.kind === "chat"
     );
     if (agent) setActive(projectId, agent.id);
-    setSessions((prev) =>
+    commit((prev) =>
       prev.filter((s) => !(s.projectId === projectId && s.kind === "dev"))
     );
   }
@@ -125,10 +142,11 @@ export function useSessions() {
   /** Remove every session belonging to a closed project. */
   function closeProjectSessions(projectId: string) {
     const gone = new Set(
-      sessions.filter((s) => s.projectId === projectId).map((s) => s.id)
+      sessionsRef.current
+        .filter((s) => s.projectId === projectId)
+        .map((s) => s.id)
     );
-    const next = sessions.filter((s) => s.projectId !== projectId);
-    setSessions(next);
+    const next = commit((prev) => prev.filter((s) => s.projectId !== projectId));
     repointActive(next, gone);
     setActiveByProject((m) => {
       const copy = { ...m };

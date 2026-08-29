@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowLeft, Plus, SquarePen, PanelLeftClose, PanelLeftOpen, Settings, FolderOpen, FolderPlus, GitBranch, GitPullRequest, Bell, Search, ChevronDown, Clock, Check, Laptop, LoaderCircle, SquareTerminal, MoreHorizontal, Pin, ChartColumn } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
@@ -265,64 +265,122 @@ function AllThreads(props: SidebarProps) {
   const [scope, setScope] = useState<string | null>(null);
   const machine = useMachineName().data ?? "";
 
-  // One probe per repo, not per worktree and not per thread.
-  const roots = [
-    ...new Set(projects.map((p) => p.worktree?.repoRoot ?? p.path)),
-  ];
+  // One probe per repo, not per worktree and not per thread. Memoized because
+  // it is a useQueries options array — a new one every render rebuilds the
+  // whole query set.
+  const roots = useMemo(
+    () => [...new Set(projects.map((p) => p.worktree?.repoRoot ?? p.path))],
+    [projects]
+  );
   const merged = useMergedBranchesMap(roots, threadAutoSettleOnMerge);
   // A worktree names its own branch; everything else has to be asked.
-  const branches = useBranchMap(
-    projects.filter((p) => !p.worktree).map((p) => p.path)
+  const branchPaths = useMemo(
+    () => projects.filter((p) => !p.worktree).map((p) => p.path),
+    [projects]
   );
+  const branches = useBranchMap(branchPaths);
 
-  const now = Date.now();
-  const scoped = scope ? projects.filter((p) => p.id === scope) : projects;
-  const linked = scoped.flatMap((project) =>
-    project.threads.flatMap((thread) => {
-      const pr = meta[threadMetaKey(project.path, thread.id)]?.linkedPr;
-      return pr ? [{ path: project.path, pr }] : [];
-    })
+  // Quantized to the minute so `now` isn't a fresh value on every render — the
+  // settle windows it feeds are measured in days, and an un-quantized clock
+  // would invalidate the row memo below on every keystroke and every token.
+  const [minuteTick, setMinuteTick] = useState(() =>
+    Math.floor(Date.now() / 60_000)
+  );
+  useEffect(() => {
+    const id = window.setInterval(
+      () => setMinuteTick(Math.floor(Date.now() / 60_000)),
+      60_000
+    );
+    return () => window.clearInterval(id);
+  }, []);
+  const scoped = useMemo(
+    () => (scope ? projects.filter((p) => p.id === scope) : projects),
+    [scope, projects]
+  );
+  const linked = useMemo(
+    () =>
+      scoped.flatMap((project) =>
+        project.threads.flatMap((thread) => {
+          const pr = meta[threadMetaKey(project.path, thread.id)]?.linkedPr;
+          return pr ? [{ path: project.path, pr }] : [];
+        })
+      ),
+    [scoped, meta]
   );
   const mergedPrs = useLinkedPrMerged(linked, threadAutoSettleOnMerge);
-  const rows: ThreadRowData[] = scoped
-    .flatMap((project) =>
-      project.threads.map((thread) => {
-        const key = threadMetaKey(project.path, thread.id);
-        const root = project.worktree?.repoRoot ?? project.path;
-        const branch = project.worktree?.branch;
-        const pr = meta[key]?.linkedPr;
-        const branchMerged = !!branch && (merged[root] ?? []).includes(branch);
-        const prMerged =
-          !!pr && mergedPrs.has(`${project.path}:${pr.host}:${pr.iid}`);
-        return {
-          project,
-          thread,
-          key,
-          branch: branch ?? branches[project.path],
-          linkedPr: pr,
-          state: deriveThreadState({
-            modified: thread.modified,
-            meta: meta[key] ?? {},
-            now,
-            settleDays: threadSettleDays,
-            merged: branchMerged || prMerged,
-          }),
-        };
-      })
-    )
-    .sort((a, b) => b.thread.modified - a.thread.modified);
+  // One pass, memoized: the sort plus five filters used to run on every render,
+  // and — because each produced a new array — they also guaranteed the
+  // `listSlots` memo below could never hit.
+  const buckets = useMemo(() => {
+    const now = minuteTick * 60_000;
+    const all: ThreadRowData[] = scoped
+      .flatMap((project) =>
+        project.threads.map((thread) => {
+          const key = threadMetaKey(project.path, thread.id);
+          const root = project.worktree?.repoRoot ?? project.path;
+          const branch = project.worktree?.branch;
+          const pr = meta[key]?.linkedPr;
+          const branchMerged = !!branch && (merged[root] ?? []).includes(branch);
+          const prMerged =
+            !!pr && mergedPrs.has(`${project.path}:${pr.host}:${pr.iid}`);
+          return {
+            project,
+            thread,
+            key,
+            branch: branch ?? branches[project.path],
+            linkedPr: pr,
+            state: deriveThreadState({
+              modified: thread.modified,
+              meta: meta[key] ?? {},
+              now,
+              settleDays: threadSettleDays,
+              merged: branchMerged || prMerged,
+            }),
+          };
+        })
+      )
+      .sort((a, b) => b.thread.modified - a.thread.modified);
+    const by: Record<ThreadState, ThreadRowData[]> = {
+      pinned: [],
+      active: [],
+      snoozed: [],
+      settled: [],
+      archived: [],
+    };
+    for (const r of all) by[r.state].push(r);
+    return { all, ...by };
+  }, [
+    scoped,
+    meta,
+    merged,
+    branches,
+    mergedPrs,
+    threadSettleDays,
+    minuteTick,
+  ]);
 
-  const of = (state: ThreadState) => rows.filter((r) => r.state === state);
-  const pinned = of("pinned");
-  const active = of("active");
-  const snoozed = of("snoozed");
-  const settled = of("settled");
-  const archived = of("archived");
+  const rows = buckets.all;
+  const { pinned, active, snoozed, settled, archived } = buckets;
 
   // setThreadMeta returns the whole store, so the new identity is what makes
   // the list re-derive — the rows are computed from `meta`, not read per row.
-  const apply = (key: string, patch: ThreadMeta) =>
-    setMeta({ ...setThreadMeta(key, patch) });
+  const apply = useCallback(
+    (key: string, patch: ThreadMeta) => setMeta({ ...setThreadMeta(key, patch) }),
+    []
+  );
+
+  // Identity-stable so the memoized rows below actually stay put: an inline
+  // arrow per row is a new prop on every render, which is a re-render of every
+  // visible card and the three dropdown trees each one carries.
+  // Through a ref, so it is stable even though the handler App passes down is a
+  // fresh closure on every one of its renders.
+  const resumeRef = useRef(onResumeThread);
+  resumeRef.current = onResumeThread;
+  const resume = useCallback(
+    (data: ThreadRowData) =>
+      resumeRef.current(data.project.id, data.project.path, data.thread),
+    []
+  );
 
   const row = (data: ThreadRowData) => {
     // A thread the pane opened itself is matched by the id it reported, not by
@@ -345,9 +403,7 @@ function AllThreads(props: SidebarProps) {
         terminals={
           sessionsFor(data.project.id).filter((s) => s.kind === "dev").length
         }
-        onResume={() =>
-          onResumeThread(data.project.id, data.project.path, data.thread)
-        }
+        onResume={resume}
         onApply={apply}
       />
     );
@@ -600,7 +656,7 @@ const groupByRepository = (
  *  The card is a div with an absolutely-positioned button behind it rather than
  *  one big button, because the header row carries its own actions and a button
  *  inside a button is invalid and swallows the click that opens it. */
-function ThreadRow({
+const ThreadRow = memo(function ThreadRow({
   data,
   session,
   open,
@@ -617,7 +673,8 @@ function ThreadRow({
   machine: string;
   /** Terminal + dev processes running in this project. */
   terminals: number;
-  onResume: () => void;
+  /** Takes the row's own data, so one stable callback serves every row. */
+  onResume: (data: ThreadRowData) => void;
   onApply: (key: string, patch: ThreadMeta) => void;
 }) {
   const { project, thread, key, state, branch, linkedPr } = data;
@@ -655,7 +712,7 @@ function ThreadRow({
         >
           <button
             type="button"
-            onClick={onResume}
+            onClick={() => onResume(data)}
             aria-label={`Resume ${thread.title}`}
             className="absolute inset-0 rounded-lg outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
@@ -832,7 +889,7 @@ function ThreadRow({
       </PopoverContent>
     </Popover>
   );
-}
+});
 
 /** The status dot on a thread card, minus the working state — that one is the
  *  chip in the header. */

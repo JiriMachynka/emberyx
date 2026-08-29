@@ -139,6 +139,20 @@ describe("useWorkspace launch restore", () => {
     expect(session.resume).toBe("latest");
     expect(session.label).toBe("latest");
   });
+
+  // "New chat" means a blank thread. Opening a project through it used to run
+  // the same resume-the-latest boot as any other open, so a project with
+  // threads answered the request with an old conversation.
+  it("starts a blank chat when a project is opened for a new chat", async () => {
+    cacheThreads("/p", [{ id: "latest", title: "latest", modified: 200 }]);
+
+    const { result } = renderHook(() => useWorkspace(DEFAULT_SETTINGS));
+    await act(() => result.current.openProjectAt("/p", { fresh: true }));
+    const id = result.current.projects[0].id;
+    await waitFor(() => expect(result.current.sessionsFor(id)).toHaveLength(1));
+
+    expect(result.current.sessionsFor(id)[0].resume).toBeUndefined();
+  });
 });
 
 describe("useWorkspace agent backend", () => {

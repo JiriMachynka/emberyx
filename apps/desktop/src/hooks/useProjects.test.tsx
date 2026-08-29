@@ -5,6 +5,23 @@ import { useProjects } from "@/hooks/useProjects";
 const WT = { repoRoot: "/code/emberyx", branch: "fix/panes" };
 
 describe("useProjects", () => {
+  // The launch restore awaits `openProjectAt` per project, so the `projects`
+  // render snapshot is stale for its whole duration. Opening a folder in that
+  // window used to miss the entry already restored and create a second project
+  // — with a second spawned agent — for the same path.
+  it("dedupes by path within a single tick", () => {
+    const { result } = renderHook(() => useProjects());
+    let first = "";
+    let second = "";
+    act(() => {
+      first = result.current.openProject("/code/emberyx").id;
+      second = result.current.openProject("/code/emberyx").id;
+    });
+
+    expect(second).toBe(first);
+    expect(result.current.projects).toHaveLength(1);
+  });
+
   it("keeps a repo and its worktree as separate projects", () => {
     const { result } = renderHook(() => useProjects());
     let repoId = "";

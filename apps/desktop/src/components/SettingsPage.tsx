@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
@@ -53,6 +53,7 @@ import {
   CODEX_SANDBOX_LABEL,
   isCodexSandbox,
 } from "@/lib/settings";
+import { CLAUDE_MODELS } from "@/lib/modelCatalog";
 import {
   getCustomModels,
   getHiddenModels,
@@ -103,6 +104,10 @@ type Tab =
   | "sourceControl"
   | "notifications"
   | "about";
+
+/** Radix Select refuses an empty item value, so "no model" needs a name of its
+ *  own on the way through the picker. */
+const NO_COMMIT_MODEL = "off";
 
 /** A tab owns the settings keys it edits, which is what "Restore defaults"
  *  resets, and the words that should find it from the search box — a setting
@@ -201,8 +206,8 @@ const TABS: TabMeta[] = [
     id: "sourceControl",
     label: "Source Control",
     icon: GitBranch,
-    keys: ["gitlabRemote", "diffIgnoreWhitespace"],
-    finds: "git github gitlab gh glab cli login remote pull request merge request diff whitespace",
+    keys: ["gitlabRemote", "diffIgnoreWhitespace", "commitMessageModel"],
+    finds: "git github gitlab gh glab cli login remote pull request merge request diff whitespace commit message model generate ai",
   },
   {
     id: "notifications",
@@ -238,9 +243,16 @@ export function SettingsPage({
   const searchRef = useRef<HTMLInputElement>(null);
   const capabilities = capabilitiesOf(settings.agentBackend);
   const qc = useQueryClient();
-  const providers = useProviderStatus().data ?? [];
-  const forgeClis = useForgeCliStatus().data ?? [];
-  const daemon = useDaemonHealth(true).data ?? null;
+  // Each of these three is a subprocess sweep on the Rust side — CLI version
+  // probes, a keychain read, a socket round trip. They are fetched on the tabs
+  // that show them (About reads providers + daemon for its diagnostics dump),
+  // not on every open: the default tab displays none of them, and paying for
+  // all three there is what made Settings feel slow to appear.
+  const providers =
+    useProviderStatus(tab === "providers" || tab === "about").data ?? [];
+  const forgeClis = useForgeCliStatus(tab === "sourceControl").data ?? [];
+  const daemon =
+    useDaemonHealth(tab === "connections" || tab === "about").data ?? null;
   const [startingDaemon, setStartingDaemon] = useState(false);
   const [hiddenDraft, setHiddenDraft] = useState("");
   const [customBackend, setCustomBackend] = useState<AgentBackend>("claude");
@@ -248,7 +260,16 @@ export function SettingsPage({
   const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
 
   const meta = TAB_META(tab);
-  const navigationTarget = document.getElementById("settings-navigation");
+  // The Sidebar creates this host in the same commit that mounts this page, so
+  // reading it during render finds nothing and the whole tab list is skipped
+  // until some unrelated state change re-renders. Read it after the commit,
+  // before paint.
+  const [navigationTarget, setNavigationTarget] = useState<HTMLElement | null>(
+    null
+  );
+  useLayoutEffect(() => {
+    setNavigationTarget(document.getElementById("settings-navigation"));
+  }, []);
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -1243,6 +1264,32 @@ export function SettingsPage({
                     hint="Working-tree diffs in the Changes panel skip whitespace-only edits (git -w)."
                     checked={settings.diffIgnoreWhitespace}
                     onChange={(v) => onUpdate({ diffIgnoreWhitespace: v })}
+                  />
+                  <Row
+                    label="Commit message model"
+                    hint="Drafts a commit message from the diff when you press Generate in the commit box. One throwaway claude -p call, so the list is Claude's."
+                    control={
+                      <Select
+                        value={settings.commitMessageModel || NO_COMMIT_MODEL}
+                        onValueChange={(v) =>
+                          onUpdate({
+                            commitMessageModel: v === NO_COMMIT_MODEL ? "" : v,
+                          })
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={NO_COMMIT_MODEL}>Off</SelectItem>
+                          {CLAUDE_MODELS.filter((m) => !m.legacy).map((m) => (
+                            <SelectItem key={m.id} value={m.id}>
+                              {m.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    }
                   />
                 </Group>
               </>

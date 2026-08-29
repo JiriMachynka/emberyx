@@ -52,6 +52,11 @@ impl Daemon {
         default_socket()
     }
 
+    /// How long a single daemon request may take before it is called failed.
+    /// Every request here is metadata — none of them do real work — so a second
+    /// is already generous.
+    const REQUEST_TIMEOUT_SECS: u64 = 1;
+
     fn connect() -> Option<UnixStream> {
         UnixStream::connect(Self::socket()).ok()
     }
@@ -66,6 +71,12 @@ impl Daemon {
     /// keeps a failed request from poisoning the next one.
     pub fn request(request: &Request) -> Result<Value> {
         let stream = Self::connect().ok_or("emberyxd is not running")?;
+        // A daemon that accepted the connection and then wedged would otherwise
+        // hold this read open forever; "not answering" has to be an error the
+        // caller can render, not a hang.
+        let timeout = std::time::Duration::from_secs(Self::REQUEST_TIMEOUT_SECS);
+        let _ = stream.set_read_timeout(Some(timeout));
+        let _ = stream.set_write_timeout(Some(timeout));
         let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
         let mut reader = BufReader::new(stream);
         serde_json::to_writer(&mut writer, request).map_err(|e| e.to_string())?;
@@ -222,8 +233,10 @@ impl Daemon {
 /// health surface — the UI must be able to say "agents will not survive" before
 /// the user finds out the hard way.
 #[tauri::command]
-pub fn daemon_health() -> Result<Health> {
-    Daemon::health()
+pub async fn daemon_health() -> Result<Health> {
+    tauri::async_runtime::spawn_blocking(Daemon::health)
+        .await
+        .map_err(|e| crate::err!("daemon_health join failed: {e}"))?
 }
 
 /// Start the daemon on demand.

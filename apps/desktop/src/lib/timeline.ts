@@ -109,19 +109,36 @@ export function useThreadTimeline(threadId: string): ThreadTimeline {
   const lastSeqRef = useRef(0);
 
   const apply = useCallback((incoming: TimelineEvent[]) => {
-    setEvents((prev) => {
-      const merged = mergeTimeline(prev, incoming);
-      lastSeqRef.current = lastSeqOf(merged);
-      return merged;
-    });
+    // Advance the cursor here, not inside the updater: React defers the updater
+    // to the render phase, so a burst of events delivered in one task would all
+    // compare against the pre-burst sequence and each declare a false gap.
+    const top = lastSeqOf(incoming);
+    if (top > lastSeqRef.current) lastSeqRef.current = top;
+    setEvents((prev) => mergeTimeline(prev, incoming));
   }, []);
 
-  const reload = useCallback(async () => {
-    const all = await readTimeline(threadId, null);
-    lastSeqRef.current = lastSeqOf(all);
-    setEvents(all);
-    setLoading(false);
-  }, [threadId]);
+  const reload = useCallback(
+    // `cancelled` lets the mount effect abandon a read whose thread has since
+    // changed. A caller reloading by hand has nothing to abandon.
+    async (cancelled: () => boolean = () => false) => {
+      try {
+        const all = await readTimeline(threadId, null);
+        // A read for the *previous* thread landing after a switch would render
+        // its events under the new thread and, worse, leave the cursor on its
+        // sequence — every later event then reads as a gap and backfills.
+        if (cancelled()) return;
+        lastSeqRef.current = lastSeqOf(all);
+        setEvents(all);
+      } catch (e) {
+        // Leaving `loading` true here would show an empty timeline with no
+        // error and no way to tell the two apart.
+        console.error("[emberyx] timeline read failed", e);
+      } finally {
+        if (!cancelled()) setLoading(false);
+      }
+    },
+    [threadId]
+  );
 
   const backfill = useCallback(async () => {
     const missed = await readTimeline(threadId, lastSeqRef.current || null);
@@ -130,10 +147,11 @@ export function useThreadTimeline(threadId: string): ThreadTimeline {
 
   useEffect(() => {
     let disposed = false;
+    const cancelled = () => disposed;
     lastSeqRef.current = 0;
     setEvents([]);
     setLoading(true);
-    void reload();
+    void reload(cancelled);
 
     let off: (() => void) | undefined;
     void listen<TimelineEvent>(TIMELINE_EVENT, (ev) => {
@@ -144,7 +162,9 @@ export function useThreadTimeline(threadId: string): ThreadTimeline {
       // A hole means events were missed while disconnected — ask the server
       // for them rather than rendering a timeline with a gap in it.
       if (event.seq > lastSeqRef.current + 1) {
-        void backfill();
+        void backfill().catch((e) =>
+          console.error("[emberyx] timeline backfill failed", e)
+        );
         return;
       }
       apply([event]);

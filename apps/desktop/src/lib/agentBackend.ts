@@ -56,6 +56,19 @@ export const COMMAND_SIGIL: Record<AgentBackend, string> = {
   grok: "/",
 };
 
+/**
+ * Fallback context window per backend, used only when neither the transport nor
+ * the model catalog names one. 200k is Claude's floor, not a universal one — a
+ * backend with no known floor gets 0 and the ring renders as unknown rather
+ * than dividing by zero and reading as permanently full.
+ */
+export const CONTEXT_FLOOR: Record<AgentBackend, number> = {
+  claude: 200_000,
+  codex: 0,
+  opencode: 0,
+  grok: 0,
+};
+
 /** `--effort` levels Claude accepts. Fixed by the CLI rather than discovered,
  *  so the chip renders without waiting on a catalog. Codex's levels vary per
  *  model and come from its catalog instead. Note there is no `ultra` here —

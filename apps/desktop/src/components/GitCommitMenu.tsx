@@ -2,7 +2,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
-import { ChevronDown, GitCommitVertical, LoaderCircle } from "lucide-react";
+import { ChevronDown, GitCommitVertical, LoaderCircle, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -27,6 +27,7 @@ import {
   type GitActionState,
 } from "@/lib/gitAction";
 import { FORGE_NOUN, isRemoteHost, type RemoteHost } from "@/lib/forge";
+import { loadSettings } from "@/lib/settings";
 import {
   useForgeCliStatus,
   useForgeOpenPr,
@@ -55,6 +56,10 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  // Read once on mount, not per render: this menu lives in the top bar, which
+  // re-renders often, and `loadSettings` parses and migrates the whole blob.
+  const [draftModel] = useState(() => loadSettings().commitMessageModel);
 
   const branchQuery = useGitBranch(projectPath);
   const changesQuery = useGitChanges(projectPath);
@@ -78,6 +83,7 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
 
   const state: GitActionState = {
     staged: staged.length,
+    unstaged: unstaged.length,
     ahead: branch.ahead,
     behind: branch.behind,
     upstream: branch.upstream,
@@ -88,6 +94,36 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
   const primary = primaryAction(state);
   const others = menuActions(state);
   const noun = FORGE_NOUN[forge ?? "github"].one;
+
+  /** Draft the message from the diff and drop it in the box — never commit it.
+   *  Whatever comes back is a suggestion the user reads and edits. */
+  async function draft() {
+    if (drafting || busy) return;
+    setDrafting(true);
+    try {
+      const drafted = await invoke<string>("git_draft_commit_message", {
+        path: projectPath,
+        model: draftModel,
+      });
+      setMessage(drafted);
+    } catch (e) {
+      toast.error("Couldn't draft a message", { description: String(e) });
+    } finally {
+      setDrafting(false);
+    }
+  }
+
+  /** What the next commit will contain. Staging is implicit: with nothing
+   *  staged the whole working tree goes in, which is the common case here — the
+   *  changes were made by an agent, not hand-picked. An explicit staging
+   *  selection is left alone. */
+  async function stageForCommit() {
+    if (staged.length > 0 || unstaged.length === 0) return;
+    await invoke("git_stage", {
+      path: projectPath,
+      files: unstaged.map((f) => f.path),
+    });
+  }
 
   /** Commit and push in one call: the Rust side runs its safety checks before
    *  committing, so a refusal never strands a commit. */
@@ -161,6 +197,7 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
     setBusy(true);
     try {
       let pushed = true;
+      if (needsMessage(kind)) await stageForCommit();
       if (kind === "commit") {
         await invoke<string>("git_commit", {
           path: projectPath,
@@ -188,18 +225,6 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
     }
   }
 
-  const stageAll = async () => {
-    try {
-      await invoke("git_stage", {
-        path: projectPath,
-        files: unstaged.map((f) => f.path),
-      });
-      invalidateGit(projectPath);
-    } catch (e) {
-      toast.error("Couldn't stage", { description: String(e) });
-    }
-  };
-
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -220,8 +245,11 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
             {state.isDefaultBranch && " · default"}
           </span>
           <span>
-            {staged.length} staged
-            {unstaged.length > 0 && ` · ${unstaged.length} unstaged`}
+            {staged.length > 0
+              ? `${staged.length} staged${
+                  unstaged.length > 0 ? ` · ${unstaged.length} unstaged` : ""
+                }`
+              : `${unstaged.length} ${unstaged.length === 1 ? "change" : "changes"}`}
           </span>
         </div>
 
@@ -234,22 +262,37 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
         />
 
         <div className="flex items-center gap-2">
+          {draftModel && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy || drafting || files.length === 0}
+              title={
+                files.length === 0
+                  ? "Nothing to describe"
+                  : "Draft a message from the diff"
+              }
+              onClick={() => void draft()}
+            >
+              {drafting ? (
+                <LoaderCircle className="size-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="size-3.5" />
+              )}
+              Generate
+            </Button>
+          )}
+
           <Button
             className="flex-1"
             size="sm"
-            disabled={busy || !!primary.disabledReason}
+            disabled={busy || drafting || !!primary.disabledReason}
             title={primary.disabledReason}
             onClick={() => run(primary.kind)}
           >
             {busy && <LoaderCircle className="size-3.5 animate-spin" />}
             {primary.label}
           </Button>
-
-          {unstaged.length > 0 && (
-            <Button variant="outline" size="sm" disabled={busy} onClick={stageAll}>
-              Stage all
-            </Button>
-          )}
 
           {others.length > 0 && (
             <DropdownMenu>

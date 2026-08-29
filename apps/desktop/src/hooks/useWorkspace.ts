@@ -298,7 +298,12 @@ export function useWorkspace(settings: Settings) {
 
   async function openProjectAt(
     path: string,
-    opts?: { prewarm?: boolean; worktree?: { repoRoot: string; branch: string } }
+    opts?: {
+      prewarm?: boolean;
+      worktree?: { repoRoot: string; branch: string };
+      /** Opened by "new chat": land on a blank thread, never a resumed one. */
+      fresh?: boolean;
+    }
   ) {
     const prewarm = opts?.prewarm ?? false;
     // Revealing the project the pre-warm already owns: its startPrimaryAgent may
@@ -327,7 +332,13 @@ export function useWorkspace(settings: Settings) {
     // when the in-flight pre-warm will start the agent itself. startPrimaryAgent
     // owns the thread refresh in every path it runs, so only a plain reopen
     // (agent still up) refreshes here.
-    if (!matchedPrewarm && (isNew || !sessionsFor(id).some(isPrimaryAgent))) {
+    if (opts?.fresh) {
+      // The user asked for a new chat, not for this project's latest one — a
+      // resumed thread is the opposite of what was requested, even when the
+      // project has plenty of them.
+      startChat(id, path, undefined, undefined, backendFor(path));
+      refreshThreads(id, path, true);
+    } else if (!matchedPrewarm && (isNew || !sessionsFor(id).some(isPrimaryAgent))) {
       await startPrimaryAgent(id, path);
     } else if (!matchedPrewarm) {
       refreshThreads(id, path, prewarm);
@@ -451,14 +462,19 @@ export function useWorkspace(settings: Settings) {
     resumeThreadIn(activeProject.id, activeProject.path, thread);
   }
 
-  async function pickProject() {
+  async function pickProject(opts?: { fresh?: boolean }) {
     const selected = await open({ directory: true, multiple: false });
-    if (typeof selected === "string") void openProjectAt(selected);
+    if (typeof selected === "string")
+      void openProjectAt(selected, { fresh: opts?.fresh });
   }
 
-  /** Spawn a fresh chat tab in the active project. */
+  /** Spawn a fresh chat tab in the active project. With nothing open yet, pick
+   *  a project first and start it on a blank thread. */
   function newAgent() {
-    if (!activeProject) return;
+    if (!activeProject) {
+      void pickProject({ fresh: true });
+      return;
+    }
     const { id, path } = activeProject;
     startChat(id, path, undefined, undefined, backendFor(path));
   }

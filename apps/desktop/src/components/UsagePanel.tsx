@@ -155,14 +155,39 @@ export function UsagePanel({ onBack }: UsagePanelProps) {
       .sort((a, b) => b.cost - a.cost);
   }, [rows]);
 
-  const totalCost = byProvider.reduce((s, p) => s + p.cost, 0);
-  const totalTokensAll = byProvider.reduce((s, p) => s + p.tokens, 0);
-  const totalSessions = sessionCounts.reduce((s, p) => s + p.count, 0);
-  const cachedInput = rows.reduce((s, r) => s + r.cacheRead, 0);
-  const uncachedInput = rows.reduce((s, r) => s + r.input, 0);
-  const output = rows.reduce((s, r) => s + r.output, 0);
-  const processed = rows.reduce((s, r) => s + totalTokens(r), 0);
-  const savings = rows.reduce((s, r) => s + cacheSavingsOf(r), 0);
+  // Eight separate passes over `rows` used to run inline on every render, right
+  // below four correctly-memoized aggregations. One pass, one memo.
+  const totals = useMemo(() => {
+    let cachedInput = 0;
+    let uncachedInput = 0;
+    let output = 0;
+    let processed = 0;
+    let savings = 0;
+    for (const r of rows) {
+      cachedInput += r.cacheRead;
+      uncachedInput += r.input;
+      output += r.output;
+      processed += totalTokens(r);
+      savings += cacheSavingsOf(r);
+    }
+    return { cachedInput, uncachedInput, output, processed, savings };
+  }, [rows]);
+  const { cachedInput, uncachedInput, output, processed, savings } = totals;
+
+  const { totalCost, totalTokensAll } = useMemo(() => {
+    let cost = 0;
+    let tokens = 0;
+    for (const p of byProvider) {
+      cost += p.cost;
+      tokens += p.tokens;
+    }
+    return { totalCost: cost, totalTokensAll: tokens };
+  }, [byProvider]);
+
+  const totalSessions = useMemo(
+    () => sessionCounts.reduce((s, p) => s + p.count, 0),
+    [sessionCounts]
+  );
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">

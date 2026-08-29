@@ -1,7 +1,11 @@
 import { memo, type ComponentProps } from "react";
 import { Streamdown } from "streamdown";
 import type { CodeHighlighterPlugin, HighlightOptions, ThemeInput } from "streamdown";
-import { highlightTokens, supportedLanguages } from "@/lib/codeHighlighter";
+import {
+  highlightTokens,
+  peekTokens,
+  supportedLanguages,
+} from "@/lib/codeHighlighter";
 
 /** Streamdown types the result inline rather than exporting it. */
 type HighlightResult = NonNullable<ReturnType<CodeHighlighterPlugin["highlight"]>>;
@@ -64,6 +68,11 @@ const deferredHighlight = new Map<string, ReturnType<typeof setTimeout>>();
 const deferredCode: CodeHighlighterPlugin = {
   ...shikiPlugin,
   highlight(options, callback) {
+    // Already tokenized: hand it straight back. Returning null here — as this
+    // did — makes Streamdown re-render the fence as plain text and re-colour it
+    // 80ms later, on every frame of the stream.
+    const cached = peekTokens(options.code, options.language, THEME_NAME);
+    if (cached) return cached;
     const key = `${options.language}:${options.code.slice(0, 80)}`;
     const prev = deferredHighlight.get(key);
     if (prev !== undefined) clearTimeout(prev);

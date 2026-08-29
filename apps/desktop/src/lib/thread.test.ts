@@ -63,9 +63,13 @@ describe("carryOver", () => {
 
 describe("mergeThread", () => {
   it("is just the live turns before any switch", () => {
-    const merged = mergeThread(EMPTY_THREAD, [message("a")], "claude", null);
+    const live = [message("a")];
+    const merged = mergeThread(EMPTY_THREAD, live, "claude", null);
     expect(merged.map((m) => m.id)).toEqual(["a"]);
-    expect(merged[0].provider).toBe("claude");
+    // Identity, not a copy: the transcript's row memos compare by reference, so
+    // cloning here would re-render every visible row on every streamed frame.
+    expect(merged).toBe(live);
+    expect(merged[0]).toBe(live[0]);
   });
 
   it("puts carried turns ahead of the live ones", () => {

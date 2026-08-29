@@ -10,6 +10,7 @@ import {
 
 const state = (over: Partial<GitActionState> = {}): GitActionState => ({
   staged: 0,
+  unstaged: 0,
   ahead: 0,
   behind: 0,
   upstream: "origin/feature",
@@ -47,7 +48,15 @@ describe("primaryAction", () => {
     );
   });
 
-  it("pushes unpushed commits when nothing is staged", () => {
+  // Staging is implicit: unstaged work is committable, so the button offers the
+  // commit rather than a Push that would skip the changes sitting right there.
+  it("offers a commit for unstaged changes too", () => {
+    expect(primaryAction(state({ unstaged: 3, canOpenPr: false })).kind).toBe(
+      "commitPush"
+    );
+  });
+
+  it("pushes unpushed commits when nothing is changed", () => {
     expect(primaryAction(state({ ahead: 3, canOpenPr: false })).kind).toBe("push");
     expect(primaryAction(state({ ahead: 3 })).kind).toBe("pushPr");
   });
@@ -80,6 +89,12 @@ describe("menuActions", () => {
 
   it("offers plain commit whenever something is staged", () => {
     expect(menuActions(state({ staged: 1 })).map((a) => a.kind)).toContain(
+      "commit"
+    );
+  });
+
+  it("offers plain commit for unstaged changes as well", () => {
+    expect(menuActions(state({ unstaged: 1 })).map((a) => a.kind)).toContain(
       "commit"
     );
   });

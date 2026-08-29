@@ -3,7 +3,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAgentStore, type SubagentActivity } from "@/lib/agentStore";
 import { registerAgent, setAgentLifecycle } from "@/lib/agentRegistry";
-import { fetchPendingAsk } from "@/lib/approvals";
+import { askQuestions, fetchPendingAsk } from "@/lib/approvals";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
 import type { PermissionMode } from "@/lib/settings";
 import type { Provider } from "@/lib/providers";
@@ -234,6 +234,25 @@ const localId = () => `m${++counter}`;
  *  holding a chatty run's whole output. */
 const STDERR_CAP = 8192;
 
+/** Wire frames are decoded, not trusted. Mirrors `lib/codex/decode.ts`; kept
+ *  local so the Claude transport doesn't import a Codex module. */
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** Queue attachments are stored opaquely by the supervisor, so the column can
+ *  hold anything an older schema or a truncated write left there. Throwing on
+ *  it inside an effect unmounts the whole tree — a queued image is not worth
+ *  the window. */
+const parseAttachments = (raw: string | null | undefined): ChatImage[] | undefined => {
+  if (!raw) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ChatImage[]) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 /**
  * Parse a Claude Code transcript (`.jsonl`) into the chat message model, so a
  * resumed thread shows its prior turns. Headless `--resume` loads context but
@@ -271,10 +290,15 @@ export function parseTranscript(text: string): ChatMessage[] {
       } else if (Array.isArray(content)) {
         let text = "";
         for (const b of content) {
-          if (b?.type === "text") text += b.text as string;
-          else if (b?.type === "tool_result") {
+          if (!isRecord(b)) continue;
+          if (b.type === "text") {
+            if (typeof b.text === "string") text += b.text;
+          } else if (b.type === "tool_result") {
+            // An id-less result would `attach` onto the first tool that also
+            // has no id — writing one call's output onto another's card.
+            if (typeof b.tool_use_id !== "string") continue;
             attach(
-              b.tool_use_id as string,
+              b.tool_use_id,
               typeof b.content === "string" ? b.content : JSON.stringify(b.content),
               Boolean(b.is_error)
             );
@@ -286,14 +310,22 @@ export function parseTranscript(text: string): ChatMessage[] {
       }
     } else if (o.type === "assistant" && msg && Array.isArray(msg.content)) {
       const m = newMessage("assistant", {});
-      for (const b of msg.content as Array<Record<string, unknown>>) {
-        if (b.type === "text") m.text += b.text as string;
-        else if (b.type === "thinking") m.thinking += b.thinking as string;
-        else if (b.type === "tool_use") {
+      for (const b of msg.content) {
+        if (!isRecord(b)) continue;
+        if (b.type === "text") {
+          // `+= undefined` would put the literal string "undefined" in the
+          // transcript rather than skipping a malformed block.
+          if (typeof b.text === "string") m.text += b.text;
+        } else if (b.type === "thinking") {
+          if (typeof b.thinking === "string") m.thinking += b.thinking;
+        } else if (b.type === "tool_use") {
+          // Same id trap as tool_result above: tools are matched to their
+          // results by id, so an id-less call collects someone else's output.
+          if (typeof b.id !== "string" || typeof b.name !== "string") continue;
           m.tools.push({
-            id: b.id as string,
-            name: b.name as string,
-            input: b.input ?? {},
+            id: b.id,
+            name: b.name,
+            input: isRecord(b.input) ? b.input : {},
             partial: "",
           });
         }
@@ -529,7 +561,7 @@ export function useAgentChat({
       queueRef.current[i] = {
         queueId: p.queueId,
         text: p.text,
-        images: p.attachments ? (JSON.parse(p.attachments) as ChatImage[]) : undefined,
+        images: parseAttachments(p.attachments),
       };
       if (existing && existing.text === p.text) queueRef.current[i].queueId = p.queueId;
     }
@@ -537,6 +569,8 @@ export function useAgentChat({
     setQueued(runtime.length);
   }, [promptQueue.items]);
 
+  // Set while a queue drain is in flight — see the drain effect below.
+  const drainingRef = useRef(false);
   const idRef = useRef<number | null>(null);
   // Set while an exit is the user's own doing (stop/rewind). Interrupting makes
   // the headless CLI exit, and "Session ended." is the wrong story for that.
@@ -746,8 +780,9 @@ export function useAgentChat({
       }
 
       if (type === "stream_event") {
-        const ev = msg.event as Record<string, unknown>;
-        const evType = ev.type as string;
+        if (!isRecord(msg.event)) return;
+        const ev = msg.event;
+        const evType = typeof ev.type === "string" ? ev.type : "";
         if (evType === "message_start") {
           draftRef.current = {
             id: localId(),
@@ -784,7 +819,8 @@ export function useAgentChat({
           setStatus("thinking");
         } else if (evType === "content_block_start") {
           const index = ev.index as number;
-          const block = ev.content_block as Record<string, unknown>;
+          if (!isRecord(ev.content_block)) return;
+          const block = ev.content_block;
           if (block.type === "tool_use") {
             pushDraft((d) => {
               blockToolRef.current[index] = d.tools.length;
@@ -799,16 +835,21 @@ export function useAgentChat({
           }
         } else if (evType === "content_block_delta") {
           const index = ev.index as number;
-          const delta = ev.delta as Record<string, unknown>;
-          const dType = delta.type as string;
+          if (!isRecord(ev.delta)) return;
+          const delta = ev.delta;
+          const dType = typeof delta.type === "string" ? delta.type : "";
           if (dType === "text_delta") {
             setStatus("streaming");
+            if (typeof delta.text !== "string") return;
+            const text = delta.text;
             pushDraft((d) => {
-              d.text += delta.text as string;
+              d.text += text;
             });
           } else if (dType === "thinking_delta") {
+            if (typeof delta.thinking !== "string") return;
+            const thinking = delta.thinking;
             pushDraft((d) => {
-              d.thinking += delta.thinking as string;
+              d.thinking += thinking;
             });
           } else if (dType === "input_json_delta") {
             pushDraft((d) => {
@@ -1139,8 +1180,18 @@ export function useAgentChat({
       // Ignore late events from a torn-down effect (StrictMode double-mount kills
       // the first agent; its Exit must not flip the live session to "exited").
       if (disposed) return;
-      if (ev.type === "line") handleLine(ev.data);
-      else if (ev.type === "lines") for (const line of ev.data) handleLine(line);
+      // One malformed frame must not abort the rest of a batch: dropping the
+      // remaining lines loses `message_stop`, which leaves the draft streaming
+      // forever and hangs the pane mid-turn.
+      const safeLine = (line: string) => {
+        try {
+          handleLine(line);
+        } catch (e) {
+          console.error("[emberyx] dropped unparsable agent frame", e);
+        }
+      };
+      if (ev.type === "line") safeLine(ev.data);
+      else if (ev.type === "lines") for (const line of ev.data) safeLine(line);
       else if (ev.type === "stderr") {
         stderr = (stderr + ev.data).slice(-STDERR_CAP);
         checkStderr();
@@ -1276,6 +1327,23 @@ export function useAgentChat({
     setAttempt((n) => n + 1);
   }, [setPending]);
 
+  /**
+   * Write a line to the agent. A rejected send is the one failure that must not
+   * be silent: the caller has already flipped the status to "thinking" and shown
+   * the user's message, so swallowing it leaves the pane thinking forever with
+   * the composer disabled and no way out but closing the tab. `fatal` marks the
+   * sends that carry a turn — an interrupt that fails has already set its own
+   * terminal state.
+   */
+  const sendLine = useCallback((id: number, line: string, fatal: boolean) => {
+    void invoke("agent_send", { id, message: line }).catch((e) => {
+      console.error("[emberyx] agent_send failed", e);
+      if (!fatal) return;
+      setStatus("error");
+      setExitReason(e instanceof Error ? e.message : String(e));
+    });
+  }, []);
+
   // Abort the current turn with a real `interrupt` control_request. Some CLI
   // versions keep the process alive, others exit — either way the exit is ours,
   // so flag it and the exit handler respawns instead of showing a dead end.
@@ -1288,11 +1356,11 @@ export function useAgentChat({
         request_id: crypto.randomUUID(),
         request: { subtype: "interrupt" },
       });
-      void invoke("agent_send", { id, message: line });
+      sendLine(id, line, false);
     }
     setPending(null);
     setStatus("idle");
-  }, [setPending]);
+  }, [setPending, sendLine]);
 
   // Stop the current turn, keeping everything it already produced.
   const stop = useCallback(() => {
@@ -1369,11 +1437,13 @@ export function useAgentChat({
           response: inner,
         },
       });
-      void invoke("agent_send", { id, message: line });
+      // Allowing a tool puts the turn back in flight, so a failed write here
+      // deadlocks the pane exactly the way a failed prompt does.
+      sendLine(id, line, decision !== "deny");
       setPending(null);
       setStatus(decision === "deny" ? "idle" : "thinking");
     },
-    [setPending]
+    [setPending, sendLine]
   );
 
   // `ask_user` questions arrive as a Tauri event (the tool call blocks in Rust,
@@ -1383,17 +1453,33 @@ export function useAgentChat({
     // The event fires once. A question raised while this pane was closed is
     // still blocking the agent, so read the open ones back rather than leaving
     // it waiting on a prompt nothing is showing.
-    void fetchPendingAsk(emberyxSessionId).then((pending) => {
-      if (!pending || askRef.current) return;
-      setPendingAsk(pending);
-      setStatus("awaiting_answer");
-    });
-    const unlisten = listen<PendingAsk & { session: string }>("ask-user", (ev) => {
-      if (ev.payload.session !== emberyxSessionId) return;
-      setPendingAsk(ev.payload);
+    // The read-back is a round trip into the supervisor. If the pane's session
+    // changed before it lands, its answer belongs to a question this pane never
+    // asked — showing it would cover the composer with someone else's prompt.
+    let cancelled = false;
+    void fetchPendingAsk(emberyxSessionId)
+      .then((pending) => {
+        if (cancelled || !pending || askRef.current) return;
+        setPendingAsk(pending);
+        setStatus("awaiting_answer");
+      })
+      .catch((e) => console.error("[emberyx] pending ask read failed", e));
+    const unlisten = listen<unknown>("ask-user", (ev) => {
+      if (cancelled) return;
+      const payload = ev.payload;
+      if (!isRecord(payload) || payload.session !== emberyxSessionId) return;
+      if (typeof payload.id !== "string") return;
+      // A live event is no more trustworthy than the persisted payload.
+      const questions = askQuestions(payload);
+      if (!questions) {
+        console.error("[emberyx] unanswerable ask-user payload", payload);
+        return;
+      }
+      setPendingAsk({ id: payload.id, questions });
       setStatus("awaiting_answer");
     });
     return () => {
+      cancelled = true;
       void unlisten.then((off) => off());
     };
   }, [enabled, emberyxSessionId]);
@@ -1433,9 +1519,9 @@ export function useAgentChat({
       type: "user",
       message: { role: "user", content },
     });
-    void invoke("agent_send", { id, message: line });
+    sendLine(id, line, true);
     },
-    [cwd, emberyxSessionId]
+    [cwd, emberyxSessionId, sendLine]
   );
 
   /**
@@ -1492,17 +1578,30 @@ export function useAgentChat({
   useEffect(() => {
     if (status !== "idle") return;
     if (queueRef.current.length === 0) return;
-    void promptQueue.runNext().then((next) => {
-      if (!next) return;
-      // Shift the mirror in step with the runtime pop so rewind never sees a
-      // stale head.
-      queueRef.current.shift();
-      setQueued((n) => Math.max(0, n - 1));
-      deliver(
-        next.text,
-        next.attachments ? (JSON.parse(next.attachments) as ChatImage[]) : undefined
-      );
-    });
+    // `promptQueue` gets a new identity whenever its items change — which
+    // `runNext` itself causes, as does every agent event. Without this guard the
+    // effect re-enters mid-drain, two pops race, and the second turn goes on the
+    // wire during the first.
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+    let cancelled = false;
+    void promptQueue
+      .runNext()
+      .then((next) => {
+        if (cancelled || !next) return;
+        // Shift the mirror in step with the runtime pop so rewind never sees a
+        // stale head.
+        queueRef.current.shift();
+        setQueued((n) => Math.max(0, n - 1));
+        deliver(next.text, parseAttachments(next.attachments));
+      })
+      .catch((e) => console.error("[emberyx] queue drain failed", e))
+      .finally(() => {
+        drainingRef.current = false;
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [status, deliver, promptQueue]);
 
   // Auto-title a fresh chat after its first turn completes (headless CC never

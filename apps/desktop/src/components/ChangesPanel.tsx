@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, memo, useEffect, useMemo, useState } from "react";
 import { isStaged, isUnstaged } from "@/lib/gitStatus";
 import type { CommitPush } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
@@ -24,7 +24,7 @@ import { Input } from "@/components/ui/input";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { basename } from "@/lib/path";
 import { parseDiff, hunkPatch } from "@/lib/hunks";
-import { highlightCode, langFromPath } from "@/lib/highlight";
+import { highlightCached, langFromPath } from "@/lib/highlight";
 import {
   useGitChanges,
   useGitCommitDiff,
@@ -36,7 +36,11 @@ import { useAgentStore } from "@/lib/agentStore";
 import type { Change } from "@/lib/changes";
 import type { GitFile } from "@/types";
 import { GitActions } from "@/components/GitActions";
-import { GitRewind } from "@/components/GitRewind";
+// File history is a drill-down, not part of the changes list — and it carries
+// its own diff rendering. Only a session that opens it pays for it.
+const GitRewind = lazy(() =>
+  import("@/components/GitRewind").then((m) => ({ default: m.GitRewind }))
+);
 import { SidePanel } from "@/components/SidePanel";
 
 /** True for unified-diff header lines that aren't source code. */
@@ -73,7 +77,7 @@ const DiffLine = memo(function DiffLine({
       <span className="inline-block w-5 shrink-0 select-none text-center opacity-40">
         {marker}
       </span>
-      <span dangerouslySetInnerHTML={{ __html: highlightCode(code, lang) || " " }} />
+      <span dangerouslySetInnerHTML={{ __html: highlightCached(code, lang) || " " }} />
     </div>
   );
 });
@@ -227,6 +231,11 @@ interface ChangesPanelProps {
   onRemoveWorktree: (worktreePath: string, repoRoot: string) => void | Promise<void>;
   /** Render inside the surface panel rather than as its own right aside. */
   embedded?: boolean;
+  /** This dock tab is the one on screen. A diff tab that is open but behind
+   *  another tab stays mounted, and used to keep polling `git status` — with
+   *  `refetchOnWindowFocus` that is a `git` process per alt-tab, for a panel
+   *  nobody is looking at. */
+  active?: boolean;
 }
 
 export function ChangesPanel({
@@ -237,6 +246,7 @@ export function ChangesPanel({
   onOpenWorktree,
   onRemoveWorktree,
   embedded,
+  active = true,
 }: ChangesPanelProps) {
   const [tab, setTab] = useState<"git" | "agent">("git");
   const [fileListHeight, setFileListHeight] = useState(208);
@@ -253,7 +263,7 @@ export function ChangesPanel({
   // Git tab state. The index is the source of truth: a file shows up under
   // "Staged" when its index column is dirty and under "Changes" when its
   // worktree column is, so partly-staged files appear in both.
-  const gitQuery = useGitChanges(projectPath);
+  const gitQuery = useGitChanges(projectPath, active);
   const gitFiles = useMemo(() => gitQuery.data ?? [], [gitQuery.data]);
   const stagedFiles = gitFiles.filter(isStaged);
   const unstagedFiles = gitFiles.filter(isUnstaged);
@@ -712,11 +722,13 @@ export function ChangesPanel({
       )}
 
       {historyFile && (
-        <GitRewind
-          projectPath={projectPath}
-          file={historyFile}
-          onClose={() => setHistoryFile(null)}
-        />
+        <Suspense fallback={null}>
+          <GitRewind
+            projectPath={projectPath}
+            file={historyFile}
+            onClose={() => setHistoryFile(null)}
+          />
+        </Suspense>
       )}
     </SidePanel>
   );

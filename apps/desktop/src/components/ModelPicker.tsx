@@ -45,7 +45,13 @@ interface ModelPickerProps {
   backend: AgentBackend;
   /** Project root — a Codex catalog lookup needs one to open an app-server. */
   cwd: string;
-  usage: ChatUsage;
+  /** Models the live session named, when its protocol exposes a catalog. The
+   *  only thing this picker reads off usage — taking the whole object would
+   *  re-render four React Query subscriptions on every streamed frame. */
+  sessionModels?: ChatUsage["models"];
+  /** The model the CLI resolved when none is pinned, so the chip names what is
+   *  actually running. A primitive for the same reason as `sessionModels`. */
+  resolvedModel?: string;
   onModelChange: (model: string) => void;
   onEffortChange: (effort: string) => void;
   /** Move the thread to another provider in place. Called before the model
@@ -70,7 +76,8 @@ export const ModelPicker = memo(function ModelPicker({
   effort,
   backend,
   cwd,
-  usage,
+  sessionModels,
+  resolvedModel,
   onModelChange,
   onEffortChange,
   onSwitchBackend,
@@ -140,14 +147,14 @@ export const ModelPicker = memo(function ModelPicker({
       ...codexModelEntries(codexModels),
       ...acpModelEntries("grok", grokCatalog.data ?? []),
       ...acpModelEntries("opencode", opencodeCatalog.data ?? []),
-      ...(usage.models ?? []).map((entry) => ({
+      ...(sessionModels ?? []).map((entry) => ({
         id: entry.value,
         label: entry.label,
         provider: backend,
         legacy: false,
       })),
     ];
-    // A cached ACP catalog and the live chat's `usage.models` name the same
+    // A cached ACP catalog and the live session catalog name the same
     // models; each id renders once, first entry wins. Stored preferences go
     // last: hidden ids drop out, custom slugs join their provider's rail.
     const seen = new Set<string>();
@@ -162,7 +169,7 @@ export const ModelPicker = memo(function ModelPicker({
     codexModels,
     grokCatalog.data,
     opencodeCatalog.data,
-    usage.models,
+    sessionModels,
     hiddenModels,
     customModels,
   ]);
@@ -174,10 +181,6 @@ export const ModelPicker = memo(function ModelPicker({
         : all.filter((e) => e.provider === rail);
     return orderByFavorites(searchModels(scoped, query), favorites);
   }, [all, favorites, query, rail]);
-
-  // Favourites is the only list that spans providers, so it is the only one
-  // where naming each row's provider tells the user something.
-  const mixed = rail === FAVORITES;
 
   const current = shown.filter((e) => !e.legacy);
   const legacy = shown.filter((e) => e.legacy);
@@ -213,7 +216,9 @@ export const ModelPicker = memo(function ModelPicker({
 
   // The CLI-resolved model when nothing is pinned, so the chip still names what
   // is actually running.
-  const resolved = usage.model ? labelForModel(usage.model, all) ?? usage.model : "";
+  const resolved = resolvedModel
+    ? labelForModel(resolvedModel, all) ?? resolvedModel
+    : "";
   const label = model ? labelForModel(model, all) ?? model : resolved || "Default";
 
   return (
@@ -243,7 +248,10 @@ export const ModelPicker = memo(function ModelPicker({
             onClick={() => setRail(FAVORITES)}
           >
             <Star
-              className={cn("size-6", rail === FAVORITES ? "text-primary" : "opacity-70")}
+              className={cn(
+                "size-6",
+                rail === FAVORITES ? "fill-foreground text-foreground" : "text-foreground"
+              )}
             />
           </RailButton>
           {PROVIDERS.filter((p) => installed.some((s) => s.id === p && s.installed)).map(
@@ -269,7 +277,7 @@ export const ModelPicker = memo(function ModelPicker({
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-center gap-2 border-b px-3 py-2.5">
+          <div className="flex items-center gap-2 border-b border-primary/70 px-3 py-2.5">
             <Search className="size-3.5 shrink-0 text-muted-foreground" />
             <input
               autoFocus
@@ -295,7 +303,7 @@ export const ModelPicker = memo(function ModelPicker({
               <Row
                 key={entry.id}
                 title={entry.label}
-                subtitle={mixed ? BACKEND_LABEL[entry.provider] : undefined}
+                subtitle={BACKEND_LABEL[entry.provider]}
                 provider={entry.provider}
                 shortcut={shortcutFor(i) ?? undefined}
                 selected={entry.id === model}
@@ -344,7 +352,7 @@ export const ModelPicker = memo(function ModelPicker({
                     <Row
                       key={entry.id}
                       title={entry.label}
-                      subtitle={mixed ? BACKEND_LABEL[entry.provider] : undefined}
+                      subtitle={BACKEND_LABEL[entry.provider]}
                       provider={entry.provider}
                       selected={entry.id === model}
                       starred={favorites.includes(entry.id)}
@@ -385,26 +393,30 @@ function RailButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "relative grid size-10 place-items-center rounded-lg transition-colors",
+        "relative grid size-10 place-items-center rounded-lg transition-[background-color,opacity]",
         disabled
           ? "cursor-not-allowed opacity-30"
           : active
-            ? "bg-secondary"
-            : "hover:bg-secondary/60"
+            ? "opacity-100"
+            : "opacity-50 hover:bg-secondary/50 hover:opacity-100"
       )}
     >
+      {/* The mark sits on the rail's own edge, against the list divider — the
+          rail is icons, so the selected one is said by the edge, not by a pill
+          drawn around it. */}
       {active && !disabled && (
-        <span className="absolute -left-2 h-6 w-0.5 rounded-full bg-primary" />
+        <span className="absolute -right-2 h-7 w-0.5 rounded-full bg-primary" />
       )}
       {children}
     </button>
   );
 }
 
-/** One model. Laid out like T3 Code's `ModelListRow`: the name on its own
- *  line at `text-xs`, the provider as a quiet footer *only when the list mixes
- *  providers* — repeating "OpenCode" under every row of the OpenCode rail is
- *  noise, and it is what squeezed the names into an ellipsis. */
+/** One model, laid out like T3 Code's `ModelListRow`: the name on its own line,
+ *  the provider as a quiet icon+label footer under it, and the shortcut and star
+ *  flush right. The footer is shown on every rail, not only the mixed one — it
+ *  is what keeps every row the same height, so the selected mark and the ⌘ keys
+ *  line up down the list. */
 function Row({
   title,
   subtitle,
@@ -416,7 +428,7 @@ function Row({
   onSelect,
 }: {
   title: string;
-  /** Provider footer. Omitted when the list is already scoped to one. */
+  /** Provider footer: icon + name, under the model. */
   subtitle?: string;
   provider: string;
   shortcut?: string;
@@ -428,19 +440,22 @@ function Row({
   return (
     <div
       className={cn(
-        "group/model flex w-full min-w-0 items-center gap-3 rounded-md px-2 py-2 transition-colors",
+        "group/model relative flex w-full min-w-0 items-center gap-3 rounded-md px-2 py-2 transition-colors",
         selected ? "bg-foreground/[0.08]" : "hover:bg-secondary/50"
       )}
     >
+      {selected && (
+        <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />
+      )}
       <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
         <span
-          className="block truncate text-xs font-medium leading-snug text-foreground"
+          className="block truncate text-sm font-medium leading-snug text-foreground"
           title={title}
         >
           {title}
         </span>
         {subtitle && (
-          <span className="mt-1 flex items-center gap-1.5 text-xs font-normal leading-snug text-muted-foreground/70">
+          <span className="mt-0.5 flex items-center gap-1.5 text-xs font-normal leading-snug text-muted-foreground/70">
             <ProviderIcon provider={provider} className="size-3" />
             <span className="truncate">{subtitle}</span>
           </span>

@@ -7,6 +7,19 @@ export function useProjects() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const counter = useRef(0);
 
+  // Mirrored so the dedupe below is synchronous. `openProjectAt` is async and
+  // the launch restore awaits it per project, so the `projects` render snapshot
+  // is stale for the whole restore — opening a folder in that window used to
+  // miss the entry already restored and create a second project, with a second
+  // spawned agent, for the same path.
+  const projectsRef = useRef<Project[]>([]);
+  const commit = (update: (prev: Project[]) => Project[]): Project[] => {
+    const next = update(projectsRef.current);
+    projectsRef.current = next;
+    setProjects(next);
+    return next;
+  };
+
   /**
    * Open a project, or focus it if its path is already open. Returns the
    * project id and whether it was newly created (caller starts the agent).
@@ -15,11 +28,11 @@ export function useProjects() {
     path: string,
     worktree?: { repoRoot: string; branch: string }
   ): { id: string; isNew: boolean } {
-    const existing = projects.find((p) => p.path === path);
+    const existing = projectsRef.current.find((p) => p.path === path);
     if (existing) {
       // A worktree opened earlier as a plain folder gets relabelled.
       if (!existing.worktree && worktree) {
-        setProjects((prev) =>
+        commit((prev) =>
           prev.map((p) => (p.id === existing.id ? { ...p, worktree } : p))
         );
       }
@@ -27,7 +40,7 @@ export function useProjects() {
       return { id: existing.id, isNew: false };
     }
     const id = `p${++counter.current}`;
-    setProjects((prev) => [
+    commit((prev) => [
       ...prev,
       {
         id,
@@ -43,26 +56,25 @@ export function useProjects() {
   }
 
   function setWorkspace(id: string, workspace: WorkspaceInfo) {
-    setProjects((prev) =>
+    commit((prev) =>
       prev.map((p) => (p.id === id ? { ...p, workspace } : p))
     );
   }
 
   function setIcon(id: string, icon: string | null) {
-    setProjects((prev) =>
+    commit((prev) =>
       prev.map((p) => (p.id === id ? { ...p, icon } : p))
     );
   }
 
   function setThreads(id: string, threads: Thread[]) {
-    setProjects((prev) =>
+    commit((prev) =>
       prev.map((p) => (p.id === id ? { ...p, threads } : p))
     );
   }
 
   function closeProject(id: string) {
-    const next = projects.filter((p) => p.id !== id);
-    setProjects(next);
+    const next = commit((prev) => prev.filter((p) => p.id !== id));
     setActiveProjectId((cur) =>
       cur === id ? next[next.length - 1]?.id ?? null : cur
     );

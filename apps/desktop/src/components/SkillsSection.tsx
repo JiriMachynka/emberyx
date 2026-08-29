@@ -87,6 +87,10 @@ export function SkillsSection() {
                 const open = expanded === skill.name;
                 const readers = readersOf(skill);
                 const absent = missingFrom(skill);
+                // A skill with no source has nothing to copy from, and indexing
+                // it used to crash the whole list instead of dropping its row.
+                const skillDir = skill.sources[0]?.skillDir;
+                if (!skillDir) return null;
                 return (
                   <div
                     key={skill.name}
@@ -180,7 +184,7 @@ export function SkillsSection() {
                                   }
                                   onClick={() =>
                                     copySkill.mutate({
-                                      skillDir: skill.sources[0].skillDir,
+                                      skillDir,
                                       harness,
                                     })
                                   }

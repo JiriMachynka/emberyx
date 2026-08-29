@@ -160,6 +160,11 @@ export interface Settings {
   codexSandbox: CodexSandbox;
   /** Working-tree diffs hide whitespace-only changes. */
   diffIgnoreWhitespace: boolean;
+  /** Model that drafts commit messages from the diff, as a one-shot `claude -p`
+   *  call. "" turns the Generate button off. Claude ids only — the one-shot
+   *  path is the Claude CLI, and offering a model it can't run would fail on
+   *  click instead of in the picker. */
+  commitMessageModel: string;
   /** Wrap long lines in the built-in editor. */
   wordWrap: boolean;
 }
@@ -198,6 +203,7 @@ export const DEFAULT_SETTINGS: Settings = {
   claudeProfiles: [],
   codexSandbox: "",
   diffIgnoreWhitespace: false,
+  commitMessageModel: "claude-haiku-4-5",
   wordWrap: false,
 };
 
@@ -327,10 +333,6 @@ export function useSettings() {
   useLayoutEffect(() => {
     applyFontFamilies(settings);
   }, [settings.chatFontFamily, settings.editorFontFamily]);
-
-  useLayoutEffect(() => {
-    applyTheme(settings.theme);
-  }, [settings.theme]);
 
   useLayoutEffect(() => {
     applyTheme(settings.theme);

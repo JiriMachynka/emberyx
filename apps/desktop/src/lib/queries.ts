@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   QueryClient,
   useMutation,
@@ -255,12 +256,22 @@ export const useBranchMap = (paths: string[]): Record<string, string> => {
       queryFn: () => invoke<GitBranch>("git_branch", { path }),
     })),
   });
-  const map: Record<string, string> = {};
-  paths.forEach((path, i) => {
-    const branch = results[i]?.data?.branch;
-    if (branch) map[path] = branch;
-  });
-  return map;
+  // Rebuilt only when a branch name actually moved. `paths` and `results` are
+  // fresh arrays every render, but this map's *identity* is a dependency of the
+  // sidebar's whole sort-and-partition memo — returning a new object each time
+  // silently defeated it.
+  const key = paths
+    .map((path, i) => `${path}\u0000${results[i]?.data?.branch ?? ""}`)
+    .join("\u001f");
+  return useMemo(() => {
+    const map: Record<string, string> = {};
+    paths.forEach((path, i) => {
+      const branch = results[i]?.data?.branch;
+      if (branch) map[path] = branch;
+    });
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- key encodes both
+  }, [key]);
 };
 
 /** Merged PR/MR iids for linked-thread settle. One detail fetch per link —
@@ -281,13 +292,21 @@ export const useLinkedPrMerged = (
       staleTime: 60_000,
     })),
   });
-  const merged = new Set<string>();
-  links.forEach(({ path, pr }, i) => {
-    if (results[i]?.data?.state === "merged") {
-      merged.add(`${path}:${pr.host}:${pr.iid}`);
-    }
-  });
-  return merged;
+  // Same reason as `useBranchMap`: a fresh Set per render invalidates the
+  // sidebar memo that consumes it.
+  const key = links
+    .map(({ path, pr }, i) => `${path}:${pr.host}:${pr.iid}=${results[i]?.data?.state ?? ""}`)
+    .join("\u001f");
+  return useMemo(() => {
+    const merged = new Set<string>();
+    links.forEach(({ path, pr }, i) => {
+      if (results[i]?.data?.state === "merged") {
+        merged.add(`${path}:${pr.host}:${pr.iid}`);
+      }
+    });
+    return merged;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- key encodes both
+  }, [key]);
 };
 
 export const useMergedBranchesMap = (
@@ -299,13 +318,23 @@ export const useMergedBranchesMap = (
       queryKey: gitKeys.mergedBranches(root),
       queryFn: () => invoke<string[]>("git_merged_branches", { path: root }),
       enabled,
+      // A `git branch --merged` per open repo. The 2s default made every
+      // window focus a burst of them; merge state does not move that fast.
+      staleTime: 30_000,
     })),
   });
-  const map: Record<string, string[]> = {};
-  roots.forEach((root, i) => {
-    map[root] = results[i]?.data ?? [];
-  });
-  return map;
+  // Identity-stable for the same reason as the two hooks above.
+  const key = roots
+    .map((root, i) => `${root}=${(results[i]?.data ?? []).join(",")}`)
+    .join("\u001f");
+  return useMemo(() => {
+    const map: Record<string, string[]> = {};
+    roots.forEach((root, i) => {
+      map[root] = results[i]?.data ?? [];
+    });
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- key encodes both
+  }, [key]);
 };
 
 export const useGitWorktrees = (path: string, enabled: boolean) =>
@@ -426,12 +455,19 @@ export const useForgeOpenPr = (
     retry: false,
   });
 
-/** Install + login probe for `gh` and `glab`, Settings → Source Control. */
-export const useForgeCliStatus = () =>
+/** Install + login probe for `gh` and `glab`, Settings → Source Control. The
+ *  probe shells out per CLI and reads the keychain, so callers that only need
+ *  it on one tab pass `enabled` rather than paying for it on every open.
+ *  Installed CLIs don't change mid-session, hence the long staleTime. */
+export const useForgeCliStatus = (enabled = true) =>
   useQuery({
     queryKey: ["forgeCli", "status"],
     queryFn: () => invoke<ForgeCliStatus[]>("forge_cli_status"),
-    staleTime: 30_000,
+    enabled,
+    staleTime: 5 * 60_000,
+    // Alt-tabbing back is not a reason to shell out to `gh` and the keychain
+    // again; Settings invalidates this explicitly when it rescans.
+    refetchOnWindowFocus: false,
     retry: false,
   });
 
@@ -509,12 +545,17 @@ export const providerKeys = {
   status: () => ["providers", "status"] as const,
 };
 
-/** Install + version probe for every provider CLI. Rescan on demand. */
-export const useProviderStatus = () =>
+/** Install + version probe for every provider CLI. Rescan on demand. One
+ *  `--version` subprocess per provider, so it is refetched rarely and only
+ *  where its answer is shown. */
+export const useProviderStatus = (enabled = true) =>
   useQuery({
     queryKey: providerKeys.status(),
     queryFn: () => invoke<ProviderStatus[]>("provider_status"),
-    staleTime: 30_000,
+    enabled,
+    staleTime: 5 * 60_000,
+    // Six `--version` subprocesses; window focus is not new information.
+    refetchOnWindowFocus: false,
     retry: false,
   });
 

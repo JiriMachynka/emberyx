@@ -75,7 +75,10 @@ export function McpSection() {
                 const absent = MCP_HARNESS_ORDER.filter(
                   (harness) => entryFor(server, harness) === undefined
                 );
-                const transport = server.harnesses[0].transport;
+                // `McpHarnessEntry[]` permits empty, and an empty one used to take
+                // down the whole server list rather than skipping its row.
+                const transport = server.harnesses[0]?.transport;
+                if (!transport) return null;
                 return (
                   <div
                     key={server.name}
@@ -177,7 +180,7 @@ export function McpSection() {
                                     addMcp.mutate({
                                       name: server.name,
                                       harnesses: [harness],
-                                      transport: server.harnesses[0].transport,
+                                      transport,
                                     })
                                   }
                                   className="flex items-center gap-1.5 rounded-full border border-dashed px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"

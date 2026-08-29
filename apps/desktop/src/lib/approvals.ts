@@ -9,7 +9,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import type { PendingAsk } from "@/hooks/useAgentChat";
+import type { AskQuestion, PendingAsk } from "@/hooks/useAgentChat";
 
 export interface PendingApproval {
   approvalId: string;
@@ -27,14 +27,41 @@ export interface PendingApproval {
  * for anything that isn't an answerable question — a request whose payload no
  * longer parses is one the pane must not offer an answer for.
  */
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+const isOption = (v: unknown): v is AskQuestion["options"][number] =>
+  isRecord(v) && typeof v.label === "string";
+
+/**
+ * `AskQuestion` promises at least one option, and the picker dereferences that
+ * promise — `options[active]` during render, `% options.length` on an arrow
+ * key. A question with none crashes the pane, so the shape is checked at the
+ * boundary rather than trusted. Applies to the live event too, not just the
+ * read-back: payloads written by an older runtime are the likely bad case.
+ */
+export const isAskQuestion = (v: unknown): v is AskQuestion =>
+  isRecord(v) &&
+  typeof v.question === "string" &&
+  Array.isArray(v.options) &&
+  v.options.length > 0 &&
+  v.options.every(isOption);
+
+/** Validate an `ask-user` payload into the shape the picker can render. */
+export function askQuestions(value: unknown): AskQuestion[] | null {
+  if (!isRecord(value)) return null;
+  const { questions } = value;
+  if (!Array.isArray(questions) || questions.length === 0) return null;
+  if (!questions.every(isAskQuestion)) return null;
+  return questions;
+}
+
 export function askFromApproval(approval: PendingApproval): PendingAsk | null {
   if (approval.kind !== "ask") return null;
   try {
-    const parsed: unknown = JSON.parse(approval.payload);
-    if (!parsed || typeof parsed !== "object") return null;
-    const { questions } = parsed as { questions?: unknown };
-    if (!Array.isArray(questions) || questions.length === 0) return null;
-    return { id: approval.approvalId, questions: questions as PendingAsk["questions"] };
+    const questions = askQuestions(JSON.parse(approval.payload));
+    if (!questions) return null;
+    return { id: approval.approvalId, questions };
   } catch {
     return null;
   }

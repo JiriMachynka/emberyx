@@ -19,6 +19,11 @@ export type GitActionKind =
 export interface GitActionState {
   /** Files staged for the next commit. */
   staged: number;
+  /** Changed files that are not staged. Staging is implicit here: with nothing
+   *  staged, a commit takes the whole working tree, so these count as
+   *  committable too. An explicit staging selection is still respected — it is
+   *  only when nothing is staged that everything goes in. */
+  unstaged: number;
   /** Commits the branch is ahead of its upstream. */
   ahead: number;
   /** Commits the branch is behind its upstream. */
@@ -45,9 +50,12 @@ export interface GitAction {
 const prReachable = (s: GitActionState) =>
   s.canOpenPr && !s.isDefaultBranch && !s.openPr;
 
+/** Whether a commit is possible at all — staged or not. */
+const canCommit = (s: GitActionState) => s.staged + s.unstaged > 0;
+
 /** The action the primary button runs. */
 export function primaryAction(s: GitActionState): GitAction {
-  if (s.staged > 0) {
+  if (canCommit(s)) {
     if (prReachable(s)) {
       return { kind: "commitPushPr", label: "Commit, push & open PR" };
     }
@@ -74,7 +82,7 @@ export function primaryAction(s: GitActionState): GitAction {
 export function menuActions(s: GitActionState): GitAction[] {
   const primary = primaryAction(s).kind;
   const all: GitAction[] = [];
-  if (s.staged > 0) {
+  if (canCommit(s)) {
     all.push({ kind: "commit", label: "Commit" });
     all.push({ kind: "commitPush", label: "Commit & push" });
   }
@@ -94,8 +102,14 @@ export function menuActions(s: GitActionState): GitAction[] {
 export const needsMessage = (kind: GitActionKind) =>
   kind === "commit" || kind === "commitPush" || kind === "commitPushPr";
 
-/** Actions that push, so the default-branch confirmation knows when to ask. */
-export const pushes = (kind: GitActionKind) => kind !== "commit" && kind !== "pull";
+/** Actions that push, so the default-branch confirmation knows when to ask.
+ *  Stated positively, like its two neighbours: defined as "not commit, not
+ *  pull", a new kind would silently default into the destructive branch. */
+export const pushes = (kind: GitActionKind) =>
+  kind === "commitPush" ||
+  kind === "commitPushPr" ||
+  kind === "push" ||
+  kind === "pushPr";
 
 /** Actions that open a PR afterwards. */
 export const opensPr = (kind: GitActionKind) =>

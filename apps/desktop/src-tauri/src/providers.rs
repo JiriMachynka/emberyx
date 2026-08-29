@@ -156,8 +156,19 @@ fn probe(provider: Provider, shell_env: Option<&[(String, String)]>) -> Provider
 }
 
 /// Detection for every provider, for the Settings → Providers page.
+///
+/// Async on purpose: probing runs a `--version` subprocess per provider, and a
+/// non-async command runs on the main thread — which on macOS is the webview's
+/// thread, so six node startups would freeze the window while Settings opens.
 #[tauri::command]
-pub fn provider_status() -> Vec<ProviderStatus> {
+pub async fn provider_status() -> Vec<ProviderStatus> {
+    tauri::async_runtime::spawn_blocking(probe_all)
+        .await
+        .unwrap_or_default()
+}
+
+/// The blocking probe itself: one `--version` subprocess per installed provider.
+pub(crate) fn probe_all() -> Vec<ProviderStatus> {
     let shell_env = crate::pty::shell_env_blocking(std::time::Duration::from_secs(5));
     Provider::all()
         .into_iter()
@@ -215,7 +226,7 @@ mod tests {
 
     #[test]
     fn provider_status_reports_all_six() {
-        let rows = provider_status();
+        let rows = probe_all();
         assert_eq!(rows.len(), 6);
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, ["claude", "cursor", "codex", "grok", "opencode", "kilo"]);

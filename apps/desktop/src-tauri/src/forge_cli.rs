@@ -102,23 +102,29 @@ fn env_token(env: &[(String, String)], keys: &[&str]) -> Option<String> {
 
 /// Token the CLI would send, or an error naming the missing install/login.
 pub(crate) fn auth_token(binary: &str, name: &str, login: &str) -> Result<String> {
-    let env = shell_env();
-    let resolved = resolve_binary(binary, &env).ok_or_else(|| {
+    auth_token_in(binary, name, login, &shell_env())
+}
+
+/// Same, with the login-shell env already in hand — `probe` has one and paying
+/// for a second capture per CLI is the difference between one keychain hit and
+/// four subprocesses.
+fn auth_token_in(binary: &str, name: &str, login: &str, env: &[(String, String)]) -> Result<String> {
+    let resolved = resolve_binary(binary, env).ok_or_else(|| {
         crate::err!("{name} CLI (`{binary}`) is not installed")
     })?;
     // glab has no `auth token`. Current versions print help and exit 0.
     if binary == "glab" {
-        if let Some(token) = env_token(&env, &["GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN"]) {
+        if let Some(token) = env_token(env, &["GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN"]) {
             return Ok(token);
         }
-        if let Some(token) = run(&resolved, &["config", "get", "token"], &env)
+        if let Some(token) = run(&resolved, &["config", "get", "token"], env)
             .filter(|value| looks_like_token(value))
         {
             return Ok(token);
         }
         return Err(crate::err!("{name} CLI isn't logged in — run `{login}`"));
     }
-    if let Some(token) = run(&resolved, &["auth", "token"], &env).filter(|value| looks_like_token(value))
+    if let Some(token) = run(&resolved, &["auth", "token"], env).filter(|value| looks_like_token(value))
     {
         return Ok(token);
     }
@@ -131,7 +137,7 @@ fn probe(cli: &Cli, env: &[(String, String)]) -> ForgeCliStatus {
     let version = binary
         .as_ref()
         .and_then(|path| probe_version(path, env));
-    let authenticated = installed && auth_token(cli.binary, cli.label, cli.login).is_ok();
+    let authenticated = installed && auth_token_in(cli.binary, cli.label, cli.login, env).is_ok();
     ForgeCliStatus {
         id: cli.id.to_string(),
         label: cli.label.to_string(),
@@ -143,10 +149,18 @@ fn probe(cli: &Cli, env: &[(String, String)]) -> ForgeCliStatus {
 }
 
 /// Detection for Settings → Source Control: GitHub (`gh`) and GitLab (`glab`).
+///
+/// Off the main thread: each probe is a `--version` plus an auth check that
+/// reads the macOS keychain, and blocking the webview thread for that is felt
+/// as the Settings window refusing to paint.
 #[tauri::command]
-pub fn forge_cli_status() -> Vec<ForgeCliStatus> {
-    let env = shell_env();
-    CLIS.iter().map(|cli| probe(cli, &env)).collect()
+pub async fn forge_cli_status() -> Vec<ForgeCliStatus> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let env = shell_env();
+        CLIS.iter().map(|cli| probe(cli, &env)).collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 pub(crate) fn github_token() -> Result<String> {

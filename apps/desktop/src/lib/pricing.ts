@@ -98,11 +98,24 @@ interface PricingCache {
 let liveRates: Record<string, Rate> | undefined = readCache()?.rates;
 let liveContexts: Record<string, number> | undefined = readCache()?.contexts;
 
+/**
+ * A cache written by an older version — or hand-edited — can hold anything.
+ * Casting it through meant a `rates` that was a string got walked by
+ * `Object.entries` a character at a time and returned a garbage rate, so the
+ * panel showed confident, wrong money instead of falling back to
+ * `FALLBACK_RATES`. Shape is checked before it is trusted.
+ */
 function readCache(): PricingCache | undefined {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return undefined;
-    return JSON.parse(raw) as PricingCache;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+    const { rates, contexts } = parsed as Partial<PricingCache>;
+    const isTable = (v: unknown) =>
+      typeof v === "object" && v !== null && !Array.isArray(v);
+    if (!isTable(rates) || !isTable(contexts)) return undefined;
+    return parsed as PricingCache;
   } catch {
     return undefined;
   }

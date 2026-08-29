@@ -6,9 +6,7 @@ import { onOpenFileRequest } from "@/lib/openFileRequest";
 import { SessionPanes } from "@/components/SessionPanes";
 import { RightDock } from "@/components/RightDock";
 import { ProjectSettingsPane } from "@/components/ProjectSettingsPane";
-import { SettingsPage } from "@/components/SettingsPage";
 import { ChangesPanel } from "@/components/ChangesPanel";
-import { MergeRequestsPanel } from "@/components/MergeRequestsPanel";
 import { NotificationPanel } from "@/components/NotificationPanel";
 import { DevPanel } from "@/components/DevPanel";
 import { TerminalPane } from "@/components/TerminalPane";
@@ -17,7 +15,6 @@ import { Sidebar } from "@/components/Sidebar";
 import { CommandPalette } from "@/components/CommandPalette";
 import { CloneDialog } from "@/components/CloneDialog";
 import { PublishDialog } from "@/components/PublishDialog";
-import { UsagePanel } from "@/components/UsagePanel";
 import { SlashCommandsPanel } from "@/components/SlashCommandsPanel";
 import { WelcomeScreen } from "@/components/WelcomeScreen";
 import { AttentionBanner } from "@/components/AttentionBanner";
@@ -63,6 +60,28 @@ const ConflictView = lazy(() =>
 const EditorPane = lazy(() =>
   import("@/components/EditorPane").then((m) => ({ default: m.EditorPane }))
 );
+
+// Full-screen surfaces and a dock tab most sessions never open. Each already
+// renders behind its own flag, so lazy loading changes nothing but when the
+// code arrives — and together they are ~250 KB off the startup parse.
+const SettingsPage = lazy(() =>
+  import("@/components/SettingsPage").then((m) => ({ default: m.SettingsPage }))
+);
+const UsagePanel = lazy(() =>
+  import("@/components/UsagePanel").then((m) => ({ default: m.UsagePanel }))
+);
+const MergeRequestsPanel = lazy(() =>
+  import("@/components/MergeRequestsPanel").then((m) => ({
+    default: m.MergeRequestsPanel,
+  }))
+);
+
+/** Fetch and parse the settings chunk while the app is idle. Lazy keeps it out
+ *  of the startup parse; warming it keeps the first open from showing the
+ *  Suspense blank instead of a page. */
+const warmSettingsChunk = () => {
+  void import("@/components/SettingsPage");
+};
 
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -152,6 +171,14 @@ function App() {
   // Project-scoped panels close when switching projects, so a panel opened
   // for one project doesn't linger empty over the next. Output stays — it
   // already retargets to the new project's servers.
+  useEffect(() => {
+    const idle = window.requestIdleCallback?.(warmSettingsChunk);
+    if (idle === undefined) warmSettingsChunk();
+    return () => {
+      if (idle !== undefined) window.cancelIdleCallback?.(idle);
+    };
+  }, []);
+
   useEffect(() => {
     setDock((s) => closeTabs(s, DOCK_KINDS.filter((k) => k !== "dev")));
   }, [activeProjectId]);
@@ -334,6 +361,7 @@ function App() {
     diff: activeProject && (
       <ChangesPanel
         embedded
+        active={dockActive === "diff"}
         projectPath={activeProject.path}
         sessionIds={projectSessionIds}
         ignoreWhitespace={settings.diffIgnoreWhitespace}
@@ -351,14 +379,16 @@ function App() {
       />
     ),
     mrs: activeProject && (
-      <MergeRequestsPanel
-        embedded
-        open={dockActive === "mrs"}
-        host={remoteHost}
-        path={activeProject.path}
-        onClose={() => hideTab("mrs")}
-        onConflicts={() => setConflictOpen(true)}
-      />
+      <Suspense fallback={null}>
+        <MergeRequestsPanel
+          embedded
+          open={dockActive === "mrs"}
+          host={remoteHost}
+          path={activeProject.path}
+          onClose={() => hideTab("mrs")}
+          onConflicts={() => setConflictOpen(true)}
+        />
+      </Suspense>
     ),
     dev: (
       <DevPanel
@@ -453,13 +483,17 @@ function App() {
 
       <div className="relative flex min-w-0 flex-1 flex-col">
         {settingsOpen ? (
-          <SettingsPage
-            onBack={() => setSettingsOpen(false)}
-            settings={settings}
-            onUpdate={updateSettings}
-          />
+          <Suspense fallback={null}>
+            <SettingsPage
+              onBack={() => setSettingsOpen(false)}
+              settings={settings}
+              onUpdate={updateSettings}
+            />
+          </Suspense>
         ) : usageOpen ? (
-          <UsagePanel onBack={() => setUsageOpen(false)} />
+          <Suspense fallback={null}>
+            <UsagePanel onBack={() => setUsageOpen(false)} />
+          </Suspense>
         ) : (
           <>
             <ContextBar

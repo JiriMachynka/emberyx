@@ -108,6 +108,17 @@ export interface HighlightRequest {
   loadTheme: () => Promise<{ default: ThemeRegistrationAny }>;
 }
 
+/** Tokens already in the cache for this fence, without scheduling any work.
+ *  The streaming plugin needs this: a fence it highlighted a frame ago must
+ *  render coloured immediately, or it drops back to plain text on every
+ *  re-render and flickers for as long as the message streams. */
+export const peekTokens = (
+  code: string,
+  language: string,
+  themeName: string
+): TokensResult | null =>
+  tokenCache.get(cacheKey(code, resolveLang(language), themeName)) ?? null;
+
 /**
  * Tokens for a fence, or null while the grammar is still loading — the caller
  * gets them through `callback` when it lands, which is the contract Streamdown

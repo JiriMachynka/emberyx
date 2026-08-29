@@ -54,7 +54,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Markdown } from "@/components/Markdown";
+import { MarkdownAsync as Markdown } from "@/components/MarkdownAsync";
 import { ChatComposer } from "@/components/ChatComposer";
 import {
   handoffLabel,
@@ -327,6 +327,11 @@ export const ChatPane = memo(function ChatPane({
   // token is what makes a long thread stutter.
   const pinnedRef = useRef(true);
   const userScrollRef = useRef(false);
+  // Sticky: has this pane ever been touched? A pane mounts at scrollTop 0 and
+  // the virtualizer's own re-measurements fire scroll events, which used to
+  // spend the whole auto-load budget before the user did anything — three extra
+  // page reads, each a transcript query, in the pane's first frames.
+  const userEngagedRef = useRef(false);
   const scrollRaf = useRef<number | null>(null);
   const [showScrollEnd, setShowScrollEnd] = useState(false);
 
@@ -385,7 +390,9 @@ export const ChatPane = memo(function ChatPane({
     // hundreds of messages and the window is 60, so clicking a button per page
     // is the difference between "the history is there" and "the history is
     // gone". `loadOlder` no-ops while a page is already in flight.
-    if (el.scrollTop < LOAD_EARLIER_PX) autoLoadRef.current();
+    if (userEngagedRef.current && el.scrollTop < LOAD_EARLIER_PX) {
+      autoLoadRef.current();
+    }
   }, []);
 
   // Which scrolls came from the user. Virtualized rows re-measure after paint
@@ -396,6 +403,7 @@ export const ChatPane = memo(function ChatPane({
     if (!el) return;
     const mark = () => {
       userScrollRef.current = true;
+      userEngagedRef.current = true;
     };
     el.addEventListener("wheel", mark, { passive: true });
     el.addEventListener("touchmove", mark, { passive: true });
@@ -469,17 +477,46 @@ export const ChatPane = memo(function ChatPane({
   const accountIssue = useAgentStore((s) => s.accountIssue);
 
   // While a tool runs, say what it's doing instead of a generic "Running tool…".
-  let statusLabel = STATUS_LABEL[status];
-  if (active && status === "tool") {
-    const running = messages[messages.length - 1]?.tools.find((t) => t.result == null);
-    if (running) {
-      const d = describeTool(running.name, running.input);
-      statusLabel = d.title ? `${d.label} ${d.title}` : d.label;
-    }
-  }
+  const running =
+    status === "tool"
+      ? messages[messages.length - 1]?.tools.find((t) => t.result == null)
+      : undefined;
+  // `describeTool` re-serialises tool input that is routinely tens of KB and
+  // builds a full body this caller never reads. Unmemoized it ran on every
+  // frame for the whole life of the tool call.
+  const runningLabel = useMemo(() => {
+    if (!running) return null;
+    const d = describeTool(running.name, running.input);
+    return d.title ? `${d.label} ${d.title}` : d.label;
+  }, [running?.name, running?.input]);
+  const statusLabel = (active && runningLabel) || STATUS_LABEL[status];
 
   // Stable across renders so memoized rows don't re-render on every update.
   const openPreview = useCallback((dataUrl: string) => setPreview(dataUrl), []);
+
+  const threadLink = useMemo(
+    () => (resume ? { projectPath: cwd, threadId: resume } : null),
+    [cwd, resume]
+  );
+
+  // ChatComposer is memoized and owns its own draft precisely so typing does
+  // not re-render the transcript. Handing it a fresh arrow each frame defeats
+  // that in the other direction.
+  const switchBackend = useCallback(
+    (to: AgentBackend) => switchProvider(to, false),
+    [switchProvider]
+  );
+  const changeClaudeProfile = useCallback(
+    (id: string | null) => {
+      setClaudeProfileId(id);
+      if (resume) {
+        setThreadMeta(threadMetaKey(cwd, resume), {
+          claudeProfileId: id ?? undefined,
+        });
+      }
+    },
+    [cwd, resume]
+  );
 
   // Everything earlier providers produced, then whatever the live transport
   // has now — one transcript, however many providers it took.
@@ -527,12 +564,15 @@ export const ChatPane = memo(function ChatPane({
 
   // The busy footer is a slot of its own, so the last slot is not the last
   // turn — the streaming turn is the one before it.
-  const lastTurnIndex = useMemo(() => {
-    for (let i = slots.length - 1; i >= 0; i -= 1) {
-      if (slots[i].kind === "turn") return i;
+  // Not memoized: `slots` is a new array on every streamed frame, so a memo here
+  // could never hit and only cost a deps comparison.
+  let lastTurnIndex = -1;
+  for (let i = slots.length - 1; i >= 0; i -= 1) {
+    if (slots[i].kind === "turn") {
+      lastTurnIndex = i;
+      break;
     }
-    return -1;
-  }, [slots]);
+  }
 
   const rowVirt = useVirtualizer({
     count: slots.length,
@@ -620,11 +660,15 @@ export const ChatPane = memo(function ChatPane({
   const [tasksHidden, setTasksHidden] = useState(false);
   useEffect(() => setTasksHidden(false), [todosSig]);
 
-  const openProjectPaths = new Set(projects.map((project) => project.path));
-  const recentOnly = recentProjects.filter(
-    (path) => !openProjectPaths.has(path)
-  );
-  const newThreadHeading = (
+  // Built on demand, not per render: an empty thread is by definition not
+  // streaming, so eagerly constructing this set, filter and dropdown tree was
+  // work only ever done in the case that throws it away.
+  const renderNewThreadHeading = () => {
+    const openProjectPaths = new Set(projects.map((project) => project.path));
+    const recentOnly = recentProjects.filter(
+      (path) => !openProjectPaths.has(path)
+    );
+    return (
     <h2 className="text-center text-3xl font-normal tracking-tight text-foreground">
       {ready ? (
         <>
@@ -664,16 +708,15 @@ export const ChatPane = memo(function ChatPane({
         "Starting agent…"
       )}
     </h2>
-  );
-
+    );
+  };
 
   return (
     <FileRefProject value={cwd}>
-    <ThreadLinkProvider
-      value={
-        resume ? { projectPath: cwd, threadId: resume } : null
-      }
-    >
+    {/* A fresh object here would defeat every consumer's memo — context does
+        not compare — and PrLink renders every link in every message, each one
+        re-reading thread meta from localStorage. Per streamed frame. */}
+    <ThreadLinkProvider value={threadLink}>
     <div
       className="chat-pane relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
       style={{ fontFamily }}
@@ -761,7 +804,9 @@ export const ChatPane = memo(function ChatPane({
         )}
       >
         <div className="chat-content-width mx-auto">
-          {thread.length === 0 && <div className="mb-8">{newThreadHeading}</div>}
+          {thread.length === 0 && (
+            <div className="mb-8">{renderNewThreadHeading()}</div>
+          )}
           {terminal &&
             (accountIssue ? (
               <AccountNotice issue={accountIssue} />
@@ -818,17 +863,10 @@ export const ChatPane = memo(function ChatPane({
                   onEffortChange={changeEffort}
                   fullAccess={fullAccess}
                   onFullAccessChange={setFullAccess}
-                  onSwitchBackend={(to) => switchProvider(to, false)}
+                  onSwitchBackend={switchBackend}
                   claudeProfiles={claudeProfiles}
                   claudeProfileId={claudeProfileId}
-                  onClaudeProfileChange={(id) => {
-                    setClaudeProfileId(id);
-                    if (resume) {
-                      setThreadMeta(threadMetaKey(cwd, resume), {
-                        claudeProfileId: id ?? undefined,
-                      });
-                    }
-                  }}
+                  onClaudeProfileChange={changeClaudeProfile}
                   queue={queue}
                   draft={draft}
                   onDraftConsumed={consumeDraft}

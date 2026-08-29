@@ -75,7 +75,11 @@ export function mergeThread(
   provider: Provider,
   model: string | null
 ): ChatMessage[] {
-  if (carried.messages.length === 0) return stampTurns(live, provider, model);
+  // Before any switch there is nothing to attribute against, and stamping would
+  // clone every message on every streamed frame — breaking the identity the
+  // transcript's row memos compare on. Consumers that need attribution here
+  // fall back to the live provider themselves (see handoff.ts).
+  if (carried.messages.length === 0) return live;
   return [...carried.messages, ...stampTurns(live, provider, model)];
 }
 
@@ -89,6 +93,9 @@ export function switchBefore(
   messageId: string,
   merged: ChatMessage[]
 ): ProviderSwitchMark | null {
+  // The scan below is O(messages) and runs per turn per frame; a thread that
+  // never changed hands has no divider to draw, so skip it entirely.
+  if (carried.switches.length === 0) return null;
   const index = merged.findIndex((message) => message.id === messageId);
   if (index <= 0) return null;
   const previous = merged[index - 1].provider;

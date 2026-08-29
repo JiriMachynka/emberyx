@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { ChevronDown, Pencil, Play, Plus, Square, SquareArrowOutUpRight } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -109,6 +110,10 @@ export function ActionsMenu({
  *  click rather than held as a prop: this is the only place that needs them,
  *  and a stale editor choice would send the project to the wrong app. */
 function OpenInIdeItem({ projectPath }: { projectPath: string }) {
+  // The label only needs the choice made when this menu mounted; `loadSettings`
+  // parses and migrates the whole settings blob, and running that inside render
+  // did it on every parent re-render. The click path re-reads it for real.
+  const [labelIde] = useState(() => loadSettings().ide);
   const openInIde = async () => {
     const { ide, ideCustomCommand } = loadSettings();
     const command = buildIdeCommand(ide, { project: projectPath }, ideCustomCommand);
@@ -127,7 +132,7 @@ function OpenInIdeItem({ projectPath }: { projectPath: string }) {
   return (
     <DropdownMenuItem onSelect={() => void openInIde()}>
       <SquareArrowOutUpRight className="size-3.5" />
-      {`Open in ${IDE_LABEL[loadSettings().ide]}`}
+      {`Open in ${IDE_LABEL[labelIde]}`}
     </DropdownMenuItem>
   );
 }

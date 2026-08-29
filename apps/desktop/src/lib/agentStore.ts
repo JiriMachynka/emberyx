@@ -196,8 +196,12 @@ export const useAgentStore = create<AgentState>()((set) => ({
             statusSince: { ...s.statusSince, [id]: Date.now() },
           }
     ),
+  // Same object back means nothing moved. Without the bail-out every publish
+  // allocated a new `usages` map and woke every subscriber — one per sidebar row.
   setUsage: (id, usage) =>
-    set((s) => ({ usages: { ...s.usages, [id]: usage } })),
+    set((s) =>
+      s.usages[id] === usage ? s : { usages: { ...s.usages, [id]: usage } }
+    ),
   addChange: (change) =>
     set((s) => {
       const next = [...s.changes, change];

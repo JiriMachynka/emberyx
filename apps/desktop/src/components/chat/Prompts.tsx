@@ -80,6 +80,10 @@ export function AskPrompt({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const q = questions[tab];
+      // This handler is registered on `window`: a throw here breaks every
+      // keystroke in the app, not just this picker. `askQuestions` validates
+      // the payload upstream, so this is the belt to that braces.
+      if (!q || q.options.length === 0) return;
       const count = q.options.length;
       const move = (delta: number) =>
         setActive((a) => a.map((v, i) => (i === tab ? (v + delta + count) % count : v)));

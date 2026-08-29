@@ -270,6 +270,90 @@ pub fn git_commit(path: String, message: String) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// How much diff the model drafting a commit message sees. A message is a
+/// summary; past this the extra context buys nothing and costs latency on every
+/// click.
+const DRAFT_DIFF_LIMIT: usize = 24_000;
+
+/// Cut a diff down to the budget on a line boundary, saying so — a message
+/// drafted from a silently halved diff would describe half the change as if it
+/// were all of it.
+fn truncate_diff(diff: &str, limit: usize) -> String {
+    if diff.len() <= limit {
+        return diff.to_string();
+    }
+    let mut out = String::with_capacity(limit + 64);
+    for line in diff.lines() {
+        if out.len() + line.len() + 1 > limit {
+            break;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("\n[diff truncated — describe only what is shown above]\n");
+    out
+}
+
+/// What the next commit would contain. With something staged that is the index;
+/// with nothing staged it is the whole working tree, which is what the commit
+/// menu commits in that case. Untracked files contribute their names only — a
+/// new lockfile is megabytes and its name already says what it is.
+fn commit_diff(path: &str) -> Result<String> {
+    let staged = run_git(path, &["diff", "--cached", "--name-only"])?;
+    if !staged.trim().is_empty() {
+        return run_git(path, &["diff", "--cached", "--no-color"]);
+    }
+    let tracked = run_git(path, &["diff", "--no-color"])?;
+    let untracked = run_git(path, &["ls-files", "--others", "--exclude-standard"])?;
+    Ok(if untracked.trim().is_empty() {
+        tracked
+    } else {
+        format!("{tracked}\n\nNew files:\n{untracked}")
+    })
+}
+
+/// Draft a commit message from that diff with a one-shot model call. The draft
+/// lands in the message box and is never committed on its own: the box is where
+/// the user reads it, which is the whole point of drafting rather than
+/// committing for them.
+#[tauri::command]
+pub async fn git_draft_commit_message(path: String, model: String) -> Result<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let diff = commit_diff(&path)?;
+        if diff.trim().is_empty() {
+            return Err(Error::new("Nothing to describe — no changes."));
+        }
+        let prompt = format!(
+            "Write the git commit message for this change.\n\n\
+             - First line: what changed, in plain language and the imperative, \
+             at most 72 characters, no trailing period.\n\
+             - Add a short body only when the change needs a why. Otherwise \
+             reply with the subject line alone.\n\
+             - Write it the way a person would. No file-by-file inventory, no \
+             Conventional Commit prefix, no bullet padding.\n\
+             - Reply with the message only: no quotes, no code fences, no \
+             preamble.\n\nDiff:\n{}",
+            truncate_diff(&diff, DRAFT_DIFF_LIMIT)
+        );
+        let raw = crate::agent::AgentManager::one_shot(&prompt, &model)?;
+        // A model that fenced its answer anyway would otherwise put ``` in the
+        // commit itself.
+        let message = raw
+            .trim()
+            .trim_start_matches("```text")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim()
+            .to_string();
+        if message.is_empty() {
+            return Err(Error::new("The model returned an empty message."));
+        }
+        Ok(message)
+    })
+    .await
+    .map_err(|e| crate::err!("git_draft_commit_message join failed: {e}"))?
+}
+
 /// One commit that touched a file, as shown on the history timeline.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1450,6 +1534,57 @@ pub fn git_remote_host(path: String) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncate_diff_cuts_on_a_line_boundary_and_says_so() {
+        let diff = (0..500)
+            .map(|i| format!("+line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let cut = truncate_diff(&diff, 200);
+        assert!(cut.len() < diff.len());
+        assert!(cut.contains("[diff truncated"));
+        // Whole lines only: a half-written hunk reads as a different change.
+        assert!(cut.lines().all(|l| l.is_empty()
+            || l.starts_with("+line")
+            || l.starts_with("[diff truncated")));
+    }
+
+    #[test]
+    fn a_short_diff_is_left_alone() {
+        assert_eq!(truncate_diff("+one\n", 200), "+one\n");
+    }
+
+    #[test]
+    fn commit_diff_falls_back_to_the_working_tree_when_nothing_is_staged() {
+        let repo = Repo::new("draft_diff");
+        std::fs::write(repo.0.join("a.txt"), "one\n").unwrap();
+        repo.run(&["add", "."]);
+        repo.run(&["commit", "-m", "first"]);
+        std::fs::write(repo.0.join("a.txt"), "two\n").unwrap();
+        std::fs::write(repo.0.join("new.txt"), "fresh\n").unwrap();
+
+        let diff = commit_diff(repo.0.to_str().unwrap()).unwrap();
+        assert!(diff.contains("+two"));
+        // Untracked files are named, not inlined.
+        assert!(diff.contains("New files:\nnew.txt"));
+        assert!(!diff.contains("+fresh"));
+    }
+
+    #[test]
+    fn commit_diff_uses_the_index_once_something_is_staged() {
+        let repo = Repo::new("draft_diff_staged");
+        std::fs::write(repo.0.join("a.txt"), "one\n").unwrap();
+        repo.run(&["add", "."]);
+        repo.run(&["commit", "-m", "first"]);
+        std::fs::write(repo.0.join("a.txt"), "two\n").unwrap();
+        repo.run(&["add", "a.txt"]);
+        std::fs::write(repo.0.join("b.txt"), "unstaged\n").unwrap();
+
+        let diff = commit_diff(repo.0.to_str().unwrap()).unwrap();
+        assert!(diff.contains("+two"));
+        assert!(!diff.contains("b.txt"));
+    }
 
     /// A throwaway repo with deterministic identity and no global config
     /// leaking in (signing, hooks, and templates all vary per machine).

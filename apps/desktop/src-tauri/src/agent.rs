@@ -315,31 +315,18 @@ impl AgentManager {
         }
     }
 
-    /// Generate a short title for a fresh chat thread with a cheap headless
-    /// haiku one-shot (user hooks/settings excluded to keep it fast, cheap, and
-    /// unstyled), then append it to the transcript as an `ai-title` line so
-    /// `list_threads` surfaces it — headless sessions never get one otherwise.
-    /// Runs off the main thread: a title is a whole `claude -p` process, and a
-    /// sync command would freeze the UI for its duration.
-    pub fn title_thread(
-        cwd: String,
-        session_id: String,
-        first_message: String,
-    ) -> Result<String> {
-        let prompt = format!(
-            "Generate a concise 3-6 word title for a coding conversation that \
-             opens with this user message. Reply with ONLY the title — no quotes, \
-             no trailing punctuation, no preamble.\n\nMessage:\n{first_message}"
-        );
+    /// Run one throwaway `claude -p` and hand back its text. Deliberately
+    /// minimal: no tools, no session persistence, no user-level settings or
+    /// hooks, and a neutral cwd, so a one-line answer stays fast, cheap, and
+    /// unstyled by whatever the project configures for real chats.
+    pub fn one_shot(prompt: &str, model: &str) -> Result<String> {
         let mut cmd = Command::new("claude");
         cmd.arg("-p")
-            .arg(&prompt)
+            .arg(prompt)
             .arg("--model")
-            .arg("claude-haiku-4-5-20251001")
+            .arg(model)
             .arg("--output-format")
             .arg("text")
-            // Load only project/local settings (never the user's global hooks) so
-            // this stays cheap and the title isn't run through a hook style.
             .arg("--setting-sources")
             .arg("project,local")
             .arg("--no-session-persistence")
@@ -358,9 +345,28 @@ impl AgentManager {
 
         let output = cmd.output().map_err(|e| e.to_string())?;
         if !output.status.success() {
-            return Err(crate::err!("title generation exited {:?}", output.status.code()));
+            return Err(crate::err!("claude exited {:?}", output.status.code()));
         }
-        let raw = String::from_utf8_lossy(&output.stdout);
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    /// Generate a short title for a fresh chat thread with a cheap headless
+    /// haiku one-shot (user hooks/settings excluded to keep it fast, cheap, and
+    /// unstyled), then append it to the transcript as an `ai-title` line so
+    /// `list_threads` surfaces it — headless sessions never get one otherwise.
+    /// Runs off the main thread: a title is a whole `claude -p` process, and a
+    /// sync command would freeze the UI for its duration.
+    pub fn title_thread(
+        cwd: String,
+        session_id: String,
+        first_message: String,
+    ) -> Result<String> {
+        let prompt = format!(
+            "Generate a concise 3-6 word title for a coding conversation that \
+             opens with this user message. Reply with ONLY the title — no quotes, \
+             no trailing punctuation, no preamble.\n\nMessage:\n{first_message}"
+        );
+        let raw = Self::one_shot(&prompt, "claude-haiku-4-5-20251001")?;
         let title: String = raw
             .lines()
             .find(|l| !l.trim().is_empty())

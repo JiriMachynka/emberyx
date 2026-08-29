@@ -36,8 +36,10 @@ import { fuzzyFilter } from "@/lib/fuzzy";
 import { contextWindowFor } from "@/lib/pricing";
 import { formatPlan, formatResetsIn, formatWindowLength } from "@/lib/quota";
 import {
+  BACKEND_LABEL,
   CLAUDE_EFFORTS,
   COMMAND_SIGIL,
+  CONTEXT_FLOOR,
   capabilitiesOf,
   type AgentBackend,
 } from "@/lib/agentBackend";
@@ -128,7 +130,10 @@ interface EffortPickerProps {
   effort: string;
   backend: AgentBackend;
   cwd: string;
-  usage: ChatUsage;
+  /** Only the two fields this chip reads. `usage` is a fresh object on every
+   *  streamed frame, so taking the whole thing re-renders the chip per frame. */
+  resolvedModel?: string;
+  contextWindow?: number;
   onEffortChange: (effort: string) => void;
 }
 
@@ -140,21 +145,22 @@ const EffortPicker = memo(function EffortPicker({
   effort,
   backend,
   cwd,
-  usage,
+  resolvedModel,
+  contextWindow,
   onEffortChange,
 }: EffortPickerProps) {
   const codex = backend === "codex";
   const models = useCodexModels(cwd, codex).data ?? [];
   // Codex: on "Default" the levels on offer are those of the model the CLI
   // resolved. Claude: the same five levels whatever the model, so no catalog.
-  const source = model || usage.model || "";
+  const source = model || resolvedModel || "";
   const efforts = codex ? codexEfforts(source, models) : CLAUDE_EFFORTS;
   if (efforts.length === 0) return null;
   const fallback = codex ? codexDefaultEffort(source, models) : undefined;
   const level = titleCase(effort || fallback || "") || "Default";
   // The window rides along on this chip: it is the other half of "how hard is
   // this turn going to think", and it saves a second control for one number.
-  const max = resolveContextWindow(model, backend, usage.model, usage.contextWindow);
+  const max = resolveContextWindow(model, backend, resolvedModel, contextWindow);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className={chipTrigger}>
@@ -336,8 +342,7 @@ const resolveContextWindow = (
   if (model.includes("[1m]")) return 1_000_000;
   const known = contextWindowFor(resolved || model);
   if (known) return known;
-  // 200k is Claude's floor, not a universal one.
-  return backend === "claude" ? 200_000 : 0;
+  return CONTEXT_FLOOR[backend];
 };
 
 /** Compact token count: 135k, 1m. */
@@ -423,8 +428,8 @@ const ContextMeter = memo(function ContextMeter({
           />
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          {backend === "claude" ? "Claude" : "Codex"} automatically compacts its
-          context when needed.
+          {BACKEND_LABEL[backend]} automatically compacts its context when
+          needed.
         </p>
         {onCompact && (
           <>
@@ -695,7 +700,8 @@ const UsageFooter = memo(function UsageFooter({
         effort={effort}
         backend={backend}
         cwd={cwd}
-        usage={usage}
+        sessionModels={usage.models}
+        resolvedModel={usage.model}
         onModelChange={onModelChange}
         onEffortChange={onEffortChange}
         onSwitchBackend={onSwitchBackend}
@@ -706,7 +712,8 @@ const UsageFooter = memo(function UsageFooter({
           effort={effort}
           backend={backend}
           cwd={cwd}
-          usage={usage}
+          resolvedModel={usage.model}
+          contextWindow={usage.contextWindow}
           onEffortChange={onEffortChange}
         />
       )}

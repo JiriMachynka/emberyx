@@ -14,6 +14,28 @@ describe("useSessions", () => {
     expect(result.current.sessionsFor("b").map((s) => s.kind)).toEqual(["chat"]);
   });
 
+  // A monorepo's dev servers exit together, each firing onExit → closeSession
+  // in the same tick. Reading the render snapshot meant the second close
+  // overwrote the first, and a dead server came back as a tab with no PTY.
+  it("drops both when two sessions close in the same tick", () => {
+    const { result } = renderHook(() => useSessions());
+    let first = "";
+    let second = "";
+    act(() => {
+      result.current.startChat("a", "/a");
+      first = result.current.addDev("a", "web", "/a", "bun dev");
+      second = result.current.addDev("a", "api", "/a", "bun api");
+    });
+    expect(result.current.sessionsFor("a")).toHaveLength(3);
+
+    act(() => {
+      result.current.closeSession(first);
+      result.current.closeSession(second);
+    });
+
+    expect(result.current.sessionsFor("a").map((s) => s.kind)).toEqual(["chat"]);
+  });
+
   it("repoints the project when its focused session closes", () => {
     const { result } = renderHook(() => useSessions());
     let firstId = "";

@@ -700,13 +700,18 @@ describe("useAgentChat persistent agents", () => {
 });
 
 describe("useAgentChat ask_user", () => {
+  // Mirrors `ask.rs` `AskEvent`: id + session + a non-empty `questions` list.
   const question = {
     session: "emberyx-1",
     id: "ask-1",
-    question: "Which one?",
-    header: "Pick",
-    options: [{ label: "A", description: "first" }],
-    multiSelect: false,
+    questions: [
+      {
+        question: "Which one?",
+        header: "Pick",
+        options: [{ label: "A", description: "first" }],
+        multiSelect: false,
+      },
+    ],
   };
 
   it("shows a question addressed to this session", async () => {
@@ -721,6 +726,26 @@ describe("useAgentChat ask_user", () => {
     expect(result.current.pendingAsk).toBeNull();
   });
 
+  // The picker indexes `options[active]` and takes `% options.length` on an
+  // arrow key, so a question with no options threw inside a window-level
+  // keydown handler and unmounted the pane. Refuse it at the boundary instead.
+  it("refuses a question with no options", async () => {
+    const { result } = await mount();
+    act(() =>
+      listeners.forEach((fn) =>
+        fn({
+          session: "emberyx-1",
+          id: "ask-bad",
+          questions: [
+            { question: "Which?", header: "Pick", options: [], multiSelect: false },
+          ],
+        })
+      )
+    );
+    expect(result.current.pendingAsk).toBeNull();
+    expect(result.current.status).not.toBe("awaiting_answer");
+  });
+
   // The event fires once. A pane that was closed when it fired must still find
   // the question, or the agent stays blocked with nothing showing it.
   it("picks up a question raised while the pane was closed", async () => {
@@ -732,7 +757,14 @@ describe("useAgentChat ask_user", () => {
         payload: JSON.stringify({
           id: "ask-9",
           session: "emberyx-1",
-          questions: [{ question: "Which?", header: "Pick", options: [], multiSelect: false }],
+          questions: [
+            {
+              question: "Which?",
+              header: "Pick",
+              options: [{ label: "A", description: "first" }],
+              multiSelect: false,
+            },
+          ],
         }),
         createdAt: 1,
         expiresAt: 2,
@@ -750,7 +782,7 @@ describe("useAgentChat ask_user", () => {
         approvalId: "ask-old",
         threadId: "emberyx-1",
         kind: "ask",
-        payload: JSON.stringify({ questions: [{ question: "Old?", header: "Old", options: [], multiSelect: false }] }),
+        payload: JSON.stringify({ questions: [{ question: "Old?", header: "Old", options: [{ label: "O", description: "" }], multiSelect: false }] }),
         createdAt: 1,
         expiresAt: 2,
       },
