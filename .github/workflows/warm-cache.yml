@@ -21,6 +21,10 @@ concurrency:
 
 jobs:
   warm:
+    # A version bump touches Cargo.lock, so every release commit used to start a
+    # full release build here — competing with the tag's own release run for a
+    # macOS runner, and saving its cache after that run had already restored one.
+    if: "!startsWith(github.event.head_commit.message, 'Release v')"
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

@@ -14,11 +14,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  preflight:
-    runs-on: ubuntu-latest
+  # One job, one runner. The validation steps below took their own ubuntu runner
+  # before; they finish in under a second, so the runner spin-up was most of
+  # their cost.
+  release:
+    runs-on: macos-14
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
+          # Full history: the ancestor check below needs main's commits.
           fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
@@ -26,27 +32,18 @@ jobs:
       - name: Validate tag and project versions
         run: bun run release:check -- "${GITHUB_REF_NAME}"
 
+      # The tag must name a commit that is already on main, which is what makes
+      # the checks unnecessary here: main's own Test run covers this commit.
+      # A compile break still can't ship — the build below compiles the crate in
+      # release mode — so what this trades away is a lint or test regression
+      # slipping into a tag whose Test run went red.
       - name: Ensure tag is based on main
         run: |
           git fetch origin main --quiet
           git merge-base --is-ancestor "${GITHUB_SHA}" origin/main
 
-  # Gate the release on the same checks CI runs on main, then publish from this
-  # runner. Keeping verification and packaging together avoids a second macOS
-  # runner plus a second checkout, toolchain setup, and dependency install.
-  release:
-    needs: preflight
-    runs-on: macos-14
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
           targets: aarch64-apple-darwin
 
       - uses: swatinem/rust-cache@v2
@@ -57,22 +54,6 @@ jobs:
           shared-key: release
 
       - run: bun install --frozen-lockfile
-
-      - name: Typecheck
-        run: bunx tsc --noEmit
-        working-directory: apps/desktop
-
-      - name: Frontend tests
-        run: bun run test
-        working-directory: apps/desktop
-
-      - name: Clippy
-        run: cargo clippy --all-targets
-        working-directory: apps/desktop/src-tauri
-
-      - name: Rust tests
-        run: cargo test
-        working-directory: apps/desktop/src-tauri
 
       - uses: tauri-apps/tauri-action@v0
         env:
