@@ -46,5 +46,9 @@ jobs:
       # has to exist before cargo runs.
       - run: bun run --cwd apps/desktop build
 
+      # Builds the real daemon rather than a stub: this job exists to warm the
+      # cache release.yml restores, and release.yml compiles emberyxd too.
+      - run: bun run --cwd apps/desktop sidecar -- --target aarch64-apple-darwin
+
       - run: cargo build --release --target aarch64-apple-darwin
         working-directory: apps/desktop/src-tauri

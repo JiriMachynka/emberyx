@@ -50,6 +50,14 @@ jobs:
         run: bun run build
         working-directory: apps/desktop
 
+      # Declaring emberyxd as a sidecar makes `tauri-build` demand the file on
+      # every cargo command, including these two, which bundle nothing. A stub
+      # satisfies that without spending a release compile on a binary no test
+      # runs; release.yml builds the real one.
+      - name: Sidecar placeholder
+        run: bun run sidecar -- --stub --target aarch64-apple-darwin
+        working-directory: apps/desktop
+
       # No `-D warnings`: the crate carries a couple of pre-existing lints, and
       # failing the build on them is a separate decision from adding tests.
       - name: Clippy

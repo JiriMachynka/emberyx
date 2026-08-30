@@ -40,15 +40,33 @@ if (!target) throw new Error("--target was given without a triple");
 const binaries = join(tauriDir, "binaries");
 const sidecar = join(binaries, `emberyxd-${target}`);
 
-// `tauri-build` refuses to run when a declared `externalBin` is missing, and
-// emberyxd links the same lib that build script belongs to — so the binary
-// cannot be compiled until the file it produces already exists. A placeholder
-// satisfies the check for this one compile and is overwritten below.
-mkdirSync(binaries, { recursive: true });
-if (!existsSync(sidecar)) writeFileSync(sidecar, "");
+/**
+ * `tauri-build` refuses to run while a declared `externalBin` is missing, and
+ * that applies to *every* cargo invocation — `cargo test` and `cargo clippy`
+ * included, neither of which bundles anything. So the placeholder is not just a
+ * bootstrap trick for this script; it is what lets the crate be compiled at all
+ * before a daemon exists.
+ *
+ * It is a script that fails loudly rather than an empty file. If one ever does
+ * reach a bundle, persistent mode reports a daemon that refuses to start, which
+ * is findable — an empty file would be spawned, do nothing, and look like a
+ * daemon that started and went quiet.
+ */
+const writePlaceholder = () => {
+  mkdirSync(binaries, { recursive: true });
+  writeFileSync(
+    sidecar,
+    "#!/bin/sh\necho 'emberyxd placeholder: this build never compiled the daemon' >&2\nexit 1\n",
+    { mode: 0o755 },
+  );
+};
 
-run("cargo", ["build", "--release", "--bin", "emberyxd", "--target", target]);
-
-copyFileSync(join(tauriDir, "target", target, "release", "emberyxd"), sidecar);
-
-console.log(`emberyxd → binaries/emberyxd-${target}`);
+if (process.argv.includes("--stub")) {
+  writePlaceholder();
+  console.log(`placeholder → binaries/emberyxd-${target} (not a daemon)`);
+} else {
+  if (!existsSync(sidecar)) writePlaceholder();
+  run("cargo", ["build", "--release", "--bin", "emberyxd", "--target", target]);
+  copyFileSync(join(tauriDir, "target", target, "release", "emberyxd"), sidecar);
+  console.log(`emberyxd → binaries/emberyxd-${target}`);
+}
