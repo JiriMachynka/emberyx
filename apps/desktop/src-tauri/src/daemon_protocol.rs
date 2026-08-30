@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -118,8 +119,20 @@ pub struct Health {
     pub version: String,
     pub pid: u32,
     pub uptime_ms: u64,
+    /// Agents the daemon has metadata for, live or not.
     pub agent_count: usize,
     pub event_count: usize,
+    /// Agents with a running child process right now. Separate from
+    /// `agent_count` because the two genuinely differ: metadata outlives a
+    /// process, and a daemon holding three live agents used to report zero.
+    #[serde(default)]
+    pub live_count: usize,
+    /// Set by the *client* when the running daemon predates this build. Never
+    /// sent by the daemon — an old one wouldn't know to. The app can't restart
+    /// it to fix this, because that would kill the agents it is holding, so the
+    /// honest move is to say so and let the user choose the moment.
+    #[serde(default)]
+    pub outdated: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -208,6 +221,45 @@ impl State {
         now.saturating_sub(self.started_at)
     }
 
+    /// Record a spawned agent as metadata. The runtime owns the process; this is
+    /// what makes it *listable* — without it a window could reattach to an agent
+    /// the daemon could not name. Re-spawning a known id keeps the row it
+    /// already has, since that spawn is a reattach.
+    pub fn register_spawn(&mut self, spec: &AgentSpec) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let agent = self
+            .agents
+            .entry(spec.agent_id.clone())
+            .or_insert_with(|| DaemonAgent {
+                agent_id: spec.agent_id.clone(),
+                project_id: String::new(),
+                workspace_id: String::new(),
+                backend: "claude".into(),
+                cwd: spec.cwd.clone(),
+                thread_id: spec.resume.clone(),
+                lifecycle: "idle".into(),
+                current_task: None,
+                updated_at: now,
+            });
+        agent.updated_at = now;
+    }
+
+    /// Mark an agent's metadata as stopped. Called when the runtime kills a
+    /// child, so a listed agent never claims to be running after its process is
+    /// gone.
+    pub fn mark_exited(&mut self, agent_id: &str) {
+        if let Some(agent) = self.agents.get_mut(agent_id) {
+            agent.lifecycle = "exited".into();
+            agent.updated_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+        }
+    }
+
     pub fn handle(&mut self, request: Request) -> (Response, bool) {
         match request {
             Request::Ping => (Response::ok("emberyxd"), false),
@@ -219,6 +271,10 @@ impl State {
                     uptime_ms: self.uptime(),
                     agent_count: self.agents.len(),
                     event_count: self.events.values().map(VecDeque::len).sum(),
+                    // Filled in by the daemon, which is the only side that can
+                    // see the live children; `State` is metadata alone.
+                    live_count: 0,
+                    outdated: false,
                 };
                 (Response::ok(health), false)
             }
@@ -414,6 +470,56 @@ mod tests {
         for i in 0..(MAX_EVENTS + 1) { state.handle(Request::Append { agent_id: "a".into(), kind: "delta".into(), payload: i.to_string(), timestamp: i as u64 }); }
         let (response, _) = state.handle(Request::Read { agent_id: "a".into(), after_event_id: Some(1) });
         assert_eq!(response.result.as_array().unwrap().len(), MAX_EVENTS);
+    }
+
+    #[test]
+    fn a_spawned_agent_becomes_listable_metadata() {
+        let mut state = State::default();
+        let spec = AgentSpec {
+            agent_id: "a1".into(),
+            cwd: "/repo".into(),
+            resume: Some("thread-7".into()),
+            ..AgentSpec::default()
+        };
+        state.register_spawn(&spec);
+        let (response, _) = state.handle(Request::List);
+        let listed = response.result.as_array().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0]["agentId"], "a1");
+        assert_eq!(listed[0]["threadId"], "thread-7");
+        assert_eq!(listed[0]["cwd"], "/repo");
+    }
+
+    #[test]
+    fn respawning_a_known_agent_keeps_its_row_because_that_is_a_reattach() {
+        let mut state = State::default();
+        let spec = AgentSpec { agent_id: "a1".into(), cwd: "/repo".into(), ..AgentSpec::default() };
+        state.register_spawn(&spec);
+        state.agents.get_mut("a1").unwrap().project_id = "p1".into();
+        state.register_spawn(&spec);
+        assert_eq!(state.agents.len(), 1);
+        assert_eq!(state.agents["a1"].project_id, "p1");
+    }
+
+    #[test]
+    fn a_killed_agent_stops_claiming_to_run() {
+        let mut state = State::default();
+        state.register_spawn(&AgentSpec { agent_id: "a1".into(), ..AgentSpec::default() });
+        state.mark_exited("a1");
+        assert_eq!(state.agents["a1"].lifecycle, "exited");
+        // An id the daemon never knew is not an error worth failing a kill over.
+        state.mark_exited("nobody");
+    }
+
+    #[test]
+    fn health_reports_live_agents_separately_from_known_ones() {
+        let mut state = State::default();
+        state.register_spawn(&AgentSpec { agent_id: "a1".into(), ..AgentSpec::default() });
+        let (response, _) = state.handle(Request::Health);
+        // State alone cannot see processes, so it never guesses: the daemon
+        // fills `liveCount` in from the runtime.
+        assert_eq!(response.result["agentCount"], 1);
+        assert_eq!(response.result["liveCount"], 0);
     }
 
     #[test]

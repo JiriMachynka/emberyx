@@ -35,6 +35,21 @@ fn handle_runtime(runtime: &Runtime, request: Request) -> Response {
     }
 }
 
+/// Put the runtime's live-agent count into a `Health` reply. Done on the
+/// serialized value rather than by handing `State` a runtime handle: metadata
+/// and process ownership stay separable, which is what lets `State` be tested
+/// and persisted on its own.
+fn with_live_count(response: Response, live: usize) -> Response {
+    if !response.ok {
+        return response;
+    }
+    let mut response = response;
+    if let Some(object) = response.result.as_object_mut() {
+        object.insert("liveCount".into(), serde_json::json!(live));
+    }
+    response
+}
+
 /// Turn this connection into a one-way frame stream: the missed backlog first,
 /// then everything new until the client goes away. Attach owns the connection
 /// for its lifetime, which is why each one gets its own thread.
@@ -95,7 +110,34 @@ fn serve(
             stream_frames(writer, runtime, &agent_id, after_frame_id);
             return false;
         }
+        // Health is the one op that needs both halves: the counts come from
+        // metadata, but "how many agents are actually running" is only knowable
+        // from the runtime.
+        if matches!(request, Request::Health) {
+            let (response, _) = state.lock().unwrap().handle(request);
+            let response = with_live_count(response, runtime.live().len());
+            if serde_json::to_writer(&mut writer, &response).is_err()
+                || writer.write_all(b"\n").is_err()
+            {
+                break;
+            }
+            let _ = writer.flush();
+            continue;
+        }
         let response = if request.needs_runtime() {
+            // A spawned agent is registered as metadata too, so a reconnecting
+            // window can list what is running before it attaches to anything.
+            match &request {
+                Request::AgentSpawn { spec } => {
+                    state.lock().unwrap().register_spawn(spec);
+                    let _ = state.lock().unwrap().save(state_path);
+                }
+                Request::AgentKill { agent_id } => {
+                    state.lock().unwrap().mark_exited(agent_id);
+                    let _ = state.lock().unwrap().save(state_path);
+                }
+                _ => {}
+            }
             handle_runtime(runtime, request)
         } else {
             let (response, should_stop) = state.lock().unwrap().handle(request);

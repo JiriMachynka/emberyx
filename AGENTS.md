@@ -152,9 +152,10 @@ restoring a registry turns a `Working`/`Blocked` agent into `Orphaned`, not
 is the single conversion point between the live transport vocabulary and the
 provider-neutral persisted one.
 
-Still open: `emberyxd` does not yet own the child processes, so agents do not
-survive window close — `lib.rs` still kills them on `RunEvent::Exit`. Orphan
-detection and durable approvals are the state model that migration needs.
+Still open: only Claude runs in the daemon. Codex, ACP and PTY children are
+still window-scoped and killed on `RunEvent::Exit`, so persistent mode is a
+Claude-only promise — `lib.rs` deliberately leaves daemon-owned agents out of
+that list.
 
 ### Checkpoints, commits, and forges
 
@@ -206,9 +207,14 @@ About. Two are worth knowing about:
   (`useDaemonHealth`, polled) before the persistent-agents toggle, because that
   toggle is meaningless without it. `provider_status` powers **Providers** the
   same way — a provider that isn't installed is listed, not hidden.
-- **Keyboard Shortcuts** is a reference table, not a rebinding UI. Nothing
-  rebinds keys yet, and a settings screen that implies otherwise is worse than
-  one that tells you what the keys are.
+- **Keyboard Shortcuts** records a new chord per command, with `lib/commands.ts`
+  as the one declaration and `lib/keybindings.ts` holding the overrides (under
+  their own storage key, not `Settings`). Two things stay un-rebindable and say
+  so: menu accelerators (⌘W, ⌘,), because AppKit consumes a menu key equivalent
+  before the webview sees it, and chords no single binding describes — the
+  composer's ↵ / ⇧↵ and ⌘1…9, which is nine chords feeding one action an index.
+  A chord may name Control specifically (`ctrl+tab`) rather than the portable
+  `mod`: ⌘Tab is the macOS app switcher and never arrives.
 
 Fonts are two axes, not one: `chatFontFamily` drives the chat transcript, the
 composer and the sidebar thread list; `fontFamily` is the terminal's. The chat
@@ -275,6 +281,24 @@ Both prefill and never send, and both append a `providerSwitch` timeline event.
    known agent id **reattaches** rather than starting a second agent. Closing a
    pane calls `agent_detach`, not `agent_kill`.
 
+   The daemon is spawned into **its own process group** (`process_group(0)`) so
+   a group-wide signal when the app quits cannot take down the agents it holds,
+   and its output appends to a log beside the socket — it used to go to
+   `/dev/null`, which made a daemon that died at startup look identical to one
+   that never started.
+
+   Metadata and processes are separate halves, and `Health` now says so: a spawn
+   registers a listable `DaemonAgent` while `liveCount` (filled in by the daemon,
+   which is the only side that can see children) counts what is actually
+   running. `agent_count` alone once reported zero for a daemon holding three
+   agents. `outdated` is set client-side when the running daemon predates the
+   app; nothing auto-restarts it, because that would kill those agents.
+
+   `ask.rs` republishes its port and token to `emberyxd.ask.json` and rebinds
+   them on the next launch. A persistent agent keeps the `--mcp-config` it was
+   spawned with, so a fresh random port per window left every surviving agent
+   calling `ask_user` at an address nothing answered.
+
    Two things to know before touching it:
    - **Persistent mode skips the on-disk transcript prefill.** The daemon replay
      and the CLI's own transcript carry the same turns; rendering both would
@@ -283,11 +307,15 @@ Both prefill and never send, and both append a `providerSwitch` timeline event.
    - **Codex is still in-process.** `codex app-server` is a long-lived JSON-RPC
      peer with server→client requests to answer; proxying that through the
      socket is its own migration.
-   - **Packaging is not wired.** `Daemon::ensure()` looks for `emberyxd` beside
-     the app executable. That holds under `tauri dev`; a bundled `.app` needs
-     the binary shipped as a sidecar (`externalBin` + a CI copy step) or
-     persistent mode reports "emberyxd is not installed at …" — deliberately,
-     rather than silently degrading.
+   - **Packaging ships it as a sidecar.** `Daemon::ensure()` looks for
+     `emberyxd` beside the app executable, which is exactly where Tauri puts an
+     `externalBin` — it resolves `binaries/emberyxd-<triple>` and drops the
+     suffix when bundling. `scripts/build-sidecar.ts` (`bun run sidecar`, and a
+     step in `release.yml`) produces that file; `binaries/` is gitignored build
+     output. Note the ordering trap: `tauri-build` refuses to run while a
+     declared sidecar is missing, and `emberyxd` links the same lib, so the
+     script writes a placeholder before compiling and overwrites it after. A
+     missing daemon now fails the bundle rather than the user's first click.
 
 ### Backends and capabilities
 
@@ -311,9 +339,17 @@ entry knows whose it is, so picking a Codex model inside a Claude chat switches
 the transport in place first and then sets the model. That switch is silent —
 `ChatPane.switchProvider(to, prefill)` only fills the composer with the handoff
 package for the explicit "Continue here with X" action. Providers that can't be
-enumerated (the ACP ones negotiate a catalog but no mid-session switch) are
-listed disabled rather than hidden: an absent icon reads as unsupported, a
-disabled one as not wired yet, and the second is the truth.
+enumerated are listed disabled rather than hidden: an absent icon reads as
+unsupported, a disabled one as not wired yet, and the second is the truth.
+
+The ACP backends do switch mid-session — their catalog arrives with
+`session/new` and the switch is a `session/set_model` round trip. A refusal is
+not retried, because an agent that said no says it again every render; it is
+reported instead. `useAcpChat` hands the pane a `modelError` naming the model
+that is still running, since the picker goes on showing the one you asked for
+and two surfaces quietly disagreeing is the failure worth avoiding. Claude and
+Codex return it as `null` by construction: they carry the model into spawn
+arguments and `turn/start`, where a bad model fails in the open.
 
 `codex app-server` is flagged experimental and has renamed its core methods
 once already. Generate types from the installed binary

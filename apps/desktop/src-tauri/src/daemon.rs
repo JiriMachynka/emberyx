@@ -52,6 +52,22 @@ impl Daemon {
         default_socket()
     }
 
+    /// Where the daemon's own output goes. Beside the socket, so the whole of
+    /// its footprint is one directory.
+    pub fn log_path() -> PathBuf {
+        Self::socket().with_extension("log")
+    }
+
+    /// Opened per stream, appending: two handles onto one file interleave the
+    /// daemon's stdout and stderr in the order they were actually written.
+    fn log_file() -> Option<std::fs::File> {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(Self::log_path())
+            .ok()
+    }
+
     /// How long a single daemon request may take before it is called failed.
     /// Every request here is metadata — none of them do real work — so a second
     /// is already generous.
@@ -97,7 +113,13 @@ impl Daemon {
 
     pub fn health() -> Result<Health> {
         let value = Self::request(&Request::Health)?;
-        serde_json::from_value(value).map_err(|e| e.to_string().into())
+        let mut health: Health =
+            serde_json::from_value(value).map_err(|e| e.to_string())?;
+        // A daemon left running across an app update speaks the older protocol.
+        // Nothing here restarts it — that would kill the agents it is holding,
+        // which is the one thing persistent mode promises not to do.
+        health.outdated = health.version != crate::daemon_protocol::DAEMON_VERSION;
+        Ok(health)
     }
 
     /// Start `emberyxd` if it isn't already listening, and wait until it is.
@@ -117,12 +139,30 @@ impl Daemon {
                 binary.display()
             ));
         }
-        std::process::Command::new(&binary)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        let mut command = std::process::Command::new(&binary);
+        command.stdin(std::process::Stdio::null());
+        // A daemon whose whole job is outliving this window must not share its
+        // process group: a group-wide signal on app quit would take it down with
+        // the agents it is holding.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        // Its output went to /dev/null, which made a daemon that died on startup
+        // indistinguishable from one that never started. Appending to a log costs
+        // nothing and is the only account of what happened once the window is gone.
+        match (Self::log_file(), Self::log_file()) {
+            (Some(out), Some(errors)) => {
+                command.stdout(std::process::Stdio::from(out));
+                command.stderr(std::process::Stdio::from(errors));
+            }
+            _ => {
+                command.stdout(std::process::Stdio::null());
+                command.stderr(std::process::Stdio::null());
+            }
+        }
+        command.spawn().map_err(|e| e.to_string())?;
         let deadline = Instant::now() + START_TIMEOUT;
         while Instant::now() < deadline {
             if Self::reachable() {
@@ -259,4 +299,28 @@ pub fn daemon_live_agents() -> Result<Vec<String>> {
 pub fn daemon_stop() -> Result<()> {
     Daemon::request(&Request::Stop)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_log_sits_beside_the_socket() {
+        // One directory holds the daemon's whole footprint — socket, state, log —
+        // so "where did it go wrong" has a single place to look.
+        let socket = Daemon::socket();
+        let log = Daemon::log_path();
+        assert_eq!(log.parent(), socket.parent());
+        assert_eq!(log.extension().and_then(|e| e.to_str()), Some("log"));
+    }
+
+    #[test]
+    fn a_missing_binary_names_the_path_it_looked_at() {
+        // `ensure` only reaches the not-installed branch when no daemon answers,
+        // which a running one would defeat — so this checks the message the
+        // branch produces rather than driving it.
+        let error = crate::err!("emberyxd is not installed at {}", "/nowhere/emberyxd");
+        assert!(error.to_string().contains("/nowhere/emberyxd"));
+    }
 }

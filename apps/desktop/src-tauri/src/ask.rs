@@ -221,16 +221,66 @@ fn next_id() -> String {
     format!("ask-{nanos:x}")
 }
 
+/// Where the ask endpoint is remembered between windows. Beside the daemon's
+/// socket, since that is the footprint a persistent agent already depends on.
+fn endpoint_path() -> std::path::PathBuf {
+    crate::daemon_protocol::default_socket().with_extension("ask.json")
+}
+
+/// The endpoint a previous window published, if it is still readable. A partial
+/// or corrupt record reads as "none": binding port 0 or answering with an empty
+/// token would be worse than starting fresh.
+fn read_endpoint(path: &std::path::Path) -> Option<(u16, String)> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value: Value = serde_json::from_str(&raw).ok()?;
+    let port = u16::try_from(value.get("port")?.as_u64()?).ok()?;
+    let token = value.get("token")?.as_str()?.to_string();
+    (port != 0 && !token.is_empty()).then_some((port, token))
+}
+
+fn write_endpoint(path: &std::path::Path, port: u16, token: &str) {
+    let _ = std::fs::write(path, json!({ "port": port, "token": token }).to_string());
+}
+
+fn saved_endpoint() -> Option<(u16, String)> {
+    read_endpoint(&endpoint_path())
+}
+
+fn save_endpoint(port: u16, token: &str) {
+    write_endpoint(&endpoint_path(), port, token);
+}
+
 /// Start the MCP server the chat agents talk to. Mirrors `hooks::start`: bind a
-/// random localhost port, guard it with a token, serve on a background thread.
+/// localhost port, guard it with a token, serve on a background thread.
+///
+/// The port and token are *reused across windows* when they can be. A persistent
+/// agent keeps running with the `--mcp-config` it was spawned with, so a fresh
+/// random port each launch would leave every agent that outlived its window
+/// pointing at an address nothing answers — `ask_user` would hang until its
+/// timeout instead of reaching the user who is sitting right there. If the old
+/// port is taken, a random one is used and republished; the agents that lose
+/// their endpoint that way are the ones that were already unreachable.
 pub fn start(app: &AppHandle) -> Result<AskServer> {
-    let server = tiny_http::Server::http("127.0.0.1:0").map_err(|e| e.to_string())?;
-    let port = match server.server_addr() {
-        tiny_http::ListenAddr::IP(addr) => addr.port(),
-        #[allow(unreachable_patterns)]
-        _ => return Err("ask server: no IP address".into()),
+    let saved = saved_endpoint();
+    let bound = saved.as_ref().and_then(|(port, token)| {
+        tiny_http::Server::http(("127.0.0.1", *port))
+            .ok()
+            .map(|server| (server, *port, token.clone()))
+    });
+    let (server, port, token) = match bound {
+        Some(bound) => bound,
+        None => {
+            let server =
+                tiny_http::Server::http("127.0.0.1:0").map_err(|e| e.to_string())?;
+            let port = match server.server_addr() {
+                tiny_http::ListenAddr::IP(addr) => addr.port(),
+                #[allow(unreachable_patterns)]
+                _ => return Err("ask server: no IP address".into()),
+            };
+            (server, port, next_id())
+        }
     };
-    let token = next_id();
+    save_endpoint(port, &token);
 
     let state = AskServer {
         port,
@@ -477,6 +527,32 @@ pub fn answer_ask(state: tauri::State<'_, AskServer>, id: String, answer: String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A persistent agent keeps the `--mcp-config` it was spawned with, so the
+    /// endpoint has to come back identical after the window that published it is
+    /// gone — otherwise `ask_user` asks an address nobody is listening on.
+    #[test]
+    fn a_published_endpoint_survives_the_window_that_wrote_it() {
+        let path = std::env::temp_dir().join("emberyx_test_ask_endpoint.json");
+        let _ = std::fs::remove_file(&path);
+        write_endpoint(&path, 51234, "tok-1");
+        assert_eq!(read_endpoint(&path), Some((51234, "tok-1".to_string())));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_unusable_record_reads_as_no_endpoint_at_all() {
+        let path = std::env::temp_dir().join("emberyx_test_ask_endpoint_bad.json");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(read_endpoint(&path), None);
+        write_endpoint(&path, 0, "tok");
+        assert_eq!(read_endpoint(&path), None);
+        write_endpoint(&path, 5000, "");
+        assert_eq!(read_endpoint(&path), None);
+        std::fs::write(&path, "not json").unwrap();
+        assert_eq!(read_endpoint(&path), None);
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[test]
     fn mcp_config_carries_port_session_and_token() {

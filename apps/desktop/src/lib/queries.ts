@@ -647,6 +647,12 @@ export interface DaemonHealth {
   uptimeMs: number;
   agentCount: number;
   eventCount: number;
+  /** Agents with a running process, as opposed to ones the daemon merely has
+   *  metadata for. The pill counts these — it is what "persistent" means. */
+  liveCount: number;
+  /** The daemon predates this build. Nothing restarts it automatically: that
+   *  would kill the agents it is holding. */
+  outdated: boolean;
 }
 
 export const daemonKeys = {

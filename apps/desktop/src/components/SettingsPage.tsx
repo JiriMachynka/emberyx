@@ -326,7 +326,7 @@ export function SettingsPage({
       "",
       "Daemon: " +
         (daemon
-          ? `running v${daemon.version}, pid ${daemon.pid}, ${daemon.agentCount} agent(s), ${daemon.eventCount} event(s)`
+          ? `running v${daemon.version}, pid ${daemon.pid}, ${daemon.liveCount} live of ${daemon.agentCount} agent(s), ${daemon.eventCount} event(s)`
           : "not running"),
     ].join("\n");
   }
@@ -1052,7 +1052,9 @@ export function SettingsPage({
                         )}
                       />
                       {daemon
-                        ? `Running · v${daemon.version} · ${daemon.agentCount} agent${daemon.agentCount === 1 ? "" : "s"}`
+                        ? `Running · v${daemon.version} · ${daemon.liveCount} agent${daemon.liveCount === 1 ? "" : "s"}${
+                            daemon.outdated ? " · older than this app" : ""
+                          }`
                         : "Not running"}
                     </span>
                     {!daemon && (
@@ -1296,11 +1298,13 @@ export function SettingsPage({
   );
 }
 
-/** Chords the composer owns. They aren't commands — nothing dispatches them —
- *  so they're listed for reference rather than offered for rebinding. */
+/** Chords no single binding can describe: the composer's own keys, and tab
+ *  selection, which is nine chords feeding one action an argument. Listed for
+ *  reference rather than offered for rebinding. */
 const COMPOSER_KEYS: { action: string; keys: string }[] = [
   { action: "Send message", keys: "↵" },
   { action: "Newline in composer", keys: "⇧↵" },
+  { action: "Select tab by number", keys: "⌘1…9" },
 ];
 
 /** Rebindable commands, plus the fixed ones, plus the composer's own keys.
