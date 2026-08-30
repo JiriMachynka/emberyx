@@ -200,6 +200,10 @@ interface Options {
   backend?: AgentBackend;
   /** Claude session id to resume; omit to start fresh. */
   resume?: string;
+  /** `resume` names imported history: this app can render the thread from its
+   *  event log, but no CLI ever wrote a transcript for it, so the agent starts
+   *  fresh and `--resume` is never passed that id. */
+  imported?: boolean;
   /** Bypass the permission protocol entirely — no in-chat approval prompts. */
   skipPermissions?: boolean;
   /** Run in `emberyxd` so the agent survives this window closing. */
@@ -452,6 +456,7 @@ export function useAgentChat({
   emberyxSessionId,
   backend = "claude",
   resume,
+  imported = false,
   skipPermissions = false,
   persistent = false,
   permissionMode = "acceptEdits",
@@ -575,7 +580,9 @@ export function useAgentChat({
   // Set while an exit is the user's own doing (stop/rewind). Interrupting makes
   // the headless CLI exit, and "Session ended." is the wrong story for that.
   const interruptedRef = useRef(false);
-  const sessionRef = useRef<string | undefined>(resume);
+  // Imported history has no CLI session behind it, so the pane starts without
+  // one and adopts whatever id the fresh agent reports.
+  const sessionRef = useRef<string | undefined>(imported ? undefined : resume);
   // The CLI's own thread id, published so the pane can register the thread with
   // the sidebar before the first turn (and its transcript on disk) exists.
   const [threadId, setThreadId] = useState<string | undefined>(resume);
@@ -1058,9 +1065,11 @@ export function useAgentChat({
   // Skipped in persistent mode: the daemon replays its own buffer, and the two
   // overlap — the CLI writes the same turns to disk as they stream. Rendering
   // both would duplicate the conversation, so the daemon's replay is the single
-  // source and resuming an older thread starts visually empty.
+  // source and resuming an older thread starts visually empty. Imported history
+  // is the exception: no daemon buffer can hold turns this app never ran, so
+  // there is nothing to double up with.
   useEffect(() => {
-    if (!enabled || !resume || persistent) return;
+    if (!enabled || !resume || (persistent && !imported)) return;
     // Prepending is not idempotent, so a re-run for a target already hydrated
     // (a dependency identity change, StrictMode's second mount) must not
     // stack the same page on top of itself.
@@ -1122,10 +1131,10 @@ export function useAgentChat({
     return () => {
       cancelled = true;
     };
-  }, [enabled, resume, cwd, persistent]);
+  }, [enabled, resume, imported, cwd, persistent]);
 
   const loadOlder = useCallback(async () => {
-    if (!enabled || !resume || persistent) return false;
+    if (!enabled || !resume || (persistent && !imported)) return false;
     // No cursor yet means hydration hasn't run (or the thread has no history).
     if (loadingOlderRef.current || !oldestCursorRef.current) return false;
     loadingOlderRef.current = true;
@@ -1157,7 +1166,7 @@ export function useAgentChat({
       loadingOlderRef.current = false;
       setLoadingOlder(false);
     }
-  }, [enabled, resume, cwd, persistent]);
+  }, [enabled, resume, imported, cwd, persistent]);
 
   // Spawn the process once per (cwd, resume) target.
   useEffect(() => {
@@ -1234,7 +1243,7 @@ export function useAgentChat({
           sessionId: crypto.randomUUID(),
           // Prefer the live session id so a respawn (model switch, restart)
           // resumes the same thread instead of starting a fresh one.
-          resume: sessionRef.current ?? resume ?? null,
+          resume: sessionRef.current ?? (imported ? null : resume) ?? null,
           permissionMode,
           skipPermissions,
           settings: null,
@@ -1302,6 +1311,7 @@ export function useAgentChat({
     enabled,
     cwd,
     resume,
+    imported,
     skipPermissions,
     model,
     effort,
@@ -1607,7 +1617,7 @@ export function useAgentChat({
   // Auto-title a fresh chat after its first turn completes (headless CC never
   // titles a session itself). Skipped for resumed threads (already titled).
   useEffect(() => {
-    if (status !== "idle" || resume || titledRef.current) return;
+    if (status !== "idle" || (resume && !imported) || titledRef.current) return;
     const sid = sessionRef.current;
     const first = firstMsgRef.current;
     if (!sid || !first) return;
@@ -1621,7 +1631,7 @@ export function useAgentChat({
         if (title) onTitledRef.current?.(title);
       })
       .catch((e) => console.error("[emberyx] title_thread failed", e));
-  }, [status, resume, cwd]);
+  }, [status, resume, imported, cwd]);
 
   return {
     messages,

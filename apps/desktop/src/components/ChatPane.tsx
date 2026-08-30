@@ -1,6 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  Archive,
   ArrowRightLeft,
   Bot,
   Brain,
@@ -108,6 +109,9 @@ interface ChatPaneProps {
   sessionId: string;
   cwd: string;
   resume?: string;
+  /** The thread is imported history — rendered from the local event log, with
+   *  no provider session behind it to continue. */
+  imported?: boolean;
   /** Agent CLI this chat drives; gates the Claude-only composer surfaces. */
   backend: AgentBackend;
   active: boolean;
@@ -168,6 +172,7 @@ export const ChatPane = memo(function ChatPane({
   sessionId,
   cwd,
   resume,
+  imported = false,
   backend,
   active,
   fontFamily,
@@ -268,6 +273,7 @@ export const ChatPane = memo(function ChatPane({
     cwd,
     emberyxSessionId: sessionId,
     resume,
+    imported,
     backend: activeBackend,
     skipPermissions: spawnAccess.skipPermissions,
     persistent,
@@ -286,10 +292,13 @@ export const ChatPane = memo(function ChatPane({
   const startedRef = useRef(false);
   const firstUserMessage = messages.find((m) => m.role === "user")?.text;
   useEffect(() => {
-    if (startedRef.current || resume || !threadId || !firstUserMessage) return;
+    // An imported thread has no live provider thread yet, so the one its fresh
+    // agent starts still needs registering — unlike an ordinary resume.
+    if (startedRef.current || (resume && !imported) || !threadId || !firstUserMessage)
+      return;
     startedRef.current = true;
     onThreadStarted?.(threadId, firstUserMessage);
-  }, [resume, threadId, firstUserMessage, onThreadStarted]);
+  }, [resume, imported, threadId, firstUserMessage, onThreadStarted]);
 
   // The transcript is read at switch/handoff time, not published per token —
   // publishing it on every token would re-render the world.
@@ -743,6 +752,17 @@ export const ChatPane = memo(function ChatPane({
       className="chat-pane relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
       style={{ fontFamily }}
     >
+      {imported && (
+        // Said once, at the top, rather than per turn: the history below is
+        // real, but the agent that answers the next prompt never saw it.
+        <div className="z-10 flex items-center gap-2 border-b border-border/60 bg-muted/40 px-5 py-2 text-xs text-muted-foreground">
+          <Archive className="size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1">
+            Imported history. The agent has no memory of this conversation —
+            sending a message starts a new thread from here.
+          </span>
+        </div>
+      )}
       <div
         ref={scrollRef}
         onScroll={onScroll}

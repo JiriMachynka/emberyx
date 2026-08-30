@@ -85,12 +85,29 @@ const recordProviderSwitch = (
  *  Codex's in its app-server. A backend with no store of its own lists nothing
  *  — reading Claude's transcripts for it would file another agent's history
  *  under its name. */
-const listThreads = (backend: AgentBackend, cwd: string): Promise<Thread[]> => {
-  if (!capabilitiesOf(backend).threads) return Promise.resolve([]);
-  return backend === "codex"
-    ? listCodexThreads(cwd)
-    : invoke<Thread[]>("list_threads", { cwd });
+const listThreads = async (backend: AgentBackend, cwd: string): Promise<Thread[]> => {
+  if (!capabilitiesOf(backend).threads) return [];
+  if (backend === "codex") return listCodexThreads(cwd);
+  // Two sources answering different questions: the transcript scan, and the
+  // event log for imported history that was never a file here. Imported
+  // threads are listed for Claude alone — it is the pane that can render the
+  // log's stored lines, and a row you cannot open is worse than none.
+  const [scanned, imported] = await Promise.all([
+    invoke<Thread[]>("list_threads", { cwd }),
+    invoke<Thread[]>("list_store_threads", { cwd }).catch((e) => {
+      console.error("list_store_threads failed:", e);
+      return [] as Thread[];
+    }),
+  ]);
+  const scannedIds = new Set(scanned.map((t) => t.id));
+  return [...scanned, ...imported.filter((t) => !scannedIds.has(t.id))].sort(
+    (a, b) => b.modified - a.modified
+  );
 };
+
+/** Threads a fresh agent can actually continue, newest first. */
+const resumable = (threads: Thread[]): Thread[] =>
+  threads.filter((t) => !t.imported).sort((a, b) => b.modified - a.modified);
 
 const labelFor = (thread: Thread) =>
   thread.title.length > LABEL_MAX
@@ -227,7 +244,9 @@ export function useWorkspace(settings: Settings) {
     if (capabilitiesOf(backend).threads) {
       const cached = cachedThreads(path);
       if (cached.length) {
-        const latest = [...cached].sort((a, b) => b.modified - a.modified)[0];
+        // Imported threads are history, not a conversation to continue — the
+        // agent behind one has no memory of it, so launch never lands there.
+        const latest = resumable(cached)[0];
         if (latest) {
           startChat(id, path, latest.id, labelFor(latest), backend);
           // Show the cached list now; the scan refreshes it behind the boot.
@@ -238,9 +257,7 @@ export function useWorkspace(settings: Settings) {
       try {
         const threads = await fetchThreads(id, path);
         if (torndownRef.current.has(id)) return;
-        const latest = threads
-          ? [...threads].sort((a, b) => b.modified - a.modified)[0]
-          : undefined;
+        const latest = threads ? resumable(threads)[0] : undefined;
         if (latest) {
           startChat(id, path, latest.id, labelFor(latest), backend);
           return;
@@ -453,7 +470,14 @@ export function useWorkspace(settings: Settings) {
       setActive(projectId, existing.id);
       return;
     }
-    startChat(projectId, path, thread.id, labelFor(thread), backendFor(path));
+    startChat(
+      projectId,
+      path,
+      thread.id,
+      labelFor(thread),
+      backendFor(path),
+      thread.imported ?? false
+    );
   }
 
   /** Resume a thread in the active project (ContextBar / Threads menu). */

@@ -17,6 +17,9 @@ interface Options {
   backend: AgentBackend;
   /** Thread id to resume, in the backend's own id space. */
   resume?: string;
+  /** `resume` names imported history rather than a live provider thread. Only
+   *  the Claude transport can render it; the others ignore the flag. */
+  imported?: boolean;
   skipPermissions?: boolean;
   /** Run the agent in `emberyxd` so it survives closing the window. */
   persistent?: boolean;

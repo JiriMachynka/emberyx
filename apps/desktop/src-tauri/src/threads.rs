@@ -17,6 +17,14 @@ pub struct Thread {
     pub title: String,
     /// Last-modified time, unix seconds.
     pub modified: u64,
+    /// Which agent produced the conversation, when that is known from
+    /// projections. A transcript on disk does not say, so a scanned thread
+    /// leaves it `None` rather than assuming the pane's current backend.
+    pub provider: Option<String>,
+    /// True for a thread that exists only in the event log — imported history
+    /// with no transcript to resume. The pane renders it and starts a fresh
+    /// agent instead of passing `--resume` an id the CLI never wrote.
+    pub imported: bool,
 }
 
 /// A window of a transcript jsonl, read from the end so a long thread does not
@@ -428,6 +436,38 @@ fn read_thread_impl(
     result
 }
 
+/// Threads under `cwd` that live only in the event log — imported history.
+/// Listed separately from the transcript scan because the two answer different
+/// questions: this one knows nothing about `~/.claude/projects`, and the scan
+/// cannot see a thread that was never a file.
+#[tauri::command]
+pub async fn list_store_threads(
+    supervisor: tauri::State<'_, crate::supervisor::Supervisor>,
+    cwd: String,
+) -> Result<Vec<Thread>> {
+    let store = supervisor.store().ok_or("event log not attached")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(store
+            .imported_threads(&cwd)?
+            .into_iter()
+            .map(|row| Thread {
+                id: row.id,
+                title: if row.title.trim().is_empty() {
+                    "Imported thread".to_string()
+                } else {
+                    row.title
+                },
+                // Projections keep milliseconds; the sidebar's clock is seconds.
+                modified: row.updated_at / 1000,
+                provider: row.provider,
+                imported: true,
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| crate::err!("list_store_threads join failed: {e}"))?
+}
+
 /// List the Claude Code threads recorded for `cwd`, newest first. Runs off the
 /// main thread: a project with hundreds of transcripts (or a few multi-MB ones)
 /// is a whole-directory read, and a sync command would freeze the UI for the
@@ -534,6 +574,8 @@ fn list_threads_impl(cwd: &str) -> Result<Vec<Thread>> {
             id: id.to_string(),
             title: label,
             modified,
+            provider: None,
+            imported: false,
         });
     }
 

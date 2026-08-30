@@ -107,6 +107,35 @@ Easy to conflate — they share almost nothing.
    with no timeline meaning stays agent-local rather than being forced into a
    shape it does not have. Frontend: `lib/timeline.ts` `useThreadTimeline`.
 
+### Imported history
+
+`t3_import.rs` reads T3 Code's own event-sourced store
+(`~/.t3/userdata/state.sqlite`, copied first — T3 may be running and its `-wal`
+makes a read-only open of the live file unreliable) and replays its projections
+as `TimelineEvent`s through `Store::import_events`. Imported threads therefore
+land in the same tables a live thread writes to; every reader works unchanged.
+
+Two things are deliberately asymmetric with a live thread. **Attribution is
+true, rendering is borrowed**: four of five imported threads were not Claude, so
+each event carries its real provider in `attribution` (what projections and the
+sidebar read) while `raw_line` is Claude-shaped purely so `parseTranscript` can
+render it — nothing infers a provider from the raw line. And **tool calls have
+no output**: T3 stored a tool's name and truncated input, never its result, so
+the synthesized `tool_result` says that in words rather than leaving a card
+spinning.
+
+`projection_threads.source` marks the provenance (`"t3"`), which is what
+`list_store_threads` lists — the sidebar's other source, `list_threads`, scans
+`~/.claude/projects` and can never see a thread that was never a file. The two
+are merged in `useWorkspace.listThreads` for Claude only, since that is the pane
+that can render the log's stored lines.
+
+An imported thread is history, not a conversation to continue: `Session.imported`
+suppresses `--resume` (the id names a thread no CLI ever wrote), the pane says so
+in a banner, and `startPrimaryAgent` never auto-resumes one. Import is idempotent
+by thread id — a thread already in the log is skipped whole, because stream
+versions stay contiguous only if one writer owns a thread's stream.
+
 ### Approvals and orphaned agents
 
 An `ask_user` call blocks in Rust and is announced **once**, on the `ask-user`

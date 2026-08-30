@@ -42,6 +42,9 @@ export interface Session {
   backend?: AgentBackend;
   /** Claude session id to resume (chat kind only). */
   resume?: string;
+  /** The thread is imported history: `resume` names a thread this app can
+   *  render but no CLI can continue, so the agent starts fresh. */
+  imported?: boolean;
   /** The thread this session is actually on, learnt from the running agent.
    *  Kept apart from `resume` — that one is a spawn argument, and changing it
    *  under a live pane would respawn the CLI mid-turn. */
@@ -228,6 +231,12 @@ export interface Thread {
   id: string;
   title: string;
   modified: number;
+  /** Which agent produced the conversation, when projections know. A thread
+   *  found by scanning transcripts leaves this unset. */
+  provider?: string | null;
+  /** History that lives only in the local event log — imported from another
+   *  app, with no transcript for the CLI to resume. */
+  imported?: boolean;
 }
 
 

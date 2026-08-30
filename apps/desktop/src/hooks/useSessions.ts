@@ -39,12 +39,13 @@ export function useSessions() {
     cwd: string,
     resume?: string,
     label = "chat",
-    backend: AgentBackend = "claude"
+    backend: AgentBackend = "claude",
+    imported = false
   ): string {
     const id = nextId();
     commit((s) => [
       ...s,
-      { id, projectId, label, cwd, kind: "chat", backend, resume },
+      { id, projectId, label, cwd, kind: "chat", backend, resume, imported },
     ]);
     setActive(projectId, id);
     return id;

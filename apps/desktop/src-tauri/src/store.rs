@@ -111,6 +111,11 @@ const MIGRATIONS: &[&str] = &[
        kind         TEXT NOT NULL,
        payload_json TEXT NOT NULL
      );",
+    // 007 — where a thread came from, when it was not this app. NULL means the
+    // ordinary case: a thread this machine ran and ingested from the provider's
+    // own transcript. Imports set it so the sidebar can list threads that have
+    // no transcript on disk without guessing which those are.
+    "ALTER TABLE projection_threads ADD COLUMN source TEXT;",
 ];
 
 pub struct Store {
@@ -621,6 +626,56 @@ impl Store {
             Ok(())
         })
     }
+
+    /// Record that a thread came from somewhere other than this app's own
+    /// transcripts (`"t3"` today). Separate from `attach_thread_context` so a
+    /// re-run of an import cannot flip an ordinary thread's provenance by
+    /// racing the projector that created its row.
+    pub fn mark_thread_source(&self, thread_id: &str, source: &str) -> Result<()> {
+        self.with_writer(|conn| {
+            conn.execute(
+                "UPDATE projection_threads SET source = ?2 WHERE thread_id = ?1",
+                params![thread_id, source],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Threads under `project_path` that came from an import, newest first.
+    /// The sidebar's own listing scans transcripts on disk, which these have
+    /// none of — without this they would be history nothing can reach.
+    pub fn imported_threads(&self, project_path: &str) -> Result<Vec<ImportedThread>> {
+        self.with_reader(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT thread_id, title, provider, source, updated_at
+                 FROM projection_threads
+                 WHERE project_path = ?1 AND source IS NOT NULL AND deleted_at IS NULL
+                 ORDER BY updated_at DESC",
+            )?;
+            let rows = stmt.query_map(params![project_path], |row| {
+                Ok(ImportedThread {
+                    id: row.get(0)?,
+                    title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    provider: row.get(2)?,
+                    source: row.get(3)?,
+                    updated_at: row.get::<_, i64>(4)? as u64,
+                })
+            })?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(Into::into)
+        })
+    }
+}
+
+/// A thread the sidebar can only learn about from projections.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedThread {
+    pub id: String,
+    pub title: String,
+    pub provider: Option<String>,
+    pub source: Option<String>,
+    /// Unix ms of the thread's newest event.
+    pub updated_at: u64,
 }
 
 /// One log row: the event plus its global ordering key (`events.seq`), which

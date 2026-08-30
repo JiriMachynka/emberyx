@@ -32,6 +32,7 @@ mod slash;
 mod skills;
 mod store;
 pub mod supervisor;
+mod t3_import;
 mod threads;
 mod usage;
 mod workspace;
@@ -240,10 +241,13 @@ pub fn run() {
             gitlab::gitlab_mr_notes,
             usage::usage_summary,
             threads::list_threads,
+            threads::list_store_threads,
             threads::read_thread,
             ingest::transcripts_ingest,
             ingest::thread_messages_page,
             ingest::thread_turns_page,
+            t3_import::t3_import_available,
+            t3_import::t3_import_run,
 
             providers::provider_status,
             mcp::mcp_list,

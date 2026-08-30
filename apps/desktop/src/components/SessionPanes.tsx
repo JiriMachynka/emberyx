@@ -136,6 +136,7 @@ function SessionPaneRow({
           sessionId={session.id}
           cwd={session.cwd}
           resume={session.resume}
+          imported={session.imported ?? false}
           backend={session.backend ?? "claude"}
           active={active}
           fontFamily={settings.chatFontFamily}
