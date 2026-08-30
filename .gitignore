@@ -34,3 +34,6 @@ Thumbs.db
 *.sln
 *.sw?
 codedb.snapshot
+
+# Sidecar build output — produced by `bun run sidecar`, not source.
+apps/desktop/src-tauri/binaries/

@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "sidecar": "bun ../../scripts/build-sidecar.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.4",

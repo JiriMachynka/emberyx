@@ -55,6 +55,18 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      # The daemon ships inside the .app as a sidecar, or persistent mode has
+      # nothing to launch. Tauri resolves `binaries/emberyxd-<triple>` and drops
+      # the suffix when bundling, which is what `Daemon::ensure` expects to find
+      # next to the main executable. The frontend build comes first because
+      # `generate_context!` embeds dist/ at compile time and emberyxd links the
+      # same lib.
+      - name: Build the emberyxd sidecar
+        working-directory: apps/desktop
+        run: |
+          bun run build
+          bun run sidecar -- --target aarch64-apple-darwin
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
