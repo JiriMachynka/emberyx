@@ -16,6 +16,8 @@ export const COMMAND_IDS = [
   "agent.new",
   "sidebar.toggle",
   "project.search",
+  "tab.next",
+  "tab.prev",
   "tab.close",
   "settings.open",
 ] as const;
@@ -63,6 +65,18 @@ export const COMMANDS: readonly CommandDef[] = [
     id: "project.search",
     label: "Search in project",
     defaultKey: "mod+shift+f",
+    rebindable: true,
+  },
+  {
+    id: "tab.next",
+    label: "Next tab",
+    defaultKey: "ctrl+tab",
+    rebindable: true,
+  },
+  {
+    id: "tab.prev",
+    label: "Previous tab",
+    defaultKey: "ctrl+shift+tab",
     rebindable: true,
   },
   // Both of these are app-menu items; the menu, not this table, is what fires.

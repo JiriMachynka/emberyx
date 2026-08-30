@@ -31,15 +31,16 @@ describe("parseChord", () => {
   it("reads modifiers and key", () => {
     expect(parseChord("mod+shift+f")).toEqual({
       mod: true,
+      ctrl: false,
       alt: false,
       shift: true,
       key: "f",
     });
   });
 
-  it("accepts cmd and ctrl as spellings of mod", () => {
+  it("reads cmd as mod, and ctrl as Control itself", () => {
     expect(formatChord(parseChord("cmd+k")!)).toBe("mod+k");
-    expect(formatChord(parseChord("ctrl+k")!)).toBe("mod+k");
+    expect(formatChord(parseChord("ctrl+tab")!)).toBe("ctrl+tab");
   });
 
   it("rejects a bare modifier or an unknown one", () => {
@@ -56,9 +57,9 @@ describe("parseChord", () => {
 });
 
 describe("chordFromEvent", () => {
-  it("treats either platform modifier as mod", () => {
+  it("records ⌘ as mod and a lone Control as ctrl", () => {
     expect(formatChord(chordFromEvent(press("k", { meta: true }))!)).toBe("mod+k");
-    expect(formatChord(chordFromEvent(press("k", { ctrl: true }))!)).toBe("mod+k");
+    expect(formatChord(chordFromEvent(press("k", { ctrl: true }))!)).toBe("ctrl+k");
   });
 
   it("lowercases the shifted letter the browser reports", () => {
@@ -141,6 +142,24 @@ describe("matchCommand", () => {
 
   it("ignores a plain keypress with no modifier", () => {
     expect(matchCommand(press("k"), resolveBindings())).toBeNull();
+  });
+
+  // `mod` has to stay portable — Ctrl+K is how the palette opens off macOS —
+  // while `ctrl+tab` must mean Control, since ⌘Tab is the OS app switcher.
+  it("accepts Ctrl for a mod chord but not ⌘ for a ctrl chord", () => {
+    const b = resolveBindings();
+    expect(matchCommand(press("k", { ctrl: true }), b)).toBe(
+      "commandPalette.toggle"
+    );
+    expect(matchCommand(press("Tab", { ctrl: true }), b)).toBe("tab.next");
+    expect(matchCommand(press("Tab", { meta: true }), b)).toBeNull();
+  });
+
+  it("separates the two tab-cycling directions by shift", () => {
+    const b = resolveBindings();
+    expect(matchCommand(press("Tab", { ctrl: true, shift: true }), b)).toBe(
+      "tab.prev"
+    );
   });
 });
 

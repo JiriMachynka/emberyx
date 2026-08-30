@@ -14,6 +14,12 @@ const KEY = "emberyx.keybindings";
 
 export interface Chord {
   mod: boolean;
+  /**
+   * Literal Control, as distinct from `mod`. Tab cycling is Ctrl+Tab on every
+   * platform — ⌘Tab is the macOS app switcher and never reaches the webview —
+   * so a chord that means "Control specifically" has to be expressible.
+   */
+  ctrl: boolean;
   alt: boolean;
   shift: boolean;
   /** Lowercased key, e.g. "k", ",", "space". */
@@ -39,8 +45,11 @@ export function parseChord(chord: string): Chord | null {
   if (mods.some((m) => !["mod", "shift", "alt", "cmd", "ctrl"].includes(m))) {
     return null;
   }
+  // "ctrl" is literal Control; "mod"/"cmd" are the portable ⌘-or-Ctrl modifier.
+  const ctrl = mods.includes("ctrl");
   return {
-    mod: mods.includes("mod") || mods.includes("cmd") || mods.includes("ctrl"),
+    mod: mods.includes("mod") || mods.includes("cmd"),
+    ctrl,
     alt: mods.includes("alt"),
     shift: mods.includes("shift"),
     key: normalizeKey(key),
@@ -49,30 +58,60 @@ export function parseChord(chord: string): Chord | null {
 
 /** Canonical string for a chord, so two spellings of one binding compare equal. */
 export const formatChord = (chord: Chord): string =>
-  [chord.mod && "mod", chord.alt && "alt", chord.shift && "shift", chord.key]
+  [
+    chord.mod && "mod",
+    chord.ctrl && "ctrl",
+    chord.alt && "alt",
+    chord.shift && "shift",
+    chord.key,
+  ]
     .filter(Boolean)
     .join("+");
 
-/** The chord a keyboard event represents, or null for a bare modifier press. */
-export function chordFromEvent(e: {
+type KeyEventLike = {
   key: string;
   metaKey: boolean;
   ctrlKey: boolean;
   altKey: boolean;
   shiftKey: boolean;
-}): Chord | null {
+};
+
+/**
+ * The chord a keyboard event represents, or null for a bare modifier press.
+ *
+ * Control without Command records as literal `ctrl` rather than `mod`: on macOS
+ * the two are genuinely different keys, and on the platforms where they aren't,
+ * `matchesEvent` accepts either for a `mod` chord anyway.
+ */
+export function chordFromEvent(e: KeyEventLike): Chord | null {
   if (["Meta", "Control", "Alt", "Shift"].includes(e.key)) return null;
   return {
-    mod: e.metaKey || e.ctrlKey,
+    mod: e.metaKey,
+    ctrl: e.ctrlKey && !e.metaKey,
     alt: e.altKey,
     shift: e.shiftKey,
     key: normalizeKey(e.key),
   };
 }
 
+/**
+ * Whether an event fires a stored chord. Not string equality on
+ * `chordFromEvent`: `mod` is satisfied by either ⌘ or Ctrl, so the same stored
+ * binding works on every platform, while `ctrl` demands Control specifically.
+ */
+export function matchesEvent(stored: Chord, e: KeyEventLike): boolean {
+  if (stored.alt !== e.altKey || stored.shift !== e.shiftKey) return false;
+  if (stored.key !== normalizeKey(e.key)) return false;
+  if (stored.ctrl && !stored.mod) return e.ctrlKey && !e.metaKey;
+  if (stored.mod) return e.metaKey || e.ctrlKey;
+  return !e.metaKey && !e.ctrlKey;
+}
+
 const GLYPHS: Record<string, string> = {
   mod: "⌘",
+  ctrl: "⌃",
   alt: "⌥",
+  tab: "⇥",
   shift: "⇧",
   space: "Space",
   enter: "↵",
@@ -91,6 +130,7 @@ export function displayChord(stored: string): string {
   const key =
     GLYPHS[chord.key] ?? (chord.key.length === 1 ? chord.key.toUpperCase() : chord.key);
   return [
+    chord.ctrl && GLYPHS.ctrl,
     chord.alt && GLYPHS.alt,
     chord.shift && GLYPHS.shift,
     chord.mod && GLYPHS.mod,
@@ -158,16 +198,14 @@ export function resetAllBindings(): Record<CommandId, string> {
  * run the action twice.
  */
 export function matchCommand(
-  event: Parameters<typeof chordFromEvent>[0],
+  event: KeyEventLike,
   bindings: Record<CommandId, string>
 ): CommandId | null {
-  const pressed = chordFromEvent(event);
-  if (!pressed) return null;
-  const wanted = formatChord(pressed);
+  if (!chordFromEvent(event)) return null;
   for (const command of COMMANDS) {
     if (!command.rebindable) continue;
     const chord = parseChord(bindings[command.id]);
-    if (chord && formatChord(chord) === wanted) return command.id;
+    if (chord && matchesEvent(chord, event)) return command.id;
   }
   return null;
 }
