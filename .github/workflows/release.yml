@@ -7,6 +7,11 @@ on:
   push:
     tags:
       - "v*"
+  # Re-running a failed run reuses the token context it was started with, so a
+  # run that failed on permissions keeps failing however often it is retried.
+  # Dispatching against the tag mints a fresh one and is the way to republish a
+  # tag whose build was fine and whose upload was not.
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
