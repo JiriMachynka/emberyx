@@ -1646,6 +1646,9 @@ export function useAgentChat({
     stop,
     restart,
     exitReason,
+    // Claude folds the model into its spawn arguments, so a model it rejects
+    // ends the session with a reason rather than quietly running another one.
+    modelError: null as string | null,
     rewind,
     pendingPermission,
     respond,

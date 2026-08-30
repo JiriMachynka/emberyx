@@ -671,6 +671,9 @@ export function useCodexChat({
     stop,
     restart,
     exitReason,
+    // Codex takes the model as a `turn/start` parameter, so a model it won't
+    // run fails the turn in the open rather than silently staying on another.
+    modelError: null as string | null,
     rewind,
     pendingPermission,
     respond,

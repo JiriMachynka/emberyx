@@ -262,6 +262,7 @@ export const ChatPane = memo(function ChatPane({
     stop,
     restart,
     exitReason,
+    modelError,
     pendingPermission,
     respond,
     pendingAsk,
@@ -870,6 +871,14 @@ export const ChatPane = memo(function ChatPane({
                 )}
               </div>
             ))}
+          {/* The picker keeps showing the model you asked for, so a refusal has
+              to say what is actually running or the two quietly disagree. */}
+          {modelError && !terminal && (
+            <div className="mb-2 truncate text-center text-xs text-muted-foreground">
+              {modelError}
+              {usage.model ? ` — still on ${usage.model}.` : "."}
+            </div>
+          )}
           <div className="flex items-start gap-3">
             <div className="min-w-0 flex-1">
               {/* A prompt replaces the composer rather than stacking above it —

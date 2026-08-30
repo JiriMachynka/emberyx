@@ -92,6 +92,9 @@ export function useAcpChat({
   const [pendingPermission, setPendingPermission] =
     useState<PendingPermission | null>(null);
   const [restartNonce, setRestartNonce] = useState(0);
+  /** Set when the agent refused a model switch. The picker would otherwise go on
+   *  showing the model you asked for while the session runs another one. */
+  const [modelError, setModelError] = useState<string | null>(null);
 
   // Committed turns, plus the one being streamed. Held in refs so a token
   // doesn't have to round-trip through React to be folded in.
@@ -347,6 +350,8 @@ export function useAcpChat({
   // the agent decides, and there is no id to hand back — the agent just keeps
   // whatever it is on. A refusal leaves `usage.model` naming what actually
   // runs; retrying it every render would hammer an agent that already said no.
+  // It is reported instead: the pane says which model the session is still on,
+  // so the picker showing the requested one is never the only thing you see.
   useEffect(() => {
     if (!enabled || !ready || !model) return;
     if (model === appliedModelRef.current) return;
@@ -355,9 +360,12 @@ export function useAcpChat({
     if (id === null || !sessionId) return;
     appliedModelRef.current = model;
     void acpSetModel(id, sessionId, model)
-      .then(() => setUsage((u) => ({ ...u, model })))
-      .catch((e) => console.error(`session/set_model ${model} failed:`, e));
-  }, [enabled, ready, model]);
+      .then(() => {
+        setUsage((u) => ({ ...u, model }));
+        setModelError(null);
+      })
+      .catch((e) => setModelError(`${provider} refused ${model}: ${String(e)}`));
+  }, [enabled, ready, model, provider]);
 
   const send = useCallback(
     (text: string) => {
@@ -395,6 +403,10 @@ export function useAcpChat({
 
   const restart = useCallback(() => {
     setExitReason(null);
+    // A fresh session has not refused anything yet, and `session/new` picks the
+    // model up again on its own.
+    setModelError(null);
+    appliedModelRef.current = "";
     committedRef.current = [];
     turnRef.current = emptyTurn();
     publish();
@@ -439,6 +451,7 @@ export function useAcpChat({
     stop,
     restart,
     exitReason,
+    modelError,
     // Rewinding a sent turn is Claude's transcript trick and ACP has no
     // equivalent, so there is never anything to pull back — which is exactly
     // what `null` means to the composer, leaving Escape to do its usual thing.
