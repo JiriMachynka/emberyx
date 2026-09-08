@@ -98,6 +98,14 @@ function App() {
   const [usageOpen, setUsageOpen] = useState(false);
   // Settings and usage cover the workspace column rather than replacing it.
   const overlayOpen = settingsOpen || usageOpen;
+  // Settings stays mounted after its first open and is merely hidden, like the
+  // editor above: remounting re-ran its effects, rebuilt ~1300 lines of JSX and
+  // repainted the covered workspace from scratch on every toggle, which is what
+  // made both Settings and the Back button feel slow. Latched during render
+  // rather than in an effect so the first open mounts in the same commit.
+  const settingsMountedRef = useRef(false);
+  if (settingsOpen) settingsMountedRef.current = true;
+  const settingsMounted = settingsMountedRef.current;
   const [slashOpen, setSlashOpen] = useState(false);
   const [conflictOpen, setConflictOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -193,9 +201,6 @@ function App() {
     []
   );
 
-  // Project-scoped panels close when switching projects, so a panel opened
-  // for one project doesn't linger empty over the next. Output stays — it
-  // already retargets to the new project's servers.
   useEffect(() => {
     const idle = window.requestIdleCallback?.(warmSettingsChunk);
     if (idle === undefined) warmSettingsChunk();
@@ -204,6 +209,9 @@ function App() {
     };
   }, []);
 
+  // Project-scoped panels close when switching projects, so a panel opened
+  // for one project doesn't linger empty over the next. Output stays — it
+  // already retargets to the new project's servers.
   useEffect(() => {
     setDock((s) => closeTabs(s, DOCK_KINDS.filter((k) => k !== "dev")));
   }, [activeProjectId]);
@@ -652,18 +660,28 @@ function App() {
           )}
         </div>
 
-        {overlayOpen && (
+        {settingsMounted && (
+          <div
+            className={cn(
+              "absolute inset-0 z-20 flex-col bg-background",
+              settingsOpen ? "flex" : "hidden"
+            )}
+          >
+            <Suspense fallback={null}>
+              <SettingsPage
+                active={settingsOpen}
+                onBack={() => setSettingsOpen(false)}
+                settings={settings}
+                onUpdate={updateSettings}
+              />
+            </Suspense>
+          </div>
+        )}
+
+        {usageOpen && (
           <div className="absolute inset-0 z-20 flex flex-col bg-background">
             <Suspense fallback={null}>
-              {settingsOpen ? (
-                <SettingsPage
-                  onBack={() => setSettingsOpen(false)}
-                  settings={settings}
-                  onUpdate={updateSettings}
-                />
-              ) : (
-                <UsagePanel onBack={() => setUsageOpen(false)} />
-              )}
+              <UsagePanel onBack={() => setUsageOpen(false)} />
             </Suspense>
           </div>
         )}

@@ -83,6 +83,11 @@ import type { LucideIcon } from "lucide-react";
 import type { Settings } from "@/lib/settings";
 
 interface SettingsPageProps {
+  /** False while the page is mounted but hidden. The page keeps its state
+   *  between visits, so everything that reaches outside its own subtree — the
+   *  window key handler, the subprocess probes, the sidebar portal — is gated
+   *  on this rather than on being mounted. */
+  active: boolean;
   onBack: () => void;
   settings: Settings;
   onUpdate: (patch: Partial<Settings>) => void;
@@ -222,6 +227,7 @@ const defaultsFor = (keys: (keyof Settings)[]): Partial<Settings> =>
   Object.fromEntries(keys.map((k) => [k, DEFAULT_SETTINGS[k]]));
 
 export function SettingsPage({
+  active,
   onBack,
   settings,
   onUpdate,
@@ -238,10 +244,13 @@ export function SettingsPage({
   // not on every open: the default tab displays none of them, and paying for
   // all three there is what made Settings feel slow to appear.
   const providers =
-    useProviderStatus(tab === "providers" || tab === "about").data ?? [];
-  const forgeClis = useForgeCliStatus(tab === "sourceControl").data ?? [];
+    useProviderStatus(active && (tab === "providers" || tab === "about")).data ??
+    [];
+  const forgeClis =
+    useForgeCliStatus(active && tab === "sourceControl").data ?? [];
   const daemon =
-    useDaemonHealth(tab === "connections" || tab === "about").data ?? null;
+    useDaemonHealth(active && (tab === "connections" || tab === "about")).data ??
+    null;
   const [startingDaemon, setStartingDaemon] = useState(false);
   const [hiddenDraft, setHiddenDraft] = useState("");
   const [customBackend, setCustomBackend] = useState<AgentBackend>("claude");
@@ -249,16 +258,19 @@ export function SettingsPage({
   const [diagnosticsCopied, setDiagnosticsCopied] = useState(false);
 
   const meta = TAB_META(tab);
-  // The Sidebar creates this host in the same commit that mounts this page, so
+  // The Sidebar creates this host in the same commit that reveals this page, so
   // reading it during render finds nothing and the whole tab list is skipped
   // until some unrelated state change re-renders. Read it after the commit,
-  // before paint.
+  // before paint — and re-read on every reveal, because the Sidebar drops the
+  // host while Settings is hidden and builds a fresh one on the way back in.
   const [navigationTarget, setNavigationTarget] = useState<HTMLElement | null>(
     null
   );
   useLayoutEffect(() => {
-    setNavigationTarget(document.getElementById("settings-navigation"));
-  }, []);
+    setNavigationTarget(
+      active ? document.getElementById("settings-navigation") : null
+    );
+  }, [active]);
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -275,6 +287,7 @@ export function SettingsPage({
   // `/` jumps to the search box, unless something already has the keyboard.
   // Escape is Back — this is a page, not a dialog with a dimmed chat behind it.
   useEffect(() => {
+    if (!active) return;
     function onKey(e: KeyboardEvent) {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Escape") {
@@ -290,7 +303,7 @@ export function SettingsPage({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onBack]);
+  }, [active, onBack]);
 
   async function onRestoreDefaults() {
     const ok = await ask(
