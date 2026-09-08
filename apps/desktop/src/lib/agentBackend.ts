@@ -6,7 +6,7 @@
  * of filling in one row.
  */
 
-export type AgentBackend = "claude" | "codex" | "opencode" | "grok";
+export type AgentBackend = "claude" | "codex" | "opencode" | "grok" | "cursor";
 
 export interface AgentCapabilities {
   /** Past conversations can be listed and resumed (`list_threads`). */
@@ -31,6 +31,8 @@ export interface AgentCapabilities {
   steering: boolean;
   /** Context can be compacted on demand (`/compact` or `thread/compact/start`). */
   compact: boolean;
+  /** Revert turn also drops this turn from the provider conversation. */
+  conversationRewind: boolean;
 }
 
 export const AGENT_BACKENDS: readonly AgentBackend[] = [
@@ -38,6 +40,7 @@ export const AGENT_BACKENDS: readonly AgentBackend[] = [
   "codex",
   "opencode",
   "grok",
+  "cursor",
 ];
 
 export const BACKEND_LABEL: Record<AgentBackend, string> = {
@@ -45,6 +48,7 @@ export const BACKEND_LABEL: Record<AgentBackend, string> = {
   codex: "Codex",
   opencode: "OpenCode",
   grok: "Grok",
+  cursor: "Cursor",
 };
 
 /** Character that opens a command in the composer. Codex invokes its skills as
@@ -54,6 +58,7 @@ export const COMMAND_SIGIL: Record<AgentBackend, string> = {
   codex: "$",
   opencode: "/",
   grok: "/",
+  cursor: "/",
 };
 
 /**
@@ -67,6 +72,7 @@ export const CONTEXT_FLOOR: Record<AgentBackend, number> = {
   codex: 0,
   opencode: 0,
   grok: 0,
+  cursor: 0,
 };
 
 /** `--effort` levels Claude accepts. Fixed by the CLI rather than discovered,
@@ -96,6 +102,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     reasoningEffort: true,
     steering: true,
     compact: true,
+    conversationRewind: true,
   },
   // Codex reaches all of these over the app-server rather than Claude's
   // out-of-band surfaces: hook runs arrive in-band as `hook/started` /
@@ -113,6 +120,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     reasoningEffort: true,
     steering: true,
     compact: true,
+    conversationRewind: true,
   },
   // Driven over ACP. The protocol carries prompts, streamed updates, tool calls
   // and permission requests — and nothing else here, so the rest stay off until
@@ -135,6 +143,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     // A prompt sent mid-turn is rejected; the turn is cancelled and re-sent.
     steering: false,
     compact: false,
+    conversationRewind: false,
   },
   // Also ACP, over `grok agent stdio`. Grok advertises more than OpenCode does
   // — reasoning effort and a session list among them — but each still needs the
@@ -154,6 +163,24 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     reasoningEffort: false,
     steering: false,
     compact: false,
+    conversationRewind: false,
+  },
+  // Cursor ACP (`cursor-agent acp`). Same transport as Grok: prompts, streamed
+  // updates, permission requests, and a model catalog on `session/new` once
+  // the parameterized picker opt-in is advertised. No native turn truncation.
+  cursor: {
+    threads: false,
+    usage: false,
+    hookStatus: false,
+    permissions: true,
+    askUser: false,
+    slashCommands: false,
+    subagents: false,
+    modelPicker: true,
+    reasoningEffort: false,
+    steering: false,
+    compact: false,
+    conversationRewind: false,
   },
 };
 
@@ -170,7 +197,6 @@ export const isAgentBackend = (value: unknown): value is AgentBackend =>
 export const backendFromCommand = (command: string): AgentBackend =>
   command.startsWith("claude") ? "claude" : "codex";
 
-/** Backends driven over ACP rather than their own transport. Cursor is absent
- *  on purpose: `cursor-agent` has no ACP mode, only its own stream-json. */
+/** Backends driven over ACP rather than their own transport. */
 export const isAcpBackend = (backend: AgentBackend): boolean =>
-  backend === "opencode" || backend === "grok";
+  backend === "opencode" || backend === "grok" || backend === "cursor";

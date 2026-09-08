@@ -34,6 +34,8 @@ class MemoryStorage implements Storage {
   }
 }
 
+(globalThis as { __EMBERYX_TEST__?: boolean }).__EMBERYX_TEST__ = true;
+
 const storage = new MemoryStorage();
 for (const target of [globalThis, window]) {
   Object.defineProperty(target, "localStorage", {

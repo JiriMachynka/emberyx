@@ -12,7 +12,13 @@
  * which lands long before the first assistant token.
  */
 
-import { Suspense, lazy, type ComponentProps } from "react";
+import {
+  Suspense,
+  lazy,
+  useEffect,
+  useState,
+  type ComponentProps,
+} from "react";
 
 const load = () =>
   import("@/components/Markdown").then((m) => ({ default: m.Markdown }));
@@ -31,6 +37,30 @@ if (typeof window !== "undefined") {
 type Props = ComponentProps<typeof Markdown>;
 
 export function MarkdownAsync({ text, fontSize, streaming }: Props) {
+  // Markdown is never parsed on the frame this block first appears. Switching
+  // to a thread mounts a screenful of settled turns at once, and running every
+  // one of them through Streamdown and Shiki inline is what made the switch
+  // lag; the plain text below is the same string, so the row is laid out and
+  // painted first and coloured on the next frame. Rows are overscanned, so
+  // during a scroll the plain pass is off-screen.
+  const [deferred, setDeferred] = useState(true);
+  useEffect(() => {
+    if (!deferred) return;
+    const id = requestAnimationFrame(() => setDeferred(false));
+    return () => cancelAnimationFrame(id);
+  }, [deferred]);
+  // Live tokens stay as pre-wrap text so Streamdown isn't in the tree at all
+  // until the turn settles — the fallback already looked like this.
+  if (streaming || deferred) {
+    return (
+      <div
+        className="chat-md whitespace-pre-wrap leading-relaxed"
+        style={{ fontSize: `${fontSize}px` }}
+      >
+        {text}
+      </div>
+    );
+  }
   return (
     <Suspense
       fallback={
@@ -42,7 +72,7 @@ export function MarkdownAsync({ text, fontSize, streaming }: Props) {
         </div>
       }
     >
-      <Markdown text={text} fontSize={fontSize} streaming={streaming} />
+      <Markdown text={text} fontSize={fontSize} />
     </Suspense>
   );
 }

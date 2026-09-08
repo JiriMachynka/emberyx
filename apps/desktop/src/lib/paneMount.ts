@@ -1,12 +1,13 @@
 import type { SessionStatus } from "@/types";
 
 /** How many recently visited panes stay mounted behind the active one.
- *  Remounting a settled pane is not free: it respawns the CLI, re-reads the
- *  thread page and re-renders every message through markdown and Shiki with a
- *  cold memo cache — around a second on a long thread. Keeping the last few
- *  alive makes switching back instant; the bound is what stops every project's
- *  chat being parsed and held at once. */
-export const PANE_KEEP_ALIVE = 3;
+ *  Remounting a settled pane is not free: it re-reads the thread page and
+ *  re-renders every message through markdown and Shiki with a cold memo cache.
+ *  Keeping the last few alive makes switching back instant; the bound is what
+ *  stops every project's chat being parsed and held at once. A mounted pane no
+ *  longer implies a running CLI — a resumed thread stays asleep until the user
+ *  types — so this can hold more panes than it used to. */
+export const PANE_KEEP_ALIVE = 6;
 
 /**
  * A pane that is mid-turn must stay mounted when hidden. Unmounting kills the

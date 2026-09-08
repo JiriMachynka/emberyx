@@ -3,7 +3,6 @@ import { Streamdown } from "streamdown";
 import type { CodeHighlighterPlugin, HighlightOptions, ThemeInput } from "streamdown";
 import {
   highlightTokens,
-  peekTokens,
   supportedLanguages,
 } from "@/lib/codeHighlighter";
 
@@ -57,38 +56,6 @@ const shikiPlugin: CodeHighlighterPlugin = {
   },
 };
 
-/** T3 skips the Shiki LRU while a fence is still growing so every token
- *  doesn't write a unique partial into the cache. We go one step further:
- *  don't run Shiki until the fence has been quiet for ~80ms. The chat hook
- *  already coalesces tokens to rAF; re-highlighting a 200-line dump every
- *  frame is still quadratic. Closed fences settle and color in; the live
- *  tail stays plain until it does. */
-const deferredHighlight = new Map<string, ReturnType<typeof setTimeout>>();
-
-const deferredCode: CodeHighlighterPlugin = {
-  ...shikiPlugin,
-  highlight(options, callback) {
-    // Already tokenized: hand it straight back. Returning null here — as this
-    // did — makes Streamdown re-render the fence as plain text and re-colour it
-    // 80ms later, on every frame of the stream.
-    const cached = peekTokens(options.code, options.language, THEME_NAME);
-    if (cached) return cached;
-    const key = `${options.language}:${options.code.slice(0, 80)}`;
-    const prev = deferredHighlight.get(key);
-    if (prev !== undefined) clearTimeout(prev);
-    deferredHighlight.set(
-      key,
-      setTimeout(() => {
-        deferredHighlight.delete(key);
-        const result = shikiPlugin.highlight(options, callback);
-        if (result) callback?.(result);
-      }, 80),
-    );
-    return null;
-  },
-};
-
-const streamingPlugins = { code: deferredCode };
 const staticPlugins = { code: shikiPlugin };
 
 const components = {
@@ -124,8 +91,9 @@ const controls = {
   image: false,
 };
 
-/** Renders assistant markdown with GFM. Incomplete tokens are healed while
- *  `streaming` so a half-open fence already looks like a code block. */
+/** Renders assistant markdown with GFM. While `streaming`, the text is shown
+ *  as plain prose so Streamdown isn't re-parsing a growing buffer every
+ *  paint; the settled message is the one that gets the real renderer. */
 export const Markdown = memo(function Markdown({
   text,
   fontSize,
@@ -135,12 +103,21 @@ export const Markdown = memo(function Markdown({
   fontSize: number;
   streaming?: boolean;
 }) {
+  if (streaming) {
+    return (
+      <div
+        className="chat-md whitespace-pre-wrap leading-relaxed"
+        style={{ fontSize: `${fontSize}px` }}
+      >
+        {text}
+      </div>
+    );
+  }
   return (
     <div style={{ fontSize: `${fontSize}px` }}>
       <Streamdown
         className="chat-md leading-relaxed"
-        mode={streaming ? "streaming" : "static"}
-        isAnimating={streaming}
+        mode="static"
         parseIncompleteMarkdown
         skipHtml
         lineNumbers={false}
@@ -148,7 +125,7 @@ export const Markdown = memo(function Markdown({
         shikiTheme={shikiTheme}
         linkSafety={{ enabled: false }}
         controls={controls}
-        plugins={streaming ? streamingPlugins : staticPlugins}
+        plugins={staticPlugins}
         components={components}
       >
         {text}

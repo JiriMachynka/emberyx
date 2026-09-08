@@ -146,7 +146,7 @@ describe("withModelPrefs", () => {
     const out = withModelPrefs(
       catalog,
       [],
-      { cursor: ["not-a-backend"] } as never
+      { nosuchprovider: ["not-a-backend"] } as never
     );
     expect(out).toEqual(catalog);
     expect(withModelPrefs(catalog, [], { claude: ["  "] }).map((e) => e.id)).toEqual([

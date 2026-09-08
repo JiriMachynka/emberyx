@@ -58,6 +58,17 @@ export const codexTurnStart = (id: number, params: Params) =>
 export const codexThreadCompact = (id: number, params: Params) =>
   invoke<unknown>("codex_thread_compact", { id, params });
 
+export const codexThreadRollback = (
+  id: number,
+  threadId: string,
+  numTurns: number
+) =>
+  invoke<unknown>("codex_request", {
+    id,
+    method: "thread/rollback",
+    params: { threadId, numTurns },
+  });
+
 export const codexTurnSteer = (id: number, params: Params) =>
   invoke<unknown>("codex_turn_steer", { id, params });
 

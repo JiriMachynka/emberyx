@@ -27,10 +27,10 @@ describe("PROVIDERS", () => {
     }
   });
 
-  it("backs claude and codex with a live backend, the rest not yet", () => {
+  it("backs every ACP and native driver, and leaves Kilo as detection-only", () => {
     expect(providerToBackend("claude")).toBe("claude");
     expect(providerToBackend("codex")).toBe("codex");
-    expect(providerToBackend("cursor")).toBeNull();
+    expect(providerToBackend("cursor")).toBe("cursor");
     expect(providerToBackend("grok")).toBe("grok");
     expect(providerToBackend("opencode")).toBe("opencode");
     expect(providerToBackend("kilo")).toBeNull();
@@ -51,6 +51,7 @@ describe("capabilitiesOf", () => {
       "modelPicker",
       "reasoningEffort",
       "steering",
+      "conversationRewind",
       "installDetection",
       "authStatus",
       "costReported",
@@ -72,6 +73,7 @@ describe("capabilitiesOf", () => {
       expect(capabilitiesOf(p).installDetection).toBe(true);
       expect(capabilitiesOf(p).headless).toBe(false);
       expect(capabilitiesOf(p).threads).toBe(false);
+      expect(capabilitiesOf(p).conversationRewind).toBe(false);
     }
   });
 

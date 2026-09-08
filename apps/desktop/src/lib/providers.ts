@@ -41,7 +41,7 @@ export const PROVIDER_LABEL: Record<Provider, string> = {
 /** The binary that announces the provider on PATH (install detection). */
 export const PROVIDER_BINARY: Record<Provider, string> = {
   claude: "claude",
-  cursor: "cursor",
+  cursor: "cursor-agent",
   codex: "codex",
   grok: "grok",
   opencode: "opencode",
@@ -75,6 +75,8 @@ export interface ProviderCapabilities {
   reasoningEffort: boolean;
   /** A message sent mid-turn steers the running turn instead of queueing. */
   steering: boolean;
+  /** Revert turn also drops this turn from the provider conversation. */
+  conversationRewind: boolean;
   /** The binary can be probed for presence/version (Settings → Providers). */
   installDetection: boolean;
   /** An auth status can be queried (logged in / out, which account). */
@@ -109,6 +111,8 @@ export const providerToBackend = (provider: Provider): AgentBackend | null => {
       return "opencode";
     case "grok":
       return "grok";
+    case "cursor":
+      return "cursor";
     default:
       return null;
   }
@@ -126,6 +130,7 @@ const CAPABILITIES: Record<Provider, ProviderCapabilities> = {
     modelPicker: true,
     reasoningEffort: true,
     steering: true,
+    conversationRewind: true,
     installDetection: true,
     authStatus: true,
     costReported: true,
@@ -144,6 +149,7 @@ const CAPABILITIES: Record<Provider, ProviderCapabilities> = {
     modelPicker: true,
     reasoningEffort: true,
     steering: true,
+    conversationRewind: true,
     installDetection: true,
     authStatus: true,
     costReported: false,
@@ -163,24 +169,26 @@ const CAPABILITIES: Record<Provider, ProviderCapabilities> = {
     modelPicker: false,
     reasoningEffort: false,
     steering: false,
+    conversationRewind: false,
     installDetection: true,
     authStatus: true,
     costReported: false,
     headless: false,
   },
-  // Cursor, Grok and OpenCode are detected today; their drivers are future
-  // work, so no session capability is claimed yet.
+  // Cursor is ACP (`cursor-agent acp`). Permissions and the model picker are
+  // on the wire; rewind is not — ACP has no turn-aware truncation.
   cursor: {
     threads: false,
     usage: false,
     hookStatus: false,
-    permissions: false,
+    permissions: true,
     askUser: false,
     slashCommands: false,
     subagents: false,
-    modelPicker: false,
+    modelPicker: true,
     reasoningEffort: false,
     steering: false,
+    conversationRewind: false,
     installDetection: true,
     authStatus: false,
     costReported: false,
@@ -197,6 +205,7 @@ const CAPABILITIES: Record<Provider, ProviderCapabilities> = {
     modelPicker: true,
     reasoningEffort: false,
     steering: false,
+    conversationRewind: false,
     installDetection: true,
     authStatus: false,
     costReported: false,
@@ -213,6 +222,7 @@ const CAPABILITIES: Record<Provider, ProviderCapabilities> = {
     modelPicker: true,
     reasoningEffort: false,
     steering: false,
+    conversationRewind: false,
     installDetection: true,
     authStatus: false,
     costReported: false,

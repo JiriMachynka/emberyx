@@ -38,6 +38,8 @@ interface Options {
   /** Codex sandbox posture; "" derives it from the permission switches. */
   codexSandbox?: CodexSandbox;
   onTitled?: (title: string) => void;
+  /** False while this pane is mounted but hidden. Token paints skip React. */
+  visible?: boolean;
 }
 
 export function useChatSession(options: Options) {

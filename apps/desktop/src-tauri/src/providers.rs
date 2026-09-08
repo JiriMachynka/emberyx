@@ -45,13 +45,13 @@ impl Provider {
         }
     }
 
-    /// The binary that announces the provider on PATH. `grok` is xAI's CLI;
-    /// Cursor ships a `cursor` CLI alongside the app. Detection is by PATH
+    /// The binary that announces the provider on PATH. Cursor's ACP server is
+    /// `cursor-agent`, not the `cursor` editor binary. Detection is by PATH
     /// lookup only — no HOME-specific shims, which vary per machine.
     pub fn binary(self) -> &'static str {
         match self {
             Provider::Claude => "claude",
-            Provider::Cursor => "cursor",
+            Provider::Cursor => "cursor-agent",
             Provider::Codex => "codex",
             Provider::Grok => "grok",
             Provider::Opencode => "opencode",

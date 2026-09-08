@@ -776,6 +776,10 @@ interface ChatComposerProps {
   /** Text handed to this chat from elsewhere, to drop into the box unsent. */
   draft?: string;
   onDraftConsumed: () => void;
+  /** First sign the user means to talk to this thread. A resumed pane has no
+   *  process until then, so this is what starts it — by the time the message is
+   *  sent the agent is usually already up. */
+  onTyping?: () => void;
   onSend: (text: string, images: ChatImage[]) => void;
   /** Compact the live context window. Absent when this backend cannot. */
   onCompact?: () => void;
@@ -816,6 +820,7 @@ export const ChatComposer = memo(function ChatComposer({
   queue,
   draft,
   onDraftConsumed,
+  onTyping,
   onSend,
   onCompact,
   lastActivityAt,
@@ -1109,6 +1114,7 @@ export const ChatComposer = memo(function ChatComposer({
           onChange={(e) => {
             setInput(e.target.value);
             syncMenus(e.currentTarget);
+            onTyping?.();
           }}
           onClick={(e) => syncMenus(e.currentTarget)}
           onKeyUp={(e) => {

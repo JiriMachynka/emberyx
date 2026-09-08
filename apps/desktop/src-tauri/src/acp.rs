@@ -6,9 +6,8 @@
 //! subcommand differs per provider (`opencode acp`, `grok agent stdio`), so it
 //! is looked up rather than assumed.
 //!
-//! Not every provider belongs here. `cursor-agent` has no ACP mode at all — it
-//! speaks its own `--print --output-format stream-json` — so it would need a
-//! driver of its own rather than a row in `acp_command`.
+//! Cursor speaks ACP as `cursor-agent acp` (verified against the installed
+//! CLI). A stale comment here once claimed it had only `--print` stream-json.
 //!
 //! Framing and request correlation are shared with `codex.rs` (`classify`,
 //! `Frame`, `Pending`) — it is the same NDJSON JSON-RPC on the wire, and having
@@ -171,13 +170,14 @@ impl AcpManager {
 
 /// The command that serves ACP for a provider id, as (binary, args). The
 /// subcommand is per-provider and not guessable — verified against the
-/// installed CLIs: `opencode acp` and `grok agent stdio` both answer an ACP
-/// `initialize` with `protocolVersion: 1`. Unknown ids are refused rather than
-/// passed through, because this value reaches `Command::new`.
+/// installed CLIs: `opencode acp`, `grok agent stdio`, and `cursor-agent acp`
+/// all answer an ACP `initialize` with `protocolVersion: 1`. Unknown ids are
+/// refused rather than passed through, because this value reaches `Command::new`.
 pub fn acp_command(provider: &str) -> Result<(&'static str, &'static [&'static str])> {
     match provider {
         "opencode" => Ok(("opencode", &["acp"])),
         "grok" => Ok(("grok", &["agent", "stdio"])),
+        "cursor" => Ok(("cursor-agent", &["acp"])),
         other => Err(crate::err!("{other} does not speak ACP")),
     }
 }
@@ -240,22 +240,24 @@ impl Inner {
 
         self.start_reader(id, stdout, &handle, on_event.clone());
 
-        let initialize = request(
-            &handle,
-            "initialize",
-            json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "clientCapabilities": {
-                    // Claimed because `acp_respond` can answer both; claiming
-                    // an fs capability the client won't serve deadlocks a turn.
-                    "fs": { "readTextFile": true, "writeTextFile": true },
-                },
-                "clientInfo": {
-                    "name": "emberyx",
-                    "version": env!("CARGO_PKG_VERSION"),
-                },
-            }),
-        )?;
+        let mut initialize_params = json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "clientCapabilities": {
+                // Claimed because `acp_respond` can answer both; claiming
+                // an fs capability the client won't serve deadlocks a turn.
+                "fs": { "readTextFile": true, "writeTextFile": true },
+            },
+            "clientInfo": {
+                "name": "emberyx",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+        });
+        // Cursor only returns its model catalog on session/new when this
+        // opt-in is present; without it the picker has nothing to list.
+        if provider == "cursor" {
+            initialize_params["_meta"] = json!({ "parameterizedModelPicker": true });
+        }
+        let initialize = request(&handle, "initialize", initialize_params)?;
 
         Ok(SpawnResult { id, initialize })
     }
@@ -623,21 +625,25 @@ mod tests {
 
     #[test]
     fn serves_each_provider_with_the_subcommand_it_actually_answers_on() {
-        // Not the same word for both: `opencode acp` vs `grok agent stdio`.
+        // Not the same word for each: `opencode acp` vs `grok agent stdio`
+        // vs `cursor-agent acp`.
         assert_eq!(acp_command("opencode").unwrap(), ("opencode", &["acp"][..]));
         assert_eq!(
             acp_command("grok").unwrap(),
             ("grok", &["agent", "stdio"][..])
+        );
+        assert_eq!(
+            acp_command("cursor").unwrap(),
+            ("cursor-agent", &["acp"][..])
         );
     }
 
     #[test]
     fn refuses_a_provider_that_does_not_speak_acp_rather_than_running_it() {
         // The value reaches Command::new, so anything unrecognised is refused
-        // here instead of being spawned. Cursor is on this list deliberately:
-        // `cursor-agent` has no ACP mode, only its own stream-json output.
+        // here instead of being spawned.
         assert!(acp_command("claude").is_err());
-        assert!(acp_command("cursor").is_err());
+        assert!(acp_command("codex").is_err());
         assert!(acp_command("rm -rf /").is_err());
         assert!(acp_command("").is_err());
     }

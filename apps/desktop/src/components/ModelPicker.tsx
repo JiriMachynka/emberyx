@@ -126,6 +126,10 @@ export const ModelPicker = memo(function ModelPicker({
     rail === "opencode" &&
     backend !== "opencode" &&
     installed.some((s) => s.id === "opencode" && s.installed);
+  const wantsCursor =
+    rail === "cursor" &&
+    backend !== "cursor" &&
+    installed.some((s) => s.id === "cursor" && s.installed);
   const grokCatalog = useAcpModels(
     "grok",
     cwd,
@@ -140,6 +144,14 @@ export const ModelPicker = memo(function ModelPicker({
         backend !== "opencode" &&
         installed.some((s) => s.id === "opencode" && s.installed))
   );
+  const cursorCatalog = useAcpModels(
+    "cursor",
+    cwd,
+    (wantsCursor && open) ||
+      (warm &&
+        backend !== "cursor" &&
+        installed.some((s) => s.id === "cursor" && s.installed))
+  );
 
   const all = useMemo<ModelEntry[]>(() => {
     const entries = [
@@ -147,6 +159,7 @@ export const ModelPicker = memo(function ModelPicker({
       ...codexModelEntries(codexModels),
       ...acpModelEntries("grok", grokCatalog.data ?? []),
       ...acpModelEntries("opencode", opencodeCatalog.data ?? []),
+      ...acpModelEntries("cursor", cursorCatalog.data ?? []),
       ...(sessionModels ?? []).map((entry) => ({
         id: entry.value,
         label: entry.label,
@@ -169,6 +182,7 @@ export const ModelPicker = memo(function ModelPicker({
     codexModels,
     grokCatalog.data,
     opencodeCatalog.data,
+    cursorCatalog.data,
     sessionModels,
     hiddenModels,
     customModels,

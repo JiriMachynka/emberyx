@@ -4,6 +4,7 @@ import {
   CLAUDE_EFFORTS,
   backendFromCommand,
   capabilitiesOf,
+  isAcpBackend,
   isAgentBackend,
 } from "@/lib/agentBackend";
 
@@ -29,6 +30,7 @@ describe("capabilitiesOf", () => {
       reasoningEffort: true,
       steering: true,
       compact: true,
+      conversationRewind: true,
     });
   });
 
@@ -62,10 +64,21 @@ describe("CLAUDE_EFFORTS", () => {
   });
 });
 
+describe("isAcpBackend", () => {
+  it("is the ACP transport, including Cursor", () => {
+    expect(isAcpBackend("cursor")).toBe(true);
+    expect(isAcpBackend("grok")).toBe(true);
+    expect(isAcpBackend("opencode")).toBe(true);
+    expect(isAcpBackend("claude")).toBe(false);
+    expect(isAcpBackend("codex")).toBe(false);
+  });
+});
+
 describe("isAgentBackend", () => {
   it("accepts the known backends and nothing else", () => {
     expect(isAgentBackend("claude")).toBe(true);
     expect(isAgentBackend("codex")).toBe(true);
+    expect(isAgentBackend("cursor")).toBe(true);
     expect(isAgentBackend("gemini")).toBe(false);
     expect(isAgentBackend(undefined)).toBe(false);
     // Object.prototype keys must not pass the `in` test.

@@ -7,6 +7,10 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
  */
 GlobalRegistrator.register();
 
+// Stream publish stays rAF-only in tests so `await frame()` still sees every
+// token the way it did before the 8 Hz cap.
+(globalThis as { __EMBERYX_TEST__?: boolean }).__EMBERYX_TEST__ = true;
+
 // Neither Bun nor the registrator provides localStorage, and the modules under
 // test read it at call time — mirrors what vitest.setup.ts installs.
 class MemoryStorage implements Storage {
