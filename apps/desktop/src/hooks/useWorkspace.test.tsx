@@ -25,6 +25,8 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "git_changes")
       return Promise.resolve([{ path: "a.ts", status: " M", untracked: false }]);
     if (cmd === "git_file_diff") return Promise.resolve("+added");
+    if (cmd === "git_working_diff")
+      return Promise.resolve("diff --git a/a.ts b/a.ts\n+added");
     if (cmd === "git_branch")
       return Promise.resolve({ branch: "main", upstream: null, ahead: 0, behind: 0 });
     if (cmd === "list_dir")
@@ -328,7 +330,7 @@ describe("useWorkspace handoff", () => {
         "Uncommitted changes"
       )
     );
-    expect(invoked).toContain("git_changes");
+    expect(invoked).toContain("git_working_diff");
   });
 });
 
