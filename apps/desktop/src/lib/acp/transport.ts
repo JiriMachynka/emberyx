@@ -50,7 +50,12 @@ export interface AcpVendorSessionConfig {
 
 interface AcpGrokModelState {
   currentModelId?: string;
-  availableModels?: { modelId: string; name?: string }[];
+  availableModels?: {
+    modelId: string;
+    name?: string;
+    /** Grok states the model's context window here; nobody else does. */
+    _meta?: { totalContextTokens?: number };
+  }[];
 }
 
 export interface AcpSessionResult {
@@ -110,6 +115,7 @@ const grokModels = (session: AcpSessionResult | undefined) =>
   (session?.models?.availableModels ?? session?._meta?.modelState?.availableModels ?? []).map((model) => ({
     id: model.modelId,
     label: model.name,
+    context: model._meta?.totalContextTokens,
     selected:
       model.modelId ===
       (session?.models?.currentModelId ?? session?._meta?.modelState?.currentModelId),
@@ -124,17 +130,24 @@ const grokModels = (session: AcpSessionResult | undefined) =>
  */
 export function modelOptions(
   session: AcpSessionResult | undefined
-): { value: string; label: string }[] {
+): { value: string; label: string; context?: number }[] {
   const standard = (session?.configOptions ?? []).find(
     (o) => o.id === "model" || o.category === "model"
   );
   if (standard?.options?.length) {
     return standard.options.map((o) => ({ value: o.value, label: o.name ?? o.value }));
   }
-  return [...vendorModels(session), ...grokModels(session)].map((o) => ({
-    value: o.id,
-    label: o.label ?? o.id,
-  }));
+  // `context` rides along only where the agent stated one — Grok does, the
+  // vendor `_meta` list does not, and an absent window is resolved from the id
+  // downstream rather than invented here.
+  return [
+    ...vendorModels(session).map((o) => ({ value: o.id, label: o.label ?? o.id })),
+    ...grokModels(session).map((o) => ({
+      value: o.id,
+      label: o.label ?? o.id,
+      context: o.context,
+    })),
+  ];
 }
 
 /** Switch the session's model. `session/set_model` is ACP's (unstable) method

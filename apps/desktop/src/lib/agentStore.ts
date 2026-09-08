@@ -85,6 +85,17 @@ export interface TurnReviewRequest {
   fromId: string;
 }
 
+/** A request to show one commit's file diff in the dock's diff tab. Raised by
+ *  the top bar's git menu, consumed by App the same way `TurnReviewRequest` is:
+ *  the history lives in a popover that closes on click, so the payload has to
+ *  outlive the surface that raised it. */
+export interface CommitReviewRequest {
+  projectPath: string;
+  sha: string;
+  file: string;
+  subject: string;
+}
+
 /**
  * Live agent telemetry, updated at streaming frequency from the hook listener.
  * Kept in a store (not App state) so status/usage/change updates re-render only
@@ -127,6 +138,9 @@ interface AgentState {
    *  every click; App consumes it into the diff tab's state. */
   turnReview: TurnReviewRequest | null;
   requestTurnReview: (request: TurnReviewRequest) => void;
+  /** Latest "show me this file in this commit" request from the git menu. */
+  commitReview: CommitReviewRequest | null;
+  requestCommitReview: (request: CommitReviewRequest) => void;
   selectAgent: (id: string | null) => void;
   registerSender: (
     id: string,
@@ -193,6 +207,8 @@ export const useAgentStore = create<AgentState>()((set) => ({
   // A fresh object identity per click, so a repeat click on the same turn
   // still reads as a new request downstream.
   requestTurnReview: (request) => set({ turnReview: { ...request } }),
+  commitReview: null,
+  requestCommitReview: (request) => set({ commitReview: { ...request } }),
   selectAgent: (id) => set({ selectedAgent: id }),
   registerSender: (id, fn) =>
     set((s) => ({ senders: { ...s.senders, [id]: fn } })),

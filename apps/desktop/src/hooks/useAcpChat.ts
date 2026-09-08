@@ -26,6 +26,7 @@ import {
 } from "@/lib/streamPublish";
 import {
   applyUpdate,
+  autoPermission,
   emptyTurn,
   endTurn,
   permissionOutcome,
@@ -34,6 +35,7 @@ import {
   type AcpTurn,
 } from "@/lib/acp/adapter";
 import type { AcpSessionUpdate } from "@/lib/acp/protocol";
+import { accessLevelFrom, type PermissionMode } from "@/lib/settings";
 import {
   acpCancel,
   acpKill,
@@ -77,6 +79,11 @@ interface Options {
   /** Binary override + extra args from Settings → Providers. Identity-stable
    *  at the call site — it rides the spawn effect's deps. */
   launch?: { command: string | null; args: string[] };
+  /** The composer's access level, as the pair Claude's flags need. ACP has no
+   *  spawn-time equivalent, so the level is applied per request in
+   *  `handleRequest` instead — see `autoPermission`. */
+  skipPermissions?: boolean;
+  permissionMode?: PermissionMode;
   enabled: boolean;
   onTitled?: (title: string) => void;
   /** False while this pane is mounted but hidden. Token paints skip React;
@@ -94,6 +101,8 @@ export function useAcpChat({
   resume,
   model,
   launch,
+  skipPermissions = false,
+  permissionMode = "default",
   enabled,
   visible = true,
 }: Options) {
@@ -126,6 +135,20 @@ export function useAcpChat({
   const channelRef = useRef<Channel<AcpEvent> | null>(null);
   /** The agent request a permission prompt is answering, kept for the reply. */
   const permissionRef = useRef<AcpPermission | null>(null);
+  // Held in a ref because `handleRequest` is the channel's handler: putting the
+  // level in its deps would rebuild the handler mid-turn. Changing the level
+  // takes effect on the next request, with no respawn — unlike Claude and
+  // Codex, which carry it into spawn arguments. Written in an effect, not
+  // during render: a render that React throws away must not leave the handler
+  // answering at a level the user never committed to.
+  const access = accessLevelFrom(permissionMode, skipPermissions);
+  const accessRef = useRef(access);
+  useEffect(() => {
+    accessRef.current = access;
+  }, [access]);
+  // Tool calls this client approved on the user's behalf, so the row can say so
+  // rather than looking like the agent was never gated at all.
+  const autoApprovedRef = useRef(new Set<string>());
   /** The model the session is actually on, so a re-render never re-sends
    *  `session/set_model` for a switch that already took. */
   const appliedModelRef = useRef("");
@@ -190,6 +213,9 @@ export function useAcpChat({
       const ended = endTurn(turnRef.current, reason);
       if (ended.message) committedRef.current = [...committedRef.current, ended.message];
       turnRef.current = { message: null, status: ended.status };
+      // The rows carry the flag themselves once committed, so the ids are dead
+      // weight past the turn that approved them.
+      autoApprovedRef.current.clear();
       publish();
       // Freeze this turn's file delta at its settle, so edits made between
       // turns land in no turn's card. Best-effort.
@@ -214,6 +240,12 @@ export function useAcpChat({
         const permission = readPermission(request.id, params);
         if (!permission) {
           await acpRespond(id, request.id, permissionOutcome(null));
+          return;
+        }
+        const auto = autoPermission(permission, accessRef.current);
+        if (auto !== null) {
+          if (permission.toolCallId) autoApprovedRef.current.add(permission.toolCallId);
+          await acpRespond(id, request.id, permissionOutcome(auto));
           return;
         }
         permissionRef.current = permission;
@@ -260,7 +292,8 @@ export function useAcpChat({
     turnRef.current = applyUpdate(
       turnRef.current,
       payload.update,
-      turnRef.current.message?.id ?? messageId("a")
+      turnRef.current.message?.id ?? messageId("a"),
+      autoApprovedRef.current
     );
   }, []);
 

@@ -345,6 +345,15 @@ export const lastTodos = (
   return null;
 };
 
+/** The one task a collapsed plan shows. The task in flight if there is one,
+ *  else the next one waiting; a finished plan shows its last line rather than
+ *  nothing, so the card still says what just happened. */
+export const currentTodo = (items: readonly TodoItem[]): TodoItem | null =>
+  items.find((t) => t.status === "in_progress") ??
+  items.find((t) => t.status === "pending") ??
+  items[items.length - 1] ??
+  null;
+
 /** Drop harness-injected <system-reminder> blocks from displayed tool output
  *  (Claude still received them in-band — this is display-only noise removal). */
 export const stripReminders = (text: string): string =>

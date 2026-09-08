@@ -26,6 +26,7 @@ import type {
   AcpToolCallUpdate,
   AcpUpdate,
 } from "./protocol";
+import type { AccessLevel } from "@/lib/settings";
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null;
@@ -138,7 +139,15 @@ const newAssistant = (id: string): ChatMessage => ({
  * Fold one `session/update` into the turn. Returns a new turn — the caller
  * decides what to do with it, so this stays testable without React.
  */
-export function applyUpdate(turn: AcpTurn, update: AcpUpdate, id: string): AcpTurn {
+export function applyUpdate(
+  turn: AcpTurn,
+  update: AcpUpdate,
+  id: string,
+  /** Tool calls whose permission request the client answered on the user's
+   *  behalf. Passed in rather than remembered here so this stays pure — the
+   *  hook owns the set, since it is the side that answers. */
+  autoApproved?: ReadonlySet<string>
+): AcpTurn {
   if (!isRecord(update)) return turn;
   const kind = update.sessionUpdate;
   const message = turn.message ?? newAssistant(id);
@@ -223,7 +232,10 @@ export function applyUpdate(turn: AcpTurn, update: AcpUpdate, id: string): AcpTu
       const settled = closeReasoning({ ...message, tools });
       return {
         ...turn,
-        message: withActivity(settled, acpActivity(call, result, previous)),
+        message: withActivity(
+          settled,
+          acpActivity(call, result, previous, autoApproved?.has(call.toolCallId))
+        ),
         status: "tool",
       };
     }
@@ -257,6 +269,10 @@ export interface AcpPermission {
   title: string;
   description?: string;
   toolCallId?: string;
+  /** What the blocked tool call does (`edit`, `execute`, …), when the agent
+   *  says. Read by `autoPermission` — a request with no kind is never
+   *  auto-answered below full access. */
+  toolKind?: string;
   options: { optionId: string; name: string; kind?: string }[];
 }
 
@@ -275,6 +291,7 @@ export function readPermission(
     title: req.title ?? toolCall?.title ?? "Allow this action?",
     description: req.description,
     toolCallId: toolCall?.toolCallId,
+    toolKind: toolCall?.kind,
     options: options.map((o) => ({
       optionId: o.optionId,
       name: o.name,
@@ -282,6 +299,34 @@ export function readPermission(
     })),
   };
 }
+
+/** Tool kinds "Accept edits" answers on its own. Reading and writing files is
+ *  what that level promises; running a command is not, so `execute` and
+ *  `delete` still ask. */
+const AUTO_EDIT_KINDS = new Set(["read", "edit"]);
+
+/**
+ * The option that answers a permission request without prompting, or `null` to
+ * ask the user. ACP has no spawn-time bypass the way Claude's
+ * `--dangerously-skip-permissions` or Codex's `approvalPolicy: "never"` do, so
+ * the access level is honoured here — by the client answering for the user.
+ *
+ * `allow_always` is preferred so the agent stops asking; an agent that offers
+ * only `allow_once` is answered with that every time rather than falling back
+ * to a prompt the level said not to show.
+ */
+export const autoPermission = (
+  permission: AcpPermission,
+  access: AccessLevel
+): string | null => {
+  if (access === "ask") return null;
+  if (access === "acceptEdits" && !AUTO_EDIT_KINDS.has(permission.toolKind ?? ""))
+    return null;
+  const pick =
+    permission.options.find((o) => o.kind === "allow_always") ??
+    permission.options.find((o) => o.kind === "allow_once");
+  return pick?.optionId ?? null;
+};
 
 /** The reply body for a chosen option, or for backing out. */
 export const permissionOutcome = (optionId: string | null) =>

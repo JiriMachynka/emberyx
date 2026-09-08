@@ -45,7 +45,11 @@ export const acpKind = (call: AcpToolCallUpdate, name: string): ActivityKind => 
 export const acpActivity = (
   call: AcpToolCallUpdate,
   output: string | undefined,
-  previous?: ActivityItem
+  previous?: ActivityItem,
+  /** The client already answered this call's permission request. Carried from
+   *  `previous` as well, since a row is replaced wholesale on every update and
+   *  the approval only happens once. */
+  autoApproved?: boolean
 ): ActivityItem => {
   // A tool call's title is what the agent chose to call it; the kind is the
   // fallback, because an untitled row reading "other" says nothing.
@@ -66,5 +70,6 @@ export const acpActivity = (
     // `pending` and `in_progress` are both still running. The tool card threw
     // this away entirely and inferred it from whether a result had landed.
     complete: call.status === "completed" || call.status === "failed",
+    autoApproved: autoApproved || previous?.autoApproved || undefined,
   };
 };

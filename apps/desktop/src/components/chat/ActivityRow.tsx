@@ -118,6 +118,14 @@ export const ActivityRow = memo(function ActivityRow({
               {meta}
             </span>
           )}
+          {activity.autoApproved && (
+            <span
+              className="shrink-0 text-[0.65rem] text-muted-foreground/70"
+              title="Approved by Emberyx because this session runs at full access"
+            >
+              auto-approved
+            </span>
+          )}
           <div className="ml-auto flex shrink-0 items-center gap-2 pl-2">
             {running ? (
               <Loader2 className="size-3 animate-spin text-muted-foreground" />
@@ -194,6 +202,7 @@ export function ActivityList({
               key={activity.id}
               text={activity.output ?? ""}
               active={!activity.complete}
+              timingKey={activity.id}
             />
           );
         }

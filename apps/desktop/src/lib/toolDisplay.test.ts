@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  currentTodo,
   describeResult,
   describeTool,
   detectResult,
@@ -250,5 +251,32 @@ describe("stripReminders", () => {
   it("drops injected reminder blocks and the whitespace trailing them", () => {
     const raw = "keep\n<system-reminder>drop this</system-reminder>\nalso keep";
     expect(stripReminders(raw)).toBe("keep\nalso keep");
+  });
+});
+
+describe("currentTodo", () => {
+  const t = (status: "completed" | "in_progress" | "pending", text: string) => ({
+    status,
+    text,
+  });
+
+  it("names the task in flight", () => {
+    expect(
+      currentTodo([t("completed", "a"), t("in_progress", "b"), t("pending", "c")])?.text
+    ).toBe("b");
+  });
+
+  it("falls back to the next task waiting", () => {
+    expect(currentTodo([t("completed", "a"), t("pending", "c")])?.text).toBe("c");
+  });
+
+  // A finished plan still says what it finished on, rather than collapsing to
+  // a card with no line in it.
+  it("shows the last task when everything is done", () => {
+    expect(currentTodo([t("completed", "a"), t("completed", "b")])?.text).toBe("b");
+  });
+
+  it("has nothing to show for an empty plan", () => {
+    expect(currentTodo([])).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyUpdate,
+  autoPermission,
   blockText,
   emptyTurn,
   endTurn,
@@ -233,10 +234,98 @@ describe("permission requests", () => {
     expect(readPermission(1, null)).toBeNull();
   });
 
+  it("keeps the tool kind, which is what \"accept edits\" is decided on", () => {
+    const p = readPermission(7, {
+      sessionId: "s",
+      toolCall: { toolCallId: "c3", title: "Run tests", kind: "execute" },
+      options: [{ optionId: "a", name: "Allow", kind: "allow_once" }],
+    });
+    expect(p?.toolKind).toBe("execute");
+  });
+
   it("builds both outcomes the spec defines", () => {
     expect(permissionOutcome("allow")).toEqual({
       outcome: { outcome: "selected", optionId: "allow" },
     });
     expect(permissionOutcome(null)).toEqual({ outcome: { outcome: "cancelled" } });
+  });
+});
+
+describe("auto-approved tool calls", () => {
+  const call = (status: string) => ({
+    sessionUpdate: "tool_call" as const,
+    toolCallId: "c1",
+    title: "Edit main.rs",
+    kind: "edit",
+    status,
+  });
+
+  it("marks the row whose permission the client answered", () => {
+    const turn = applyUpdate(emptyTurn(), call("pending"), "m1", new Set(["c1"]));
+    expect(turn.message?.activities?.[0]?.autoApproved).toBe(true);
+  });
+
+  // Rows are replaced wholesale on every update, and the approval only happens
+  // once — so a later update must not quietly erase it.
+  it("keeps the mark across later updates of the same call", () => {
+    const first = applyUpdate(emptyTurn(), call("pending"), "m1", new Set(["c1"]));
+    const later = applyUpdate(first, call("completed"), "m1", new Set());
+    expect(later.message?.activities?.[0]?.autoApproved).toBe(true);
+  });
+
+  it("leaves a call the user answered unmarked", () => {
+    const turn = applyUpdate(emptyTurn(), call("pending"), "m1", new Set());
+    expect(turn.message?.activities?.[0]?.autoApproved).toBeUndefined();
+  });
+});
+
+describe("autoPermission", () => {
+  const request = (kind: string, options: { optionId: string; kind: string }[]) => ({
+    requestId: 1,
+    title: "t",
+    toolKind: kind,
+    options: options.map((o) => ({ ...o, name: o.optionId })),
+  });
+  const both = [
+    { optionId: "once", kind: "allow_once" },
+    { optionId: "always", kind: "allow_always" },
+  ];
+
+  it("never answers for the user at \"ask\"", () => {
+    expect(autoPermission(request("edit", both), "ask")).toBeNull();
+  });
+
+  it("prefers allow_always at full access, whatever the tool does", () => {
+    expect(autoPermission(request("execute", both), "full")).toBe("always");
+  });
+
+  // An agent that only offers "allow once" is answered every time rather than
+  // falling back to the prompt the level said not to show.
+  it("falls back to allow_once when the agent offers no allow_always", () => {
+    const opts = [
+      { optionId: "once", kind: "allow_once" },
+      { optionId: "no", kind: "reject_once" },
+    ];
+    expect(autoPermission(request("edit", opts), "full")).toBe("once");
+  });
+
+  it("answers only file work at acceptEdits", () => {
+    expect(autoPermission(request("edit", both), "acceptEdits")).toBe("always");
+    expect(autoPermission(request("read", both), "acceptEdits")).toBe("always");
+    expect(autoPermission(request("execute", both), "acceptEdits")).toBeNull();
+    expect(autoPermission(request("delete", both), "acceptEdits")).toBeNull();
+  });
+
+  // An agent that names no kind gets the prompt: guessing "edit" would run a
+  // command the level never promised to allow.
+  it("asks when the request names no kind, below full access", () => {
+    const p = { requestId: 1, title: "t", options: both.map((o) => ({ ...o, name: o.optionId })) };
+    expect(autoPermission(p, "acceptEdits")).toBeNull();
+    expect(autoPermission(p, "full")).toBe("always");
+  });
+
+  it("asks when nothing in the list allows anything", () => {
+    const opts = [{ optionId: "no", kind: "reject_always" }];
+    expect(autoPermission(request("edit", opts), "full")).toBeNull();
   });
 });
