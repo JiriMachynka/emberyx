@@ -22,6 +22,9 @@ export interface ModelEntry {
   provider: AgentBackend;
   /** Superseded, but still selectable — folded away under one row. */
   legacy: boolean;
+  /** Context window the backend stated for this model, when it stated one.
+   *  Everything else is resolved from the id — see `lib/modelContext.ts`. */
+  context?: number;
 }
 
 const claude = (id: string, label: string, legacy = false): ModelEntry => ({
@@ -79,13 +82,14 @@ export const codexModelEntries = (models: CodexModel[]): ModelEntry[] => {
  *  declares no generations, so nothing is folded away as legacy. */
 export const acpModelEntries = (
   provider: AgentBackend,
-  models: { value: string; label: string }[]
+  models: { value: string; label: string; context?: number }[]
 ): ModelEntry[] =>
   models.map((m) => ({
     id: m.value,
     label: m.label,
     provider,
     legacy: false,
+    ...(m.context ? { context: m.context } : {}),
   }));
 
 /** Substring match over the model's name, its id and its provider, so "opus",
@@ -109,6 +113,70 @@ export function orderByFavorites(
   };
   return [...entries].sort((a, b) => rank(a) - rank(b));
 }
+
+/**
+ * A catalog label split into the model's own name and the vendor in front of it.
+ * ACP providers front-load the vendor — OpenCode reports
+ * `OpenCode Zen/GLM-5.3-Flash`, `GitLab Duo/Agentic Chat (GPT-5.6 Luna)` — which
+ * reads as one long name and buries the part that differs between rows.
+ * Splitting is display only: `label` stays whole, so search still matches what
+ * the provider called it.
+ *
+ * A label with no vendor, or one whose halves are empty, is left alone — the
+ * name is the one part a row cannot do without.
+ */
+export const splitModelLabel = (
+  label: string
+): { name: string; vendor?: string } => {
+  const at = label.lastIndexOf("/");
+  if (at <= 0 || at === label.length - 1) return { name: label };
+  const name = label.slice(at + 1).trim();
+  const vendor = label.slice(0, at).trim();
+  if (!name || !vendor) return { name: label };
+  return { name, vendor };
+};
+
+/**
+ * OpenCode's own models, dropping the third parties it can also reach.
+ *
+ * OpenCode resolves models through models.dev and offers every provider you
+ * hold credentials for — a GitLab Duo seat, a direct Anthropic key — so its
+ * catalog answers "what could this CLI call", not "what is OpenCode". The rail
+ * offers its own plans alone (`opencode` = Zen, `opencode-go` = Go): a Claude
+ * model belongs on Claude's rail, where the pricing, hooks and slash commands
+ * are true, and listing it twice makes the same model read as two products.
+ *
+ * The id decides when it names a provider, since `opencode/glm-5.3-flash` is
+ * stable in a way a display name is not; the vendor half of the label is the
+ * fallback. Neither is a reason to drop a row — an entry that names no provider
+ * at all is kept rather than guessed away.
+ */
+export const opencodeOwnModels = <T extends { value: string; label: string }>(
+  models: T[]
+): T[] =>
+  models.filter((m) => {
+    const at = m.value.indexOf("/");
+    if (at > 0) return m.value.slice(0, at).toLowerCase().startsWith("opencode");
+    const { vendor } = splitModelLabel(m.label);
+    return !vendor || vendor.toLowerCase().startsWith("opencode");
+  });
+
+/**
+ * The two lines a picker row shows: the model, then who serves it.
+ *
+ * The vendor stands alone rather than reading `OpenCode (Zen)` — the row's icon
+ * already says OpenCode, and the vendor is what the user would go connect.
+ * OpenCode resolves models through models.dev, whose catalog names 200+
+ * providers, so this is not a short list to phrase around. Only a label that
+ * names no vendor falls back to the backend itself.
+ */
+export const modelRowLabels = (
+  label: string,
+  backendLabel: string
+): { title: string; subtitle: string } => {
+  const { name, vendor } = splitModelLabel(label);
+  return { title: name, subtitle: vendor ?? backendLabel };
+};
 
 /** Display name for a stored value, or undefined when nothing in the catalog
  *  claims it — the caller decides whether to show the raw id. */

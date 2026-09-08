@@ -9,6 +9,8 @@ import {
   acpModelEntries,
   codexModelEntries,
   labelForModel,
+  modelRowLabels,
+  opencodeOwnModels,
   orderByFavorites,
   searchModels,
   withModelPrefs,
@@ -22,6 +24,7 @@ import {
   toggleFavorite,
 } from "@/lib/modelFavorites";
 import { codexEffortForModel } from "@/lib/codex/models";
+import { contextLabel } from "@/lib/modelContext";
 import { useAcpModels, useCodexModels, useProviderStatus } from "@/lib/queries";
 import type { ChatUsage } from "@/hooks/useAgentChat";
 
@@ -158,7 +161,7 @@ export const ModelPicker = memo(function ModelPicker({
       ...CLAUDE_MODELS,
       ...codexModelEntries(codexModels),
       ...acpModelEntries("grok", grokCatalog.data ?? []),
-      ...acpModelEntries("opencode", opencodeCatalog.data ?? []),
+      ...acpModelEntries("opencode", opencodeOwnModels(opencodeCatalog.data ?? [])),
       ...acpModelEntries("cursor", cursorCatalog.data ?? []),
       ...(sessionModels ?? []).map((entry) => ({
         id: entry.value,
@@ -316,9 +319,9 @@ export const ModelPicker = memo(function ModelPicker({
             {current.map((entry, i) => (
               <Row
                 key={entry.id}
-                title={entry.label}
-                subtitle={BACKEND_LABEL[entry.provider]}
+                {...modelRowLabels(entry.label, BACKEND_LABEL[entry.provider])}
                 provider={entry.provider}
+                context={contextLabel(entry.id, entry.context)}
                 shortcut={shortcutFor(i) ?? undefined}
                 selected={entry.id === model}
                 starred={favorites.includes(entry.id)}
@@ -365,9 +368,9 @@ export const ModelPicker = memo(function ModelPicker({
                   legacy.map((entry) => (
                     <Row
                       key={entry.id}
-                      title={entry.label}
-                      subtitle={BACKEND_LABEL[entry.provider]}
+                      {...modelRowLabels(entry.label, BACKEND_LABEL[entry.provider])}
                       provider={entry.provider}
+                      context={contextLabel(entry.id, entry.context)}
                       selected={entry.id === model}
                       starred={favorites.includes(entry.id)}
                       onStar={() => star(entry.id)}
@@ -435,6 +438,7 @@ function Row({
   title,
   subtitle,
   provider,
+  context,
   shortcut,
   selected,
   starred,
@@ -445,6 +449,9 @@ function Row({
   /** Provider footer: icon + name, under the model. */
   subtitle?: string;
   provider: string;
+  /** Context window, already formatted ("1M"). Absent when nothing knows it —
+   *  a blank column reads as unknown, a guessed number reads as fact. */
+  context?: string;
   shortcut?: string;
   selected: boolean;
   starred?: boolean;
@@ -476,6 +483,14 @@ function Row({
         )}
       </button>
       <div className="flex shrink-0 items-center gap-1.5">
+        {context && (
+          <span
+            className="shrink-0 tabular-nums text-xs text-muted-foreground/70"
+            title={`${context} context window`}
+          >
+            {context}
+          </span>
+        )}
         {shortcut && (
           <kbd className="h-4 shrink-0 rounded-sm border border-border bg-background/60 px-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
             {shortcut}

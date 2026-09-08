@@ -5,6 +5,8 @@ import {
   codexGeneration,
   codexModelEntries,
   labelForModel,
+  modelRowLabels,
+  opencodeOwnModels,
   orderByFavorites,
   searchModels,
   withModelPrefs,
@@ -160,5 +162,79 @@ describe("withModelPrefs", () => {
       claude: ["proxy"],
     });
     expect(out.map((e) => e.id)).toEqual(["claude-sonnet-5", "claude-haiku-4-5"]);
+  });
+});
+
+describe("modelRowLabels", () => {
+  it("puts the model on the first line and its vendor on the second", () => {
+    expect(modelRowLabels("OpenCode Zen/GLM-5.3-Flash", "OpenCode")).toEqual({
+      title: "GLM-5.3-Flash",
+      subtitle: "OpenCode Zen",
+    });
+  });
+
+  it("names the upstream provider, not the backend that resolved it", () => {
+    expect(
+      modelRowLabels("GitLab Duo/Agentic Chat (GPT-5.6 Luna)", "OpenCode")
+    ).toEqual({
+      title: "Agentic Chat (GPT-5.6 Luna)",
+      subtitle: "GitLab Duo",
+    });
+  });
+
+  it("falls back to the backend when the label names no vendor", () => {
+    expect(modelRowLabels("Claude Opus 5", "Claude")).toEqual({
+      title: "Claude Opus 5",
+      subtitle: "Claude",
+    });
+  });
+
+  it("splits on the last slash, so a vendor path stays with the vendor", () => {
+    expect(modelRowLabels("OpenCode Zen/free/qwen-3", "OpenCode")).toEqual({
+      title: "qwen-3",
+      subtitle: "OpenCode Zen/free",
+    });
+  });
+
+  it("leaves a label whose slash names no model alone", () => {
+    expect(modelRowLabels("OpenCode Zen/", "OpenCode")).toEqual({
+      title: "OpenCode Zen/",
+      subtitle: "OpenCode",
+    });
+    expect(modelRowLabels("/gpt-5", "OpenCode")).toEqual({
+      title: "/gpt-5",
+      subtitle: "OpenCode",
+    });
+  });
+});
+
+describe("opencodeOwnModels", () => {
+  const catalog = [
+    { value: "opencode/glm-5.3-flash", label: "OpenCode Zen/GLM-5.3-Flash" },
+    { value: "opencode-go/qwen3.7-max", label: "OpenCode Go/Qwen3.7 Max" },
+    { value: "gitlab/duo-chat-gpt-5-6-luna", label: "GitLab Duo/Agentic Chat (GPT-5.6 Luna)" },
+    { value: "anthropic/claude-opus-5", label: "Anthropic/Claude Opus 5" },
+  ];
+
+  it("keeps OpenCode's own plans and drops the third parties it can also reach", () => {
+    expect(opencodeOwnModels(catalog).map((m) => m.value)).toEqual([
+      "opencode/glm-5.3-flash",
+      "opencode-go/qwen3.7-max",
+    ]);
+  });
+
+  it("falls back to the label's vendor when the id names no provider", () => {
+    expect(
+      opencodeOwnModels([
+        { value: "glm-5.3-flash", label: "OpenCode Zen/GLM-5.3-Flash" },
+        { value: "duo-chat-gpt-5", label: "GitLab Duo/Agentic Chat (GPT-5)" },
+      ]).map((m) => m.value)
+    ).toEqual(["glm-5.3-flash"]);
+  });
+
+  it("keeps an entry that names no provider at all", () => {
+    expect(
+      opencodeOwnModels([{ value: "some-model", label: "Some Model" }])
+    ).toHaveLength(1);
   });
 });
