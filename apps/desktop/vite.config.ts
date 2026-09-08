@@ -16,6 +16,13 @@ export default defineConfig(async () => ({
     },
   },
 
+  // The @pierre/diffs highlighter worker code-splits, and Vite's default
+  // worker format (iife) cannot: the build fails outright rather than
+  // degrading, so this is required, not a tuning knob.
+  worker: {
+    format: "es",
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

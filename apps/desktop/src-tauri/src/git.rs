@@ -184,6 +184,64 @@ pub fn git_file_diff(
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// One multi-file unified patch for the whole working tree: the index diff
+/// (`--cached`) when `staged`, else what the working tree has on top of the
+/// index. Untracked files are diffed against `/dev/null` with `--no-index` so
+/// they arrive as real `diff --git` blocks — `git_file_diff` returns them as
+/// bare `+` lines, which is fine for one file but unparseable as a patch.
+///
+/// `ignore_whitespace` passes `-w`. Note that a `-w` patch has line counts that
+/// no longer match the file, so it renders but cannot be fed back to
+/// `git apply`; staging a hunk re-reads the file's patch without it.
+#[tauri::command]
+pub fn git_working_diff(
+    path: String,
+    staged: bool,
+    ignore_whitespace: Option<bool>,
+) -> Result<String> {
+    if !is_repo(&path) {
+        return Ok(String::new());
+    }
+
+    let mut args = vec!["diff", "--no-color"];
+    if ignore_whitespace.unwrap_or(false) {
+        args.push("-w");
+    }
+    if staged {
+        args.push("--cached");
+    }
+    let out = git(&path, &args)?;
+    if !out.status.success() {
+        return Err(failure(&out));
+    }
+    let mut patch = String::from_utf8_lossy(&out.stdout).to_string();
+
+    // The index already holds a staged file's content, so untracked files only
+    // belong in the working-tree half.
+    if !staged {
+        for file in git_changes(path.clone())?.iter().filter(|f| f.untracked) {
+            patch.push_str(&untracked_patch(&path, &file.path));
+        }
+    }
+    Ok(patch)
+}
+
+/// A `diff --git` block for a file git isn't tracking yet. `--no-index` against
+/// `/dev/null` is git's own way to spell "everything in here is an addition",
+/// so the result parses like any other file in the patch. `--no-index` exits 1
+/// when the files differ, which is the expected case, so the status is ignored
+/// and only genuinely empty output is treated as nothing to add.
+fn untracked_patch(path: &str, file: &str) -> String {
+    let out = git(
+        path,
+        &["diff", "--no-color", "--no-index", "--", "/dev/null", file],
+    );
+    match out {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
+        Err(_) => String::new(),
+    }
+}
+
 /// Add paths to the index (picks up untracked files too).
 #[tauri::command]
 pub fn git_stage(path: String, files: Vec<String>) -> Result<String> {
@@ -1553,6 +1611,62 @@ mod tests {
     #[test]
     fn a_short_diff_is_left_alone() {
         assert_eq!(truncate_diff("+one\n", 200), "+one\n");
+    }
+
+    #[test]
+    fn working_diff_carries_every_changed_file_in_one_patch() {
+        let repo = Repo::new("working_diff");
+        std::fs::write(repo.0.join("a.txt"), "one\n").unwrap();
+        std::fs::write(repo.0.join("b.txt"), "one\n").unwrap();
+        repo.run(&["add", "."]);
+        repo.run(&["commit", "-m", "first"]);
+        std::fs::write(repo.0.join("a.txt"), "two\n").unwrap();
+        std::fs::write(repo.0.join("b.txt"), "two\n").unwrap();
+
+        let patch =
+            git_working_diff(repo.0.to_str().unwrap().into(), false, None).unwrap();
+        // One patch, both files, each with its own `diff --git` header — which is
+        // what makes it parseable as a multi-file patch.
+        assert_eq!(patch.matches("diff --git").count(), 2);
+        assert!(patch.contains("a/a.txt"));
+        assert!(patch.contains("a/b.txt"));
+        assert!(patch.contains("+two"));
+    }
+
+    #[test]
+    fn working_diff_gives_untracked_files_a_real_diff_header() {
+        let repo = Repo::new("working_diff_untracked");
+        std::fs::write(repo.0.join("a.txt"), "one\n").unwrap();
+        repo.run(&["add", "."]);
+        repo.run(&["commit", "-m", "first"]);
+        std::fs::write(repo.0.join("new.txt"), "fresh\n").unwrap();
+
+        let patch =
+            git_working_diff(repo.0.to_str().unwrap().into(), false, None).unwrap();
+        // Not bare `+` lines the way git_file_diff returns them: the renderer
+        // needs a header to know which file the additions belong to.
+        assert!(patch.contains("diff --git"));
+        assert!(patch.contains("new.txt"));
+        assert!(patch.contains("+fresh"));
+    }
+
+    #[test]
+    fn working_diff_staged_reads_the_index_and_skips_untracked() {
+        let repo = Repo::new("working_diff_staged");
+        std::fs::write(repo.0.join("a.txt"), "one\n").unwrap();
+        repo.run(&["add", "."]);
+        repo.run(&["commit", "-m", "first"]);
+        std::fs::write(repo.0.join("a.txt"), "two\n").unwrap();
+        repo.run(&["add", "a.txt"]);
+        std::fs::write(repo.0.join("new.txt"), "fresh\n").unwrap();
+
+        let patch =
+            git_working_diff(repo.0.to_str().unwrap().into(), true, None).unwrap();
+        assert!(patch.contains("+two"));
+        // An untracked file has nothing in the index, so it belongs to the
+        // working-tree half only — listing it here would offer to unstage
+        // something that was never staged.
+        assert!(!patch.contains("new.txt"));
     }
 
     #[test]

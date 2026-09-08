@@ -182,6 +182,7 @@ pub fn run() {
             ide::open_in_terminal,
             git::git_changes,
             git::git_file_diff,
+            git::git_working_diff,
             git::git_commit,
             git::git_draft_commit_message,
             git::git_stage,

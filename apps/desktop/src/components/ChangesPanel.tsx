@@ -16,8 +16,6 @@ import {
   ChevronDown,
   Plus,
   Minus,
-  Undo2,
-  History,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -37,7 +35,7 @@ import { highlightCached, langFromPath } from "@/lib/highlight";
 import {
   useGitChanges,
   useGitCommitDiff,
-  useGitFileDiff,
+  useGitWorkingDiff,
   useInvalidateGit,
   useThreadCheckpoints,
   useTurnDiff,
@@ -58,6 +56,7 @@ const GitRewind = lazy(() =>
   import("@/components/GitRewind").then((m) => ({ default: m.GitRewind }))
 );
 import { SidePanel } from "@/components/SidePanel";
+import { WorkingDiffView } from "@/components/WorkingDiffView";
 
 /** True for unified-diff header lines that aren't source code. */
 function isDiffMeta(line: string): boolean {
@@ -229,13 +228,6 @@ function EditDiff({ change }: { change: Change }) {
   );
 }
 
-/** Which side of a file is being viewed — the same path can be both staged and
- *  unstaged, with a different diff on each side. */
-interface Selection {
-  path: string;
-  staged: boolean;
-}
-
 interface ChangesPanelProps {
   projectPath: string;
   /** Session ids in this project — selects its slice of the agent edit feed. */
@@ -274,7 +266,10 @@ export function ChangesPanel({
   active = true,
 }: ChangesPanelProps) {
   const [tab, setTab] = useState<"git" | "agent">("git");
-  const [fileListHeight, setFileListHeight] = useState(208);
+  // The working-tree surface renders one scope as one patch, so staged and
+  // unstaged are a toggle rather than two lists — a single patch can only
+  // describe one side of the index.
+  const [scope, setScope] = useState<"working" | "staged">("working");
 
   // This project's slice of the live agent edit feed. Select the whole feed
   // (its ref only changes when edits arrive) then filter, so status/usage
@@ -293,16 +288,6 @@ export function ChangesPanel({
   const stagedFiles = gitFiles.filter(isStaged);
   const unstagedFiles = gitFiles.filter(isUnstaged);
 
-  const [gitSel, setGitSel] = useState<Selection | null>(null);
-  const selFile = gitFiles.find((f) => f.path === gitSel?.path);
-  const diffQuery = useGitFileDiff(
-    projectPath,
-    gitSel?.path ?? null,
-    selFile?.untracked ?? false,
-    gitSel?.staged ?? false,
-    ignoreWhitespace
-  );
-  const gitDiff = diffQuery.data ?? "";
   const invalidateGit = useInvalidateGit();
 
   // A file picked out of the commit timeline. When set, the diff pane shows the
@@ -327,16 +312,6 @@ export function ChangesPanel({
   const [agentSelId, setAgentSelId] = useState<number | null>(null);
   const agentSel =
     changes.find((c) => c.id === agentSelId) ?? changes[changes.length - 1];
-
-  // Clear a selection whose side of the file went away (staged, committed,
-  // discarded), so the pane never shows a diff that no longer exists.
-  useEffect(() => {
-    if (!gitQuery.data || !gitSel) return;
-    const still = gitQuery.data.some(
-      (f) => f.path === gitSel.path && (gitSel.staged ? isStaged(f) : isUnstaged(f))
-    );
-    if (!still) setGitSel(null);
-  }, [gitQuery.data, gitSel]);
 
   /** Run a git mutation, refresh every git view, and toast on failure. */
   async function run(fn: () => Promise<unknown>, what: string) {
@@ -395,22 +370,28 @@ export function ChangesPanel({
   const stageAll = () => stage(unstagedFiles.map((f) => f.path));
   const unstageAll = () => unstage(stagedFiles.map((f) => f.path));
 
-  const startResize = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startY = e.clientY;
-    const startH = fileListHeight;
-    const onMove = (ev: MouseEvent) => {
-      const max = Math.round(window.innerHeight * 0.6);
-      const next = Math.min(max, Math.max(80, startH + ev.clientY - startY));
-      setFileListHeight(next);
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+  // One patch for the whole scope, which is what the diff surface renders.
+  const workingDiff = useGitWorkingDiff(
+    projectPath,
+    scope === "staged",
+    ignoreWhitespace,
+    active && tab === "git" && !turnPick
+  );
+
+  const onHunk = (patch: string, action: "stage" | "unstage" | "discard") => {
+    if (action === "discard") return void discardHunk(patch);
+    void applyHunk(patch, true, action === "unstage");
   };
+
+  const onFileAction = (
+    file: GitFile,
+    action: "stage" | "unstage" | "discard"
+  ) => {
+    if (action === "stage") return void stage([file.path]);
+    if (action === "unstage") return void unstage([file.path]);
+    void discardFile(file);
+  };
+
 
   /** Commit, then push in the same action. The Rust side does the safety
    *  checks before it commits, so a refusal never strands a commit here. */
@@ -438,7 +419,6 @@ export function ChangesPanel({
       }
       if (out.committed) {
         setCommitMsg("");
-        setGitSel(null);
       }
       // A commit that landed with a failed push is not an error to swallow —
       // the user needs to know the history moved even though the remote didn't.
@@ -465,7 +445,6 @@ export function ChangesPanel({
         message: commitMsg.trim(),
       });
       setCommitMsg("");
-      setGitSel(null);
       invalidateGit(projectPath);
     } catch (e) {
       setCommitErr(String(e));
@@ -533,71 +512,36 @@ export function ChangesPanel({
             </Empty>
           ) : (
             <>
-              <div
-                className="shrink-0 overflow-auto border-b pr-1.5"
-                style={{ height: fileListHeight }}
-              >
-                {stagedFiles.length > 0 && (
-                  <>
-                    <SectionHeader
-                      label="Staged Changes"
-                      count={stagedFiles.length}
-                      actionIcon={<Minus className="size-3" />}
-                      actionTitle="Unstage all"
-                      onAction={unstageAll}
-                    />
-                    <ul>
-                      {stagedFiles.map((f) => (
-                        <GitFileRow
-                          key={f.path}
-                          file={f}
-                          staged
-                          selected={gitSel?.path === f.path && gitSel.staged}
-                          onSelect={() => {
-                            setCommitPick(null);
-                            setGitSel({ path: f.path, staged: true });
-                          }}
-                          onToggle={() => void unstage([f.path])}
-                          onHistory={() => setHistoryFile(f.path)}
-                        />
-                      ))}
-                    </ul>
-                  </>
-                )}
-                {unstagedFiles.length > 0 && (
-                  <>
-                    <SectionHeader
-                      label="Changes"
-                      count={unstagedFiles.length}
-                      actionIcon={<Plus className="size-3" />}
-                      actionTitle="Stage all changes"
-                      onAction={stageAll}
-                    />
-                    <ul>
-                      {unstagedFiles.map((f) => (
-                        <GitFileRow
-                          key={f.path}
-                          file={f}
-                          staged={false}
-                          selected={gitSel?.path === f.path && !gitSel.staged}
-                          onSelect={() => {
-                            setCommitPick(null);
-                            setGitSel({ path: f.path, staged: false });
-                          }}
-                          onToggle={() => void stage([f.path])}
-                          onDiscard={() => void discardFile(f)}
-                          onHistory={f.untracked ? undefined : () => setHistoryFile(f.path)}
-                        />
-                      ))}
-                    </ul>
-                  </>
-                )}
+              <div className="flex shrink-0 items-center gap-1 border-b px-2 py-1.5">
+                <ScopeButton
+                  active={scope === "working"}
+                  onClick={() => setScope("working")}
+                  label="Working tree"
+                  count={unstagedFiles.length}
+                />
+                <ScopeButton
+                  active={scope === "staged"}
+                  onClick={() => setScope("staged")}
+                  label="Staged"
+                  count={stagedFiles.length}
+                />
+                <button
+                  onClick={scope === "staged" ? unstageAll : stageAll}
+                  className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  {scope === "staged" ? (
+                    <>
+                      <Minus className="size-3" />
+                      Unstage all
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="size-3" />
+                      Stage all
+                    </>
+                  )}
+                </button>
               </div>
-              <div
-                onMouseDown={startResize}
-                title="Drag to resize"
-                className="h-1 shrink-0 cursor-row-resize bg-transparent transition-colors hover:bg-primary/40"
-              />
               {stagedFiles.length > 0 && (
                 <div className="shrink-0 space-y-1.5 border-b p-2">
                   <Input
@@ -670,50 +614,18 @@ export function ChangesPanel({
                       file={commitPick.file}
                     />
                   </>
-                ) : gitSel ? (
-                  <>
-                    <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-card px-3 py-1 text-[11px] text-muted-foreground">
-                      <span className="truncate">{gitSel.path}</span>
-                      <span className="ml-auto shrink-0">
-                        {gitSel.staged ? "staged" : "working tree"}
-                      </span>
-                    </div>
-                    <UnifiedDiff
-                      text={gitDiff}
-                      lang={langFromPath(gitSel.path)}
-                      file={gitSel.path}
-                      actions={(patch) =>
-                        gitSel.staged ? (
-                          <HunkButton
-                            title="Unstage this hunk"
-                            onClick={() => void applyHunk(patch, true, true)}
-                          >
-                            <Minus className="size-3" />
-                            Unstage
-                          </HunkButton>
-                        ) : (
-                          <>
-                            <HunkButton
-                              title="Discard this hunk"
-                              onClick={() => void discardHunk(patch)}
-                            >
-                              <Undo2 className="size-3" />
-                              Discard
-                            </HunkButton>
-                            <HunkButton
-                              title="Stage this hunk"
-                              onClick={() => void applyHunk(patch, true, false)}
-                            >
-                              <Plus className="size-3" />
-                              Stage
-                            </HunkButton>
-                          </>
-                        )
-                      }
-                    />
-                  </>
                 ) : (
-                  <Empty>Select a file to see its diff.</Empty>
+                  <WorkingDiffView
+                    patch={workingDiff.data ?? ""}
+                    files={scope === "staged" ? stagedFiles : unstagedFiles}
+                    staged={scope === "staged"}
+                    // A `-w` patch has line counts that no longer match the
+                    // file, so git apply rejects every hunk cut from it. Hide
+                    // the buttons rather than offer an action that always fails.
+                    hunkActions={!ignoreWhitespace}
+                    onHunk={onHunk}
+                    onFileAction={onFileAction}
+                  />
                 )}
               </div>
             </>
@@ -770,6 +682,35 @@ export function ChangesPanel({
         </Suspense>
       )}
     </SidePanel>
+  );
+}
+
+/** Which half of the index the diff surface is showing. One patch describes one
+ *  scope, so these are a toggle, not two lists. */
+function ScopeButton({
+  active,
+  onClick,
+  label,
+  count,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  count: number;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors",
+        active
+          ? "bg-secondary font-medium text-foreground"
+          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+      )}
+    >
+      {label}
+      {count > 0 && <span className="tabular-nums opacity-60">{count}</span>}
+    </button>
   );
 }
 
@@ -922,129 +863,8 @@ function TurnReview({
   );
 }
 
-/** VS Code-style group header ("Staged Changes" / "Changes") with a count and
- *  a bulk stage/unstage action button on the right. */
-function SectionHeader({
-  label,
-  count,
-  actionIcon,
-  actionTitle,
-  onAction,
-}: {
-  label: string;
-  count: number;
-  actionIcon: React.ReactNode;
-  actionTitle: string;
-  onAction: () => void;
-}) {
-  return (
-    <div className="group sticky top-0 flex items-center justify-between bg-card px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-      <span>{label}</span>
-      <div className="flex items-center gap-1.5">
-        <button
-          onClick={onAction}
-          title={actionTitle}
-          className="rounded p-0.5 hover:bg-accent hover:text-foreground"
-        >
-          {actionIcon}
-        </button>
-        <span className="tabular-nums">{count}</span>
-      </div>
-    </div>
-  );
-}
 
-/** Small button in a hunk's action bar. */
-function HunkButton({
-  title,
-  onClick,
-  children,
-}: {
-  title: string;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      className="flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-    >
-      {children}
-    </button>
-  );
-}
 
-/** One file row: click to view its diff, hover-reveal stage/unstage (and
- *  discard, on the working-tree side). */
-function GitFileRow({
-  file,
-  staged,
-  selected,
-  onSelect,
-  onToggle,
-  onDiscard,
-  onHistory,
-}: {
-  file: GitFile;
-  staged: boolean;
-  selected: boolean;
-  onSelect: () => void;
-  onToggle: () => void;
-  onDiscard?: () => void;
-  onHistory?: () => void;
-}) {
-  return (
-    <li
-      className={cn(
-        "group flex items-center gap-1 pr-1",
-        selected && "bg-secondary"
-      )}
-    >
-      <button
-        onClick={onSelect}
-        className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-3 text-left text-xs hover:text-foreground"
-        title={file.path}
-      >
-        <span
-          className={cn(
-            "w-4 shrink-0 text-center font-mono text-[10px]",
-            file.untracked ? "text-emerald-400" : "text-amber-400"
-          )}
-        >
-          {file.untracked ? "U" : file.status.trim() || "M"}
-        </span>
-        <FileTypeIcon path={file.path} />
-        <span className="flex-1 truncate">{file.path}</span>
-      </button>
-      {onHistory && (
-        <button
-          onClick={onHistory}
-          title="File history"
-          className="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground group-hover:opacity-100"
-        >
-          <History className="size-3.5" />
-        </button>
-      )}
-      {onDiscard && (
-        <button
-          onClick={onDiscard}
-          title={file.untracked ? "Delete file" : "Discard changes"}
-          className="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-destructive group-hover:opacity-100"
-        >
-          <Undo2 className="size-3.5" />
-        </button>
-      )}
-      <button
-        onClick={onToggle}
-        title={staged ? "Unstage" : "Stage"}
-        className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        {staged ? <Minus className="size-3.5" /> : <Plus className="size-3.5" />}
-      </button>
-    </li>
-  );
-}
 
 function TabButton({
   active,

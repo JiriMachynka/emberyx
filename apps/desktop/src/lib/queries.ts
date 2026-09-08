@@ -71,6 +71,8 @@ export const gitKeys = {
     staged: boolean,
     ignoreWhitespace = false
   ) => ["git", "diff", path, file, untracked, staged, ignoreWhitespace] as const,
+  workingDiff: (path: string, staged: boolean, ignoreWhitespace: boolean) =>
+    ["git", "workingDiff", path, staged, ignoreWhitespace] as const,
   branch: (path: string) => ["git", "branch", path] as const,
   remoteHost: (path: string) => ["git", "remoteHost", path] as const,
   branches: (path: string) => ["git", "branches", path] as const,
@@ -248,6 +250,22 @@ export const useGitFileDiff = (
         ignoreWhitespace,
       }),
     enabled: !!file,
+  });
+
+/** The whole working tree as one multi-file patch — what the changes panel
+ *  renders. One query rather than one per file: the panel shows every file in a
+ *  single scroll, and N queries would each be a git subprocess. */
+export const useGitWorkingDiff = (
+  path: string,
+  staged: boolean,
+  ignoreWhitespace: boolean,
+  enabled: boolean
+) =>
+  useQuery({
+    queryKey: gitKeys.workingDiff(path, staged, ignoreWhitespace),
+    queryFn: () =>
+      invoke<string>("git_working_diff", { path, staged, ignoreWhitespace }),
+    enabled: enabled && !!path,
   });
 
 /** A file's commit history, newest first, following renames. */

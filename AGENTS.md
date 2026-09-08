@@ -177,8 +177,28 @@ manual edits made between turns land in no turn's delta, only in the
 working-tree review. Turn diffs render through `@pierre/diffs`
 (`lib/diffView.ts` registers Vesper; `.pierre-diffs` in index.css bridges the
 app tokens), with context expansion backed by `checkpoint_turn_contents` — the
-working-tree diff keeps the hand-rolled renderer because its hunk stage/discard
-actions are built around it.
+working-tree diff renders through the same library (`WorkingDiffView`), as one
+`CodeView` over a single multi-file patch (`git_working_diff`) with the tree on
+the right. Staged and unstaged are a scope toggle, not two lists — one patch
+describes one side of the index.
+
+Hunk stage/discard survives that move, but the seam is worth knowing:
+`@pierre/diffs` gives hunk *metadata* and can resolve a hunk visually
+(`diffAcceptRejectHunk`), and never emits patch text. So the per-hunk buttons
+ride on a line annotation, and the patch fed to `git apply` is **cut out of the
+raw patch** by `lib/patchFiles.ts` (multi-file split) on top of `lib/hunks.ts`
+(per-file hunk parsing) — text git produced applies, text we re-rendered only
+usually does. Hunk actions are hidden while "Hide whitespace changes" is on: a
+`-w` patch has line counts that no longer match the file, and its hunk indexes
+don't correspond to the real ones, so there is nothing safe to apply.
+
+Highlighting runs in a worker pool (`lib/diffWorkers.ts`), or a large working
+tree tokenizes every line on the main thread and freezes the window. Two things
+hang off that: `vite.config.ts` must keep `worker.format: "es"` — pierre's
+worker code-splits and Vite's default `iife` fails the build outright — and a
+worker that dies at startup flips a flag the view subscribes to, re-rendering
+with `disableWorkerPool` so it degrades to main-thread highlighting instead of
+staying blank.
 
 `git_commit_and_push` does its safety checks **before** committing, so a refusal
 never strands a commit: detached HEAD, behind upstream, and no-upstream all stop

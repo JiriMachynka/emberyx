@@ -42,6 +42,28 @@ export const buildTurnDiffOptions = (load: FileDiffContentsLoader) => ({
   loadDiffFiles: load,
 });
 
+/**
+ * Options for the working-tree surface: every changed file in one scroll, so
+ * unlike the turn review this one keeps pierre's own file headers and sticks
+ * them while a long file scrolls past. `line-info-basic` is the collapsed
+ * "N unmodified lines" band between hunks.
+ *
+ * Written out rather than spread from `baseTurnDiffOptions`: that one is
+ * annotated `FileDiffOptions`, and spreading it carries optional line-event
+ * callbacks whose props are narrower than CodeView's own.
+ */
+export const workingDiffOptions = {
+  theme: "vesper" as const,
+  diffStyle: "unified" as const,
+  diffIndicators: "bars" as const,
+  overflow: "wrap" as const,
+  hunkSeparators: "line-info-basic" as const,
+  lineDiffType: "word-alt" as const,
+  // CodeView's own option, not a per-file diff option: it sticks whichever
+  // file header is at the top of the scroll.
+  stickyHeaders: true,
+};
+
 /** Adapt the Rust contents pair to pierre's loader shape. An absent old side
  *  (file created in the range) reads as a pure rename to pierre, which skips
  *  the loader for added/deleted diffs anyway. */
