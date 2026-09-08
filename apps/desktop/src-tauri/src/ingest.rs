@@ -86,6 +86,13 @@ const DEFAULT_TURN_PAGE_LIMIT: u32 = 40;
 
 /// Keyset page over a thread's projected messages, newest-first by default and
 /// paging backwards on `(created_at, messageId)`.
+///
+/// `fresh: false` serves what is already projected and skips the freshness pass
+/// — which, even as a no-op, is a `read_dir`, a `stat` per transcript and an
+/// 82ms `GROUP BY` over the whole events table (measured 2026-09-08 on a 406MB
+/// log). Opening a thread pays that before it can paint. The caller that skips
+/// it is expected to ingest afterwards and read again if anything changed:
+/// history that is three seconds stale for one frame beats a switch that waits.
 #[tauri::command]
 pub async fn thread_messages_page(
     supervisor: tauri::State<'_, crate::supervisor::Supervisor>,
@@ -94,10 +101,13 @@ pub async fn thread_messages_page(
     before_created_at: Option<u64>,
     before_message_id: Option<String>,
     limit: Option<u32>,
+    fresh: Option<bool>,
 ) -> Result<crate::store::MessagePage> {
     let store = supervisor.store().ok_or("event log not attached")?;
     tauri::async_runtime::spawn_blocking(move || {
-        ensure_fresh(&store, &cwd)?;
+        if fresh.unwrap_or(true) {
+            ensure_fresh(&store, &cwd)?;
+        }
         store.messages_page(
             &thread_id,
             before_created_at,

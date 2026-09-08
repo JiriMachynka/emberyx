@@ -17,6 +17,7 @@ import {
   turnsToDrop,
 } from "@/lib/conversationRewind";
 import type { PermissionMode } from "@/lib/settings";
+import { decodeClaudeQuota } from "@/lib/quota";
 import type { Provider } from "@/lib/providers";
 import {
   emptyOwnerIndex,
@@ -38,24 +39,8 @@ import { loadSettings } from "@/lib/settings";
 import { basename } from "@/lib/path";
 import { usePromptQueue } from "@/lib/promptQueue";
 
-/** One projected message row from `thread_messages_page`. */
-interface ProjectedMessageRow {
-  messageId: string;
-  threadId: string;
-  role: string;
-  text: string;
-  provider?: string | null;
-  createdAt: number;
-  payloadJson: string | null;
-}
-
-interface MessagePage {
-  rows: ProjectedMessageRow[];
-  hasMore: boolean;
-}
-
-/** Messages fetched per "load older" page from the local event store. */
-const THREAD_PAGE_LIMIT = 60;
+/** Paging over the local event store, plus the sidebar's hover prefetch. */
+import { fetchThreadPage, takePrefetchedPage } from "@/lib/threadPage";
 
 /** A stream-json line from the headless `claude` process (Rust AgentEvent). */
 type AgentEvent =
@@ -1120,6 +1105,14 @@ export function useAgentChat({
         return;
       }
 
+      // Claude's plan windows ride the same stream, once per turn. Codex sends
+      // its own over the app-server; this is the Claude half of the same chip.
+      if (type === "rate_limit_event") {
+        const quota = decodeClaudeQuota(msg);
+        if (quota) setUsage((u) => ({ ...u, quota }));
+        return;
+      }
+
       if (type === "result") {
         const t = turnUsageRef.current;
         const s = sessionUsageRef.current;
@@ -1242,20 +1235,24 @@ export function useAgentChat({
     let cancelled = false;
     void (async () => {
       try {
-        const page = await invoke<MessagePage>("thread_messages_page", {
-          cwd,
-          threadId: resume,
-          limit: THREAD_PAGE_LIMIT,
-        });
+        // The sidebar starts this page on hover; when it did, the switch pays
+        // no round trip at all. Either way the read skips the freshness pass —
+        // `transcripts_ingest` below does it after the thread is on screen.
+        const page = await (takePrefetchedPage(cwd, resume) ??
+          fetchThreadPage(cwd, resume, { fresh: false }));
         if (cancelled) return;
         const lines = page.rows
           .map((row) => row.payloadJson)
           .filter((line): line is string => typeof line === "string");
         const transcript = lines.join("\n");
-        const parsed = attachTranscriptActivities(
-          parseTranscript(transcript),
-          await readTranscriptActivities(lines)
-        );
+        // Paint the turns, then colour them. Activities are a second round trip
+        // and they only add ordering *within* a message, so waiting for them
+        // holds back the whole conversation for something no one can see yet.
+        const parsed = parseTranscript(transcript);
+        void readTranscriptActivities(lines).then((rows) => {
+          if (cancelled || !rows.length) return;
+          setMessages((prev) => attachTranscriptActivities(prev, rows));
+        });
         if (cancelled) return;
         const oldest = page.rows[0];
         oldestCursorRef.current = oldest
@@ -1289,6 +1286,36 @@ export function useAgentChat({
           };
           return hu;
         });
+
+        // Now that the thread is on screen, catch the projections up. This is
+        // the pass the read above skipped, and it matters for turns written
+        // outside this pane — a terminal session, another window, a run from
+        // before the app started. A re-read only replaces what was hydrated
+        // while nothing else has touched the list: once a live turn has
+        // arrived, merging two views of the same tail is how a thread gets its
+        // turns twice.
+        const summary = await invoke<{ filesChanged: number }>(
+          "transcripts_ingest",
+          { cwd }
+        ).catch(() => null);
+        if (cancelled || !summary?.filesChanged) return;
+        const fresher = await fetchThreadPage(cwd, resume);
+        if (cancelled) return;
+        const freshLines = fresher.rows
+          .map((row) => row.payloadJson)
+          .filter((line): line is string => typeof line === "string");
+        if (freshLines.length === lines.length) return;
+        const reparsed = parseTranscript(freshLines.join("\n"));
+        setMessages((prev) => (prev.length === parsed.length ? reparsed : prev));
+        setHasMore(fresher.hasMore);
+        const freshOldest = fresher.rows[0];
+        oldestCursorRef.current = freshOldest
+          ? { createdAt: freshOldest.createdAt, messageId: freshOldest.messageId }
+          : oldestCursorRef.current;
+        void readTranscriptActivities(freshLines).then((rows) => {
+          if (cancelled || !rows.length) return;
+          setMessages((prev) => attachTranscriptActivities(prev, rows));
+        });
       } catch (e) {
         // Let a later mount retry; a failed read must not look hydrated.
         hydratedRef.current = null;
@@ -1308,12 +1335,9 @@ export function useAgentChat({
     setLoadingOlder(true);
     try {
       const cursor = oldestCursorRef.current;
-      const page = await invoke<MessagePage>("thread_messages_page", {
-        cwd,
-        threadId: resume,
+      const page = await fetchThreadPage(cwd, resume, {
         beforeCreatedAt: cursor.createdAt,
         beforeMessageId: cursor.messageId,
-        limit: THREAD_PAGE_LIMIT,
       });
       const first = page.rows[0];
       oldestCursorRef.current = first

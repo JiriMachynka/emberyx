@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { prefetchThreadPage } from "@/lib/threadPage";
 import { basename } from "@/lib/path";
 import { projectLabel, projectTitle } from "@/lib/worktree";
 import { formatElapsed, statusOf, STATUS_META } from "@/lib/status";
@@ -695,6 +696,10 @@ const ThreadRow = memo(function ThreadRow({
   const enter = () => {
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => setDetail(true), 450);
+    // Start the thread's first page on the way to the click. The pane reads it
+    // out of the cache, so the switch paints without a round trip; a hover that
+    // never becomes a click costs one indexed query.
+    if (!open && !thread.imported) prefetchThreadPage(project.path, thread.id);
   };
   const leave = () => {
     window.clearTimeout(timer.current);
