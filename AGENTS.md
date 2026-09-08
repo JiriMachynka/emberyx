@@ -107,6 +107,27 @@ Easy to conflate — they share almost nothing.
    with no timeline meaning stays agent-local rather than being forced into a
    shape it does not have. Frontend: `lib/timeline.ts` `useThreadTimeline`.
 
+### Opening a thread
+
+Three costs used to run in series before a switch painted anything, and none of
+them were the data (the page query is ~0.5ms, parsing it ~0.06ms — measured
+2026-09-08): the freshness pass in `ensure_fresh`, the page read, then a second
+round trip normalizing the page's activity rows.
+
+So the order changed. `lib/threadPage.ts` owns the read and a small hover cache:
+the sidebar starts a thread's first page when the pointer lands on its row, and
+`useAgentChat` takes it from there — `fresh: false`, because the read must not
+wait on a `read_dir`, a `stat` per transcript and an 82ms `GROUP BY` over a
+406MB log. Activities are attached in a second `setMessages` after the turns are
+already on screen; they only order work *within* a message.
+
+Freshness is not dropped, it is deferred: once the thread is painted the pane
+runs `transcripts_ingest`, and re-reads only if a file changed — which is what
+picks up turns written by a terminal session, another window, or a run from
+before the app started. The re-read replaces the hydrated page **only while
+nothing else has touched the list**; after a live turn has landed, merging two
+views of the same tail is how a thread gets its turns twice.
+
 ### Imported history
 
 `t3_import.rs` reads T3 Code's own event-sourced store
@@ -232,14 +253,29 @@ drops the frame and keeps the header row.
 
 ### Settings
 
-`SettingsDialog.tsx` is nine sections: General, Providers, Permissions,
-Connections, Source Control, Appearance, Notifications, Keyboard Shortcuts,
-About. Two are worth knowing about:
+`SettingsPage.tsx` is ten sections: General, Appearance, Keyboard Shortcuts,
+Providers, MCP, Skills, Connections, Source Control, Notifications, About — plus
+`TABS`, which is the declaration each one is driven from: a tab names the
+settings keys it owns (what "Restore defaults" resets) and the words that find it
+from the search box, so a control rendered in a tab whose `keys` omit it is a
+Restore that silently skips it. Two sections are worth knowing about:
 
 - **Connections** is the honesty surface. It shows whether `emberyxd` is running
   (`useDaemonHealth`, polled) before the persistent-agents toggle, because that
   toggle is meaningless without it. `provider_status` powers **Providers** the
   same way — a provider that isn't installed is listed, not hidden.
+- **Source Control**'s commit-message model drives `draft.rs`, which keeps one
+  warm `claude` waiting on stdin so a draft costs ~1.7s instead of ~14s. Three
+  measurements shape it (2026-09-08): `claude -p` spends ~3.8s booting before it
+  sends anything — the same for `reply with the word ok`, so it is startup, not
+  work; thinking is off (`MAX_THINKING_TOKENS=0`) because Haiku otherwise spends
+  ~2000 thinking tokens on an 18-token subject line; and the warm child is spent
+  after one draft, since `--input-format stream-json` is one conversation and the
+  next draft would carry this diff with it. `GitCommitMenu` warms on open and
+  prefetches the draft itself only when there is something to commit, so opening
+  the menu for Pull bills nothing. It also drafts **before** staging: with
+  nothing staged `commit_diff` reads the working tree, so drafting after staging
+  would describe a different diff than the prefetch did.
 - **Keyboard Shortcuts** records a new chord per command, with `lib/commands.ts`
   as the one declaration and `lib/keybindings.ts` holding the overrides (under
   their own storage key, not `Settings`). Two things stay un-rebindable and say
