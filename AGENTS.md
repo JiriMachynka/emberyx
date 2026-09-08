@@ -167,6 +167,19 @@ back, files the turn *created* are only removed when explicitly confirmed —
 deleting something the user wrote by hand is not undoable. The per-turn "Revert
 turn" action hangs off `ChatMessage.checkpointId`.
 
+The same checkpoints power the per-turn review: a settled turn renders a
+"Changed N files" card whose Review button opens the diff tab scoped to
+`checkpoint_turn_files` / `checkpoint_turn_diff`. The range end is resolved
+Rust-side: the turn's **settle snapshot** when one landed (`checkpoint_settle`,
+fired by the transport hooks at turn end, ref `refs/emberyx/settles/<id>`), else
+the next turn's checkpoint, else a scratch snapshot of the working tree — so
+manual edits made between turns land in no turn's delta, only in the
+working-tree review. Turn diffs render through `@pierre/diffs`
+(`lib/diffView.ts` registers Vesper; `.pierre-diffs` in index.css bridges the
+app tokens), with context expansion backed by `checkpoint_turn_contents` — the
+working-tree diff keeps the hand-rolled renderer because its hunk stage/discard
+actions are built around it.
+
 `git_commit_and_push` does its safety checks **before** committing, so a refusal
 never strands a commit: detached HEAD, behind upstream, and no-upstream all stop
 first (the last one asks whether to publish). When the commit lands and the push

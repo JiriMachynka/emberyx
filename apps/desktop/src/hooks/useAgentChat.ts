@@ -5,6 +5,17 @@ import { useAgentStore, type SubagentActivity } from "@/lib/agentStore";
 import { registerAgent, setAgentLifecycle } from "@/lib/agentRegistry";
 import { askQuestions, fetchPendingAsk } from "@/lib/approvals";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
+import { settleTurnCheckpoint } from "@/lib/queries";
+import {
+  cancelStreamPublish,
+  scheduleStreamPublish,
+  streamPublishMs,
+  type StreamPublishHandle,
+} from "@/lib/streamPublish";
+import {
+  truncateBeforeCheckpoint,
+  turnsToDrop,
+} from "@/lib/conversationRewind";
 import type { PermissionMode } from "@/lib/settings";
 import type { Provider } from "@/lib/providers";
 import type { SessionStatus } from "@/types";
@@ -229,6 +240,9 @@ interface Options {
   /** False while a session of another backend owns this pane — the hook still
    *  runs (rules of hooks) but spawns nothing and touches no shared state. */
   enabled?: boolean;
+  /** False while this pane is mounted but hidden. Token paints skip React;
+   *  refs keep accumulating and one flush lands when it is shown again. */
+  visible?: boolean;
 }
 
 let counter = 0;
@@ -465,6 +479,7 @@ export function useAgentChat({
   launch,
   onTitled,
   enabled = true,
+  visible = true,
 }: Options) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // Mirror for reads inside callbacks (rewind) without stale closures or making
@@ -497,6 +512,20 @@ export function useAgentChat({
   // the transcript on resume, plus each completed live turn added on top).
   const sessionUsageRef = useRef({ input: 0, output: 0 });
   const [ready, setReady] = useState(false);
+  // Whether this pane wants a process at all. Opening an old thread from the
+  // sidebar used to launch a CLI just to look at it — a second of work landing
+  // on the frame that switches panes. A resumed thread stays asleep until the
+  // user actually sends (or focuses the composer); a fresh chat was opened to
+  // be talked to, and a persistent one may have a live daemon agent to reattach
+  // to, so both spawn on mount as before.
+  const [awake, setAwake] = useState(() => !resume || persistent);
+  const wake = useCallback(() => setAwake(true), []);
+  // A turn accepted before the process existed. Delivered by the effect below
+  // the moment the spawn lands; further turns queue normally, since the status
+  // is already busy by then.
+  const pendingSendRef = useRef<{ text: string; images?: ChatImage[] } | null>(
+    null
+  );
   // Bumped by `restart` to re-run the spawn effect for the same target.
   const [attempt, setAttempt] = useState(0);
   // A session that dies before it has been used at all is almost always a boot
@@ -522,6 +551,10 @@ export function useAgentChat({
   // Mirror for reads inside callbacks, same reason as pendingRef above.
   const askRef = useRef<PendingAsk | null>(null);
   askRef.current = pendingAsk;
+
+  // The checkpoint this pane's newest turn is running under — set when the
+  // send-time snapshot lands, read when the turn settles.
+  const lastCheckpointIdRef = useRef<string | null>(null);
 
   // Subagent runs are telemetry, not transcript — they live in the store so the
   // agent panel and the chip row can subscribe without re-rendering the chat.
@@ -583,6 +616,9 @@ export function useAgentChat({
   // Imported history has no CLI session behind it, so the pane starts without
   // one and adopts whatever id the fresh agent reports.
   const sessionRef = useRef<string | undefined>(imported ? undefined : resume);
+  // Set when rewind dropped every turn: the next spawn must not `--resume` the
+  // session we just emptied, even though the pane's `resume` prop still names it.
+  const clearedResumeRef = useRef(false);
   // The CLI's own thread id, published so the pane can register the thread with
   // the sidebar before the first turn (and its transcript on disk) exists.
   const [threadId, setThreadId] = useState<string | undefined>(resume);
@@ -595,9 +631,12 @@ export function useAgentChat({
   const onTitledRef = useRef(onTitled);
   onTitledRef.current = onTitled;
 
-  // The draft is mutated on every token but published to React at most once per
-  // animation frame; these track what a frame still owes and the frame itself.
-  const frameRef = useRef<number | null>(null);
+  // The draft is mutated on every token but published to React at most ~8 Hz;
+  // these track what a paint still owes and the pending rAF/timeout.
+  const frameRef = useRef<StreamPublishHandle | null>(null);
+  const lastPublishRef = useRef(0);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const draftDirtyRef = useRef(false);
   const usageDirtyRef = useRef(false);
   // Last published copy of each live tool, keyed by tool_use id. Downstream
@@ -639,15 +678,16 @@ export function useAgentChat({
   }, []);
 
   const cancelFrame = useCallback(() => {
-    if (frameRef.current !== null) {
-      cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
-    }
+    cancelStreamPublish(frameRef.current);
+    frameRef.current = null;
   }, []);
 
   /** Publish everything the pending frame owed, right now. */
   const flushPending = useCallback(() => {
     cancelFrame();
+    if (!visibleRef.current) return;
+    lastPublishRef.current =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
     if (draftDirtyRef.current) {
       draftDirtyRef.current = false;
       const draft = draftRef.current;
@@ -669,10 +709,14 @@ export function useAgentChat({
   }, [cancelFrame, snapshotTools, publishTurnUsage]);
 
   const scheduleFlush = useCallback(() => {
-    if (frameRef.current !== null) return;
-    frameRef.current = requestAnimationFrame(() => {
-      frameRef.current = null;
-      flushPending();
+    frameRef.current = scheduleStreamPublish(frameRef.current, {
+      lastAt: lastPublishRef.current,
+      intervalMs: streamPublishMs(),
+      visible: visibleRef.current,
+      flush: () => {
+        frameRef.current = null;
+        flushPending();
+      },
     });
   }, [flushPending]);
 
@@ -723,6 +767,11 @@ export function useAgentChat({
 
   // A queued frame can only render into a live component; drop it on unmount.
   useEffect(() => cancelFrame, [cancelFrame]);
+
+  // Hidden panes skip token paints; show the backlog on reveal.
+  useEffect(() => {
+    if (visible) flushPending();
+  }, [visible, flushPending]);
 
   /** Record an account-level failure and announce it in the generic error's
    *  place — "usage limit reached" is actionable, "ended with an error" isn't. */
@@ -1037,6 +1086,11 @@ export function useAgentChat({
         // The turn is over — resolve any background runs still marked open,
         // since they never get a per-completion signal.
         endOpenSubagents(emberyxSessionId);
+        // Freeze this turn's file delta: snapshot the tree now under the
+        // turn's checkpoint, so edits made between turns land in no turn's
+        // card. Best-effort; a missed settle only widens the range.
+        const settledId = lastCheckpointIdRef.current;
+        if (settledId) void settleTurnCheckpoint(cwd, settledId);
         return;
       }
     },
@@ -1168,9 +1222,9 @@ export function useAgentChat({
     }
   }, [enabled, resume, imported, cwd, persistent]);
 
-  // Spawn the process once per (cwd, resume) target.
+  // Spawn the process once per (cwd, resume) target, once the pane is awake.
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !awake) return;
     let disposed = false;
     const channel = new Channel<AgentEvent>();
     // Chunks arrive split mid-line, so the buffer — not the chunk — is what gets
@@ -1238,12 +1292,16 @@ export function useAgentChat({
 
     void (async () => {
       try {
+        const resumeAt = clearedResumeRef.current
+          ? null
+          : sessionRef.current ?? (imported ? null : resume) ?? null;
+        clearedResumeRef.current = false;
         const handle = await invoke<AgentHandle>("agent_spawn", {
           cwd,
           sessionId: crypto.randomUUID(),
           // Prefer the live session id so a respawn (model switch, restart)
           // resumes the same thread instead of starting a fresh one.
-          resume: sessionRef.current ?? (imported ? null : resume) ?? null,
+          resume: resumeAt,
           permissionMode,
           skipPermissions,
           settings: null,
@@ -1309,6 +1367,7 @@ export function useAgentChat({
     };
   }, [
     enabled,
+    awake,
     cwd,
     resume,
     imported,
@@ -1330,6 +1389,7 @@ export function useAgentChat({
   const restart = useCallback(() => {
     interruptedRef.current = false;
     bootRetryRef.current = 0;
+    setAwake(true);
     setStatus("idle");
     setPending(null);
     setPendingAsk(null);
@@ -1514,7 +1574,10 @@ export function useAgentChat({
     // `send` so a queued turn is covered too, and never awaited: a checkpoint
     // is a safety net, not a precondition for the turn the user asked for.
     void createCheckpoint(cwd, emberyxSessionId, text).then((point) => {
-      if (point) setMessages((prev) => attachCheckpoint(prev, point.id));
+      if (point) {
+        lastCheckpointIdRef.current = point.id;
+        setMessages((prev) => attachCheckpoint(prev, point.id));
+      }
     });
     const content = hasImages
       ? [
@@ -1543,7 +1606,7 @@ export function useAgentChat({
     (text: string, images?: ChatImage[]) => {
       const id = idRef.current;
       const hasImages = !!images && images.length > 0;
-      if (id === null || (!text.trim() && !hasImages)) return;
+      if (!enabled || (!text.trim() && !hasImages)) return;
       // A new turn outlives the last interrupt; a later exit is a real failure.
       interruptedRef.current = false;
       // From here on the session has been used: a death is worth reporting, not
@@ -1562,6 +1625,15 @@ export function useAgentChat({
         },
       ]);
       if (!firstMsgRef.current && text.trim()) firstMsgRef.current = text;
+      if (id === null && !pendingSendRef.current) {
+        // No process yet — this is the turn that wakes the pane. Hold it (the
+        // transcript already shows it) and go busy, so anything sent while the
+        // spawn is in flight takes the queue path below instead of racing it.
+        pendingSendRef.current = { text, images };
+        setStatus("thinking");
+        wake();
+        return;
+      }
       if (BUSY_STATUS.has(statusRef.current)) {
         // The runtime owns the queue — React keeps a synchronous mirror for the
         // composer count and rewind. The runtime queueId lands once the enqueue
@@ -1574,8 +1646,17 @@ export function useAgentChat({
       }
       deliver(text, images);
     },
-    [deliver, promptQueue, emberyxSessionId]
+    [deliver, promptQueue, emberyxSessionId, enabled, wake]
   );
+
+  // The turn that woke the pane goes on the wire as soon as the spawn lands.
+  useEffect(() => {
+    if (!ready) return;
+    const held = pendingSendRef.current;
+    if (!held) return;
+    pendingSendRef.current = null;
+    deliver(held.text, held.images);
+  }, [ready, deliver]);
 
   const compact = useCallback(() => {
     send("/compact");
@@ -1633,11 +1714,46 @@ export function useAgentChat({
       .catch((e) => console.error("[emberyx] title_thread failed", e));
   }, [status, resume, imported, cwd]);
 
+  /** Drop this user turn and everything after it from Claude's transcript, then
+   *  respawn so the next prompt resumes the truncated session. Git restore is
+   *  the caller's job — this is only the provider half of Revert turn. */
+  const revertTurn = useCallback(
+    async (checkpointId: string) => {
+      const sid = sessionRef.current;
+      const drop = turnsToDrop(messagesRef.current, checkpointId);
+      if (!sid || drop === null || drop < 1) return;
+      const result = await invoke<{ sessionId: string | null }>(
+        "claude_session_rewind",
+        {
+          cwd,
+          sessionId: sid,
+          dropTurns: drop,
+          configDir: launch?.configDir ?? null,
+        }
+      );
+      const next = truncateBeforeCheckpoint(messagesRef.current, checkpointId);
+      messagesRef.current = next;
+      setMessages(next);
+      if (result.sessionId) {
+        sessionRef.current = result.sessionId;
+        setThreadId(result.sessionId);
+        clearedResumeRef.current = false;
+      } else {
+        sessionRef.current = undefined;
+        setThreadId(undefined);
+        clearedResumeRef.current = true;
+      }
+      restart();
+    },
+    [cwd, launch, restart]
+  );
+
   return {
     messages,
     status,
     usage,
     ready,
+    wake,
     threadId,
     send,
     compact,
@@ -1650,6 +1766,7 @@ export function useAgentChat({
     // ends the session with a reason rather than quietly running another one.
     modelError: null as string | null,
     rewind,
+    revertTurn,
     pendingPermission,
     respond,
     pendingAsk,

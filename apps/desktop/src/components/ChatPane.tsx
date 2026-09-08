@@ -20,7 +20,7 @@ import { issueTitle, resetLabel, type AccountIssue } from "@/lib/accountState";
 import { basename } from "@/lib/path";
 import { Button } from "@/components/ui/button";
 import { FileRefProject, TextWithFileRefs } from "@/components/FileRef";
-import { BACKEND_LABEL, type AgentBackend } from "@/lib/agentBackend";
+import { BACKEND_LABEL, capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
 import {
   describeTool,
   isTodoTool,
@@ -74,12 +74,13 @@ import {
 } from "@/lib/thread";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
-import { Undo2 } from "lucide-react";
+import { FileDiff, Undo2 } from "lucide-react";
 import { useInvalidateGit } from "@/lib/queries";
 import {
   checkpointChanges,
   describeRestore,
   restoreCheckpoint,
+  sumRangeFiles,
 } from "@/lib/checkpoints";
 import {
   accessLevelFrom,
@@ -95,8 +96,9 @@ import { ThreadLinkProvider } from "@/components/PrLink";
 import type { Project } from "@/types";
 import { projectLabel } from "@/lib/worktree";
 import { PROVIDER_LABEL } from "@/lib/providers";
-import { useGitChanges } from "@/lib/queries";
+import { useGitChanges, useTurnFiles } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
+import { rememberRowSizes, rowSize } from "@/lib/rowSizes";
 import { cn } from "@/lib/utils";
 import { formatDuration, groupTurns, isAgentTool, type Turn } from "@/components/chat/turns";
 import { ToolCard } from "@/components/chat/ToolViews";
@@ -253,10 +255,12 @@ export const ChatPane = memo(function ChatPane({
     status,
     usage,
     ready,
+    wake,
     threadId,
     send,
     compact,
     rewind,
+    revertTurn,
     queued,
     queue,
     stop,
@@ -284,6 +288,7 @@ export const ChatPane = memo(function ChatPane({
     launch,
     codexSandbox,
     onTitled,
+    visible: active,
   });
   // Register a fresh thread with the sidebar the moment it has both an id and a
   // first message. Without this the row only appears once the turn ends and the
@@ -376,8 +381,9 @@ export const ChatPane = memo(function ChatPane({
       backend: activeBackend,
       model: activeModel || null,
       onSwitchProvider: () => switchProvider(otherBackend(activeBackend), true),
+      revertTurn,
     }),
-    [sessionId, cwd, activeBackend, activeModel, switchProvider]
+    [sessionId, cwd, activeBackend, activeModel, switchProvider, revertTurn]
   );
   const draft = useAgentStore((s) => s.drafts[sessionId]);
   const clearDraft = useAgentStore((s) => s.clearDraft);
@@ -609,11 +615,24 @@ export const ChatPane = memo(function ChatPane({
   const rowVirt = useVirtualizer({
     count: slots.length,
     getScrollElement: () => scrollRef.current,
-    // Turns dominate; a rough midpoint is fine — measureElement corrects.
-    estimateSize: (index) => (slots[index]?.kind === "turn" ? 340 : 52),
+    // A height this pane measured last time it was open beats any estimate;
+    // short turns dominate, and measureElement corrects the rest once the row
+    // mounts.
+    estimateSize: (index) =>
+      rowSize(sessionId, slots[index]?.key) ??
+      (slots[index]?.kind === "turn" ? 72 : 52),
     getItemKey: (index) => slots[index]?.key ?? String(index),
     overscan: 6,
   });
+
+  // Hand the measurements to the next mount of this pane. Written on unmount
+  // only: nothing reads them while the virtualizer is alive.
+  const rowVirtRef = useRef(rowVirt);
+  rowVirtRef.current = rowVirt;
+  useEffect(
+    () => () => rememberRowSizes(sessionId, rowVirtRef.current.itemSizeCache),
+    [sessionId]
+  );
 
   // Read by `onScroll`, which is created before `loadEarlier` and must stay
   // identity-stable — a scroll handler that changes identity per page re-binds
@@ -921,6 +940,7 @@ export const ChatPane = memo(function ChatPane({
                   queue={queue}
                   draft={draft}
                   onDraftConsumed={consumeDraft}
+                  onTyping={wake}
                   onSend={send}
                   onCompact={compact}
                   lastActivityAt={lastActivityAt(messages)}
@@ -1063,6 +1083,88 @@ const TasksCard = memo(function TasksCard({
   );
 });
 
+/** How many files the card lists before the panel takes over. */
+const CHANGED_FILES_PREVIEW = 3;
+const CHANGED_FILES_LIMIT = 12;
+
+/** The file delta one settled turn produced, from the snapshot taken before it
+ *  to its settle snapshot (or the next turn's — the Rust side resolves it).
+ *  The full diff lives in the dock's diff tab; this card is the doorway to it,
+ *  the way Waku scopes Review to a turn. */
+const ChangedFilesCard = memo(function ChangedFilesCard({
+  projectPath,
+  threadId,
+  fromId,
+}: {
+  projectPath: string;
+  threadId: string;
+  fromId: string;
+}) {
+  const { data: files } = useTurnFiles(projectPath, threadId, fromId);
+  const [expanded, setExpanded] = useState(false);
+  const requestTurnReview = useAgentStore((s) => s.requestTurnReview);
+  if (!files || files.length === 0) return null;
+  const { additions, deletions } = sumRangeFiles(files);
+  const visible = files.slice(0, expanded ? CHANGED_FILES_LIMIT : CHANGED_FILES_PREVIEW);
+  const clipped = expanded && files.length > CHANGED_FILES_LIMIT;
+  const canExpand = files.length > CHANGED_FILES_PREVIEW;
+  return (
+    <div className="overflow-hidden rounded-xl border border-border bg-card/70">
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <div className="flex size-9 flex-none items-center justify-center rounded-lg bg-muted/60">
+          <FileDiff className="size-4 text-muted-foreground" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium">
+            {files.length === 1 ? "Changed 1 file" : `Changed ${files.length} files`}
+          </div>
+          <div className="flex gap-2 text-xs tabular-nums">
+            <span className="text-emerald-400">+{additions}</span>
+            <span className="text-red-400">−{deletions}</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => requestTurnReview({ projectPath, threadId, fromId })}
+          className="flex flex-none items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+        >
+          <FileDiff className="size-3.5" />
+          Review
+        </button>
+      </div>
+      <ul className="flex flex-col border-t border-border">
+        {visible.map((file) => (
+          <li key={file.path} className="flex h-8 items-center gap-2 px-3 text-xs">
+            <span className="min-w-0 flex-1 truncate text-muted-foreground" title={file.path}>
+              {file.path}
+            </span>
+            {file.additions != null && (
+              <span className="flex-none tabular-nums text-emerald-400">+{file.additions}</span>
+            )}
+            {file.deletions != null && (
+              <span className="flex-none tabular-nums text-red-400">−{file.deletions}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {clipped && (
+        <div className="border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
+          Showing first {CHANGED_FILES_LIMIT} of {files.length} — open Review for the rest
+        </div>
+      )}
+      {canExpand && !clipped && (
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="w-full border-t border-border px-3 py-1.5 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+        >
+          {expanded ? "Show fewer" : `Show ${files.length - CHANGED_FILES_PREVIEW} more`}
+        </button>
+      )}
+    </div>
+  );
+});
+
 /** One turn: the user bubble, then either the live work (streaming) or, once
  *  finished, a "Worked for Ns" accordion over the work with the final answer
  *  left visible below it. */
@@ -1158,6 +1260,13 @@ const TurnRow = memo(
               )}
             </div>
           ))}
+        {user?.checkpointId && !live && (
+          <ChangedFilesCard
+            projectPath={chat.cwd}
+            threadId={chat.sessionId}
+            fromId={user.checkpointId}
+          />
+        )}
       </>
     );
   },
@@ -1366,6 +1475,8 @@ const MessageRow = memo(function MessageRow({
             projectPath={chat.cwd}
             threadId={chat.sessionId}
             checkpointId={message.checkpointId}
+            rewindConversation={capabilitiesOf(chat.backend).conversationRewind}
+            onRevertConversation={chat.revertTurn}
           />
         )}
       </div>
@@ -1401,6 +1512,7 @@ interface ChatContext {
   model: string | null;
   /** Continue this same thread on the other provider, in this pane. */
   onSwitchProvider: () => void;
+  revertTurn: (checkpointId: string) => Promise<void>;
 }
 
 /** Where the thread changed hands. Rendered in the transcript rather than as a
@@ -1533,10 +1645,14 @@ function RevertTurnButton({
   projectPath,
   threadId,
   checkpointId,
+  rewindConversation,
+  onRevertConversation,
 }: {
   projectPath: string;
   threadId: string;
   checkpointId: string;
+  rewindConversation: boolean;
+  onRevertConversation: (checkpointId: string) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const invalidateGit = useInvalidateGit();
@@ -1545,17 +1661,19 @@ function RevertTurnButton({
     setBusy(true);
     try {
       const changes = await checkpointChanges(projectPath, checkpointId);
-      if (changes.length === 0) {
+      if (changes.length === 0 && !rewindConversation) {
         toast.info("Nothing to revert", {
           description: "The working tree is unchanged since this turn.",
         });
         return;
       }
       const added = changes.filter((c) => c.kind === "added");
-      const ok = await ask(
-        `${describeRestore(changes)}.\n\nRestore the working tree to before this turn?`,
-        { title: "Revert turn", kind: "warning" }
-      );
+      const question = rewindConversation
+        ? changes.length > 0
+          ? `${describeRestore(changes)}.\n\nRestore the working tree and drop this turn from the conversation?`
+          : "Drop this turn and everything after it from the conversation?"
+        : `${describeRestore(changes)}.\n\nRestore the working tree to before this turn?`;
+      const ok = await ask(question, { title: "Revert turn", kind: "warning" });
       if (!ok) return;
       // Deleting files created since the checkpoint is a second, separate ask:
       // some of them are the agent's, some may be the user's own.
@@ -1568,14 +1686,23 @@ function RevertTurnButton({
             .join("\n")}`,
           { title: "Delete new files", kind: "warning" }
         ));
-      await restoreCheckpoint(projectPath, checkpointId, removeAdded);
-      invalidateGit(projectPath);
+      // Provider first: if rewind fails the tree still matches the conversation.
+      if (rewindConversation) await onRevertConversation(checkpointId);
+      if (changes.length > 0) {
+        await restoreCheckpoint(projectPath, checkpointId, removeAdded);
+        invalidateGit(projectPath);
+      }
       // A revert is a durable fact about the thread, not just a toast.
       void invoke("thread_timeline_append", {
         threadId,
         kind: "checkpointReverted",
         attribution: null,
-        payload: JSON.stringify({ checkpointId, removeAdded, changes: changes.length }),
+        payload: JSON.stringify({
+          checkpointId,
+          removeAdded,
+          changes: changes.length,
+          conversation: rewindConversation,
+        }),
       }).catch(() => {});
       toast.success("Reverted to before this turn");
     } catch (e) {
@@ -1590,7 +1717,11 @@ function RevertTurnButton({
       type="button"
       onClick={() => void revert()}
       disabled={busy}
-      title="Restore the working tree to before this turn"
+      title={
+        rewindConversation
+          ? "Restore the working tree and conversation to before this turn"
+          : "Restore the working tree to before this turn"
+      }
       className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground opacity-0 outline-none transition-opacity hover:text-foreground group-hover:opacity-100 disabled:opacity-40"
     >
       <Undo2 className="size-3.5" />

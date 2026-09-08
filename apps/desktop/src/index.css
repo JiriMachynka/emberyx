@@ -125,6 +125,21 @@
 }
 
 @layer components {
+  /* @pierre/diffs chrome, blended into Emberyx tokens. pierre injects its
+     shadow styles itself and reads these variables off the host; token colors
+     come from Shiki (Vesper), the panel chrome from the app's own tokens. */
+  .pierre-diffs {
+    color-scheme: dark;
+    --diffs-dark-bg: var(--background);
+    --diffs-dark: var(--foreground);
+    --diffs-font-family: var(--code-font);
+    --diffs-font-size: 12.5px;
+    --diffs-line-height: 20px;
+    --diffs-header-font-family: var(--chat-font);
+    --diffs-addition-color-override: var(--color-emerald-400);
+    --diffs-deletion-color-override: var(--color-red-400);
+  }
+
   /* Elevated panel: faint top-lit gradient, hairline highlight on the top
      edge, soft drop shadow. The core "premium, not flat" treatment. */
   .surface-raised {

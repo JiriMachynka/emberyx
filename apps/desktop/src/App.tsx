@@ -37,7 +37,7 @@ import {
   type DockKind,
   type DockState,
 } from "@/lib/dock";
-import { useAgentStore, selectUnreadCount } from "@/lib/agentStore";
+import { useAgentStore, selectUnreadCount, type TurnReviewRequest } from "@/lib/agentStore";
 import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
 import { requestSearch } from "@/lib/searchRequest";
 import { useWorkspace } from "@/hooks/useWorkspace";
@@ -139,6 +139,20 @@ function App() {
     revealed,
     recents,
   } = ws;
+
+  // A transcript card's "Review" scopes the diff tab to that turn's delta. The
+  // request lives in the agent store so any mounted pane can raise it; only the
+  // active project's is consumed — a pane behind a project switch must not aim
+  // the diff tab at checkpoints from a repo that isn't showing.
+  const turnReviewRequest = useAgentStore((s) => s.turnReview);
+  const [turnPick, setTurnPick] = useState<TurnReviewRequest | null>(null);
+  const activeProjectPath = activeProject?.path ?? null;
+  useEffect(() => {
+    if (!turnReviewRequest) return;
+    if (turnReviewRequest.projectPath !== activeProjectPath) return;
+    setTurnPick(turnReviewRequest);
+    showTab("diff");
+  }, [turnReviewRequest, activeProjectPath]);
 
   // ChatPanes are memoized, so their callbacks must keep a stable identity
   // across a session switch or the memo can't short-circuit. updateSettings and
@@ -376,6 +390,9 @@ function App() {
         projectPath={activeProject.path}
         sessionIds={projectSessionIds}
         ignoreWhitespace={settings.diffIgnoreWhitespace}
+        turnPick={turnPick}
+        onExitTurnPick={() => setTurnPick(null)}
+        onPickTurn={setTurnPick}
         onClose={() => hideTab("diff")}
         onOpenWorktree={openWorktreeAndRun}
         onRemoveWorktree={ws.removeWorktree}

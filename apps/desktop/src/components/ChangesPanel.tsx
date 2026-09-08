@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { diffLines } from "diff";
+import { PatchDiff } from "@pierre/diffs/react";
 import {
   ArrowUpFromLine,
   FileDiff,
@@ -12,6 +13,7 @@ import {
   GitBranch,
   Bot,
   Check,
+  ChevronDown,
   Plus,
   Minus,
   Undo2,
@@ -21,6 +23,13 @@ import {
 import { cn } from "@/lib/utils";
 
 import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { basename } from "@/lib/path";
 import { parseDiff, hunkPatch } from "@/lib/hunks";
@@ -30,9 +39,16 @@ import {
   useGitCommitDiff,
   useGitFileDiff,
   useInvalidateGit,
+  useThreadCheckpoints,
+  useTurnDiff,
+  useTurnFiles,
+  fetchTurnContents,
 } from "@/lib/queries";
+import { turnRangesNewestFirst, type TurnRange } from "@/lib/checkpoints";
+import { buildTurnDiffOptions, contentsToLoader } from "@/lib/diffView";
+import { PANEL_REVIEW_WIDTH } from "@/lib/panels";
 import { RecentCommits } from "@/components/RecentCommits";
-import { useAgentStore } from "@/lib/agentStore";
+import { useAgentStore, type TurnReviewRequest } from "@/lib/agentStore";
 import type { Change } from "@/lib/changes";
 import type { GitFile } from "@/types";
 import { GitActions } from "@/components/GitActions";
@@ -226,6 +242,12 @@ interface ChangesPanelProps {
   sessionIds: string[];
   /** Hide whitespace-only changes in the working-tree diff. */
   ignoreWhitespace: boolean;
+  /** A "review this turn" request from a transcript card: the panel shows that
+   *  turn's file delta instead of the working tree. Null = working tree. */
+  turnPick: TurnReviewRequest | null;
+  onExitTurnPick: () => void;
+  /** The dropdown aims the review at another of the thread's turns. */
+  onPickTurn: (pick: TurnReviewRequest) => void;
   onClose: () => void;
   onOpenWorktree: (path: string, repoRoot: string, branch: string) => void;
   onRemoveWorktree: (worktreePath: string, repoRoot: string) => void | Promise<void>;
@@ -242,6 +264,9 @@ export function ChangesPanel({
   projectPath,
   sessionIds,
   ignoreWhitespace,
+  turnPick,
+  onExitTurnPick,
+  onPickTurn,
   onClose,
   onOpenWorktree,
   onRemoveWorktree,
@@ -455,6 +480,10 @@ export function ChangesPanel({
       flushHeader
       embedded={embedded}
       onClose={onClose}
+      // A turn review reads better wide; the working tree keeps the saved width.
+      suggestedWidth={
+        turnPick && turnPick.projectPath === projectPath ? PANEL_REVIEW_WIDTH : null
+      }
       header={
         <div className="flex items-center">
           <TabButton
@@ -485,7 +514,15 @@ export function ChangesPanel({
     >
       {tab === "git" ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          <GitActions
+          {turnPick && turnPick.projectPath === projectPath ? (
+            <TurnReview
+              pick={turnPick}
+              onExit={onExitTurnPick}
+              onPickTurn={(range) => onPickTurn({ ...turnPick, fromId: range.fromId })}
+            />
+          ) : (
+            <>
+              <GitActions
             projectPath={projectPath}
             onOpenWorktree={onOpenWorktree}
             onRemoveWorktree={onRemoveWorktree}
@@ -680,6 +717,8 @@ export function ChangesPanel({
                 )}
               </div>
             </>
+            )}
+            </>
           )}
         </div>
       ) : (
@@ -731,6 +770,155 @@ export function ChangesPanel({
         </Suspense>
       )}
     </SidePanel>
+  );
+}
+
+/** One turn's file delta, the way the transcript's Review button opens it:
+ *  the turn's file list with a filter, and the selected file's patch rendered
+ *  by @pierre/diffs with expandable context. Read-only — staging lives in the
+ *  working-tree view, and a turn's delta is history, not a work queue. */
+function TurnReview({
+  pick,
+  onExit,
+  onPickTurn,
+}: {
+  pick: TurnReviewRequest;
+  onExit: () => void;
+  onPickTurn: (range: TurnRange) => void;
+}) {
+  const checkpoints = useThreadCheckpoints(pick.projectPath, pick.threadId);
+  const ranges = useMemo(
+    () => turnRangesNewestFirst(checkpoints.data ?? []),
+    [checkpoints.data]
+  );
+  const current = ranges.find((range) => range.fromId === pick.fromId);
+  const { data: files } = useTurnFiles(pick.projectPath, pick.threadId, pick.fromId);
+  const [sel, setSel] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+  const visible = useMemo(() => {
+    if (!files) return null;
+    const query = filter.trim().toLowerCase();
+    return query
+      ? files.filter((file) => file.path.toLowerCase().includes(query))
+      : files;
+  }, [files, filter]);
+  // Follow the turn's file list: first visible file by default, and a
+  // selection that left the list (rewind, checkout, filter) moves with it.
+  useEffect(() => {
+    if (!visible) return;
+    if (!sel || !visible.some((file) => file.path === sel)) {
+      setSel(visible[0]?.path ?? null);
+    }
+  }, [visible, sel]);
+  const diff = useTurnDiff(pick.projectPath, pick.threadId, pick.fromId, sel);
+  // Per-turn options: the contents loader closes over this turn, and its
+  // memo identity keeps the underlying FileDiff from restarting.
+  const options = useMemo(
+    () =>
+      buildTurnDiffOptions(
+        contentsToLoader((file) =>
+          fetchTurnContents(pick.projectPath, pick.threadId, pick.fromId, file)
+        )
+      ),
+    [pick.projectPath, pick.threadId, pick.fromId]
+  );
+  const truncated = (diff.data ?? "").endsWith("… patch truncated\n");
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center gap-2 border-b px-2 py-1.5">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="flex min-w-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <FileDiff className="size-3.5 shrink-0" />
+              <span className="max-w-56 truncate">{current?.label ?? "Turn"}</span>
+              <ChevronDown className="size-3 shrink-0" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem onSelect={onExit}>Working tree</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            {ranges.map((range) => (
+              <DropdownMenuItem
+                key={range.fromId}
+                disabled={range.fromId === pick.fromId}
+                onSelect={() => onPickTurn(range)}
+              >
+                <span className="max-w-72 truncate">{range.label}</span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {truncated && (
+          <span className="truncate text-[11px] text-amber-400">
+            Large diff · showing the start
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onExit}
+          title="Back to working tree"
+          className="ml-auto shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <X className="size-3.5" />
+        </button>
+      </div>
+      {!files ? (
+        <Empty>Loading changes…</Empty>
+      ) : files.length === 0 ? (
+        <Empty>This turn changed no files.</Empty>
+      ) : (
+        <>
+          <div className="shrink-0 border-b p-2">
+            <Input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter files…"
+              className="h-7 text-xs"
+            />
+          </div>
+          <ul className="max-h-40 shrink-0 overflow-auto border-b">
+            {(visible ?? []).map((file) => (
+              <li key={file.path}>
+                <button
+                  type="button"
+                  onClick={() => setSel(file.path)}
+                  className={cn(
+                    "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent",
+                    sel === file.path && "bg-secondary"
+                  )}
+                >
+                  <FileTypeIcon path={file.path} />
+                  <span className="flex-1 truncate" title={file.path}>
+                    {file.path}
+                  </span>
+                  {file.additions != null && (
+                    <span className="shrink-0 tabular-nums text-emerald-400">
+                      +{file.additions}
+                    </span>
+                  )}
+                  {file.deletions != null && (
+                    <span className="shrink-0 tabular-nums text-red-400">
+                      −{file.deletions}
+                    </span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="min-h-0 flex-1 overflow-auto">
+            {sel && diff.data ? (
+              <PatchDiff patch={diff.data} options={options} className="pierre-diffs" />
+            ) : sel ? (
+              <Empty>No diff to show.</Empty>
+            ) : null}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

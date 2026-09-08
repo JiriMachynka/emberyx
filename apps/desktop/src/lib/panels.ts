@@ -3,6 +3,10 @@ export const PANEL_MIN_WIDTH = 280;
 
 const DEFAULT_WIDTH = 384;
 
+/** What a panel that is showing a review widens to — a diff wants the room.
+ *  The user's own drag wins when it is already wider. */
+export const PANEL_REVIEW_WIDTH = 620;
+
 const key = (panel: string) => `emberyx.panel.${panel}.width`;
 
 export function getPanelWidth(panel: string): number {

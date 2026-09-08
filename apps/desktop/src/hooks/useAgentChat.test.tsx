@@ -40,6 +40,10 @@ const options = { cwd: "/repo", emberyxSessionId: "emberyx-1" };
 /** Mount the hook and wait until the agent process is reported ready. */
 async function mount(extra: Record<string, unknown> = {}) {
   const view = renderHook(() => useAgentChat({ ...options, ...extra }));
+  // A resumed pane stays asleep until the user shows intent — opening a thread
+  // to read it must not launch a CLI. Every test that resumes below is about
+  // what the agent does once it is awake, so wake it here.
+  if (extra.resume) act(() => view.result.current.wake());
   await waitFor(() => expect(view.result.current.ready).toBe(true));
   const channel = channels[channels.length - 1];
   const emit: Emit = (event) =>
@@ -175,6 +179,37 @@ describe("useAgentChat lifecycle", () => {
   it("passes the thread id through when resuming", async () => {
     await mount({ resume: "sess-9" });
     expect(sentTo("agent_spawn")[0][1]).toMatchObject({ resume: "sess-9" });
+  });
+
+  // Opening an old thread from the sidebar used to launch a CLI just to read
+  // it, on the frame that switches panes. Nothing spawns until the user shows
+  // intent — a keystroke in the composer, or the turn itself.
+  it("spawns nothing for a resumed thread until the pane is woken", async () => {
+    const view = renderHook(() =>
+      useAgentChat({ ...options, resume: "sess-9" })
+    );
+    await waitFor(() => expect(sentTo("thread_messages_page")).toHaveLength(1));
+    expect(sentTo("agent_spawn")).toHaveLength(0);
+    act(() => view.result.current.wake());
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    expect(sentTo("agent_spawn")).toHaveLength(1);
+  });
+
+  // The composer is not disabled while the agent boots, so the first turn is
+  // held rather than dropped — dropping it left the message in the transcript
+  // and nothing on the wire.
+  it("delivers a turn sent before the spawn landed", async () => {
+    const view = renderHook(() =>
+      useAgentChat({ ...options, resume: "sess-9" })
+    );
+    act(() => view.result.current.send("go"));
+    expect(view.result.current.status).toBe("thinking");
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    await waitFor(() =>
+      expect(sentLines()).toEqual([
+        { type: "user", message: { role: "user", content: "go" } },
+      ])
+    );
   });
 
   it("kills the process on unmount", async () => {

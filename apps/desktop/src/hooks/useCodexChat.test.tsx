@@ -31,6 +31,10 @@ type Emit = (event: Record<string, unknown>) => void;
 
 async function mount(extra: Record<string, unknown> = {}) {
   const view = renderHook(() => useCodexChat({ ...options, ...extra }));
+  // A resumed pane stays asleep until the user shows intent — opening a thread
+  // to read it must not launch an app-server. The resume tests below are about
+  // what happens once it is awake.
+  if (extra.resume) act(() => view.result.current.wake());
   await waitFor(() => expect(view.result.current.ready).toBe(true));
   const channel = channels[channels.length - 1];
   const emit: Emit = (event) => act(() => channel.onmessage!(event));
@@ -532,5 +536,56 @@ describe("useCodexChat auto-titling", () => {
     await waitFor(() => expect(sentTo("codex_turn_start")).toHaveLength(1));
     expect(channels).toHaveLength(1);
     expect(onTitled).not.toHaveBeenCalled();
+  });
+});
+
+describe("useCodexChat revertTurn", () => {
+  it("asks app-server to drop the reverted turns and truncates the transcript", async () => {
+    let checkpoints = 0;
+    invoke.mockImplementation((command: string) => {
+      if (command === "codex_spawn") {
+        return Promise.resolve({ id: 7, initialize: {}, version: "0.147.0" });
+      }
+      if (command === "codex_thread_start" || command === "codex_thread_resume") {
+        return Promise.resolve(THREAD);
+      }
+      if (command === "checkpoint_create") {
+        checkpoints += 1;
+        return Promise.resolve({
+          id: `c${checkpoints}`,
+          sha: "s",
+          label: "go",
+          threadId: "emberyx-1",
+          createdAt: checkpoints,
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    const { result, notify } = await mount();
+    act(() => result.current.send("first"));
+    notify("turn/started", { turn: { id: "u1" } });
+    notify("turn/completed", { turn: { id: "u1", status: "completed" } });
+    await frame();
+    await waitFor(() => expect(result.current.messages[0]?.checkpointId).toBe("c1"));
+
+    act(() => result.current.send("second"));
+    notify("turn/started", { turn: { id: "u2" } });
+    notify("turn/completed", { turn: { id: "u2", status: "completed" } });
+    await frame();
+    await waitFor(() => expect(result.current.messages[2]?.checkpointId).toBe("c2"));
+
+    await act(async () => {
+      await result.current.revertTurn("c1");
+    });
+    await frame();
+    expect(sentTo("codex_request")).toContainEqual([
+      "codex_request",
+      {
+        id: 7,
+        method: "thread/rollback",
+        params: { threadId: "t1", numTurns: 2 },
+      },
+    ]);
+    expect(result.current.messages).toEqual([]);
   });
 });

@@ -15,6 +15,7 @@
 //! removed when the caller asks, because deleting a file the user has since
 //! written by hand is not recoverable from here.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -26,6 +27,16 @@ use crate::git::{failure, git, is_repo, run_git};
 /// Where checkpoint commits are parked. Under `refs/` but outside `refs/heads`
 /// and `refs/remotes`, so no branch listing, log, or push ever sees them.
 const REF_PREFIX: &str = "refs/emberyx/checkpoints";
+
+/// Where *settle* snapshots are parked, one per turn: the working tree at the
+/// moment the turn finished. A turn's file delta ends here, so edits the user
+/// makes between turns belong to no turn's delta — they are only visible in
+/// the working-tree review. Keyed by the turn's checkpoint id.
+const SETTLE_PREFIX: &str = "refs/emberyx/settles";
+
+/// Cap for a whole-range patch. Per-file patches are bounded by the file they
+/// describe; this only stops a diff of the entire range from flooding IPC.
+const RANGE_DIFF_LIMIT: usize = 250_000;
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -287,16 +298,266 @@ pub fn checkpoint_restore(
 }
 
 /// Drop a checkpoint. The commit becomes unreachable and git collects it in its
-/// own time; nothing in the working tree changes.
+/// own time; nothing in the working tree changes. The turn's settle snapshot,
+/// if one was taken, goes with it — it would never be read without the
+/// checkpoint that keys it.
 #[tauri::command]
 pub fn checkpoint_delete(path: String, id: String) -> Result<()> {
     let sha = sha_of(&path, &id)?;
     run_git(&path, &["update-ref", "-d", &format!("{REF_PREFIX}/{id}"), &sha])?;
+    // No old-value check: the settle commit's sha is not the checkpoint's, and
+    // a missed delete only leaves an unreadable ref behind.
+    let _ = run_git(&path, &["update-ref", "-d", &format!("{SETTLE_PREFIX}/{id}")]);
     let _ = run_git(
         &path,
         &["config", "--unset", &format!("emberyx.checkpoint.{id}.meta")],
     );
     Ok(())
+}
+
+/// Snapshot the working tree at the moment a turn settles, under the turn's
+/// checkpoint id. The caller swallows failures: a missed settle only means the
+/// turn's delta runs to the next snapshot instead.
+#[tauri::command]
+pub fn checkpoint_settle(path: String, checkpoint_id: String) -> Result<()> {
+    // A settle keys off a checkpoint; without one it would never be read.
+    sha_of(&path, &checkpoint_id)?;
+    let index = ScratchIndex::new();
+    if run_git(&path, &["rev-parse", "--verify", "HEAD"]).is_ok() {
+        git_with_index(&path, &index, &["read-tree", "HEAD"])?;
+    }
+    git_with_index(&path, &index, &["add", "-A"])?;
+    let tree = git_with_index(&path, &index, &["write-tree"])?;
+    let head = run_git(&path, &["rev-parse", "--verify", "HEAD"]).ok();
+    let mut args = vec!["commit-tree", tree.as_str()];
+    if let Some(head) = &head {
+        args.push("-p");
+        args.push(head);
+    }
+    args.push("-m");
+    let message = format!("emberyx settle: {checkpoint_id}");
+    args.push(&message);
+    let sha = run_git(&path, &args)?;
+    run_git(&path, &[
+        "update-ref",
+        &format!("{SETTLE_PREFIX}/{checkpoint_id}"),
+        &sha,
+    ])?;
+    Ok(())
+}
+
+/// One file a turn changed, with its line counts.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointRangeFile {
+    pub path: String,
+    /// `modified`, `added` (created inside the range), or `deleted` (gone).
+    pub kind: String,
+    /// Line counts; null for binary files.
+    pub additions: Option<u64>,
+    pub deletions: Option<u64>,
+}
+
+/// Old and new contents of one file across a turn's range, for the diff
+/// renderer's context expansion — expanding a hunk past the patch's 3-line
+/// context needs the full file, not the patch.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointRangeContents {
+    pub old_text: Option<String>,
+    pub new_text: Option<String>,
+}
+
+/// The tree the working tree has *right now*, untracked files included — the
+/// same snapshot a checkpoint takes, minus the commit and the ref. This is a
+/// range's last-resort end: a plain `git diff <sha>` would miss files the turn
+/// created that were never committed.
+fn snapshot_tree(path: &str) -> Result<String> {
+    let index = ScratchIndex::new();
+    if run_git(path, &["rev-parse", "--verify", "HEAD"]).is_ok() {
+        git_with_index(path, &index, &["read-tree", "HEAD"])?;
+    }
+    git_with_index(path, &index, &["add", "-A"])?;
+    git_with_index(path, &index, &["write-tree"])
+}
+
+/// Both `--numstat` (counts) and `--name-status` (kind) in one walk, keyed by
+/// path. `git diff` accepts a tree object as either side, so `from`/`to` can be
+/// a checkpoint sha or a snapshot tree.
+fn range_files_between(path: &str, from: &str, to: &str) -> Result<Vec<CheckpointRangeFile>> {
+    let numstat = git(path, &["diff", "--numstat", "--no-renames", from, to])?;
+    if !numstat.status.success() {
+        return Err(failure(&numstat));
+    }
+    let statuses = git(path, &["diff", "--name-status", "--no-renames", from, to])?;
+    if !statuses.status.success() {
+        return Err(failure(&statuses));
+    }
+    let kinds: HashMap<String, String> = String::from_utf8_lossy(&statuses.stdout)
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(status, file)| {
+            let kind = match status.chars().next() {
+                Some('A') => "added",
+                Some('D') => "deleted",
+                _ => "modified",
+            };
+            (file.to_string(), kind.to_string())
+        })
+        .collect();
+
+    let mut files: Vec<CheckpointRangeFile> = String::from_utf8_lossy(&numstat.stdout)
+        .lines()
+        .filter_map(|line| {
+            // numstat is "adds<TAB>dels<TAB>path"; a binary file shows "-\t-".
+            let (adds, rest) = line.split_once('\t')?;
+            let (dels, path) = rest.split_once('\t')?;
+            let (additions, deletions) = if adds == "-" {
+                (None, None)
+            } else {
+                (Some(adds.parse().ok()?), Some(dels.parse().ok()?))
+            };
+            Some(CheckpointRangeFile {
+                path: path.to_string(),
+                kind: kinds.get(path).cloned().unwrap_or_else(|| "modified".into()),
+                additions,
+                deletions,
+            })
+        })
+        .collect();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+
+/// Whether the file is textual in this range — a binary blob must not reach a
+/// string-typed contents loader.
+fn range_file_is_text(path: &str, from: &str, to: &str, file: &str) -> Result<bool> {
+    let out = git(
+        path,
+        &["diff", "--numstat", "--no-renames", from, to, "--", file],
+    )?;
+    if !out.status.success() {
+        return Err(failure(&out));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    Ok(!text.starts_with('-') || text.trim().is_empty())
+}
+
+fn blob_at(path: &str, treeish: &str, file: &str) -> Option<String> {
+    let out = git(path, &["show", &format!("{treeish}:{file}")]).ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let bytes = out.stdout;
+    // Cheap binary sniff: NUL in the first 8 KiB. Matches git's own heuristic
+    // closely enough for a viewer.
+    let head = &bytes[..bytes.len().min(8192)];
+    if head.contains(&0) {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Where a turn's file delta ends, in priority order:
+///
+/// 1. The turn's **settle snapshot** — taken when the turn finished, so manual
+///    edits made between turns land in no turn's delta (they are only visible
+///    in the working-tree review).
+/// 2. The next checkpoint of the same thread — the older fallback, for turns
+///    that never got a settle.
+/// 3. The current working tree — the newest turn before any settle lands.
+fn turn_range_end(path: &str, thread_id: &str, from_id: &str) -> Result<String> {
+    if let Ok(settled) = run_git(
+        path,
+        &["rev-parse", "--verify", &format!("{SETTLE_PREFIX}/{from_id}")],
+    ) {
+        return Ok(settled);
+    }
+    let checkpoints = checkpoint_list(path.to_string(), Some(thread_id.to_string()))?;
+    let ascending: Vec<&Checkpoint> = checkpoints.iter().rev().collect();
+    if let Some(position) = ascending.iter().position(|point| point.id == from_id) {
+        if let Some(next) = ascending.get(position + 1) {
+            return Ok(next.sha.clone());
+        }
+    }
+    snapshot_tree(path)
+}
+
+/// What changed in one agent turn: from the snapshot taken before it to its
+/// settle snapshot (or, without one, the next turn's snapshot — or the working
+/// tree for the newest turn that hasn't settled).
+#[tauri::command]
+pub fn checkpoint_turn_files(
+    path: String,
+    thread_id: String,
+    from_id: String,
+) -> Result<Vec<CheckpointRangeFile>> {
+    let from = sha_of(&path, &from_id)?;
+    let to = turn_range_end(&path, &thread_id, &from_id)?;
+    range_files_between(&path, &from, &to)
+}
+
+/// The unified patch for one file inside a turn's range, the way
+/// `git_commit_diff` serves the commit timeline.
+#[tauri::command]
+pub fn checkpoint_turn_diff(
+    path: String,
+    thread_id: String,
+    from_id: String,
+    file: String,
+) -> Result<String> {
+    let from = sha_of(&path, &from_id)?;
+    let to = turn_range_end(&path, &thread_id, &from_id)?;
+    let out = git(
+        &path,
+        &[
+            "diff",
+            "--no-color",
+            "--no-renames",
+            from.as_str(),
+            to.as_str(),
+            "--",
+            &file,
+        ],
+    )?;
+    if !out.status.success() {
+        return Err(failure(&out));
+    }
+    let mut diff = String::from_utf8_lossy(&out.stdout).to_string();
+    if diff.len() > RANGE_DIFF_LIMIT {
+        diff.truncate(RANGE_DIFF_LIMIT);
+        // Never end mid-line: the frontend parses patches, and a cut line is a
+        // hunk git never wrote.
+        if let Some(at) = diff.rfind('\n') {
+            diff.truncate(at + 1);
+        }
+        diff.push_str("… patch truncated\n");
+    }
+    Ok(diff)
+}
+
+/// Full old and new contents of one file across a turn's range, so the diff
+/// renderer can expand hunks past the patch's 3-line context. Nulls when the
+/// file is absent on a side, or binary.
+#[tauri::command]
+pub fn checkpoint_turn_contents(
+    path: String,
+    thread_id: String,
+    from_id: String,
+    file: String,
+) -> Result<CheckpointRangeContents> {
+    let from = sha_of(&path, &from_id)?;
+    let to = turn_range_end(&path, &thread_id, &from_id)?;
+    if !range_file_is_text(&path, &from, &to, &file)? {
+        return Ok(CheckpointRangeContents {
+            old_text: None,
+            new_text: None,
+        });
+    }
+    Ok(CheckpointRangeContents {
+        old_text: blob_at(&path, &from, &file),
+        new_text: blob_at(&path, &to, &file),
+    })
 }
 
 #[cfg(test)]
@@ -459,5 +720,131 @@ mod tests {
         assert!(checkpoint_create(path.clone(), "t1".into(), "x".into()).unwrap().is_none());
         assert!(checkpoint_list(path, None).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The card's data: between turn 1's and turn 2's start snapshots sit exactly
+    // turn 1's edits.
+    #[test]
+    fn turn_files_report_kind_and_counts_between_two_checkpoints() {
+        let repo = seeded("range");
+        let first = checkpoint_create(repo.path(), "t1".into(), "turn one".into())
+            .unwrap()
+            .unwrap();
+        repo.write("kept.txt", "line one\nline two\n");
+        repo.write("created.txt", "brand new\n");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        checkpoint_create(repo.path(), "t1".into(), "turn two".into()).unwrap();
+
+        let files = checkpoint_turn_files(repo.path(), "t1".into(), first.id.clone()).unwrap();
+        let kept = files.iter().find(|f| f.path == "kept.txt").unwrap();
+        assert_eq!(kept.kind, "modified");
+        assert_eq!(kept.additions, Some(2));
+        assert_eq!(kept.deletions, Some(1));
+        let created = files.iter().find(|f| f.path == "created.txt").unwrap();
+        assert_eq!(created.kind, "added");
+        assert_eq!(created.additions, Some(1));
+    }
+
+    // The newest turn's range ends at the working tree until a settle exists,
+    // so a file the turn created and never committed still shows up.
+    #[test]
+    fn an_unsettled_turn_reaches_the_working_tree() {
+        let repo = seeded("open");
+        let point = checkpoint_create(repo.path(), "t1".into(), "before".into())
+            .unwrap()
+            .unwrap();
+        repo.write("kept.txt", "edited\n");
+        repo.write("untracked.txt", "a\nb\nc\n");
+
+        let files = checkpoint_turn_files(repo.path(), "t1".into(), point.id).unwrap();
+        let untracked = files.iter().find(|f| f.path == "untracked.txt").unwrap();
+        assert_eq!(untracked.kind, "added");
+        assert_eq!(untracked.additions, Some(3));
+        assert!(files.iter().any(|f| f.path == "kept.txt" && f.kind == "modified"));
+    }
+
+    // The settle is the point: edits made after the turn finished belong to no
+    // turn's delta, only to the working-tree review.
+    #[test]
+    fn a_settled_turn_stops_at_its_settle() {
+        let repo = seeded("settle");
+        let point = checkpoint_create(repo.path(), "t1".into(), "before".into())
+            .unwrap()
+            .unwrap();
+        repo.write("kept.txt", "the agent's edit\n");
+        checkpoint_settle(repo.path(), point.id.clone()).unwrap();
+        repo.write("kept.txt", "the agent's edit\nplus the user's\n");
+
+        let files = checkpoint_turn_files(repo.path(), "t1".into(), point.id.clone()).unwrap();
+        let kept = files.iter().find(|f| f.path == "kept.txt").unwrap();
+        assert_eq!(kept.additions, Some(1));
+
+        // And the settle ref goes away with the checkpoint.
+        checkpoint_delete(repo.path(), point.id).unwrap();
+        let dir = &repo.0;
+        assert!(!dir.join(".git/refs/emberyx/settles").exists()
+            || std::fs::read_dir(dir.join(".git/refs/emberyx/settles"))
+                .map(|mut entries| entries.next().is_none())
+                .unwrap_or(true));
+    }
+
+    #[test]
+    fn turn_files_report_deletions() {
+        let repo = seeded("gone");
+        let first = checkpoint_create(repo.path(), "t1".into(), "turn one".into())
+            .unwrap()
+            .unwrap();
+        std::fs::remove_file(repo.0.join("kept.txt")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        checkpoint_create(repo.path(), "t1".into(), "turn two".into()).unwrap();
+
+        let files = checkpoint_turn_files(repo.path(), "t1".into(), first.id).unwrap();
+        let gone = files.iter().find(|f| f.path == "kept.txt").unwrap();
+        assert_eq!(gone.kind, "deleted");
+    }
+
+    #[test]
+    fn turn_diff_returns_a_patch_for_one_file() {
+        let repo = seeded("patch");
+        let point = checkpoint_create(repo.path(), "t1".into(), "before".into())
+            .unwrap()
+            .unwrap();
+        repo.write("kept.txt", "the agent changed this\n");
+
+        let patch = checkpoint_turn_diff(repo.path(), "t1".into(), point.id.clone(), "kept.txt".into())
+            .unwrap();
+        assert!(patch.contains("diff --git a/kept.txt"));
+        assert!(patch.contains("+the agent changed this"));
+        assert!(!patch.contains("untracked"));
+    }
+
+    #[test]
+    fn turn_contents_serve_both_sides_for_expansion() {
+        let repo = seeded("contents");
+        repo.write("kept.txt", "original line\n");
+        repo.run(&["add", "-A"]);
+        repo.run(&["commit", "-m", "seed kept"]);
+        let point = checkpoint_create(repo.path(), "t1".into(), "before".into())
+            .unwrap()
+            .unwrap();
+        repo.write("kept.txt", "original line\nadded line\n");
+        repo.write("new.txt", "created\n");
+
+        let contents =
+            checkpoint_turn_contents(repo.path(), "t1".into(), point.id.clone(), "kept.txt".into()).unwrap();
+        assert_eq!(contents.old_text.as_deref(), Some("original line\n"));
+        assert_eq!(
+            contents.new_text.as_deref(),
+            Some("original line\nadded line\n")
+        );
+
+        let created =
+            checkpoint_turn_contents(repo.path(), "t1".into(), point.id.clone(), "new.txt".into()).unwrap();
+        assert!(created.old_text.is_none());
+        assert_eq!(created.new_text.as_deref(), Some("created\n"));
+
+        let missing =
+            checkpoint_turn_contents(repo.path(), "t1".into(), point.id, "nope.txt".into()).unwrap();
+        assert!(missing.old_text.is_none() && missing.new_text.is_none());
     }
 }

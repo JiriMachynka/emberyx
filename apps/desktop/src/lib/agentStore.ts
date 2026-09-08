@@ -73,6 +73,18 @@ export interface HandoffRequest {
 /** Move a conversation to another provider's chat in the same project. */
 export type HandoffFn = (request: HandoffRequest) => void;
 
+/** A request from a transcript card to review one turn's file changes in the
+ *  dock's diff tab. The pane publishes it; App opens the tab and hands the
+ *  payload to the changes panel. The Rust side resolves the turn's range end
+ *  (settle snapshot → next checkpoint → working tree), so no `toId` travels. */
+export interface TurnReviewRequest {
+  projectPath: string;
+  /** The thread the turn belongs to — scopes the source dropdown's turn list. */
+  threadId: string;
+  /** The turn's start checkpoint. */
+  fromId: string;
+}
+
 /**
  * Live agent telemetry, updated at streaming frequency from the hook listener.
  * Kept in a store (not App state) so status/usage/change updates re-render only
@@ -110,6 +122,10 @@ interface AgentState {
    *  Installed by the workspace, which owns the session list. */
   handoff: HandoffFn | null;
   setHandoff: (fn: HandoffFn) => void;
+  /** Latest "review this turn" request from a transcript card. Replaced on
+   *  every click; App consumes it into the diff tab's state. */
+  turnReview: TurnReviewRequest | null;
+  requestTurnReview: (request: TurnReviewRequest) => void;
   selectAgent: (id: string | null) => void;
   registerSender: (
     id: string,
@@ -172,6 +188,10 @@ export const useAgentStore = create<AgentState>()((set) => ({
       return { drafts: rest };
     }),
   setHandoff: (fn) => set({ handoff: fn }),
+  turnReview: null,
+  // A fresh object identity per click, so a repeat click on the same turn
+  // still reads as a new request downstream.
+  requestTurnReview: (request) => set({ turnReview: { ...request } }),
   selectAgent: (id) => set({ selectedAgent: id }),
   registerSender: (id, fn) =>
     set((s) => ({ senders: { ...s.senders, [id]: fn } })),

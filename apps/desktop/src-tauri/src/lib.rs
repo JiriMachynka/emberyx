@@ -1,5 +1,6 @@
 pub mod acp;
 pub mod agent;
+mod claude_session;
 pub mod daemon;
 pub mod daemon_protocol;
 pub mod daemon_runtime;
@@ -126,6 +127,7 @@ pub fn run() {
             codex::codex_hooks_list,
             codex::codex_rate_limits,
             codex::codex_usage,
+            claude_session::claude_session_rewind,
             acp::acp_spawn,
             acp::acp_kill,
             acp::acp_session_new,
@@ -204,6 +206,10 @@ pub fn run() {
             checkpoints::checkpoint_changes,
             checkpoints::checkpoint_restore,
             checkpoints::checkpoint_delete,
+            checkpoints::checkpoint_settle,
+            checkpoints::checkpoint_turn_files,
+            checkpoints::checkpoint_turn_diff,
+            checkpoints::checkpoint_turn_contents,
             git::git_checkout,
             git::git_branch_delete,
             git::git_worktrees,

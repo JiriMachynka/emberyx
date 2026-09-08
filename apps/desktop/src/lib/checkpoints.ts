@@ -108,6 +108,93 @@ export function deleteCheckpoint(projectPath: string, id: string): Promise<void>
   return invoke<void>("checkpoint_delete", { path: projectPath, id });
 }
 
+export interface CheckpointRangeFile {
+  path: string;
+  /** `modified`, `added` (created inside the range), or `deleted` (gone). */
+  kind: "modified" | "added" | "deleted";
+  /** Line counts; null for binary files. */
+  additions: number | null;
+  deletions: number | null;
+}
+
+/** Full old/new contents of one file across a turn's range, for context
+ *  expansion. Null when the file is absent on a side, or binary. */
+export interface CheckpointRangeContents {
+  oldText: string | null;
+  newText: string | null;
+}
+
+/**
+ * One turn's file delta. The Rust side resolves the range end itself — the
+ * turn's settle snapshot when one was taken, else the next turn's checkpoint,
+ * else the working tree — so manual edits made between turns never land in a
+ * turn's delta.
+ */
+export function checkpointTurnFiles(
+  projectPath: string,
+  threadId: string,
+  fromId: string
+): Promise<CheckpointRangeFile[]> {
+  return invoke<CheckpointRangeFile[]>("checkpoint_turn_files", {
+    path: projectPath,
+    threadId,
+    fromId,
+  }).then((files) => (Array.isArray(files) ? files : []));
+}
+
+export function checkpointTurnDiff(
+  projectPath: string,
+  threadId: string,
+  fromId: string,
+  file: string
+): Promise<string> {
+  return invoke<string>("checkpoint_turn_diff", {
+    path: projectPath,
+    threadId,
+    fromId,
+    file,
+  });
+}
+
+export function checkpointTurnContents(
+  projectPath: string,
+  threadId: string,
+  fromId: string,
+  file: string
+): Promise<CheckpointRangeContents> {
+  return invoke<CheckpointRangeContents>("checkpoint_turn_contents", {
+    path: projectPath,
+    threadId,
+    fromId,
+    file,
+  });
+}
+
+/** The turn's list, newest first — the source dropdown's entries. */
+export interface TurnRange {
+  fromId: string;
+  label: string;
+}
+
+export function turnRangesNewestFirst(checkpoints: Checkpoint[]): TurnRange[] {
+  // checkpoint_list already answers newest first.
+  return checkpoints.map((point) => ({ fromId: point.id, label: point.label }));
+}
+
+/** +/− totals for a card, ignoring files numstat couldn't count (binary). */
+export function sumRangeFiles(files: CheckpointRangeFile[]): {
+  additions: number;
+  deletions: number;
+} {
+  return files.reduce(
+    (totals, file) => ({
+      additions: totals.additions + (file.additions ?? 0),
+      deletions: totals.deletions + (file.deletions ?? 0),
+    }),
+    { additions: 0, deletions: 0 }
+  );
+}
+
 /** One line describing what a restore would do, for the confirmation prompt. */
 export function describeRestore(changes: CheckpointChange[]): string {
   const counts = { modified: 0, deleted: 0, added: 0 };

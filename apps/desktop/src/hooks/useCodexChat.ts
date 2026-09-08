@@ -4,14 +4,20 @@
  *
  * Everything about *what a frame means* lives in `lib/codex/adapter`; this hook
  * owns the process, the channel, the pending server requests and React state.
- * Adapter state is held in a ref and published to React at most once per
- * animation frame, so a streaming turn re-renders the pane per frame, not per
- * token.
+ * Adapter state is held in a ref and published to React at most ~8 Hz, so a
+ * streaming turn re-renders the pane a handful of times a second, not per
+ * token. Hidden panes skip the paint until they are shown again.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import {
+  cancelStreamPublish,
+  scheduleStreamPublish,
+  streamPublishMs,
+  type StreamPublishHandle,
+} from "@/lib/streamPublish";
 import {
   APPROVAL_METHODS,
   ASK_METHODS,
@@ -34,6 +40,7 @@ import {
   codexSpawn,
   codexThreadCompact,
   codexThreadResume,
+  codexThreadRollback,
   codexThreadStart,
   codexTurnInterrupt,
   codexTurnSteer,
@@ -43,8 +50,14 @@ import {
 } from "@/lib/codex/transport";
 import { classifyFailure } from "@/lib/accountState";
 import { useAgentStore } from "@/lib/agentStore";
+import { settleTurnCheckpoint } from "@/lib/queries";
 import { registerAgent, setAgentLifecycle } from "@/lib/agentRegistry";
 import { nextChangeId } from "@/lib/changes";
+import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
+import {
+  truncateBeforeCheckpoint,
+  turnsToDrop,
+} from "@/lib/conversationRewind";
 import {
   SESSION_STATUS,
   type ChatImage,
@@ -79,6 +92,9 @@ interface Options {
   /** False while a session of another backend owns this pane — the hook still
    *  runs (rules of hooks) but spawns nothing. */
   enabled?: boolean;
+  /** False while this pane is mounted but hidden. Token paints skip React;
+   *  refs keep accumulating and one flush lands when it is shown again. */
+  visible?: boolean;
 }
 
 /** States where a turn is in flight, so a new message steers it. */
@@ -165,11 +181,20 @@ export function useCodexChat({
   codexSandbox = "",
   onTitled,
   enabled = true,
+  visible = true,
 }: Options) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
   const [ready, setReady] = useState(false);
+  // Whether this pane wants an app-server at all. Opening an old thread from
+  // the sidebar used to launch one just to read it; a resumed thread now waits
+  // for the first send (or a composer focus). A fresh chat was opened to be
+  // talked to, so it starts as before.
+  const [awake, setAwake] = useState(() => !resume);
+  const wake = useCallback(() => setAwake(true), []);
+  // Turns accepted before the process existed, delivered in order once it is.
+  const pendingSendRef = useRef<{ text: string; images?: ChatImage[] }[]>([]);
   const [exitReason, setExitReason] = useState<string | null>(null);
   const [pendingPermission, setPendingPermission] = useState<PendingPermission | null>(
     null
@@ -190,10 +215,17 @@ export function useCodexChat({
   // can be routed back to the right JSON-RPC id.
   const approvalRef = useRef<CodexServerRequest | null>(null);
   const askRef = useRef<CodexAsk | null>(null);
-  const frameRef = useRef<number | null>(null);
+  const frameRef = useRef<StreamPublishHandle | null>(null);
+  const lastPublishRef = useRef(0);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+  const dirtyRef = useRef(false);
   // Titling reads the opening message once, after the first turn settles.
   const titledRef = useRef(false);
   const firstMsgRef = useRef<string | null>(null);
+  // The checkpoint this pane's newest turn is running under — set when the
+  // send-time snapshot lands, read when the turn settles.
+  const lastCheckpointIdRef = useRef<string | null>(null);
   const onTitledRef = useRef(onTitled);
   onTitledRef.current = onTitled;
 
@@ -215,16 +247,21 @@ export function useCodexChat({
   }, [enabled, status, emberyxSessionId, setSessionStatus]);
 
   const cancelFrame = useCallback(() => {
-    if (frameRef.current !== null) {
-      cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
-    }
+    cancelStreamPublish(frameRef.current);
+    frameRef.current = null;
   }, []);
 
   // Every setter bails out when the value is unchanged by identity, so an
   // untouched slice never re-renders its subscribers.
   const publish = useCallback(() => {
     cancelFrame();
+    if (!visibleRef.current) {
+      dirtyRef.current = true;
+      return;
+    }
+    dirtyRef.current = false;
+    lastPublishRef.current =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
     const s = stateRef.current;
     setMessages(s.messages);
     setStatus(s.status);
@@ -233,15 +270,25 @@ export function useCodexChat({
   }, [cancelFrame]);
 
   const schedulePublish = useCallback(() => {
-    if (frameRef.current !== null) return;
-    frameRef.current = requestAnimationFrame(() => {
-      frameRef.current = null;
-      publish();
+    dirtyRef.current = true;
+    frameRef.current = scheduleStreamPublish(frameRef.current, {
+      lastAt: lastPublishRef.current,
+      intervalMs: streamPublishMs(),
+      visible: visibleRef.current,
+      flush: () => {
+        frameRef.current = null;
+        publish();
+      },
     });
   }, [publish]);
 
   // A queued frame can only render into a live component.
   useEffect(() => cancelFrame, [cancelFrame]);
+
+  useEffect(() => {
+    if (!visible) return;
+    if (dirtyRef.current) publish();
+  }, [visible, publish]);
 
   /** Move the chat to a status the transport, not the stream, decided. */
   const setLocalStatus = useCallback(
@@ -307,6 +354,10 @@ export function useCodexChat({
           turnId: eventTurnId,
           status: turn && typeof turn.status === "string" ? turn.status : method,
         });
+        // Freeze this turn's file delta at its settle, so edits made between
+        // turns land in no turn's card. Best-effort.
+        const settledId = lastCheckpointIdRef.current;
+        if (settledId) void settleTurnCheckpoint(cwd, settledId);
       }
       for (const c of changes) {
         addChange({
@@ -322,7 +373,7 @@ export function useCodexChat({
       for (const event of subagents) applySubagent(event);
       if (sessionStatus) setSessionStatus(emberyxSessionId, sessionStatus);
     },
-    [addChange, applySubagent, emberyxSessionId, setSessionStatus]
+    [addChange, applySubagent, emberyxSessionId, setSessionStatus, cwd]
   );
 
   const handleRequest = useCallback(
@@ -353,7 +404,7 @@ export function useCodexChat({
   // Spawn one app-server per (cwd, resume, model, posture) target and open its
   // thread. `attempt` re-runs it for the same target after a restart.
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !awake) return;
     let disposed = false;
     const channel = new Channel<CodexEvent>();
     let stderr = "";
@@ -473,6 +524,7 @@ export function useCodexChat({
     };
   }, [
     enabled,
+    awake,
     cwd,
     resume,
     // Effort rides the next turn; model, sandbox and the launch override are
@@ -511,6 +563,7 @@ export function useCodexChat({
   }, [enabled, status, resume, cwd]);
 
   const restart = useCallback(() => {
+    setAwake(true);
     setPendingPermission(null);
     setPendingAsk(null);
     setExitReason(null);
@@ -557,7 +610,7 @@ export function useCodexChat({
   const send = useCallback(
     (text: string, images?: ChatImage[]) => {
       const hasImages = !!images && images.length > 0;
-      if (idRef.current === null || (!text.trim() && !hasImages)) return;
+      if (!enabled || (!text.trim() && !hasImages)) return;
       if (firstMsgRef.current === null && text.trim()) firstMsgRef.current = text;
       const message: ChatMessage = {
         id: localId(),
@@ -576,10 +629,35 @@ export function useCodexChat({
         errorMessage: null,
       };
       publish();
+      void createCheckpoint(cwd, emberyxSessionId, text).then((point) => {
+        if (!point) return;
+        lastCheckpointIdRef.current = point.id;
+        const cur = stateRef.current;
+        stateRef.current = {
+          ...cur,
+          messages: attachCheckpoint(cur.messages, point.id),
+        };
+        publish();
+      });
+      if (idRef.current === null) {
+        // No app-server yet — this send is what wakes it. The transcript already
+        // shows the turn; it goes on the wire when the spawn lands.
+        pendingSendRef.current.push({ text, images });
+        wake();
+        return;
+      }
       deliver(text, images);
     },
-    [deliver, publish]
+    [cwd, deliver, emberyxSessionId, enabled, publish, wake]
   );
+
+  // Turns accepted before the app-server existed, in the order they were typed.
+  useEffect(() => {
+    if (!ready || pendingSendRef.current.length === 0) return;
+    const held = pendingSendRef.current;
+    pendingSendRef.current = [];
+    for (const turn of held) deliver(turn.text, turn.images);
+  }, [ready, deliver]);
 
   const compact = useCallback(() => {
     const id = idRef.current;
@@ -657,11 +735,28 @@ export function useCodexChat({
     [setLocalStatus]
   );
 
+  /** Drop this user turn and everything after it from Codex's thread. Git
+   *  restore is the caller's job — this is only the provider half. */
+  const revertTurn = useCallback(
+    async (checkpointId: string) => {
+      const id = idRef.current;
+      const threadId = threadRef.current;
+      const drop = turnsToDrop(stateRef.current.messages, checkpointId);
+      if (id === null || !threadId || drop === null || drop < 1) return;
+      await codexThreadRollback(id, threadId, drop);
+      const next = truncateBeforeCheckpoint(stateRef.current.messages, checkpointId);
+      stateRef.current = { ...stateRef.current, messages: next };
+      publish();
+    },
+    [publish]
+  );
+
   return {
     messages,
     status,
     usage,
     ready,
+    wake,
     threadId: liveThreadId,
     send,
     compact,
@@ -675,6 +770,7 @@ export function useCodexChat({
     // run fails the turn in the open rather than silently staying on another.
     modelError: null as string | null,
     rewind,
+    revertTurn,
     pendingPermission,
     respond,
     pendingAsk,

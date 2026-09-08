@@ -5,6 +5,9 @@ import {
   describeRestore,
   listCheckpoints,
   restoreCheckpoint,
+  sumRangeFiles,
+  turnRangesNewestFirst,
+  type Checkpoint,
   type CheckpointChange,
 } from "@/lib/checkpoints";
 
@@ -129,5 +132,38 @@ describe("describeRestore", () => {
 
   it("says so when nothing changed", () => {
     expect(describeRestore([])).toContain("Nothing has changed");
+  });
+});
+
+const point = (id: string, label = `prompt ${id}`): Checkpoint => ({
+  id,
+  sha: `sha-${id}`,
+  label,
+  threadId: "t1",
+  createdAt: 0,
+});
+
+describe("turnRangesNewestFirst", () => {
+  // checkpoint_list answers newest first; the dropdown lists turns the same
+  // way — "Last turn" first — and the Rust side resolves each range end.
+  it("passes the list through newest first with its prompt labels", () => {
+    const ranges = turnRangesNewestFirst([point("c2"), point("c1")]);
+    expect(ranges).toEqual([
+      { fromId: "c2", label: "prompt c2" },
+      { fromId: "c1", label: "prompt c1" },
+    ]);
+  });
+});
+
+describe("sumRangeFiles", () => {
+  it("totals the line counts and skips what numstat could not count", () => {
+    expect(
+      sumRangeFiles([
+        { path: "a.ts", kind: "modified", additions: 3, deletions: 1 },
+        { path: "b.ts", kind: "added", additions: 10, deletions: 0 },
+        { path: "c.bin", kind: "modified", additions: null, deletions: null },
+        { path: "d.ts", kind: "deleted", additions: 0, deletions: 7 },
+      ])
+    ).toEqual({ additions: 13, deletions: 8 });
   });
 });

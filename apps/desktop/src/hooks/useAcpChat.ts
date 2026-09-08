@@ -1,12 +1,13 @@
 /**
- * Drives one ACP agent process (OpenCode today) and exposes the same rendered
+ * Drives one ACP agent process (OpenCode, Grok, Cursor) and exposes the same rendered
  * chat model `useAgentChat` does, so the pane consumes any backend without
  * branching.
  *
  * Everything about *what a frame means* lives in `lib/acp/adapter`; this hook
  * owns the process, the channel, the agent's blocked requests, and React state.
- * Turn state is held in a ref and published at most once per animation frame,
- * so a streaming turn re-renders the pane per frame, not per token.
+ * Turn state is held in a ref and published at most ~8 Hz, so a streaming
+ * turn re-renders the pane a handful of times a second, not per token.
+ * Hidden panes skip the paint until they are shown again.
  *
  * Two ACP facts shape this file:
  *   * the agent blocks on `session/request_permission` and `fs/*` until they
@@ -17,6 +18,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import {
+  cancelStreamPublish,
+  scheduleStreamPublish,
+  streamPublishMs,
+  type StreamPublishHandle,
+} from "@/lib/streamPublish";
 import {
   applyUpdate,
   emptyTurn,
@@ -41,7 +48,9 @@ import {
   type AcpEvent,
   type AcpServerRequest,
 } from "@/lib/acp/transport";
+import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
 import { useAgentStore } from "@/lib/agentStore";
+import { settleTurnCheckpoint } from "@/lib/queries";
 import {
   SESSION_STATUS,
   type ChatMessage,
@@ -58,7 +67,7 @@ const STDERR_CAP = 4000;
 interface Options {
   cwd: string;
   emberyxSessionId: string;
-  /** Provider id — the ACP binary to drive (`opencode`, `grok`, `kilo`). */
+  /** Provider id — the ACP binary to drive (`opencode`, `grok`, `cursor`). */
   provider: string;
   /** ACP session id to resume; omit to open a fresh one. */
   resume?: string;
@@ -70,6 +79,9 @@ interface Options {
   launch?: { command: string | null; args: string[] };
   enabled: boolean;
   onTitled?: (title: string) => void;
+  /** False while this pane is mounted but hidden. Token paints skip React;
+   *  refs keep accumulating and one flush lands when it is shown again. */
+  visible?: boolean;
 }
 
 let nextMessageId = 0;
@@ -83,6 +95,7 @@ export function useAcpChat({
   model,
   launch,
   enabled,
+  visible = true,
 }: Options) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
@@ -99,8 +112,15 @@ export function useAcpChat({
   // Committed turns, plus the one being streamed. Held in refs so a token
   // doesn't have to round-trip through React to be folded in.
   const committedRef = useRef<ChatMessage[]>([]);
+  // The checkpoint this pane's newest turn is running under — set when the
+  // send-time snapshot lands, read when the turn settles.
+  const lastCheckpointIdRef = useRef<string | null>(null);
   const turnRef = useRef<AcpTurn>(emptyTurn());
-  const frameRef = useRef<number | null>(null);
+  const frameRef = useRef<StreamPublishHandle | null>(null);
+  const lastPublishRef = useRef(0);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
+  const dirtyRef = useRef(false);
   const processRef = useRef<number | null>(null);
   const sessionRef = useRef<string | null>(null);
   const channelRef = useRef<Channel<AcpEvent> | null>(null);
@@ -123,14 +143,19 @@ export function useAcpChat({
   }, [enabled, status, emberyxSessionId, setSessionStatus]);
 
   const cancelFrame = useCallback(() => {
-    if (frameRef.current !== null) {
-      cancelAnimationFrame(frameRef.current);
-      frameRef.current = null;
-    }
+    cancelStreamPublish(frameRef.current);
+    frameRef.current = null;
   }, []);
 
   const publish = useCallback(() => {
     cancelFrame();
+    if (!visibleRef.current) {
+      dirtyRef.current = true;
+      return;
+    }
+    dirtyRef.current = false;
+    lastPublishRef.current =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
     const turn = turnRef.current;
     setMessages(
       turn.message ? [...committedRef.current, turn.message] : committedRef.current
@@ -139,15 +164,25 @@ export function useAcpChat({
   }, [cancelFrame]);
 
   const schedulePublish = useCallback(() => {
-    if (frameRef.current !== null) return;
-    frameRef.current = requestAnimationFrame(() => {
-      frameRef.current = null;
-      publish();
+    dirtyRef.current = true;
+    frameRef.current = scheduleStreamPublish(frameRef.current, {
+      lastAt: lastPublishRef.current,
+      intervalMs: streamPublishMs(),
+      visible: visibleRef.current,
+      flush: () => {
+        frameRef.current = null;
+        publish();
+      },
     });
   }, [publish]);
 
   // A queued frame can only render into a live component.
   useEffect(() => cancelFrame, [cancelFrame]);
+
+  useEffect(() => {
+    if (!visible) return;
+    if (dirtyRef.current) publish();
+  }, [visible, publish]);
 
   /** Fold the streamed turn into the committed transcript. */
   const commitTurn = useCallback(
@@ -156,8 +191,12 @@ export function useAcpChat({
       if (ended.message) committedRef.current = [...committedRef.current, ended.message];
       turnRef.current = { message: null, status: ended.status };
       publish();
+      // Freeze this turn's file delta at its settle, so edits made between
+      // turns land in no turn's card. Best-effort.
+      const settledId = lastCheckpointIdRef.current;
+      if (settledId) void settleTurnCheckpoint(cwd, settledId);
     },
-    [publish]
+    [publish, cwd]
   );
 
   /**
@@ -388,9 +427,15 @@ export function useAcpChat({
       stoppedRef.current = false;
       turnRef.current = { message: null, status: "thinking" };
       publish();
+      void createCheckpoint(cwd, emberyxSessionId, text).then((point) => {
+        if (!point) return;
+        lastCheckpointIdRef.current = point.id;
+        committedRef.current = attachCheckpoint(committedRef.current, point.id);
+        publish();
+      });
       void acpPrompt(id, sessionId, text, channel);
     },
-    [publish]
+    [cwd, emberyxSessionId, publish]
   );
 
   const stop = useCallback(() => {
@@ -440,6 +485,9 @@ export function useAcpChat({
     status,
     usage,
     ready,
+    // ACP sessions have nothing to resume, so the pane never opens one it isn't
+    // about to use — the process starts on mount and `wake` is already true.
+    wake: () => {},
     // ACP agents keep no listable thread store, so there is no id the sidebar
     // could resume — see `capabilitiesOf(...).threads`.
     threadId: undefined as string | undefined,
@@ -456,6 +504,9 @@ export function useAcpChat({
     // equivalent, so there is never anything to pull back — which is exactly
     // what `null` means to the composer, leaving Escape to do its usual thing.
     rewind: () => null,
+    // ACP has no turn-aware truncation. Git restore still hangs off the
+    // checkpoint; the conversation stays put, which is why the capability is off.
+    revertTurn: async () => {},
     pendingPermission,
     respond,
     // ACP has no `ask_user`: that is an Emberyx MCP tool wired for Claude. The

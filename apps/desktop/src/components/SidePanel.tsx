@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getPanelWidth, setPanelWidth, PANEL_MIN_WIDTH } from "@/lib/panels";
@@ -19,6 +19,10 @@ interface SidePanelProps {
   /** Render inside another panel: no aside/border/resize/close, just the header
    *  row + body filling the host. The host owns the frame. */
   embedded?: boolean;
+  /** Widen the panel to at least this while set; restore the saved width when
+   *  cleared. A review surface reads better wide, but a user who dragged the
+   *  panel wider than this keeps their width — widening never shrinks. */
+  suggestedWidth?: number | null;
   children: React.ReactNode;
 }
 
@@ -35,10 +39,34 @@ export function SidePanel({
   open = true,
   flushHeader = false,
   embedded = false,
+  suggestedWidth = null,
   children,
 }: SidePanelProps) {
   const [width, setWidth] = useState(() => getPanelWidth(storageKey));
   const asideRef = useRef<HTMLElement>(null);
+  // The width the panel had before a suggestion widened it; -1 marks "already
+  // wide enough", so clearing the suggestion restores nothing.
+  const widenedFrom = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (embedded) return;
+    if (suggestedWidth != null) {
+      if (widenedFrom.current !== null) return;
+      if (width >= suggestedWidth) {
+        widenedFrom.current = -1;
+        return;
+      }
+      widenedFrom.current = width;
+      setWidth(suggestedWidth);
+      setPanelWidth(storageKey, suggestedWidth);
+      return;
+    }
+    if (widenedFrom.current !== null && widenedFrom.current >= 0) {
+      setWidth(widenedFrom.current);
+      setPanelWidth(storageKey, widenedFrom.current);
+    }
+    widenedFrom.current = null;
+  }, [embedded, storageKey, suggestedWidth, width]);
 
   if (embedded) {
     return (

@@ -23,6 +23,13 @@ import type {
 import { listCodexModels, listCodexSkills } from "@/lib/codex/transport";
 import { readAcpModels } from "@/lib/acp/transport";
 import { loadSettings } from "@/lib/settings";
+import {
+  checkpointTurnContents,
+  checkpointTurnDiff,
+  checkpointTurnFiles,
+  listCheckpoints,
+  type Checkpoint,
+} from "@/lib/checkpoints";
 import type { AgentBackend } from "@/lib/agentBackend";
 import type { ProviderStatus } from "@/lib/providers";
 import type {
@@ -46,7 +53,9 @@ export const queryClient = new QueryClient({
     queries: {
       staleTime: 2_000,
       retry: false,
-      refetchOnWindowFocus: true,
+      // Git status/diff on every alt-tab is the lag; mutations still
+      // invalidate explicitly via `useInvalidateGit`.
+      refetchOnWindowFocus: false,
     },
   },
 });
@@ -91,6 +100,90 @@ export const useGitChanges = (path: string, enabled = true) =>
     queryFn: () => invoke<GitFile[]>("git_changes", { path }),
     enabled,
   });
+
+// Turn-review queries. The Rust side resolves each turn's range end (settle
+// snapshot → next checkpoint → working tree), so a range's answer can change
+// exactly once — the moment its settle lands — and nothing here caches
+// forever. Keys put the repo path second so `useInvalidateGit` can flush.
+export const checkpointKeys = {
+  thread: (path: string, threadId: string) =>
+    ["checkpoints", path, "thread", threadId] as const,
+  turnFiles: (path: string, threadId: string, fromId: string) =>
+    ["checkpoints", path, "turnFiles", threadId, fromId] as const,
+  turnDiff: (path: string, threadId: string, fromId: string, file: string) =>
+    ["checkpoints", path, "turnDiff", threadId, fromId, file] as const,
+  turnContents: (path: string, threadId: string, fromId: string, file: string) =>
+    ["checkpoints", path, "turnContents", threadId, fromId, file] as const,
+};
+
+export const useThreadCheckpoints = (
+  path: string,
+  threadId: string | null
+) =>
+  useQuery({
+    queryKey: checkpointKeys.thread(path, threadId ?? ""),
+    queryFn: (): Promise<Checkpoint[]> => listCheckpoints(path, threadId ?? undefined),
+    enabled: !!threadId,
+    staleTime: 30_000,
+  });
+
+export const useTurnFiles = (
+  path: string,
+  threadId: string | null,
+  fromId: string | null,
+  enabled = true
+) =>
+  useQuery({
+    queryKey: checkpointKeys.turnFiles(path, threadId ?? "", fromId ?? ""),
+    queryFn: () => checkpointTurnFiles(path, threadId ?? "", fromId ?? ""),
+    enabled: enabled && !!fromId && !!threadId,
+    staleTime: 0,
+  });
+
+export const useTurnDiff = (
+  path: string,
+  threadId: string | null,
+  fromId: string | null,
+  file: string | null
+) =>
+  useQuery({
+    queryKey: checkpointKeys.turnDiff(path, threadId ?? "", fromId ?? "", file ?? ""),
+    queryFn: () => checkpointTurnDiff(path, threadId ?? "", fromId ?? "", file ?? ""),
+    enabled: !!fromId && !!threadId && !!file,
+    staleTime: 0,
+  });
+
+/** Full both-sides contents for one file, for the diff renderer's context
+ *  expansion. Read through the cache so re-expanding one file pays once. */
+export const fetchTurnContents = (
+  path: string,
+  threadId: string,
+  fromId: string,
+  file: string
+) =>
+  queryClient.fetchQuery({
+    queryKey: checkpointKeys.turnContents(path, threadId, fromId, file),
+    queryFn: () => checkpointTurnContents(path, threadId, fromId, file),
+    staleTime: 0,
+  });
+
+/**
+ * Freeze a turn's file delta: snapshot the working tree now under the turn's
+ * checkpoint id. Best-effort — a missed settle only means the delta runs to
+ * the next snapshot instead — but a landed one invalidates the turn views, so
+ * cards flip from "everything since" to "exactly this turn".
+ */
+export const settleTurnCheckpoint = async (
+  path: string,
+  checkpointId: string
+): Promise<void> => {
+  try {
+    await invoke("checkpoint_settle", { path, checkpointId });
+  } catch {
+    return;
+  }
+  await queryClient.invalidateQueries({ queryKey: ["checkpoints", path] });
+};
 
 const fileDiff = (
   path: string,
@@ -382,6 +475,9 @@ export const useInvalidateGit = () => {
         "remoteHost",
         "defaultBranch",
       ];
+      // Turn-review ranges: the open-ended newest turn's answer changes with
+      // every git mutation, and settle snapshots land between invalidations.
+      qc.invalidateQueries({ queryKey: ["checkpoints", p] });
       for (const key of views) {
         qc.invalidateQueries({ queryKey: ["git", key, p] });
       }
