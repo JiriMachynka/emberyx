@@ -1,10 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { IDES, IDE_LABEL, buildIdeCommand, tokenize } from "@/lib/ide";
+import { IDES, IDE_ICON, IDE_LABEL, buildIdeCommand, tokenize } from "@/lib/ide";
 
 describe("IDES", () => {
   it("labels every editor, including the custom entry", () => {
     for (const ide of IDES) expect(IDE_LABEL[ide.id]).toBe(ide.label);
     expect(IDE_LABEL.custom).toBe("Custom");
+  });
+
+  // A missing file renders as a broken image in the top bar, which is worse
+  // than the generic glyph the editors without a logo already get. tsc has no
+  // node types here, so this checks the naming contract rather than the disk:
+  // every icon is `/ide/<id>.svg` for an id that really exists.
+  it("names every icon after the editor it belongs to", () => {
+    for (const [id, src] of Object.entries(IDE_ICON)) {
+      expect(IDE_LABEL[id as keyof typeof IDE_LABEL]).toBeTruthy();
+      expect(src).toBe(`/ide/${id}.svg`);
+    }
   });
 
   it("gives every editor a way to open a project and a file", () => {

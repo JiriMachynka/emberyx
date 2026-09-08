@@ -89,6 +89,15 @@ export const IDE_LABEL: Record<IdeId, string> = {
   custom: "Custom",
 } as Record<IdeId, string>;
 
+/** Editor logo, served from `public/ide`. Only the editors an icon was drawn
+ *  for appear here — the rest fall back to a generic glyph rather than a
+ *  broken image, which is why this is partial and not a full record. */
+export const IDE_ICON: Partial<Record<IdeId, string>> = {
+  vscode: "/ide/vscode.svg",
+  cursor: "/ide/cursor.svg",
+  zed: "/ide/zed.svg",
+};
+
 export interface IdeTarget {
   project: string;
   file?: string;

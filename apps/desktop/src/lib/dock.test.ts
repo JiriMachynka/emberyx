@@ -101,10 +101,12 @@ describe("showDock / hideDock", () => {
 });
 
 describe("PICKER_OFFERS", () => {
-  it("is six unique surfaces with single-letter shortcuts", () => {
-    expect(PICKER_OFFERS).toHaveLength(6);
-    expect(new Set(PICKER_OFFERS.map((o) => o.kind)).size).toBe(6);
-    expect(new Set(PICKER_OFFERS.map((o) => o.shortcut)).size).toBe(6);
+  // Counted rather than listed: the point is that no surface is offered twice
+  // and no two share a key, whatever the list grows to.
+  it("offers each surface once, with a shortcut of its own", () => {
+    const kinds = PICKER_OFFERS.map((o) => o.kind);
+    expect(new Set(kinds).size).toBe(kinds.length);
+    expect(new Set(PICKER_OFFERS.map((o) => o.shortcut)).size).toBe(kinds.length);
     expect(PICKER_OFFERS.every((o) => o.shortcut.length === 1)).toBe(true);
   });
 });

@@ -1,10 +1,11 @@
 /**
- * Which git action the commit menu offers first.
+ * Which git action the commit menu offers first, and what its dropdown lists.
  *
- * The primary button adapts to the repo's state rather than sitting behind a
- * menu: the common move on a feature branch is commit → push → open a PR, and
- * on the default branch it is commit → push. Every action the state allows is
- * still reachable from the split menu, so the adaptation never hides one.
+ * The primary is **Commit & push** whenever there is anything to commit — a
+ * fixed, predictable action rather than one that changes shape with the repo's
+ * state. The dropdown always lists the same three moves (commit & push,
+ * commit, push) so the one you want is in the same place every time, with the
+ * state-dependent extras (open a PR, pull) below them.
  */
 
 export type GitActionKind =
@@ -53,14 +54,10 @@ const prReachable = (s: GitActionState) =>
 /** Whether a commit is possible at all — staged or not. */
 const canCommit = (s: GitActionState) => s.staged + s.unstaged > 0;
 
-/** The action the primary button runs. */
+/** The action the primary button runs. Committing and pushing is the move this
+ *  app is for; opening a PR is still one item away in the dropdown. */
 export function primaryAction(s: GitActionState): GitAction {
-  if (canCommit(s)) {
-    if (prReachable(s)) {
-      return { kind: "commitPushPr", label: "Commit, push & open PR" };
-    }
-    return { kind: "commitPush", label: "Commit & push" };
-  }
+  if (canCommit(s)) return { kind: "commitPush", label: "Commit & push" };
   if (s.ahead > 0 || (!s.upstream && !s.isDefaultBranch)) {
     return prReachable(s)
       ? { kind: "pushPr", label: "Push & open PR" }
@@ -77,17 +74,30 @@ export function primaryAction(s: GitActionState): GitAction {
   };
 }
 
-/** Everything else worth offering, in menu order — the primary is dropped so
- *  the same action is never listed twice. */
+/** Why a commit or a push can't run right now, or undefined when it can. An
+ *  action that is listed but unavailable says why rather than disappearing —
+ *  a menu whose items move around is a menu you have to read every time. */
+const commitReason = (s: GitActionState) =>
+  canCommit(s) ? undefined : "Nothing to commit";
+
+const pushReason = (s: GitActionState) =>
+  s.ahead > 0 || !s.upstream ? undefined : "Nothing to push";
+
+/** Everything the menu offers, in a fixed order. The first three are always
+ *  present — including the primary, so the dropdown is a complete list of the
+ *  moves rather than "the ones the button isn't doing". */
 export function menuActions(s: GitActionState): GitAction[] {
-  const primary = primaryAction(s).kind;
-  const all: GitAction[] = [];
-  if (canCommit(s)) {
-    all.push({ kind: "commit", label: "Commit" });
-    all.push({ kind: "commitPush", label: "Commit & push" });
+  const all: GitAction[] = [
+    { kind: "commitPush", label: "Commit & push", disabledReason: commitReason(s) },
+    { kind: "commit", label: "Commit", disabledReason: commitReason(s) },
+    { kind: "push", label: "Push", disabledReason: pushReason(s) },
+  ];
+  if (prReachable(s)) {
+    all.push({
+      kind: canCommit(s) ? "commitPushPr" : "pushPr",
+      label: canCommit(s) ? "Commit, push & open PR" : "Push & open PR",
+    });
   }
-  if (s.ahead > 0 || !s.upstream) all.push({ kind: "push", label: "Push" });
-  if (prReachable(s)) all.push({ kind: "openPr", label: "Open PR" });
   if (s.upstream) {
     all.push({
       kind: "pull",
@@ -95,7 +105,9 @@ export function menuActions(s: GitActionState): GitAction[] {
       ...(s.behind === 0 ? { disabledReason: "Already up to date" } : {}),
     });
   }
-  return all.filter((a) => a.kind !== primary);
+  return all.map((a) =>
+    a.disabledReason === undefined ? { kind: a.kind, label: a.label } : a
+  );
 }
 
 /** Actions that write a commit, so the menu knows when a message is required. */

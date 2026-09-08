@@ -1,18 +1,13 @@
-import {
-  Globe,
-  GitPullRequest,
-  PanelRight,
-  Terminal,
-} from "lucide-react";
+import { GitGraph, PanelRight, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ProjectMark } from "@/components/ProjectMark";
 import { ActionsMenu } from "@/components/ActionsMenu";
+import { OpenInIde } from "@/components/OpenInIde";
 import { GitCommitMenu } from "@/components/GitCommitMenu";
 import type { ProjectAction } from "@/lib/actions";
 import { basename } from "@/lib/path";
 import { glyphFor } from "@/lib/projectGlyph";
 import { useGitRemoteHost } from "@/lib/queries";
-import { FORGE_NOUN, isRemoteHost } from "@/lib/forge";
 import type { Project, Session } from "@/types";
 
 /** Fresh chats are labeled "chat" until a title exists; don't show that. */
@@ -22,9 +17,6 @@ interface ContextBarProps {
   activeProject: Project | null;
   agent: Session | undefined;
   devRunning: boolean;
-  mrsOpen: boolean;
-  previewOpen: boolean;
-  onTogglePreview: () => void;
   devOpen: boolean;
   /** Running action output in this project — badge on the Output toggle. */
   devCount: number;
@@ -36,7 +28,8 @@ interface ContextBarProps {
   onEditAction: (action: ProjectAction) => void;
   onAddAction: () => void;
   onStopDev: () => void;
-  onToggleMrs: () => void;
+  gitOpen: boolean;
+  onToggleGit: () => void;
   dockOpen: boolean;
   onToggleDock: () => void;
 }
@@ -46,9 +39,6 @@ export function ContextBar({
   activeProject,
   agent,
   devRunning,
-  mrsOpen,
-  previewOpen,
-  onTogglePreview,
   devOpen,
   devCount,
   onToggleDev,
@@ -58,7 +48,8 @@ export function ContextBar({
   onEditAction,
   onAddAction,
   onStopDev,
-  onToggleMrs,
+  gitOpen,
+  onToggleGit,
   dockOpen,
   onToggleDock,
 }: ContextBarProps) {
@@ -97,9 +88,9 @@ export function ContextBar({
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
+        {activeProject && <OpenInIde projectPath={activeProject.path} />}
         {activeProject && (
           <ActionsMenu
-            projectPath={activeProject.path}
             actions={actions}
             running={devRunning}
             onRun={onRunAction}
@@ -109,6 +100,17 @@ export function ContextBar({
           />
         )}
         {activeProject && (
+          <Button
+            variant={gitOpen ? "chromeActive" : "chrome"}
+            size="sm"
+            onClick={onToggleGit}
+            title="Branch actions and commit history"
+          >
+            <GitGraph className="size-3.5" />
+            Git
+          </Button>
+        )}
+        {activeProject && (
           <GitCommitMenu
             projectPath={activeProject.path}
             remoteHost={remoteHost}
@@ -116,7 +118,7 @@ export function ContextBar({
         )}
         {devCount > 0 && (
           <Button
-            variant={devOpen ? "secondary" : "ghost"}
+            variant={devOpen ? "chromeActive" : "chrome"}
             size="sm"
             onClick={onToggleDev}
             title="Action output"
@@ -130,29 +132,7 @@ export function ContextBar({
         )}
         {activeProject && (
           <Button
-            variant={previewOpen ? "secondary" : "ghost"}
-            size="sm"
-            onClick={onTogglePreview}
-            title="Preview a running dev server"
-          >
-            <Globe className="size-3.5" />
-            Preview
-          </Button>
-        )}
-        {activeProject && remoteHost && isRemoteHost(remoteHost) && (
-          <Button
-            variant={mrsOpen ? "secondary" : "ghost"}
-            size="sm"
-            onClick={onToggleMrs}
-            title={FORGE_NOUN[remoteHost].many}
-          >
-            <GitPullRequest className="size-3.5" />
-            {remoteHost === "github" ? "PRs" : "MRs"}
-          </Button>
-        )}
-        {activeProject && (
-          <Button
-            variant={dockOpen ? "secondary" : "ghost"}
+            variant={dockOpen ? "chromeActive" : "chrome"}
             size="icon"
             onClick={onToggleDock}
             title={dockOpen ? "Close dock" : "Open dock"}

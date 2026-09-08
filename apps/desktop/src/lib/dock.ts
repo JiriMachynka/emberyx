@@ -12,6 +12,7 @@ export type DockKind =
   | "terminal"
   | "files"
   | "diff"
+  | "git"
   | "preview"
   | "mrs"
   | "dev"
@@ -22,6 +23,7 @@ export const DOCK_KINDS: readonly DockKind[] = [
   "terminal",
   "files",
   "diff",
+  "git",
   "preview",
   "mrs",
   "dev",
@@ -32,6 +34,7 @@ export const DOCK_LABEL: Record<DockKind, string> = {
   terminal: "Terminal",
   files: "Files",
   diff: "Diff",
+  git: "Git",
   preview: "Preview",
   mrs: "Reviews",
   dev: "Output",
@@ -54,6 +57,7 @@ export const PICKER_OFFERS = [
   { kind: "preview", shortcut: "B", blurb: "Open a local app or URL." },
   { kind: "files", shortcut: "F", blurb: "Browse and read workspace files." },
   { kind: "diff", shortcut: "D", blurb: "Review uncommitted changes." },
+  { kind: "git", shortcut: "G", blurb: "Branch actions and commit history." },
   { kind: "mrs", shortcut: "P", blurb: "Review open requests on this branch." },
   { kind: "dev", shortcut: "O", blurb: "Running servers and command output." },
 ] as const satisfies readonly DockOffer[];

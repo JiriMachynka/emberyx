@@ -1,6 +1,7 @@
 import {
   FolderOpen,
   GitCompare,
+  GitGraph,
   GitPullRequest,
   Globe,
   SlidersHorizontal,
@@ -17,6 +18,7 @@ export const DOCK_ICONS: Record<DockKind, LucideIcon> = {
   terminal: Terminal,
   files: FolderOpen,
   diff: GitCompare,
+  git: GitGraph,
   preview: Globe,
   mrs: GitPullRequest,
   dev: SquareTerminal,

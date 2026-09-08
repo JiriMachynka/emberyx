@@ -1,18 +1,13 @@
 import { Suspense, lazy, memo, useEffect, useMemo, useState } from "react";
 import { isStaged, isUnstaged } from "@/lib/gitStatus";
-import type { CommitPush } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
-import { diffLines } from "diff";
 import { PatchDiff } from "@pierre/diffs/react";
 import {
-  ArrowUpFromLine,
   FileDiff,
   RefreshCw,
   GitBranch,
-  Bot,
-  Check,
   ChevronDown,
   Plus,
   Minus,
@@ -45,11 +40,8 @@ import {
 import { turnRangesNewestFirst, type TurnRange } from "@/lib/checkpoints";
 import { buildTurnDiffOptions, contentsToLoader } from "@/lib/diffView";
 import { PANEL_REVIEW_WIDTH } from "@/lib/panels";
-import { RecentCommits } from "@/components/RecentCommits";
-import { useAgentStore, type TurnReviewRequest } from "@/lib/agentStore";
-import type { Change } from "@/lib/changes";
+import type { CommitReviewRequest, TurnReviewRequest } from "@/lib/agentStore";
 import type { GitFile } from "@/types";
-import { GitActions } from "@/components/GitActions";
 // File history is a drill-down, not part of the changes list — and it carries
 // its own diff rendering. Only a session that opens it pays for it.
 const GitRewind = lazy(() =>
@@ -193,45 +185,9 @@ function UnifiedDiff({
   );
 }
 
-/** jsdiff view of an agent edit (old vs new), syntax-highlighted. */
-function EditDiff({ change }: { change: Change }) {
-  const lang = useMemo(() => langFromPath(change.file), [change.file]);
-  const parts = useMemo(
-    () => diffLines(change.oldText, change.newText),
-    [change.oldText, change.newText]
-  );
-  return (
-    <pre className="overflow-x-auto whitespace-pre py-1 font-mono text-xs leading-relaxed">
-      <div className="w-max min-w-full">
-        {parts.map((part, i) =>
-          part.value
-            .replace(/\n$/, "")
-            .split("\n")
-            .map((line, j) => (
-              <DiffLine
-                key={`${i}-${j}`}
-                marker={part.added ? "+" : part.removed ? "-" : " "}
-                code={line}
-                lang={lang}
-                tint={
-                  part.added
-                    ? "border-emerald-500/50 bg-emerald-500/15"
-                    : part.removed
-                      ? "border-red-500/50 bg-red-500/15"
-                      : ""
-                }
-              />
-            ))
-        )}
-      </div>
-    </pre>
-  );
-}
 
 interface ChangesPanelProps {
   projectPath: string;
-  /** Session ids in this project — selects its slice of the agent edit feed. */
-  sessionIds: string[];
   /** Hide whitespace-only changes in the working-tree diff. */
   ignoreWhitespace: boolean;
   /** A "review this turn" request from a transcript card: the panel shows that
@@ -240,9 +196,11 @@ interface ChangesPanelProps {
   onExitTurnPick: () => void;
   /** The dropdown aims the review at another of the thread's turns. */
   onPickTurn: (pick: TurnReviewRequest) => void;
+  /** A file picked out of the git menu's commit history: the panel shows that
+   *  commit's read-only diff instead of the working tree. */
+  commitPick: CommitReviewRequest | null;
+  onExitCommitPick: () => void;
   onClose: () => void;
-  onOpenWorktree: (path: string, repoRoot: string, branch: string) => void;
-  onRemoveWorktree: (worktreePath: string, repoRoot: string) => void | Promise<void>;
   /** Render inside the surface panel rather than as its own right aside. */
   embedded?: boolean;
   /** This dock tab is the one on screen. A diff tab that is open but behind
@@ -254,33 +212,22 @@ interface ChangesPanelProps {
 
 export function ChangesPanel({
   projectPath,
-  sessionIds,
   ignoreWhitespace,
   turnPick,
   onExitTurnPick,
   onPickTurn,
+  commitPick,
+  onExitCommitPick,
   onClose,
-  onOpenWorktree,
-  onRemoveWorktree,
   embedded,
   active = true,
 }: ChangesPanelProps) {
-  const [tab, setTab] = useState<"git" | "agent">("git");
   // The working-tree surface renders one scope as one patch, so staged and
   // unstaged are a toggle rather than two lists — a single patch can only
   // describe one side of the index.
   const [scope, setScope] = useState<"working" | "staged">("working");
 
-  // This project's slice of the live agent edit feed. Select the whole feed
-  // (its ref only changes when edits arrive) then filter, so status/usage
-  // updates don't re-render the panel.
-  const allChanges = useAgentStore((s) => s.changes);
-  const changes = useMemo(
-    () => allChanges.filter((c) => sessionIds.includes(c.session)),
-    [allChanges, sessionIds]
-  );
-
-  // Git tab state. The index is the source of truth: a file shows up under
+  // The index is the source of truth: a file shows up under
   // "Staged" when its index column is dirty and under "Changes" when its
   // worktree column is, so partly-staged files appear in both.
   const gitQuery = useGitChanges(projectPath, active);
@@ -290,28 +237,11 @@ export function ChangesPanel({
 
   const invalidateGit = useInvalidateGit();
 
-  // A file picked out of the commit timeline. When set, the diff pane shows the
-  // read-only commit diff instead of the working-tree diff.
-  const [commitPick, setCommitPick] = useState<{
-    sha: string;
-    file: string;
-    subject: string;
-  } | null>(null);
   const commitDiffQuery = useGitCommitDiff(
     projectPath,
     commitPick?.sha ?? null,
     commitPick?.file ?? null
   );
-
-  // Commit state.
-  const [commitMsg, setCommitMsg] = useState("");
-  const [committing, setCommitting] = useState(false);
-  const [commitErr, setCommitErr] = useState<string | null>(null);
-
-  // Agent tab state.
-  const [agentSelId, setAgentSelId] = useState<number | null>(null);
-  const agentSel =
-    changes.find((c) => c.id === agentSelId) ?? changes[changes.length - 1];
 
   /** Run a git mutation, refresh every git view, and toast on failure. */
   async function run(fn: () => Promise<unknown>, what: string) {
@@ -375,7 +305,7 @@ export function ChangesPanel({
     projectPath,
     scope === "staged",
     ignoreWhitespace,
-    active && tab === "git" && !turnPick
+    active && !turnPick
   );
 
   const onHunk = (patch: string, action: "stage" | "unstage" | "discard") => {
@@ -393,66 +323,6 @@ export function ChangesPanel({
   };
 
 
-  /** Commit, then push in the same action. The Rust side does the safety
-   *  checks before it commits, so a refusal never strands a commit here. */
-  async function doCommitAndPush() {
-    if (!stagedFiles.length || !commitMsg.trim() || committing) return;
-    setCommitting(true);
-    setCommitErr(null);
-    try {
-      let out = await invoke<CommitPush>("git_commit_and_push", {
-        path: projectPath,
-        message: commitMsg.trim(),
-        setUpstream: false,
-      });
-      if (out.needsUpstream) {
-        const publish = await ask(
-          `"${out.branch}" isn't on the remote yet. Push it to origin and track it?`,
-          { title: "Publish branch", kind: "info" }
-        );
-        if (!publish) return;
-        out = await invoke<CommitPush>("git_commit_and_push", {
-          path: projectPath,
-          message: commitMsg.trim(),
-          setUpstream: true,
-        });
-      }
-      if (out.committed) {
-        setCommitMsg("");
-      }
-      // A commit that landed with a failed push is not an error to swallow —
-      // the user needs to know the history moved even though the remote didn't.
-      if (out.committed && !out.pushed) {
-        toast.warning("Committed, but not pushed", { description: out.message });
-      } else if (out.pushed) {
-        toast.success(`Pushed to ${out.branch}`);
-      }
-    } catch (e) {
-      setCommitErr(String(e));
-    } finally {
-      setCommitting(false);
-      invalidateGit(projectPath);
-    }
-  }
-
-  async function doCommit() {
-    if (!stagedFiles.length || !commitMsg.trim() || committing) return;
-    setCommitting(true);
-    setCommitErr(null);
-    try {
-      await invoke<string>("git_commit", {
-        path: projectPath,
-        message: commitMsg.trim(),
-      });
-      setCommitMsg("");
-      invalidateGit(projectPath);
-    } catch (e) {
-      setCommitErr(String(e));
-    } finally {
-      setCommitting(false);
-    }
-  }
-
   return (
     <SidePanel
       storageKey="changes"
@@ -463,36 +333,56 @@ export function ChangesPanel({
       suggestedWidth={
         turnPick && turnPick.projectPath === projectPath ? PANEL_REVIEW_WIDTH : null
       }
+      // Scope is the only chrome this panel owns now: branch actions, history
+      // and committing moved to the top bar's git menu, so opening the diff no
+      // longer starts halfway down the panel.
       header={
-        <div className="flex items-center">
-          <TabButton
-            active={tab === "git"}
-            onClick={() => setTab("git")}
-            icon={<GitBranch className="size-4" />}
-            label={`Git${gitFiles.length ? ` (${gitFiles.length})` : ""}`}
-          />
-          <TabButton
-            active={tab === "agent"}
-            onClick={() => setTab("agent")}
-            icon={<Bot className="size-4" />}
-            label={`Agent${changes.length ? ` (${changes.length})` : ""}`}
-          />
-        </div>
-      }
-      actions={
-        tab === "git" && (
-          <button
-            onClick={() => invalidateGit(projectPath)}
-            className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="Refresh"
-          >
-            <RefreshCw className="size-3.5" />
-          </button>
+        !turnPick && gitFiles.length > 0 ? (
+          <div className="flex flex-1 items-center gap-1 px-2 py-1">
+            <ScopeButton
+              active={scope === "working"}
+              onClick={() => setScope("working")}
+              label="Working tree"
+              count={unstagedFiles.length}
+            />
+            <ScopeButton
+              active={scope === "staged"}
+              onClick={() => setScope("staged")}
+              label="Staged"
+              count={stagedFiles.length}
+            />
+            <button
+              onClick={scope === "staged" ? unstageAll : stageAll}
+              className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              {scope === "staged" ? (
+                <>
+                  <Minus className="size-3" />
+                  Unstage all
+                </>
+              ) : (
+                <>
+                  <Plus className="size-3" />
+                  Stage all
+                </>
+              )}
+            </button>
+          </div>
+        ) : (
+          <span className="px-2 text-xs font-medium text-muted-foreground">Diff</span>
         )
       }
+      actions={
+        <button
+          onClick={() => invalidateGit(projectPath)}
+          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+          title="Refresh"
+        >
+          <RefreshCw className="size-3.5" />
+        </button>
+      }
     >
-      {tab === "git" ? (
-        <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col">
           {turnPick && turnPick.projectPath === projectPath ? (
             <TurnReview
               pick={turnPick}
@@ -501,98 +391,12 @@ export function ChangesPanel({
             />
           ) : (
             <>
-              <GitActions
-            projectPath={projectPath}
-            onOpenWorktree={onOpenWorktree}
-            onRemoveWorktree={onRemoveWorktree}
-          />
-          {gitFiles.length === 0 ? (
+              {gitFiles.length === 0 ? (
             <Empty icon={<GitBranch className="size-5" />}>
               No working-tree changes (or not a git repo).
             </Empty>
           ) : (
             <>
-              <div className="flex shrink-0 items-center gap-1 border-b px-2 py-1.5">
-                <ScopeButton
-                  active={scope === "working"}
-                  onClick={() => setScope("working")}
-                  label="Working tree"
-                  count={unstagedFiles.length}
-                />
-                <ScopeButton
-                  active={scope === "staged"}
-                  onClick={() => setScope("staged")}
-                  label="Staged"
-                  count={stagedFiles.length}
-                />
-                <button
-                  onClick={scope === "staged" ? unstageAll : stageAll}
-                  className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                >
-                  {scope === "staged" ? (
-                    <>
-                      <Minus className="size-3" />
-                      Unstage all
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="size-3" />
-                      Stage all
-                    </>
-                  )}
-                </button>
-              </div>
-              {stagedFiles.length > 0 && (
-                <div className="shrink-0 space-y-1.5 border-b p-2">
-                  <Input
-                    value={commitMsg}
-                    onChange={(e) => setCommitMsg(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void doCommit();
-                    }}
-                    placeholder={`Commit message for ${stagedFiles.length} file${
-                      stagedFiles.length > 1 ? "s" : ""
-                    }…`}
-                    className="h-8 text-xs"
-                  />
-                  {commitErr && (
-                    <p className="whitespace-pre-wrap text-[11px] text-red-400">
-                      {commitErr}
-                    </p>
-                  )}
-                  <div className="flex justify-end gap-2">
-                    <button
-                      onClick={unstageAll}
-                      className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-                    >
-                      Unstage all
-                    </button>
-                    <button
-                      onClick={() => void doCommit()}
-                      disabled={committing || !commitMsg.trim()}
-                      className="flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-40"
-                    >
-                      <Check className="size-3.5" />
-                      Commit {stagedFiles.length}
-                    </button>
-                    <button
-                      onClick={() => void doCommitAndPush()}
-                      disabled={committing || !commitMsg.trim()}
-                      title="Commit the staged files and push the branch"
-                      className="flex items-center gap-1.5 rounded bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-40"
-                    >
-                      <ArrowUpFromLine className="size-3.5" />
-                      Commit &amp; push
-                    </button>
-                  </div>
-                </div>
-              )}
-              <RecentCommits
-                projectPath={projectPath}
-                onPickCommitFile={(sha, file, subject) =>
-                  setCommitPick({ sha, file, subject })
-                }
-              />
               <div className="min-h-0 flex-1 overflow-auto">
                 {commitPick ? (
                   <>
@@ -601,7 +405,7 @@ export function ChangesPanel({
                         {basename(commitPick.file)} · {commitPick.sha.slice(0, 7)}
                       </span>
                       <button
-                        onClick={() => setCommitPick(null)}
+                        onClick={onExitCommitPick}
                         title="Back to working tree"
                         className="ml-auto shrink-0 rounded p-0.5 hover:bg-accent hover:text-foreground"
                       >
@@ -629,48 +433,10 @@ export function ChangesPanel({
                 )}
               </div>
             </>
-            )}
-            </>
-          )}
-        </div>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col">
-          {changes.length === 0 ? (
-            <Empty icon={<FileDiff className="size-5" />}>
-              Edits the agent makes show up here.
-            </Empty>
-          ) : (
-            <>
-              <ul className="max-h-40 shrink-0 overflow-auto border-b">
-                {[...changes].reverse().map((c) => (
-                  <li key={c.id}>
-                    <button
-                      onClick={() => setAgentSelId(c.id)}
-                      className={cn(
-                        "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent",
-                        agentSel?.id === c.id && "bg-secondary"
-                      )}
-                    >
-                      <span className="rounded bg-secondary px-1 text-[10px] text-muted-foreground">
-                        {c.tool}
-                      </span>
-                      <span className="flex-1 truncate">{basename(c.file)}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-              {agentSel && (
-                <div className="min-h-0 flex-1 overflow-auto">
-                  <div className="border-b px-3 py-1.5 text-[11px] text-muted-foreground">
-                    {agentSel.file}
-                  </div>
-                  <EditDiff change={agentSel} />
-                </div>
               )}
             </>
           )}
-        </div>
-      )}
+      </div>
 
       {historyFile && (
         <Suspense fallback={null}>
@@ -866,32 +632,6 @@ function TurnReview({
 
 
 
-function TabButton({
-  active,
-  onClick,
-  icon,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ReactNode;
-  label: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "flex items-center gap-1.5 rounded px-3 py-1.5 text-sm",
-        active
-          ? "bg-secondary text-foreground"
-          : "text-muted-foreground hover:text-foreground"
-      )}
-    >
-      {icon}
-      {label}
-    </button>
-  );
-}
 
 function Empty({
   icon,

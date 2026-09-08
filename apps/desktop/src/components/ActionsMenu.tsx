@@ -1,7 +1,4 @@
-import { useState } from "react";
-import { ChevronDown, Pencil, Play, Plus, Square, SquareArrowOutUpRight } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
-import { toast } from "sonner";
+import { ChevronDown, Pencil, Play, Plus, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -11,13 +8,9 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { IDE_LABEL, buildIdeCommand } from "@/lib/ide";
-import { loadSettings } from "@/lib/settings";
 import type { ProjectAction } from "@/lib/actions";
 
 interface ActionsMenuProps {
-  /** Project root, for "Open in <editor>". */
-  projectPath: string;
   actions: ProjectAction[];
   running: boolean;
   onRun: (action: ProjectAction) => void;
@@ -29,7 +22,6 @@ interface ActionsMenuProps {
 /** Top-bar menu of project actions: run one, edit it, or add a new one.
  *  Replaces the old detection-driven Dev split button. */
 export function ActionsMenu({
-  projectPath,
   actions,
   running,
   onRun,
@@ -40,7 +32,7 @@ export function ActionsMenu({
   return (
     <div className="flex items-center gap-1">
       {running && (
-        <Button variant="ghost" size="sm" onClick={onStop} title="Stop running">
+        <Button variant="chrome" size="sm" onClick={onStop} title="Stop running">
           <Square className="size-3.5 fill-current" />
           Stop
         </Button>
@@ -48,7 +40,7 @@ export function ActionsMenu({
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
-            variant={running ? "secondary" : "ghost"}
+            variant={running ? "chromeActive" : "chrome"}
             size="sm"
             title={running ? "An action is running" : "Run an action"}
           >
@@ -82,7 +74,11 @@ export function ActionsMenu({
               <button
                 type="button"
                 title="Edit action"
+                // A menu item selects on *pointerup* — Radix dispatches the
+                // item's click from there. Stopping pointerdown and click left
+                // that path open, so editing an action also ran it.
                 onPointerDown={(e) => e.stopPropagation()}
+                onPointerUp={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
                   onEdit(a);
@@ -98,41 +94,8 @@ export function ActionsMenu({
             <Plus className="size-3.5" />
             Add action…
           </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <OpenInIdeItem projectPath={projectPath} />
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
-  );
-}
-
-/** Hand the project to the configured external editor. Settings are read on
- *  click rather than held as a prop: this is the only place that needs them,
- *  and a stale editor choice would send the project to the wrong app. */
-function OpenInIdeItem({ projectPath }: { projectPath: string }) {
-  // The label only needs the choice made when this menu mounted; `loadSettings`
-  // parses and migrates the whole settings blob, and running that inside render
-  // did it on every parent re-render. The click path re-reads it for real.
-  const [labelIde] = useState(() => loadSettings().ide);
-  const openInIde = async () => {
-    const { ide, ideCustomCommand } = loadSettings();
-    const command = buildIdeCommand(ide, { project: projectPath }, ideCustomCommand);
-    if (!command) {
-      toast.error("No editor configured", {
-        description: "Set a custom command in Settings → Connections.",
-      });
-      return;
-    }
-    try {
-      await invoke("open_in_ide", { ...command });
-    } catch (e) {
-      toast.error(`Couldn't open ${IDE_LABEL[ide]}`, { description: String(e) });
-    }
-  };
-  return (
-    <DropdownMenuItem onSelect={() => void openInIde()}>
-      <SquareArrowOutUpRight className="size-3.5" />
-      {`Open in ${IDE_LABEL[labelIde]}`}
-    </DropdownMenuItem>
   );
 }

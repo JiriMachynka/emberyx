@@ -15,6 +15,14 @@ const buttonVariants = cva(
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground",
+        // Top-bar chrome. A row of transparent buttons reads as a row of
+        // labels floating on the background; these sit on a surface of their
+        // own so the bar looks like a toolbar. `chromeActive` is the same
+        // surface with the accent behind it — an open panel's button has to
+        // differ from a resting one by more than a hover.
+        chrome: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        chromeActive:
+          "bg-primary/15 text-foreground ring-1 ring-inset ring-primary/30 hover:bg-primary/20",
         outline:
           "border border-input bg-transparent shadow-sm hover:bg-accent hover:text-accent-foreground",
         destructive:

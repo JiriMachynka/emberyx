@@ -21,28 +21,19 @@ const state = (over: Partial<GitActionState> = {}): GitActionState => ({
 });
 
 describe("primaryAction", () => {
-  it("offers the whole feature-branch move in one button", () => {
+  // One fixed primary: the button says the same thing whatever the repo state,
+  // and opening a PR is one item away in the dropdown.
+  it("commits and pushes whenever there is anything to commit", () => {
     expect(primaryAction(state({ staged: 2 }))).toMatchObject({
-      kind: "commitPushPr",
-      label: "Commit, push & open PR",
+      kind: "commitPush",
+      label: "Commit & push",
     });
-  });
-
-  // A PR into the branch you are already on is not a thing.
-  it("stops at push on the default branch", () => {
     expect(primaryAction(state({ staged: 2, isDefaultBranch: true })).kind).toBe(
       "commitPush"
     );
-  });
-
-  it("stops at push once a PR is already open", () => {
     expect(
       primaryAction(state({ staged: 2, openPr: "https://x/pr/1" })).kind
     ).toBe("commitPush");
-  });
-
-  // No `gh`/`glab` installed: offering to open a PR would only produce an error.
-  it("stops at push when no forge CLI can open one", () => {
     expect(primaryAction(state({ staged: 2, canOpenPr: false })).kind).toBe(
       "commitPush"
     );
@@ -81,22 +72,43 @@ describe("primaryAction", () => {
 });
 
 describe("menuActions", () => {
-  it("never repeats the primary action", () => {
-    const s = state({ staged: 1 });
-    const primary = primaryAction(s).kind;
-    expect(menuActions(s).map((a) => a.kind)).not.toContain(primary);
+  // The same three moves in the same order every time, primary included — a
+  // menu whose items move around has to be read before every click.
+  it("always lists commit & push, commit and push first", () => {
+    expect(menuActions(state({ staged: 1 })).slice(0, 3).map((a) => a.kind)).toEqual(
+      ["commitPush", "commit", "push"]
+    );
+    expect(menuActions(state()).slice(0, 3).map((a) => a.kind)).toEqual([
+      "commitPush",
+      "commit",
+      "push",
+    ]);
   });
 
-  it("offers plain commit whenever something is staged", () => {
+  it("says why a listed action can't run instead of dropping it", () => {
+    const clean = menuActions(state({ upstream: "origin/feature" }));
+    expect(clean.find((a) => a.kind === "commit")?.disabledReason).toBe(
+      "Nothing to commit"
+    );
+    expect(clean.find((a) => a.kind === "push")?.disabledReason).toBe(
+      "Nothing to push"
+    );
+  });
+
+  it("leaves the three enabled when the work is there", () => {
+    const dirty = menuActions(state({ unstaged: 1, ahead: 2 }));
+    expect(dirty.find((a) => a.kind === "commit")?.disabledReason).toBeUndefined();
+    expect(dirty.find((a) => a.kind === "push")?.disabledReason).toBeUndefined();
+  });
+
+  it("adds the PR move below them when a forge can open one", () => {
     expect(menuActions(state({ staged: 1 })).map((a) => a.kind)).toContain(
-      "commit"
+      "commitPushPr"
     );
-  });
-
-  it("offers plain commit for unstaged changes as well", () => {
-    expect(menuActions(state({ unstaged: 1 })).map((a) => a.kind)).toContain(
-      "commit"
-    );
+    expect(menuActions(state({ ahead: 1 })).map((a) => a.kind)).toContain("pushPr");
+    expect(
+      menuActions(state({ staged: 1, canOpenPr: false })).map((a) => a.kind)
+    ).not.toContain("commitPushPr");
   });
 
   it("keeps pull listed but disabled when there is nothing to pull", () => {
