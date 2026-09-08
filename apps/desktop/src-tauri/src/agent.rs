@@ -377,6 +377,10 @@ mcp__emberyx__preview_console",
             .arg("")
             // Neutral cwd: no project CLAUDE.md/settings to load.
             .current_dir(std::env::temp_dir())
+            // A title, like a commit subject, is a summary. Measured
+            // 2026-09-08: with thinking on, Haiku spends ~2000 thinking tokens
+            // before writing one — 14s against 5s — and the answer is no better.
+            .env("MAX_THINKING_TOKENS", "0")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());

@@ -375,25 +375,37 @@ fn commit_diff(path: &str) -> Result<String> {
 /// the user reads it, which is the whole point of drafting rather than
 /// committing for them.
 #[tauri::command]
-pub async fn git_draft_commit_message(path: String, model: String) -> Result<String> {
+pub async fn git_draft_commit_message(
+    drafter: tauri::State<'_, crate::draft::Drafter>,
+    path: String,
+    model: String,
+) -> Result<String> {
+    // A handle, not a borrow: `spawn_blocking` needs 'static, and the draft's
+    // stdout read blocks for as long as the model takes.
+    let drafter = drafter.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let diff = commit_diff(&path)?;
         if diff.trim().is_empty() {
             return Err(Error::new("Nothing to describe — no changes."));
         }
         let prompt = format!(
-            "Write the git commit message for this change.\n\n\
-             - First line: what changed, in plain language and the imperative, \
-             at most 72 characters, no trailing period.\n\
+            "Write the git commit message for this change, in Conventional \
+             Commits format.\n\n\
+             - First line: `type: subject`, or `type(scope): subject` when one \
+             area clearly owns the change. Type is one of feat, fix, refactor, \
+             perf, docs, test, build, ci, chore — pick the one the diff \
+             actually is, not the flattering one.\n\
+             - The subject is what changed, imperative and lower-case, the \
+             whole line at most 72 characters, no trailing period.\n\
              - Add a short body only when the change needs a why. Otherwise \
              reply with the subject line alone.\n\
-             - Write it the way a person would. No file-by-file inventory, no \
-             Conventional Commit prefix, no bullet padding.\n\
+             - Write the subject the way a person would. No file-by-file \
+             inventory, no bullet padding.\n\
              - Reply with the message only: no quotes, no code fences, no \
              preamble.\n\nDiff:\n{}",
             truncate_diff(&diff, DRAFT_DIFF_LIMIT)
         );
-        let raw = crate::agent::AgentManager::one_shot(&prompt, &model)?;
+        let raw = drafter.draft(&prompt, &model)?;
         // A model that fenced its answer anyway would otherwise put ``` in the
         // commit itself.
         let message = raw
