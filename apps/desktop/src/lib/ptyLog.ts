@@ -16,8 +16,17 @@ type PtyEvent =
 
 export type PtyLogStatus = "starting" | "running" | "exited";
 
+export type PtyLogMode = "lines" | "raw";
+
 interface Entry {
   ptyId: number | null;
+  /** A grid-backed view feeds on `raw` alone; parsing lines for it as well is
+   *  a second VT pass and a React notify per chunk, for a screen nobody reads. */
+  mode: PtyLogMode;
+  /** Last size a view asked for, applied when the spawn lands. Without it a
+   *  fit that resolves before the PTY does leaves the child at the default
+   *  width, and a shell redraws its prompt against a screen of another size. */
+  size: { cols: number; rows: number } | null;
   screen: AnsiScreen;
   /** The stream as it arrived, for a view that owns a terminal grid: line
    *  buffers can't feed one, because a redraw is cursor motion, not lines. */
@@ -74,6 +83,7 @@ export interface SpawnLogOptions {
   cwd: string;
   command?: string;
   maxLines: number;
+  mode?: PtyLogMode;
   cols?: number;
   rows?: number;
   onExit?: (code: number | null) => void;
@@ -86,9 +96,16 @@ export async function spawnLog(opts: SpawnLogOptions): Promise<void> {
     return;
   }
 
+  const mode = opts.mode ?? "lines";
+  const size = existing?.size ?? null;
+  const cols = opts.cols ?? size?.cols ?? 160;
+  const rows = opts.rows ?? size?.rows ?? 40;
+
   const entry: Entry = {
     ptyId: null,
-    screen: createAnsiScreen(opts.maxLines),
+    mode,
+    size,
+    screen: createAnsiScreen(mode === "raw" ? 1 : opts.maxLines),
     raw: existing?.raw ?? createRawBuffer(),
     decoder: new TextDecoder(),
     status: "starting",
@@ -106,10 +123,12 @@ export async function spawnLog(opts: SpawnLogOptions): Promise<void> {
     if (sessions.get(opts.sessionId) !== entry) return;
     if (event.type === "output") {
       const chunk = entry.decoder.decode(base64ToBytes(event.data), { stream: true });
-      entry.screen.push(chunk);
       pushRaw(entry.raw, chunk);
       for (const cb of entry.rawSubs) cb(chunk);
-      notify(entry);
+      if (entry.mode === "lines") {
+        entry.screen.push(chunk);
+        notify(entry);
+      }
     } else {
       entry.status = "exited";
       entry.exitCode = event.data;
@@ -122,8 +141,8 @@ export async function spawnLog(opts: SpawnLogOptions): Promise<void> {
     const id = await invoke<number>("pty_spawn", {
       cwd: opts.cwd,
       command: opts.command ?? null,
-      cols: opts.cols ?? 160,
-      rows: opts.rows ?? 40,
+      cols,
+      rows,
       onEvent: channel,
     });
     if (sessions.get(opts.sessionId) !== entry) {
@@ -134,6 +153,15 @@ export async function spawnLog(opts: SpawnLogOptions): Promise<void> {
     }
     entry.ptyId = id;
     if (entry.status === "starting") entry.status = "running";
+    // A view that measured itself while the spawn was in flight recorded its
+    // size and found no ptyId to send it to.
+    if (entry.size && (entry.size.cols !== cols || entry.size.rows !== rows)) {
+      void invoke("pty_resize", {
+        id,
+        cols: entry.size.cols,
+        rows: entry.size.rows,
+      }).catch(() => {});
+    }
     if (entry.killWhenSpawned) {
       sessions.delete(opts.sessionId);
       void invoke("pty_kill", { id });
@@ -154,6 +182,8 @@ export const subscribeLog = (sessionId: string, cb: () => void): (() => void) =>
     // Subscribing ahead of the spawn is fine — keep the seat.
     entry = {
       ptyId: null,
+      mode: "lines",
+      size: null,
       screen: createAnsiScreen(1),
       raw: createRawBuffer(),
       decoder: new TextDecoder(),
@@ -226,8 +256,12 @@ export async function resizeLog(
   cols: number,
   rows: number
 ): Promise<void> {
-  const id = sessions.get(sessionId)?.ptyId;
-  if (id != null) await invoke("pty_resize", { id, cols, rows }).catch(() => {});
+  const entry = sessions.get(sessionId);
+  if (!entry) return;
+  entry.size = { cols, rows };
+  if (entry.ptyId != null) {
+    await invoke("pty_resize", { id: entry.ptyId, cols, rows }).catch(() => {});
+  }
 }
 
 export async function writeLog(sessionId: string, data: string): Promise<void> {

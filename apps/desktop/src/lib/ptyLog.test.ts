@@ -35,6 +35,7 @@ import {
   logLines,
   logState,
   rawLog,
+  resizeLog,
   spawnLog,
   subscribeLog,
   subscribeRaw,
@@ -62,6 +63,49 @@ describe("ptyLog", () => {
     expect(pings).toBeGreaterThan(0);
     expect(logState("dev-1")?.status).toBe("running");
     disposeLog("dev-1");
+  });
+
+  it("keeps a raw session out of the line screen", async () => {
+    let pings = 0;
+    subscribeLog("sh-raw", () => pings++);
+    await spawnLog({ sessionId: "sh-raw", cwd: "/p", maxLines: 100, mode: "raw" });
+    const chunks: string[] = [];
+    subscribeRaw("sh-raw", (c) => chunks.push(c));
+    // The spawn itself notifies once, for the status. Output must not.
+    const afterSpawn = pings;
+
+    channels[0].onmessage?.({ type: "output", data: b64("\x1b[2Kprompt$ ") });
+
+    expect(chunks).toEqual(["\x1b[2Kprompt$ "]);
+    expect(logLines("sh-raw").join("")).toBe("");
+    expect(pings).toBe(afterSpawn);
+    disposeLog("sh-raw");
+  });
+
+  it("applies a size requested while the spawn is still in flight", async () => {
+    let resolveSpawn: ((id: number) => void) | null = null;
+    state.spawn = () => new Promise<number>((res) => (resolveSpawn = res));
+    const spawning = spawnLog({ sessionId: "sh-size", cwd: "/p", maxLines: 100, mode: "raw" });
+
+    await resizeLog("sh-size", 97, 31);
+    expect(calls.filter(([c]) => c === "pty_resize")).toHaveLength(0);
+
+    resolveSpawn!(7);
+    await spawning;
+
+    expect(calls).toContainEqual(["pty_resize", { id: 7, cols: 97, rows: 31 }]);
+    disposeLog("sh-size");
+  });
+
+  it("spawns at the size a previous view measured", async () => {
+    await spawnLog({ sessionId: "sh-resize", cwd: "/p", maxLines: 100, mode: "raw" });
+    await resizeLog("sh-resize", 120, 40);
+    channels[0].onmessage?.({ type: "exit", data: 0 });
+    await spawnLog({ sessionId: "sh-resize", cwd: "/p", maxLines: 100, mode: "raw" });
+
+    const spawns = calls.filter(([c]) => c === "pty_spawn");
+    expect(spawns[1][1]).toMatchObject({ cols: 120, rows: 40 });
+    disposeLog("sh-resize");
   });
 
   it("does not spawn a second PTY for a live session", async () => {
