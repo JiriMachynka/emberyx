@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
@@ -19,7 +19,6 @@ import {
   Search,
   SlidersHorizontal,
   Sparkles,
-  Type,
   X,
 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
@@ -101,7 +100,6 @@ type Tab =
   | "providers"
   | "mcp"
   | "skills"
-  | "permissions"
   | "connections"
   | "sourceControl"
   | "notifications"
@@ -138,25 +136,20 @@ const TABS: TabMeta[] = [
     finds: "thread list sidebar settle merge group project dev panel",
   },
   {
-    id: "themes",
-    label: "Themes",
-    icon: Palette,
-    keys: ["theme"],
-    finds: "theme themes color colour accent dark palette ember graphite phosphor crimson sandstone",
-  },
-  {
     id: "appearance",
     label: "Appearance",
-    icon: Type,
+    icon: Palette,
     keys: [
+      "theme",
       "chatFontFamily",
       "fontFamily",
       "editorFontFamily",
       "fontSize",
       "editorFontSize",
       "scrollback",
+      "wordWrap",
     ],
-    finds: "font family size chat terminal editor scrollback typography",
+    finds: "theme themes color colour accent dark palette ember graphite phosphor crimson sandstone font family size chat terminal editor scrollback typography wrap",
   },
   {
     id: "shortcuts",
@@ -226,7 +219,10 @@ const TAB_META = (id: Tab) => TABS.find((t) => t.id === id) as TabMeta;
 const defaultsFor = (keys: (keyof Settings)[]): Partial<Settings> =>
   Object.fromEntries(keys.map((k) => [k, DEFAULT_SETTINGS[k]]));
 
-export function SettingsPage({
+/** Memoized because the page stays mounted once opened — it is merely hidden —
+ *  so without this every unrelated App state change rebuilt all ten sections
+ *  behind the workspace. Its props are identity-stable for the same reason. */
+export const SettingsPage = memo(function SettingsPage({
   active,
   onBack,
   settings,
@@ -526,26 +522,24 @@ export function SettingsPage({
               </Group>
             )}
 
-            {tab === "themes" && (
-              <Group
-                title="Theme"
-                hint="Every theme is dark — Emberyx is terminal-first and has no light mode. A theme sets the surfaces and the single accent; type, spacing and borders never change."
-              >
-                <div className="grid grid-cols-2 gap-2.5">
-                  {THEMES.map((t) => (
-                    <ThemeCard
-                      key={t.id}
-                      theme={t}
-                      selected={settings.theme === t.id}
-                      onSelect={() => onUpdate({ theme: t.id })}
-                    />
-                  ))}
-                </div>
-              </Group>
-            )}
-
             {tab === "appearance" && (
               <>
+                <Group
+                  title="Theme"
+                  hint="Every theme is dark — Emberyx is terminal-first and has no light mode. A theme sets the surfaces and the single accent; type, spacing and borders never change."
+                >
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {THEMES.map((t) => (
+                      <ThemeCard
+                        key={t.id}
+                        theme={t}
+                        selected={settings.theme === t.id}
+                        onSelect={() => onUpdate({ theme: t.id })}
+                      />
+                    ))}
+                  </div>
+                </Group>
+
                 <Group title="Interface">
                   <Row
                     label="Chat font"
@@ -1309,7 +1303,7 @@ export function SettingsPage({
       </div>
     </div>
   );
-}
+})
 
 /** Chords no single binding can describe: the composer's own keys, and tab
  *  selection, which is nine chords feeding one action an argument. Listed for

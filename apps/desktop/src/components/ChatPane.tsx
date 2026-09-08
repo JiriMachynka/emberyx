@@ -6,6 +6,7 @@ import {
   Bot,
   Check,
   ChevronDown,
+  Gauge,
   ChevronRight,
   Copy,
   ListTodo,
@@ -16,12 +17,14 @@ import {
   X,
 } from "lucide-react";
 import { issueTitle, resetLabel, type AccountIssue } from "@/lib/accountState";
-import { basename } from "@/lib/path";
+import { basename, dirname } from "@/lib/path";
+import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { Button } from "@/components/ui/button";
 import { FileRefProject, TextWithFileRefs } from "@/components/FileRef";
 import { BACKEND_LABEL, capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
 import {
   describeTool,
+  currentTodo,
   isTodoTool,
   lastTodos,
   type TodoItem,
@@ -74,6 +77,9 @@ import {
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { FileDiff, Undo2 } from "lucide-react";
+import { quotaAlert, quotaMessage, type QuotaAlert } from "@/lib/quota";
+import { recordTodoTimings, todoTimings } from "@/lib/todoTimings";
+import { summarizeWork } from "@/lib/workSummary";
 import { useInvalidateGit } from "@/lib/queries";
 import {
   checkpointChanges,
@@ -709,12 +715,30 @@ export const ChatPane = memo(function ChatPane({
   const liveTodos = useMemo(() => {
     if (!busy) return null;
     const turn = turns[turns.length - 1];
-    return turn ? lastTodos(turn.assistants.flatMap((a) => a.tools)) : null;
+    if (!turn) return null;
+    const items = lastTodos(turn.assistants.flatMap((a) => a.tools));
+    // The turn owns the clock, so the card above the composer and the same
+    // plan once it settles into the transcript read the same record.
+    return items ? { items, planKey: turn.key } : null;
   }, [busy, turns]);
   // A sleeping pane has no process, but it is waiting on the user — typing is
   // what wakes it, so the composer takes input exactly as if it were up.
   const inputReady = ready || asleep;
-  const todosSig = liveTodos?.map((t) => `${t.status}\0${t.text}`).join("\n") ?? "";
+  // The quota strip is the only unprompted read of the plan windows; the chip
+  // in the composer is passive. Recomputed per usage frame — the numbers only
+  // move when the backend sends new ones.
+  const quotaWarning = useMemo(
+    () => quotaAlert(usage.quota, Date.now()),
+    [usage.quota]
+  );
+  // Dismissal is per level, so waving off "80% used" does not also silence the
+  // message that the window is actually gone.
+  const [quotaDismissed, setQuotaDismissed] = useState<QuotaAlert["level"] | null>(
+    null
+  );
+  const showQuota = quotaWarning && quotaDismissed !== quotaWarning.level;
+  const todosSig =
+    liveTodos?.items.map((t) => `${t.status}\0${t.text}`).join("\n") ?? "";
   const [tasksHidden, setTasksHidden] = useState(false);
   useEffect(() => setTasksHidden(false), [todosSig]);
 
@@ -898,6 +922,12 @@ export const ChatPane = memo(function ChatPane({
                 )}
               </div>
             ))}
+          {showQuota && quotaWarning && (
+            <QuotaNotice
+              alert={quotaWarning}
+              onDismiss={() => setQuotaDismissed(quotaWarning.level)}
+            />
+          )}
           {/* The picker keeps showing the model you asked for, so a refusal has
               to say what is actually running or the two quietly disagree. */}
           {modelError && !terminal && (
@@ -917,14 +947,20 @@ export const ChatPane = memo(function ChatPane({
                 <AskPrompt pending={pendingAsk} onAnswer={answerAsk} />
               ) : (
                 <>
+                  {/* Sits *behind* the composer's rounded top edge rather than
+                      above it — the extra bottom padding is what the composer
+                      covers, so the two read as one surface. */}
                   {liveTodos && !tasksHidden && (
-                    <div className="mb-3">
+                    <div className="relative z-0 -mb-4">
                       <TasksCard
-                        items={liveTodos}
+                        items={liveTodos.items}
+                        planKey={liveTodos.planKey}
+                        collapsible
                         onDismiss={() => setTasksHidden(true)}
                       />
                     </div>
                   )}
+                  <div className="relative z-10">
                 <ChatComposer
                   cwd={cwd}
                   backend={activeBackend}
@@ -956,6 +992,7 @@ export const ChatPane = memo(function ChatPane({
                   onRewind={rewind}
                   onPreview={setPreview}
                 />
+                </div>
                 </>
               )}
             </div>
@@ -980,6 +1017,43 @@ export const ChatPane = memo(function ChatPane({
     </FileRefProject>
   );
 });
+
+/** The plan window running out, said before it stops the work rather than
+ *  after. `AccountNotice` explains a session that already died; this one is a
+ *  warning while the session is still usable, so it is dismissible. */
+function QuotaNotice({
+  alert,
+  onDismiss,
+}: {
+  alert: QuotaAlert;
+  onDismiss: () => void;
+}) {
+  const spent = alert.level === "exhausted";
+  return (
+    <div
+      className={cn(
+        "mb-2 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs",
+        spent
+          ? "border-red-500/40 bg-red-500/10 text-red-300"
+          : "border-amber-500/40 bg-amber-500/10 text-amber-300"
+      )}
+    >
+      <Gauge className="mt-0.5 size-3.5 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <span className="font-medium">{quotaMessage(alert)}</span>
+        {alert.resets && <span className="ml-1 opacity-80">{alert.resets}.</span>}
+      </div>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="shrink-0 rounded-md p-0.5 opacity-70 hover:opacity-100"
+        aria-label="Dismiss usage warning"
+      >
+        <X className="size-3.5" />
+      </button>
+    </div>
+  );
+}
 
 /** Why this session died, when it was the account rather than the work: the
  *  generic "Session ended" is indistinguishable from a clean exit. The action
@@ -1007,54 +1081,113 @@ function AccountNotice({ issue }: { issue: AccountIssue }) {
   );
 }
 
-/** Elapsed time per todo text, captured at status transitions so the card
- *  can show "2m 35s" / "now" without the tool payload carrying clocks. */
-const useTodoTimings = (items: TodoItem[]) => {
-  const timings = useRef(new Map<string, { startedAt: number; endedAt?: number }>());
-  const now = Date.now();
-  for (const item of items) {
-    const prev = timings.current.get(item.text);
-    if (item.status === "in_progress") {
-      if (!prev || prev.endedAt != null) {
-        timings.current.set(item.text, { startedAt: now });
-      }
-    } else if (item.status === "completed" && prev && prev.endedAt == null) {
-      timings.current.set(item.text, { startedAt: prev.startedAt, endedAt: now });
-    }
-  }
-  return timings.current;
-};
+/** Elapsed time per task, captured at status transitions so the card can show
+ *  "2m 35s" / "now" without the tool payload carrying clocks. The record lives
+ *  outside React (`lib/todoTimings`) because the transcript is virtualized and
+ *  a card that owned it lost everything on remount. */
+const useTodoTimings = (planKey: string, items: TodoItem[]) =>
+  recordTodoTimings(todoTimings, planKey, items, Date.now());
 
 const TasksCard = memo(function TasksCard({
   items,
+  planKey,
   onDismiss,
+  /** Live plans ride above the composer collapsed — one line, the task in
+   *  flight. A settled turn's card in the transcript has room to list. */
+  collapsible = false,
 }: {
   items: TodoItem[];
+  /** Which plan these tasks belong to — the turn's message id. Two turns'
+   *  plans must not share a clock. */
+  planKey: string;
   onDismiss?: () => void;
+  collapsible?: boolean;
 }) {
-  const timings = useTodoTimings(items);
+  const timings = useTodoTimings(planKey, items);
+  const [open, setOpen] = useState(!collapsible);
+  const expanded = !collapsible || open;
   const done = items.filter((t) => t.status === "completed").length;
+  const current = collapsible ? currentTodo(items) : null;
+  const header = (
+    <>
+      <ListTodo className="size-4 shrink-0 text-muted-foreground" />
+      {current && !expanded ? (
+        <span className="min-w-0 flex-1 truncate text-left">{current.text}</span>
+      ) : (
+        <span className="font-medium">Tasks</span>
+      )}
+      <span
+        className={cn(
+          "shrink-0 tabular-nums text-muted-foreground",
+          !collapsible && "font-medium text-foreground"
+        )}
+      >
+        {done}/{items.length}
+      </span>
+      {collapsible && (
+        <ChevronDown
+          className={cn(
+            "size-3.5 shrink-0 text-muted-foreground transition-transform",
+            expanded && "rotate-180"
+          )}
+        />
+      )}
+    </>
+  );
   return (
-    <div className="rounded-xl border border-border bg-card/70">
-      <div className="flex items-center gap-2 px-3 py-2 text-sm">
-        <ListTodo className="size-4 shrink-0 text-muted-foreground" />
-        <span className="font-medium">
-          Tasks {done}/{items.length}
-        </span>
-        {onDismiss && (
+    <div
+      className={cn(
+        "border border-border bg-card/70",
+        // Tucked behind the composer, which is why the bottom corners are
+        // square: the seam is covered rather than drawn.
+        // pb-6 against the composer's -mb-4 overlap: 16px of this card is
+        // covered, so anything less than that clips its own last row.
+        collapsible ? "rounded-t-xl border-b-0 pb-6" : "rounded-xl"
+      )}
+    >
+      {collapsible ? (
+        <div className="flex items-center gap-2 px-3 py-2 text-sm">
           <button
             type="button"
-            onClick={onDismiss}
-            className="ml-auto rounded-md p-1 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-            aria-label="Dismiss tasks"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={expanded}
+            className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
           >
-            <X className="size-3.5" />
+            {header}
           </button>
-        )}
-      </div>
+          {onDismiss && (
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="rounded-md p-1 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              aria-label="Dismiss tasks"
+            >
+              <X className="size-3.5" />
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 px-3 py-2 text-sm">
+          <ListTodo className="size-4 shrink-0 text-muted-foreground" />
+          <span className="font-medium">
+            Tasks {done}/{items.length}
+          </span>
+          {onDismiss && (
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="ml-auto rounded-md p-1 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+              aria-label="Dismiss tasks"
+            >
+              <X className="size-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+      {expanded && (
       <ul className="flex flex-col px-3 pb-2">
         {items.map((item, i) => {
-          const t = timings.get(item.text);
+          const t = timings.get(i);
           const elapsed =
             item.status === "in_progress"
               ? "now"
@@ -1087,6 +1220,7 @@ const TasksCard = memo(function TasksCard({
           );
         })}
       </ul>
+      )}
     </div>
   );
 });
@@ -1125,14 +1259,14 @@ const ChangedFilesCard = memo(function ChangedFilesCard({
         <div className="flex size-9 flex-none items-center justify-center rounded-lg bg-muted/60">
           <FileDiff className="size-4 text-muted-foreground" />
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium">
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
+          <span className="truncate text-sm font-medium">
             {files.length === 1 ? "Changed 1 file" : `Changed ${files.length} files`}
-          </div>
-          <div className="flex gap-2 text-xs tabular-nums">
+          </span>
+          <span className="flex flex-none gap-2 text-xs tabular-nums">
             <span className="text-emerald-400">+{additions}</span>
             <span className="text-red-400">−{deletions}</span>
-          </div>
+          </span>
         </div>
         <button
           type="button"
@@ -1146,8 +1280,14 @@ const ChangedFilesCard = memo(function ChangedFilesCard({
       <ul className="flex flex-col border-t border-border">
         {visible.map((file) => (
           <li key={file.path} className="flex h-8 items-center gap-2 px-3 text-xs">
-            <span className="min-w-0 flex-1 truncate text-muted-foreground" title={file.path}>
-              {file.path}
+            <FileTypeIcon path={file.path} />
+            <span className="flex min-w-0 flex-1 items-baseline gap-1.5" title={file.path}>
+              <span className="flex-none truncate">{basename(file.path)}</span>
+              {file.path.includes("/") && (
+                <span className="min-w-0 truncate text-muted-foreground">
+                  {dirname(file.path)}
+                </span>
+              )}
             </span>
             {file.additions != null && (
               <span className="flex-none tabular-nums text-emerald-400">+{file.additions}</span>
@@ -1245,7 +1385,7 @@ const TurnRow = memo(
             </div>
           ) : (
             <div className="flex flex-col gap-2">
-              {turnTodos && <TasksCard items={turnTodos} />}
+              {turnTodos && <TasksCard items={turnTodos} planKey={turn.key} />}
               <WorkedAccordion
                 durationMs={
                   last?.endedAt != null && assistants[0]?.startedAt != null
@@ -1256,7 +1396,12 @@ const TurnRow = memo(
               >
                 {assistants.map((a, i) => (
                   <div key={a.id} className="flex flex-col gap-2">
-                    <MessageWork message={a} active={false} />
+                    {/* Each message's work says what it did, not just that it
+                        happened — a count is what tells you whether the group
+                        is worth opening. */}
+                    <WorkGroup label={workLabel(a)}>
+                      <MessageWork message={a} active={false} />
+                    </WorkGroup>
                     {/* Only interstitial narration stays inside; the final
                         answer is shown below the accordion. */}
                     {i < assistants.length - 1 && a.text && (
@@ -1294,9 +1439,56 @@ const TurnRow = memo(
     a.turn.assistants.every((m, i) => m === b.turn.assistants[i])
 );
 
-/** Collapsible "Worked for Ns" header over a turn's work. Collapsed by default,
- *  but stays open while the turn's subagents are still running — `null` means
- *  the user hasn't decided, so the running count does. */
+/** What one message's work amounts to, in words. Falls back to a tool count for
+ *  a replayed message that never carried an activity stream. */
+function workLabel(message: ChatMessage): string | null {
+  const rows = message.activities?.filter((a) => !isTodoTool(a.title));
+  if (rows?.length) return summarizeWork(rows);
+  const tools = message.tools.filter((t) => !isTodoTool(t.name)).length;
+  if (tools) return `Used ${tools} ${tools === 1 ? "tool" : "tools"}`;
+  return message.thinking ? "Ran 1 thought" : null;
+}
+
+/** One message's work under its own summary line. Open by default — the turn
+ *  above it is already collapsed, and making the user open two things to read
+ *  one is how a log stops being read at all. */
+function WorkGroup({
+  label,
+  children,
+}: {
+  label: string | null;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(true);
+  if (!label) return <>{children}</>;
+  return (
+    <div className="flex flex-col gap-2">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 self-start text-xs text-muted-foreground transition-colors hover:text-foreground"
+      >
+        {label}
+        <ChevronRight
+          className={cn("size-3 transition-transform", open && "rotate-90")}
+        />
+      </button>
+      <div
+        className="grid transition-[grid-template-rows] duration-200 ease-out"
+        style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
+      >
+        <div className="overflow-hidden">
+          <div className="flex flex-col gap-2">{children}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Collapsible "Worked for Ns" header over a turn's work — centered on a rule,
+ *  the way a turn boundary reads. Collapsed by default, but stays open while
+ *  the turn's subagents are still running: `null` means the user hasn't
+ *  decided, so the running count does. */
 function WorkedAccordion({
   durationMs,
   agentsRunning,
@@ -1310,28 +1502,34 @@ function WorkedAccordion({
   const expanded = open ?? agentsRunning > 0;
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => setOpen(!expanded)}
-        className={cn(
-          "flex items-center gap-1.5 text-xs transition-colors hover:text-foreground",
-          agentsRunning > 0 ? "text-violet-400" : "text-muted-foreground"
-        )}
-      >
-        <ChevronRight
-          className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
-        />
-        {agentsRunning > 0 ? (
-          <>
-            <Loader2 className="size-3 animate-spin" />
-            {agentsRunning === 1 ? "1 agent running" : `${agentsRunning} agents running`}
-          </>
-        ) : durationMs != null ? (
-          `Worked for ${formatDuration(durationMs)}`
-        ) : (
-          "Work log"
-        )}
-      </button>
+      <div className="flex items-center gap-2">
+        <span className="h-px flex-1 bg-border/60" />
+        <button
+          type="button"
+          onClick={() => setOpen(!expanded)}
+          className={cn(
+            "flex items-center gap-1.5 text-xs transition-colors hover:text-foreground",
+            agentsRunning > 0 ? "text-violet-400" : "text-muted-foreground"
+          )}
+        >
+          {agentsRunning > 0 ? (
+            <>
+              <Loader2 className="size-3 animate-spin" />
+              {agentsRunning === 1
+                ? "1 agent running"
+                : `${agentsRunning} agents running`}
+            </>
+          ) : durationMs != null ? (
+            `Worked for ${formatDuration(durationMs)}`
+          ) : (
+            "Work log"
+          )}
+          <ChevronDown
+            className={cn("size-3.5 transition-transform", expanded && "rotate-180")}
+          />
+        </button>
+        <span className="h-px flex-1 bg-border/60" />
+      </div>
       <div
         className="grid transition-[grid-template-rows] duration-200 ease-out"
         style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
@@ -1386,7 +1584,13 @@ function MessageWork({ message, active }: { message: ChatMessage; active: boolea
   }
   return (
     <>
-      {message.thinking && <ThinkingBlock text={message.thinking} active={active} />}
+      {message.thinking && (
+        <ThinkingBlock
+          text={message.thinking}
+          active={active}
+          timingKey={message.id}
+        />
+      )}
       {message.tools.length > 0 && <ToolList tools={message.tools} />}
     </>
   );

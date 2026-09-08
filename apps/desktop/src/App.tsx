@@ -7,10 +7,12 @@ import { SessionPanes } from "@/components/SessionPanes";
 import { RightDock } from "@/components/RightDock";
 import { ProjectSettingsPane } from "@/components/ProjectSettingsPane";
 import { ChangesPanel } from "@/components/ChangesPanel";
+import { GitPanel } from "@/components/GitPanel";
 import { NotificationPanel } from "@/components/NotificationPanel";
 import { DevPanel } from "@/components/DevPanel";
 import { TerminalPane } from "@/components/TerminalPane";
 import { ContextBar } from "@/components/ContextBar";
+import { TimedRegion } from "@/lib/commitTiming";
 import { Sidebar } from "@/components/Sidebar";
 import { CommandPalette } from "@/components/CommandPalette";
 import { CloneDialog } from "@/components/CloneDialog";
@@ -37,7 +39,12 @@ import {
   type DockKind,
   type DockState,
 } from "@/lib/dock";
-import { useAgentStore, selectUnreadCount, type TurnReviewRequest } from "@/lib/agentStore";
+import {
+  useAgentStore,
+  selectUnreadCount,
+  type CommitReviewRequest,
+  type TurnReviewRequest,
+} from "@/lib/agentStore";
 import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
 import { requestSearch } from "@/lib/searchRequest";
 import { useWorkspace } from "@/hooks/useWorkspace";
@@ -103,6 +110,9 @@ function App() {
   // repainted the covered workspace from scratch on every toggle, which is what
   // made both Settings and the Back button feel slow. Latched during render
   // rather than in an effect so the first open mounts in the same commit.
+  // Stable, so the memoized page above doesn't re-render on every App state
+  // change just because its Back handler is a new closure.
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const settingsMountedRef = useRef(false);
   if (settingsOpen) settingsMountedRef.current = true;
   const settingsMounted = settingsMountedRef.current;
@@ -161,6 +171,18 @@ function App() {
     setTurnPick(turnReviewRequest);
     showTab("diff");
   }, [turnReviewRequest, activeProjectPath]);
+
+  // Same contract for a file picked out of the git menu's history: the popover
+  // is gone by the time the diff renders, so the request travels through the
+  // store and App is what opens the tab.
+  const commitReviewRequest = useAgentStore((s) => s.commitReview);
+  const [commitPick, setCommitPick] = useState<CommitReviewRequest | null>(null);
+  useEffect(() => {
+    if (!commitReviewRequest) return;
+    if (commitReviewRequest.projectPath !== activeProjectPath) return;
+    setCommitPick(commitReviewRequest);
+    showTab("diff");
+  }, [commitReviewRequest, activeProjectPath]);
 
   // ChatPanes are memoized, so their callbacks must keep a stable identity
   // across a session switch or the memo can't short-circuit. updateSettings and
@@ -354,10 +376,6 @@ function App() {
         setConflictOpen(false);
       }
     : undefined;
-  const projectSessionIds = useMemo(
-    () => projectSessions.map((s) => s.id),
-    [projectSessions]
-  );
   // Dev servers render in the right-hand panel, never as sidebar tabs.
   const devSessions = useMemo(
     () => sessions.filter((s) => s.kind === "dev"),
@@ -396,14 +414,22 @@ function App() {
         embedded
         active={dockActive === "diff"}
         projectPath={activeProject.path}
-        sessionIds={projectSessionIds}
         ignoreWhitespace={settings.diffIgnoreWhitespace}
         turnPick={turnPick}
+        commitPick={commitPick}
+        onExitCommitPick={() => setCommitPick(null)}
         onExitTurnPick={() => setTurnPick(null)}
         onPickTurn={setTurnPick}
         onClose={() => hideTab("diff")}
+      />
+    ),
+    git: activeProject && (
+      <GitPanel
+        embedded
+        projectPath={activeProject.path}
         onOpenWorktree={openWorktreeAndRun}
         onRemoveWorktree={ws.removeWorktree}
+        onClose={() => hideTab("git")}
       />
     ),
     preview: activeProject && (
@@ -507,7 +533,7 @@ function App() {
             setSettingsOpen(true);
           }}
            settingsOpen={settingsOpen}
-           onBackFromSettings={() => setSettingsOpen(false)}
+           onBackFromSettings={closeSettings}
           onOpenUsage={() => {
             setSettingsOpen(false);
             setUsageOpen(true);
@@ -524,10 +550,8 @@ function App() {
               activeProject={activeProject}
               agent={agent}
               devRunning={projectSessions.some((s) => s.kind === "dev")}
-              mrsOpen={dockActive === "mrs"}
-              onToggleMrs={() => flipTab("mrs")}
-              previewOpen={dockActive === "preview"}
-              onTogglePreview={() => flipTab("preview")}
+              gitOpen={dockActive === "git"}
+              onToggleGit={() => flipTab("git")}
               devOpen={dockActive === "dev"}
               devCount={devCount}
               onToggleDev={() => flipTab("dev")}
@@ -569,6 +593,7 @@ function App() {
             {/* Panes stay mounted once a session exists, so a pre-warmed
                 project boots in the background. Hidden unless it's the active,
                 revealed tab. */}
+            <TimedRegion id="workspace">
             <SessionPanes
               sessions={sessions}
               activeId={activeId}
@@ -583,6 +608,7 @@ function App() {
              onTitled={onTitled}
              onThreadStarted={onThreadStarted}
             />
+            </TimedRegion>
             {/* The editor is an overlay, not a tab: it covers the active pane
                 while open and keeps its buffers when hidden. */}
             {activeProject && editorMounted && (
@@ -668,12 +694,14 @@ function App() {
             )}
           >
             <Suspense fallback={null}>
-              <SettingsPage
-                active={settingsOpen}
-                onBack={() => setSettingsOpen(false)}
-                settings={settings}
-                onUpdate={updateSettings}
-              />
+              <TimedRegion id="settings">
+                <SettingsPage
+                  active={settingsOpen}
+                  onBack={closeSettings}
+                  settings={settings}
+                  onUpdate={updateSettings}
+                />
+              </TimedRegion>
             </Suspense>
           </div>
         )}

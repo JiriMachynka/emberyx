@@ -11,6 +11,7 @@ mod browser;
 mod checkpoints;
 mod codex;
 mod defs;
+mod draft;
 
 pub mod error;
 mod files;
@@ -72,6 +73,7 @@ pub fn run() {
         .manage(usage::SummaryCache::default())
         .manage(browser::BrowserManager::default())
         .manage(browser::PreviewUrl::default())
+        .manage(draft::Drafter::default())
         .setup(|app| {
             // Attach the durable event log first: restore() migrates legacy
             // registry timelines into it.
@@ -186,6 +188,7 @@ pub fn run() {
             git::git_working_diff,
             git::git_commit,
             git::git_draft_commit_message,
+            draft::draft_warm,
             git::git_stage,
             git::git_unstage,
             git::git_discard,
@@ -292,6 +295,7 @@ pub fn run() {
             app_handle.state::<acp::AcpManager>().kill_all();
             app_handle.state::<PtyManager>().kill_all();
             app_handle.state::<browser::BrowserManager>().kill_all();
+            app_handle.state::<draft::Drafter>().kill_all();
             app_handle.state::<Supervisor>().kill_all();
         }
     });

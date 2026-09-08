@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from "react";
+import { useCallback, useLayoutEffect, useState } from "react";
 import {
   backendFromCommand,
   isAgentBackend,
@@ -378,13 +378,16 @@ export function useSettings() {
     applyTheme(settings.theme);
   }, [settings.theme]);
 
-  function update(patch: Partial<Settings>) {
+  // Identity-stable: it is a prop on every settings surface, and a fresh
+  // closure per render defeats their memos — the mounted-but-hidden Settings
+  // page re-rendered on every unrelated App state change because of it.
+  const update = useCallback((patch: Partial<Settings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...patch };
       localStorage.setItem(KEY, JSON.stringify(next));
       return next;
     });
-  }
+  }, []);
 
   return { settings, update };
 }
