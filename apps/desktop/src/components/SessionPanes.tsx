@@ -1,10 +1,11 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { ChatPane } from "@/components/ChatPane";
 import { PaneErrorBoundary } from "@/components/PaneErrorBoundary";
 import { useAgentStore } from "@/lib/agentStore";
 import { paneShouldMount, pushRecent } from "@/lib/paneMount";
+import { statusOf } from "@/lib/status";
 import { cn } from "@/lib/utils";
-import type { Project, Session } from "@/types";
+import type { Project, Session, SessionStatus } from "@/types";
 import type { AccessLevel, Settings } from "@/lib/settings";
 
 interface SessionPanesProps {
@@ -48,7 +49,18 @@ export function SessionPanes({
   onTitled,
   onThreadStarted,
 }: SessionPanesProps) {
-  const statuses = useAgentStore((s) => s.statuses);
+  const chats = useMemo(() => sessions.filter((s) => s.kind !== "dev"), [sessions]);
+  // Only these sessions' statuses decide what stays mounted. Subscribing to the
+  // whole map re-rendered every pane container on any session's transition, and
+  // `setStatus` allocates a new map each time — so subscribe to the joined
+  // list instead, which changes only when one of these actually moves.
+  const statusKey = useAgentStore((s) =>
+    chats.map((c) => statusOf(s.statuses, c.id)).join(",")
+  );
+  const statuses = useMemo(
+    () => statusKey.split(",") as SessionStatus[],
+    [statusKey]
+  );
   // Recency is derived during render, not in an effect: an effect would run
   // after the new pane already mounted and the old one already unmounted,
   // which is the cost we are avoiding. `pushRecent` returns the same array
@@ -58,9 +70,8 @@ export function SessionPanes({
   const recent = recentRef.current;
   return (
     <>
-      {sessions
-        .filter((s) => s.kind !== "dev")
-        .filter((s) => paneShouldMount(s.id, activeId, statuses[s.id], recent))
+      {chats
+        .filter((s, i) => paneShouldMount(s.id, activeId, statuses[i], recent))
         .map((s) => (
           <SessionPaneRow
             key={s.id}

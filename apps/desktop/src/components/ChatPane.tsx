@@ -4,7 +4,6 @@ import {
   Archive,
   ArrowRightLeft,
   Bot,
-  Brain,
   Check,
   ChevronDown,
   ChevronRight,
@@ -68,7 +67,7 @@ import {
   EMPTY_THREAD,
   carryOver,
   mergeThread,
-  switchBefore,
+  switchMarks,
   type CarriedThread,
   type ProviderSwitchMark,
 } from "@/lib/thread";
@@ -101,6 +100,8 @@ import { useAgentStore } from "@/lib/agentStore";
 import { rememberRowSizes, rowSize } from "@/lib/rowSizes";
 import { cn } from "@/lib/utils";
 import { formatDuration, groupTurns, isAgentTool, type Turn } from "@/components/chat/turns";
+import { ActivityList } from "@/components/chat/ActivityRow";
+import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { ToolCard } from "@/components/chat/ToolViews";
 import { AskPrompt, PermissionPrompt } from "@/components/chat/Prompts";
 
@@ -255,6 +256,7 @@ export const ChatPane = memo(function ChatPane({
     status,
     usage,
     ready,
+    asleep,
     wake,
     threadId,
     send,
@@ -580,6 +582,8 @@ export const ChatPane = memo(function ChatPane({
         mark: ProviderSwitchMark | null;
       }
     | { key: string; kind: "busy" };
+  // Every divider in one pass, rather than a scan of the thread per turn.
+  const marks = useMemo(() => switchMarks(carried, thread), [carried, thread]);
   const slots = useMemo<Slot[]>(() => {
     const list: Slot[] = [];
     if (showLoadOlder(hasMore)) list.push({ key: "load", kind: "load" });
@@ -588,12 +592,12 @@ export const ChatPane = memo(function ChatPane({
         key: `turn:${turn.key}`,
         kind: "turn",
         turn,
-        mark: switchBefore(carried, turn.key, thread),
+        mark: marks.get(turn.key) ?? null,
       });
     }
     if (busy) list.push({ key: "busy", kind: "busy" });
     return list;
-  }, [turns, hasMore, busy, carried, thread]);
+  }, [turns, hasMore, busy, marks]);
 
   // Read by the prepend settle loop below, which runs off rAF and so cannot
   // close over the render's `slots`.
@@ -707,6 +711,9 @@ export const ChatPane = memo(function ChatPane({
     const turn = turns[turns.length - 1];
     return turn ? lastTodos(turn.assistants.flatMap((a) => a.tools)) : null;
   }, [busy, turns]);
+  // A sleeping pane has no process, but it is waiting on the user — typing is
+  // what wakes it, so the composer takes input exactly as if it were up.
+  const inputReady = ready || asleep;
   const todosSig = liveTodos?.map((t) => `${t.status}\0${t.text}`).join("\n") ?? "";
   const [tasksHidden, setTasksHidden] = useState(false);
   useEffect(() => setTasksHidden(false), [todosSig]);
@@ -721,7 +728,7 @@ export const ChatPane = memo(function ChatPane({
     );
     return (
     <h2 className="text-center text-3xl font-normal tracking-tight text-foreground">
-      {ready ? (
+      {inputReady ? (
         <>
           What should we build in{" "}
           <DropdownMenu>
@@ -826,6 +833,7 @@ export const ChatPane = memo(function ChatPane({
                         {slot.mark && <ProviderSwitchDivider mark={slot.mark} />}
                         <TurnRow
                           turn={slot.turn}
+                          newest={vItem.index === lastTurnIndex}
                           live={busy && vItem.index === lastTurnIndex}
                           fontSize={fontSize}
                           chat={chat}
@@ -922,7 +930,7 @@ export const ChatPane = memo(function ChatPane({
                   backend={activeBackend}
                   active={active}
                   fontFamily={fontFamily}
-                  ready={ready}
+                  ready={inputReady}
                   busy={busy}
                   queued={queued}
                   exited={terminal}
@@ -1095,12 +1103,15 @@ const ChangedFilesCard = memo(function ChangedFilesCard({
   projectPath,
   threadId,
   fromId,
+  openEnded,
 }: {
   projectPath: string;
   threadId: string;
   fromId: string;
+  /** The newest turn's range ends at the working tree, so it alone re-reads. */
+  openEnded: boolean;
 }) {
-  const { data: files } = useTurnFiles(projectPath, threadId, fromId);
+  const { data: files } = useTurnFiles(projectPath, threadId, fromId, true, openEnded);
   const [expanded, setExpanded] = useState(false);
   const requestTurnReview = useAgentStore((s) => s.requestTurnReview);
   if (!files || files.length === 0) return null;
@@ -1172,12 +1183,15 @@ const TurnRow = memo(
   function TurnRow({
     turn,
     live,
+    newest,
     fontSize,
     chat,
     onPreview,
   }: {
     turn: Turn;
     live: boolean;
+    /** The last turn in the transcript — its file delta is still open-ended. */
+    newest: boolean;
     fontSize: number;
     chat: ChatContext;
     onPreview: (dataUrl: string) => void;
@@ -1242,8 +1256,7 @@ const TurnRow = memo(
               >
                 {assistants.map((a, i) => (
                   <div key={a.id} className="flex flex-col gap-2">
-                    {a.thinking && <ThinkingBlock text={a.thinking} active={false} />}
-                    {a.tools.length > 0 && <ToolList tools={a.tools} />}
+                    <MessageWork message={a} active={false} />
                     {/* Only interstitial narration stays inside; the final
                         answer is shown below the accordion. */}
                     {i < assistants.length - 1 && a.text && (
@@ -1265,6 +1278,7 @@ const TurnRow = memo(
             projectPath={chat.cwd}
             threadId={chat.sessionId}
             fromId={user.checkpointId}
+            openEnded={newest}
           />
         )}
       </>
@@ -1272,6 +1286,7 @@ const TurnRow = memo(
   },
   (a, b) =>
     a.live === b.live &&
+    a.newest === b.newest &&
     a.fontSize === b.fontSize &&
     a.chat === b.chat &&
     a.turn.user === b.turn.user &&
@@ -1344,6 +1359,36 @@ function ToolList({ tools }: { tools: ToolCall[] }) {
         )
       )}
     </div>
+  );
+}
+
+/** A message's work.
+ *
+ *  A provider that produces an ordered stream renders it, so reasoning sits
+ *  between the tool calls it came between. A replayed transcript has only
+ *  `thinking` and `tools` — it never recorded an order — so it keeps the old
+ *  shape rather than being given one it cannot back up. */
+function MessageWork({ message, active }: { message: ChatMessage; active: boolean }) {
+  const stream = message.activities;
+  if (stream?.length) {
+    // TodoWrite is lifted into TasksCard, so it is not a row here either.
+    const rows = stream.filter((a) => !isTodoTool(a.title));
+    if (rows.length === 0) return null;
+    return (
+      <ActivityList
+        activities={rows}
+        renderAgent={(a) => {
+          const tool = message.tools.find((t) => t.id === a.id);
+          return tool ? <SubagentInline id={a.id} tool={tool} /> : null;
+        }}
+      />
+    );
+  }
+  return (
+    <>
+      {message.thinking && <ThinkingBlock text={message.thinking} active={active} />}
+      {message.tools.length > 0 && <ToolList tools={message.tools} />}
+    </>
   );
 }
 
@@ -1484,15 +1529,10 @@ const MessageRow = memo(function MessageRow({
   }
   return (
     <div className="group relative flex flex-col gap-2">
-      {message.thinking && (
-        <ThinkingBlock
-          text={message.thinking}
-          active={message.streaming && !message.text && message.tools.length === 0}
-        />
-      )}
-      {message.tools.length > 0 && (
-        <ToolList tools={message.tools} />
-      )}
+      <MessageWork
+        message={message}
+        active={message.streaming && !message.text && message.tools.length === 0}
+      />
       {message.text && (
         <Markdown text={message.text} fontSize={fontSize} streaming={message.streaming} />
       )}
@@ -1606,39 +1646,6 @@ function HandoffButton({ text, chat }: { text: string; chat: ChatContext }) {
     </DropdownMenu>
   );
 }
-
-/** Reasoning, kept out of the way: a borderless dashed strip rather than a
- *  card, so it never reads as a tool call. Opens live while the model is
- *  thinking and closes once it moves on — until the user clicks, then their
- *  choice sticks. */
-function ThinkingBlock({ text, active }: { text: string; active: boolean }) {
-  const [override, setOverride] = useState<boolean | null>(null);
-  const open = override ?? active;
-  return (
-    <div className="rounded-lg border border-dashed border-border/70 px-3 py-1.5 text-xs text-muted-foreground">
-      <button
-        type="button"
-        onClick={() => setOverride(!open)}
-        className="flex w-full items-center gap-1.5 italic hover:text-foreground"
-      >
-        <Brain className={cn("size-3.5 shrink-0 opacity-70", active && "animate-pulse")} />
-        {active ? "Thinking…" : "Thought for a moment"}
-        <ChevronRight
-          className={cn("ml-auto size-3 transition-transform", open && "rotate-90")}
-        />
-      </button>
-      <div
-        className="grid transition-[grid-template-rows] duration-200 ease-out"
-        style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
-      >
-        <div className="overflow-hidden">
-          <div className="mt-1 whitespace-pre-wrap pl-4 opacity-80">{text}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 
 /** Old vs new for an Edit, as a syntax-highlighted unified diff. */
 function RevertTurnButton({

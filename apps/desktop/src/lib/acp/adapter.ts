@@ -15,6 +15,9 @@
  */
 
 import type { ChatMessage, ChatStatus, ToolCall } from "@/hooks/useAgentChat";
+import { upsertActivities } from "@/lib/activities";
+import type { ActivityItem } from "@/types";
+import { acpActivity } from "./activities";
 import type {
   AcpContentBlock,
   AcpPermissionRequest,
@@ -88,6 +91,27 @@ export function toolResultText(update: AcpToolCallUpdate): string | undefined {
 export const statusForStop = (reason: AcpStopReason | string): ChatStatus =>
   reason === "refusal" ? "error" : "idle";
 
+/** Fold a row into a message's ordered stream. */
+const withActivity = (message: ChatMessage, item: ActivityItem): ChatMessage => ({
+  ...message,
+  activities: upsertActivities(message.activities, [item]),
+});
+
+/** The trailing reasoning row, when the last thing that happened was thinking.
+ *  A run of consecutive thought chunks is one row; anything else ends it. */
+const openReasoning = (message: ChatMessage): ActivityItem | null => {
+  const rows = message.activities;
+  if (!rows?.length) return null;
+  const last = rows[rows.length - 1];
+  return last.kind === "reasoning" && !last.complete ? last : null;
+};
+
+/** Settle a reasoning run that some other work has now interrupted. */
+const closeReasoning = (message: ChatMessage): ChatMessage => {
+  const open = openReasoning(message);
+  return open ? withActivity(message, { ...open, complete: true }) : message;
+};
+
 export interface AcpTurn {
   /** The assistant message being built, or null before the first chunk. */
   message: ChatMessage | null;
@@ -105,6 +129,7 @@ const newAssistant = (id: string): ChatMessage => ({
   text: "",
   thinking: "",
   tools: [],
+  activities: [],
   streaming: true,
   startedAt: Date.now(),
 });
@@ -126,7 +151,19 @@ export function applyUpdate(turn: AcpTurn, update: AcpUpdate, id: string): AcpTu
     const tools = message.tools.some((t) => t.id === tool.id)
       ? message.tools.map((t) => (t.id === tool.id ? tool : t))
       : [...message.tools, tool];
-    return { ...turn, message: { ...message, tools }, status: "tool" };
+    const settled = closeReasoning({ ...message, tools });
+    return {
+      ...turn,
+      message: withActivity(settled, {
+        id: tool.id,
+        kind: "plan",
+        title: "TodoWrite",
+        arguments: JSON.stringify(tool.input, null, 2),
+        failed: false,
+        complete: true,
+      }),
+      status: "tool",
+    };
   }
 
   switch (kind) {
@@ -142,9 +179,24 @@ export function applyUpdate(turn: AcpTurn, update: AcpUpdate, id: string): AcpTu
     case "agent_thought_chunk": {
       const text = blockText((update as { content?: AcpContentBlock }).content);
       if (!text) return turn;
+      // ACP gives thought no id, so the row is keyed by where the run started.
+      const open = openReasoning(message);
+      const row: ActivityItem = open
+        ? { ...open, output: (open.output ?? "") + text }
+        : {
+            id: `${message.id}:r${message.activities?.length ?? 0}`,
+            kind: "reasoning",
+            title: "Thinking",
+            output: text,
+            failed: false,
+            complete: false,
+          };
       return {
         ...turn,
-        message: { ...message, thinking: message.thinking + text },
+        message: withActivity(
+          { ...message, thinking: message.thinking + text },
+          row
+        ),
         status: "thinking",
       };
     }
@@ -167,7 +219,13 @@ export function applyUpdate(turn: AcpTurn, update: AcpUpdate, id: string): AcpTu
       const tools = existing
         ? message.tools.map((t) => (t.id === merged.id ? merged : t))
         : [...message.tools, merged];
-      return { ...turn, message: { ...message, tools }, status: "tool" };
+      const previous = message.activities?.find((a) => a.id === call.toolCallId);
+      const settled = closeReasoning({ ...message, tools });
+      return {
+        ...turn,
+        message: withActivity(settled, acpActivity(call, result, previous)),
+        status: "tool",
+      };
     }
     // The pane renders the user's own turn; echoing the agent's copy of it
     // would double every prompt.
@@ -183,7 +241,12 @@ export function endTurn(turn: AcpTurn, reason: AcpStopReason | string): AcpTurn 
   return {
     ...turn,
     message: turn.message
-      ? { ...turn.message, streaming: false, endedAt: Date.now() }
+      ? {
+          // Nothing follows to end the last reasoning run, so the turn does.
+          ...closeReasoning(turn.message),
+          streaming: false,
+          endedAt: Date.now(),
+        }
       : null,
     status: statusForStop(reason),
   };

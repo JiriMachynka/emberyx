@@ -4,7 +4,7 @@ import {
   carryOver,
   mergeThread,
   stampTurns,
-  switchBefore,
+  switchMarks,
 } from "@/lib/thread";
 import type { ChatMessage } from "@/hooks/useAgentChat";
 
@@ -80,18 +80,37 @@ describe("mergeThread", () => {
   });
 });
 
-describe("switchBefore", () => {
+describe("switchMarks", () => {
   it("marks the first turn produced by the new provider", () => {
     const carried = carryOver(EMPTY_THREAD, [message("a")], "claude", "codex", null, "s1", 1);
     const merged = mergeThread(carried, [message("b")], "codex", null);
-    expect(switchBefore(carried, "b", merged)?.id).toBe("s1");
+    expect(switchMarks(carried, merged).get("b")?.id).toBe("s1");
   });
 
   it("marks nothing where the provider did not change", () => {
     const carried = carryOver(EMPTY_THREAD, [message("a")], "claude", "codex", null, "s1", 1);
     const merged = mergeThread(carried, [message("b")], "codex", null);
     // The first turn has nothing before it, and same-provider turns are plain.
-    expect(switchBefore(carried, "a", merged)).toBeNull();
-    expect(switchBefore(EMPTY_THREAD, "a", [message("a", { provider: "claude" })])).toBeNull();
+    expect(switchMarks(carried, merged).has("a")).toBe(false);
+    expect(
+      switchMarks(EMPTY_THREAD, [message("a", { provider: "claude" })]).size
+    ).toBe(0);
+  });
+});
+
+describe("stampTurns identity", () => {
+  it("returns the same clone for an unchanged message", () => {
+    const live = [message("a")];
+    const first = stampTurns(live, "claude", "opus-5");
+    const second = stampTurns(live, "claude", "opus-5");
+    // A streamed frame re-stamps every turn but the one that moved; a fresh
+    // clone each time would re-render the whole transcript.
+    expect(second[0]).toBe(first[0]);
+  });
+
+  it("re-stamps when the provider or model changed", () => {
+    const live = [message("a")];
+    const first = stampTurns(live, "claude", "opus-5");
+    expect(stampTurns(live, "claude", "sonnet-5")[0]).not.toBe(first[0]);
   });
 });

@@ -1,4 +1,5 @@
 pub mod acp;
+pub mod activity;
 pub mod agent;
 mod claude_session;
 pub mod daemon;
@@ -252,6 +253,7 @@ pub fn run() {
             threads::read_thread,
             ingest::transcripts_ingest,
             ingest::thread_messages_page,
+            activity::transcript_activities_read,
             ingest::thread_turns_page,
             t3_import::t3_import_available,
             t3_import::t3_import_run,

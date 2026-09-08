@@ -161,7 +161,7 @@ export function EditorPane({
           title="Drag to resize"
         />
         {side === "files" ? (
-          <div className="min-h-0 flex-1 overflow-auto py-1">
+          <div className="min-h-0 flex-1">
             <FileTree
               root={projectPath}
               name={basename(projectPath)}

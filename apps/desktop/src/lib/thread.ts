@@ -29,20 +29,38 @@ export interface CarriedThread {
 
 export const EMPTY_THREAD: CarriedThread = { messages: [], switches: [] };
 
+/** Stamped clones, keyed by the message they came from. A streamed frame hands
+ *  us the same objects for every turn but the one that moved, and cloning them
+ *  all would break the identity the transcript's row memos compare on. */
+const stamped = new WeakMap<
+  ChatMessage,
+  { provider: Provider; model: string | null; message: ChatMessage }
+>();
+
 /**
  * Stamp a provider's turns with who produced them. Messages that already carry
- * attribution keep it — they came from an earlier provider still.
+ * attribution keep it — they came from an earlier provider still. A message
+ * that needs no stamp, and one stamped identically before, come back by
+ * reference.
  */
 export function stampTurns(
   messages: ChatMessage[],
   provider: Provider,
   model: string | null
 ): ChatMessage[] {
-  return messages.map((message) =>
-    message.provider
-      ? message
-      : { ...message, provider, model: model || null }
-  );
+  const named = model || null;
+  let changed = false;
+  const out = messages.map((message) => {
+    if (message.provider) return message;
+    changed = true;
+    const cached = stamped.get(message);
+    if (cached && cached.provider === provider && cached.model === named)
+      return cached.message;
+    const next = { ...message, provider, model: named };
+    stamped.set(message, { provider, model: named, message: next });
+    return next;
+  });
+  return changed ? out : messages;
 }
 
 /**
@@ -84,26 +102,28 @@ export function mergeThread(
 }
 
 /**
- * The switch that happened immediately before this message, if any — how the
- * transcript knows where to draw the divider. Keyed on the message that first
- * follows the switch, since a switch has no message of its own.
+ * Where the thread changed hands, by the message that first follows each
+ * switch — a switch has no message of its own.
+ *
+ * One pass over the merged list rather than a lookup per turn: the transcript
+ * asks this for every visible turn on every streamed frame, and a scan each
+ * time is quadratic in a long thread. A thread that never changed hands has no
+ * divider to draw, so it skips the pass entirely.
  */
-export function switchBefore(
+export function switchMarks(
   carried: CarriedThread,
-  messageId: string,
   merged: ChatMessage[]
-): ProviderSwitchMark | null {
-  // The scan below is O(messages) and runs per turn per frame; a thread that
-  // never changed hands has no divider to draw, so skip it entirely.
-  if (carried.switches.length === 0) return null;
-  const index = merged.findIndex((message) => message.id === messageId);
-  if (index <= 0) return null;
-  const previous = merged[index - 1].provider;
-  const current = merged[index].provider;
-  if (!previous || !current || previous === current) return null;
-  return (
-    carried.switches.find(
-      (mark) => mark.from === previous && mark.to === current
-    ) ?? null
-  );
+): Map<string, ProviderSwitchMark> {
+  const marks = new Map<string, ProviderSwitchMark>();
+  if (carried.switches.length === 0) return marks;
+  for (let i = 1; i < merged.length; i += 1) {
+    const previous = merged[i - 1].provider;
+    const current = merged[i].provider;
+    if (!previous || !current || previous === current) continue;
+    const mark = carried.switches.find(
+      (m) => m.from === previous && m.to === current
+    );
+    if (mark) marks.set(merged[i].id, mark);
+  }
+  return marks;
 }

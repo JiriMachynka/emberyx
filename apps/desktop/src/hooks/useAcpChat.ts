@@ -487,6 +487,7 @@ export function useAcpChat({
     ready,
     // ACP sessions have nothing to resume, so the pane never opens one it isn't
     // about to use — the process starts on mount and `wake` is already true.
+    asleep: false,
     wake: () => {},
     // ACP agents keep no listable thread store, so there is no id the sidebar
     // could resume — see `capabilitiesOf(...).threads`.

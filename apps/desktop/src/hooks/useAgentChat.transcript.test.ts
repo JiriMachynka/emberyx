@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseTranscript, parseTranscriptUsage } from "@/hooks/useAgentChat";
+import {
+  attachTranscriptActivities,
+  parseTranscript,
+  parseTranscriptUsage,
+} from "@/hooks/useAgentChat";
 
 /** Build a transcript from JSONL records, the way Claude Code writes one. */
 const transcript = (...records: unknown[]) =>
@@ -250,5 +254,53 @@ describe("parseTranscriptUsage — context occupancy", () => {
       message: { model: "claude-opus-4-5", content: [{ type: "text", text: "hi" }] },
     });
     expect(parseTranscriptUsage(line).contextTokens).toBeUndefined();
+  });
+});
+
+describe("attachTranscriptActivities", () => {
+  const line = (id: string | null, toolId: string) =>
+    JSON.stringify({
+      type: "assistant",
+      message: {
+        ...(id ? { id } : {}),
+        content: [
+          { type: "tool_use", id: toolId, name: "Bash", input: { command: "ls" } },
+        ],
+      },
+    });
+
+  it("attaches rows to the message built from the same line", () => {
+    const messages = parseTranscript(line("m1", "t1"));
+    const merged = attachTranscriptActivities(messages, [
+      {
+        messageId: "m1",
+        activities: [
+          { id: "t1", kind: "command", title: "Bash", failed: false, complete: true },
+        ],
+      },
+    ]);
+    expect(merged[0].activities?.map((a) => a.id)).toEqual(["t1"]);
+  });
+
+  it("matches an id-less message by its position, the way Rust buckets it", () => {
+    // Imported history synthesizes messages that never carried an id.
+    const messages = parseTranscript([line(null, "t1"), line(null, "t2")].join("\n"));
+    expect(messages.map((m) => m.sourceId)).toEqual(["line-0", "line-1"]);
+    const merged = attachTranscriptActivities(messages, [
+      {
+        messageId: "line-1",
+        activities: [
+          { id: "t2", kind: "command", title: "Bash", failed: false, complete: true },
+        ],
+      },
+    ]);
+    expect(merged[0].activities).toBeUndefined();
+    expect(merged[1].activities?.map((a) => a.id)).toEqual(["t2"]);
+  });
+
+  it("keeps the page when nothing normalized", () => {
+    // History without the ordering is still history.
+    const messages = parseTranscript(line("m1", "t1"));
+    expect(attachTranscriptActivities(messages, [])).toBe(messages);
   });
 });

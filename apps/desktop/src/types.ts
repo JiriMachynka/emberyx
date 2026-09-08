@@ -239,4 +239,40 @@ export interface Thread {
   imported?: boolean;
 }
 
+/** Mirrors `ActivityKind` in `src-tauri/src/activity.rs`. */
+export type ActivityKind =
+  | "reasoning"
+  | "command"
+  | "fileChange"
+  | "fileRead"
+  | "fileSearch"
+  | "fileList"
+  | "search"
+  | "plan"
+  | "tool";
+
+/** Mirrors `ActivityFileChange`. Line counts are absent unless the provider
+ *  reported them — never zero standing in for unknown. */
+export interface ActivityFileChange {
+  path: string;
+  additions?: number;
+  deletions?: number;
+}
+
+/** One unit of agent work, normalized in Rust and ready to render. Mirrors
+ *  `ActivityItem`; `displayTarget` and friends are computed once on arrival,
+ *  so the renderer never reparses a tool input on a frame. */
+export interface ActivityItem {
+  id: string;
+  kind: ActivityKind;
+  title: string;
+  arguments?: string;
+  output?: string;
+  displayTarget?: string;
+  displayDescription?: string;
+  fileChanges?: ActivityFileChange[];
+  failed: boolean;
+  /** False while the work is still running — a tool with no result yet. */
+  complete: boolean;
+}
 

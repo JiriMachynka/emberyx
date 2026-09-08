@@ -92,9 +92,10 @@ export interface TurnReviewRequest {
  */
 interface AgentState {
   statuses: Record<string, SessionStatus>;
-  /** When each session entered the status it is in, so a row can say how long
-   *  it has been working rather than only that it is. Stamped on change only —
-   *  restating "working" every hook event would reset the clock. */
+  /** When the session's current *run* began, so a row can say how long it has
+   *  been working rather than only that it is. Stamped when it leaves idle —
+   *  a permission prompt mid-turn is still the same turn, so waiting and
+   *  working hand the clock to each other instead of restarting it. */
   statusSince: Record<string, number>;
   usages: Record<string, Usage>;
   changes: Change[];
@@ -208,14 +209,21 @@ export const useAgentStore = create<AgentState>()((set) => ({
       return { transcripts: rest };
     }),
   setStatus: (id, status) =>
-    set((s) =>
-      s.statuses[id] === status
-        ? s
-        : {
-            statuses: { ...s.statuses, [id]: status },
-            statusSince: { ...s.statusSince, [id]: Date.now() },
-          }
-    ),
+    set((s) => {
+      const prev = s.statuses[id] ?? "idle";
+      if (prev === status) return s;
+      // The clock measures the run, not the status. Only coming back from idle
+      // starts it: working -> waiting -> working is one turn with an approval
+      // in the middle, and restarting there made the readout lie.
+      const since =
+        status !== "idle" && prev !== "idle"
+          ? s.statusSince[id] ?? Date.now()
+          : Date.now();
+      return {
+        statuses: { ...s.statuses, [id]: status },
+        statusSince: { ...s.statusSince, [id]: since },
+      };
+    }),
   // Same object back means nothing moved. Without the bail-out every publish
   // allocated a new `usages` map and woke every subscriber — one per sidebar row.
   setUsage: (id, usage) =>
@@ -377,6 +385,10 @@ export const useAgentStore = create<AgentState>()((set) => ({
     }),
 }));
 
-/** Unread badge count for the notification centre. */
-export const selectUnreadCount = (s: AgentState) =>
-  s.notifications.filter((n) => !n.read).length;
+/** Unread badge count for the notification centre. A loop, not a `filter`:
+ *  every store mutation runs this selector, including each agent file edit. */
+export const selectUnreadCount = (s: AgentState) => {
+  let n = 0;
+  for (const notification of s.notifications) if (!notification.read) n += 1;
+  return n;
+};

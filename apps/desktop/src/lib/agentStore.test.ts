@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentStore } from "@/lib/agentStore";
 import type { Change } from "@/lib/changes";
 import type { Usage } from "@/lib/pricing";
@@ -25,7 +25,7 @@ const usage = (input: number): Usage => ({
 });
 
 beforeEach(() => {
-  useAgentStore.setState({ statuses: {}, usages: {}, changes: [] });
+  useAgentStore.setState({ statuses: {}, statusSince: {}, usages: {}, changes: [] });
 });
 
 describe("useAgentStore", () => {
@@ -39,6 +39,28 @@ describe("useAgentStore", () => {
     store().setStatus("s1", "working");
     store().setStatus("s1", "idle");
     expect(store().statuses.s1).toBe("idle");
+  });
+
+  it("keeps the run clock across a mid-turn wait", () => {
+    store().setStatus("s1", "working");
+    const started = store().statusSince.s1;
+    store().setStatus("s1", "waiting");
+    store().setStatus("s1", "working");
+    expect(store().statusSince.s1).toBe(started);
+  });
+
+  it("restarts the run clock when a new run leaves idle", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      store().setStatus("s1", "working");
+      store().setStatus("s1", "idle");
+      vi.setSystemTime(9_000);
+      store().setStatus("s1", "working");
+      expect(store().statusSince.s1).toBe(9_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("replaces a session's usage with the latest reading", () => {

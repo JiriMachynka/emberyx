@@ -18,7 +18,13 @@ import {
 } from "@/lib/conversationRewind";
 import type { PermissionMode } from "@/lib/settings";
 import type { Provider } from "@/lib/providers";
-import type { SessionStatus } from "@/types";
+import {
+  emptyOwnerIndex,
+  routeActivities,
+  syncOwnerIndex,
+  upsertActivities,
+} from "@/lib/activities";
+import type { ActivityItem, SessionStatus } from "@/types";
 import {
   classifyFailure,
   issueTitle,
@@ -56,6 +62,10 @@ type AgentEvent =
   | { type: "line"; data: string }
   /** Several stdout lines coalesced by the Rust forwarder into one IPC message. */
   | { type: "lines"; data: string[] }
+  /** The work in the lines just sent, normalized in Rust. Rides after those
+   *  lines, never instead of them — usage, session ids and permission
+   *  requests are still read off the raw stream. */
+  | { type: "activities"; data: ActivityItem[] }
   | { type: "stderr"; data: string }
   | { type: "exit"; data: number | null };
 
@@ -75,6 +85,12 @@ export interface ChatMessage {
   text: string;
   thinking: string;
   tools: ToolCall[];
+  /** Assistant messages only: this turn's work as one ordered stream, so
+   *  reasoning sits between the tool calls it came between rather than
+   *  collapsing into `thinking` above them. Normalized in Rust; the renderer
+   *  never reparses a tool input. Absent on a replayed transcript, which still
+   *  comes through `parseTranscript`. */
+  activities?: ActivityItem[];
   streaming: boolean;
   /** Images the user attached to this turn (user messages only). */
   images?: ChatImage[];
@@ -86,6 +102,10 @@ export interface ChatMessage {
   provider?: Provider;
   /** The model behind `provider`, when it named one. */
   model?: string | null;
+  /** Replayed messages only: the provider's own message id for the transcript
+   *  line this was built from, used to attach the rows the Rust normalizer
+   *  produced for the same line. */
+  sourceId?: string;
   /** Assistant messages only: wall-clock start (message_start) and turn end
    *  (result), used to render the "Worked for Ns" turn summary. */
   startedAt?: number;
@@ -288,7 +308,7 @@ export function parseTranscript(text: string): ChatMessage[] {
       }
     }
   };
-  for (const line of text.split("\n")) {
+  for (const [index, line] of text.split("\n").entries()) {
     if (!line.trim()) continue;
     let o: Record<string, unknown>;
     try {
@@ -327,7 +347,12 @@ export function parseTranscript(text: string): ChatMessage[] {
         }
       }
     } else if (o.type === "assistant" && msg && Array.isArray(msg.content)) {
-      const m = newMessage("assistant", {});
+      // The key the Rust normalizer buckets this same line under, so the two
+      // can be zipped without either side inventing an order. Imported history
+      // synthesizes messages with no id, hence the positional fallback — it
+      // must match `transcript_activities` exactly.
+      const sourceId = typeof msg.id === "string" ? msg.id : `line-${index}`;
+      const m = newMessage("assistant", { sourceId });
       for (const b of msg.content) {
         if (!isRecord(b)) continue;
         if (b.type === "text") {
@@ -446,6 +471,50 @@ export function readActivity(content: unknown): SubagentActivity[] {
   return out;
 }
 
+/** Ask Rust to normalize the lines this page was built from. A failure is not
+ *  worth losing the page over — the messages render without the ordering. */
+const readTranscriptActivities = async (
+  lines: string[]
+): Promise<MessageActivities[]> => {
+  try {
+    const rows = await invoke<MessageActivities[]>("transcript_activities_read", { lines });
+    // The command is registered, but a page must not be lost to a build where
+    // it isn't — an absent reply is "no ordering", not a broken transcript.
+    return Array.isArray(rows) ? rows : [];
+  } catch (e) {
+    console.error("[emberyx] transcript_activities_read failed", e);
+    return [];
+  }
+};
+
+/** One transcript message's rows, from `transcript_activities_read`. */
+interface MessageActivities {
+  messageId: string;
+  activities: ActivityItem[];
+}
+
+/**
+ * Attach the Rust-normalized rows to the messages the frontend parser built
+ * from the same lines.
+ *
+ * The replay path could have re-derived these in TypeScript, but then a
+ * resumed thread and a live one would be describing the same turn through two
+ * different implementations — the exact drift the ordered model exists to end.
+ * A page that fails to normalize keeps its messages: history without the
+ * ordering is still history, and the `thinking` + `tools` fallback renders it.
+ */
+export const attachTranscriptActivities = (
+  messages: ChatMessage[],
+  grouped: MessageActivities[]
+): ChatMessage[] => {
+  if (!grouped.length) return messages;
+  const byId = new Map(grouped.map((g) => [g.messageId, g.activities]));
+  return messages.map((m) => {
+    const rows = m.sourceId ? byId.get(m.sourceId) : undefined;
+    return rows?.length ? { ...m, activities: rows } : m;
+  });
+};
+
 function newMessage(
   role: "user" | "assistant",
   partial: Partial<ChatMessage>
@@ -486,6 +555,9 @@ export function useAgentChat({
   // the callback re-created — and thus the composer re-rendered — every token.
   const messagesRef = useRef<ChatMessage[]>(messages);
   messagesRef.current = messages;
+  // Which message owns each activity row. Kept alongside the list so a late
+  // snapshot is routed by lookup rather than by scanning the whole thread.
+  const ownersRef = useRef(emptyOwnerIndex());
   const [hasMore, setHasMore] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   // Keyset cursor for paging older history out of the local event store:
@@ -740,7 +812,10 @@ export function useAgentChat({
       const i = prev.findIndex((m) => m.id === finalized.id);
       if (i === -1) {
         const empty =
-          !finalized.text && !finalized.thinking && finalized.tools.length === 0;
+          !finalized.text &&
+          !finalized.thinking &&
+          finalized.tools.length === 0 &&
+          !finalized.activities?.length;
         return empty ? prev : [...prev, finalized];
       }
       const next = prev.slice();
@@ -759,6 +834,40 @@ export function useAgentChat({
     },
     [scheduleFlush]
   );
+
+  /** Fold row snapshots into the message that owns them. The routing and the
+   *  merge are pure — see `lib/activities.ts`; this only applies the result to
+   *  the draft and to React state. */
+  const applyActivities = useCallback(
+    (items: ActivityItem[]) => {
+      const index = syncOwnerIndex(ownersRef.current, messagesRef.current);
+      const routing = routeActivities(items, draftRef.current, index);
+      if (routing.draft.length) {
+        pushDraft((d) => {
+          d.activities = upsertActivities(d.activities, routing.draft);
+        });
+      }
+      if (routing.settled.size) {
+        setMessages((prev) => {
+          let next = prev;
+          for (const [id, mine] of routing.settled) {
+            const i = next.findIndex((m) => m.id === id);
+            if (i === -1) continue;
+            if (next === prev) next = prev.slice();
+            next[i] = { ...next[i], activities: upsertActivities(next[i].activities, mine) };
+          }
+          return next;
+        });
+      }
+    },
+    [pushDraft]
+  );
+
+  // Reached through a ref, not the spawn effect's dependency list: adding it
+  // there would tear down and respawn the `claude` process every time this
+  // callback's identity changed.
+  const applyActivitiesRef = useRef(applyActivities);
+  applyActivitiesRef.current = applyActivities;
 
   const scheduleUsage = useCallback(() => {
     usageDirtyRef.current = true;
@@ -1143,7 +1252,11 @@ export function useAgentChat({
           .map((row) => row.payloadJson)
           .filter((line): line is string => typeof line === "string");
         const transcript = lines.join("\n");
-        const parsed = parseTranscript(transcript);
+        const parsed = attachTranscriptActivities(
+          parseTranscript(transcript),
+          await readTranscriptActivities(lines)
+        );
+        if (cancelled) return;
         const oldest = page.rows[0];
         oldestCursorRef.current = oldest
           ? { createdAt: oldest.createdAt, messageId: oldest.messageId }
@@ -1210,7 +1323,10 @@ export function useAgentChat({
       const lines = page.rows
         .map((row) => row.payloadJson)
         .filter((line): line is string => typeof line === "string");
-      const older = parseTranscript(lines.join("\n"));
+      const older = attachTranscriptActivities(
+        parseTranscript(lines.join("\n")),
+        await readTranscriptActivities(lines)
+      );
       if (older.length) setMessages((prev) => [...older, ...prev]);
       return true;
     } catch (e) {
@@ -1255,7 +1371,15 @@ export function useAgentChat({
       };
       if (ev.type === "line") safeLine(ev.data);
       else if (ev.type === "lines") for (const line of ev.data) safeLine(line);
-      else if (ev.type === "stderr") {
+      else if (ev.type === "activities") {
+        try {
+          applyActivitiesRef.current(ev.data);
+        } catch (e) {
+          // The raw lines already landed; a bad row must not take the turn
+          // down with it.
+          console.error("[emberyx] dropped agent activity frame", e);
+        }
+      } else if (ev.type === "stderr") {
         stderr = (stderr + ev.data).slice(-STDERR_CAP);
         checkStderr();
       } else if (ev.type === "exit") {
@@ -1753,6 +1877,9 @@ export function useAgentChat({
     status,
     usage,
     ready,
+    // Not started *yet*, as opposed to starting: the composer must stay live in
+    // this state or the keystroke that wakes the pane can never be typed.
+    asleep: !awake,
     wake,
     threadId,
     send,

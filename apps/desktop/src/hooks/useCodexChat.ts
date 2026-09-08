@@ -756,6 +756,9 @@ export function useCodexChat({
     status,
     usage,
     ready,
+    // See useAgentChat: asleep is "no process wanted yet", and the composer has
+    // to accept the keystroke that wakes it.
+    asleep: !awake,
     wake,
     threadId: liveThreadId,
     send,

@@ -195,6 +195,21 @@ describe("useAgentChat lifecycle", () => {
     expect(sentTo("agent_spawn")).toHaveLength(1);
   });
 
+  // A sleeping pane is what the composer reads to stay enabled. Without it the
+  // pane waits on a keystroke it has disabled the input for — every thread
+  // restored on app start was unusable.
+  it("reports a sleeping resumed thread as asleep, not merely not ready", async () => {
+    const view = renderHook(() =>
+      useAgentChat({ ...options, resume: "sess-9" })
+    );
+    await waitFor(() => expect(sentTo("thread_messages_page")).toHaveLength(1));
+    expect(view.result.current.ready).toBe(false);
+    expect(view.result.current.asleep).toBe(true);
+    act(() => view.result.current.wake());
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    expect(view.result.current.asleep).toBe(false);
+  });
+
   // The composer is not disabled while the agent boots, so the first turn is
   // held rather than dropped — dropping it left the message in the transcript
   // and nothing on the wire.

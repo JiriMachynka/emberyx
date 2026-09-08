@@ -154,9 +154,13 @@ function ProjectStatusDot({
   className?: string;
   hideIdle?: boolean;
 }) {
+  // The chat list is derived outside the selector: the selector runs on every
+  // store notification, and filtering the sessions inside it allocated an array
+  // per project per agent event.
+  const agents = useMemo(() => sessions.filter((x) => x.kind === "chat"), [sessions]);
   const status = useAgentStore((s) => {
-    const agents = sessions.filter((x) => x.kind === "chat");
-    if (agents.some((x) => statusOf(s.statuses, x.id) === "working")) return "working";
+    for (const agent of agents)
+      if (statusOf(s.statuses, agent.id) === "working") return "working";
     return agents[0] ? statusOf(s.statuses, agents[0].id) : "idle";
   });
   if (hideIdle && status === "idle") return null;

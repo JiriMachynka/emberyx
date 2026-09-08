@@ -350,6 +350,41 @@ Both prefill and never send, and both append a `providerSwitch` timeline event.
      script writes a placeholder before compiling and overwrites it after. A
      missing daemon now fails the bundle rather than the user's first click.
 
+### One activity stream, three normalizers
+
+`ActivityItem` is the model every backend's work is expressed in — reasoning is
+a `kind` in the same ordered stream as tool calls, not a string field beside
+them. Where it is *built* differs on purpose, and that is not an inconsistency:
+
+- **Claude** — `src-tauri/src/activity.rs`, because Rust owns its raw stdout and
+  the live path needs a delta state machine anyway.
+- **Codex** — `lib/codex/activities.ts`, folded into the adapter reducer. Its
+  decoders are generated from the installed binary and live in TypeScript;
+  porting them to Rust would mean hand-writing mirrors of generated types.
+  Codex names what a thing is (`commandExecution`, `fileChange`) so most rows
+  are classified from the item type, and its patches make `additions` /
+  `deletions` real numbers rather than guesses.
+- **ACP** — `lib/acp/activities.ts`. `AcpToolKind` classifies directly; the
+  awkward part is reasoning, which arrives as bare `agent_thought_chunk`s with
+  no id. A *run* of consecutive chunks is one row and the next piece of work
+  ends it — the grouping is the meaning, not a workaround.
+
+`lib/activities.ts` holds what all three share: `upsertActivities` (rows are
+whole snapshots, so an update is a replace), `routeActivities` (Claude only —
+its rows arrive out of band and a late `tool_result` has to find the message it
+belongs to), and `kindForToolName` / `targetForInput`, the same vocabulary as
+`kind_for_tool` / `target_for` in Rust but applied to disjoint input: Claude's
+rows are already classified before they cross.
+
+Rendering is one component for all of them — `components/chat/ActivityRow.tsx`,
+via `MessageWork` in `ChatPane`. The header reads only precomputed fields, so a
+collapsed row never parses a tool input; `describeTool` is called for the
+disclosure body and only once it is mounted. `running` is `!complete` rather
+than "no result yet", which is what left a tool returning nothing spinning
+forever. A message with no `activities` falls back to the old
+`thinking` + `ToolList` shape rather than being given an order it never
+recorded.
+
 ### Backends and capabilities
 
 `lib/agentBackend.ts` owns `AgentBackend` (`"claude" | "codex"`) and a
@@ -398,6 +433,33 @@ turbo / pnpm / npm workspaces).
   not found" cause.
 - **Per-spawn stream**: `agent_spawn` takes a `Channel<AgentEvent>`; agent
   output flows through that channel, not a global event.
+- **Activities ride alongside the lines, never instead of them.** `activity.rs`
+  normalizes a turn's work into provider-neutral `ActivityItem` rows —
+  reasoning is a `kind` in the same ordered stream as tool calls, so a turn that
+  thinks, runs, then thinks again renders in that order instead of collapsing
+  into one `thinking` string above the tools. `display_target` and friends are
+  computed once on arrival; the renderer never reparses a `Write` input on a
+  frame. `ActivityStream` is the live half: Claude runs with
+  `--include-partial-messages`, so a running turn arrives as deltas and only
+  *afterwards* as the complete `assistant` line, which is why rows are merged by
+  id rather than appended. Reasoning ids are `<message_id>:<block_index>`
+  precisely so the streamed block and the line restating it are one row.
+  `AgentEvent::Activities` carries whole rows, not deltas — the consumer stays
+  stateless and a dropped event self-heals on the next one — coalesced to one
+  snapshot per row per batch, and holding back `arguments` until the block
+  closes, since that is the disclosure body and not something being watched
+  stream. The frontend merges them in `lib/activities.ts` (pure, tested) and the
+  spawn effect reaches `applyActivities` through a ref: putting it in that
+  effect's dependency list would respawn the `claude` process.
+
+  Replay goes through the same normalizer, not a second one: the frontend hands
+  the page's raw lines back to `transcript_activities_read`, which buckets rows
+  per message, and `attachTranscriptActivities` zips them onto the messages
+  `parseTranscript` built from those same lines. The join key is the provider's
+  `message.id`, falling back to the line's index — imported history synthesizes
+  messages that never had an id, so a constant fallback would collapse them all
+  into one bucket. A page that fails to normalize keeps its messages: history
+  without the ordering is still history.
 - **Global events**: `hook-event` and `ask-user`. Both are `app.emit` from a
   background thread.
 

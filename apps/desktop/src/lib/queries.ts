@@ -129,17 +129,29 @@ export const useThreadCheckpoints = (
     staleTime: 30_000,
   });
 
+/**
+ * The files one turn changed.
+ *
+ * `openEnded` is the newest turn, whose range ends at the working tree and so
+ * changes with every git mutation. Every older turn's range is closed by the
+ * next turn's snapshot and can never move again — those are cached for good,
+ * because the transcript is virtualized and a card that refetched on every
+ * remount fired a git subprocess per scroll.
+ */
 export const useTurnFiles = (
   path: string,
   threadId: string | null,
   fromId: string | null,
-  enabled = true
+  enabled = true,
+  openEnded = true
 ) =>
   useQuery({
     queryKey: checkpointKeys.turnFiles(path, threadId ?? "", fromId ?? ""),
     queryFn: () => checkpointTurnFiles(path, threadId ?? "", fromId ?? ""),
     enabled: enabled && !!fromId && !!threadId,
-    staleTime: 0,
+    staleTime: openEnded ? 0 : Infinity,
+    gcTime: openEnded ? undefined : Infinity,
+    meta: { openEnded },
   });
 
 export const useTurnDiff = (
@@ -187,47 +199,22 @@ export const settleTurnCheckpoint = async (
   await queryClient.invalidateQueries({ queryKey: ["checkpoints", path] });
 };
 
-const fileDiff = (
-  path: string,
-  file: GitFile,
-  staged: boolean,
-  ignoreWhitespace: boolean
-) =>
-  queryClient.fetchQuery({
-    queryKey: gitKeys.diff(path, file.path, file.untracked, staged, ignoreWhitespace),
-    queryFn: () =>
-      invoke<string>("git_file_diff", {
-        path,
-        file: file.path,
-        untracked: file.untracked,
-        staged,
-        ignoreWhitespace,
-      }),
-  });
-
-/** The whole working tree's diff, per file, staged parts included. Goes through
- *  the same cache entries the changes panel fills, so an open panel pays once.
- *  Read outside the render tree, so the whitespace setting comes from storage. */
+/** The whole working tree as one patch, staged parts included — what a handoff
+ *  package carries. Two git subprocesses (index and working tree), not one per
+ *  file: a wide tree used to spawn hundreds. Read outside the render tree, so
+ *  the whitespace setting comes from storage. */
 export const fetchWorkingDiff = async (path: string): Promise<string> => {
   const ignoreWhitespace = loadSettings().diffIgnoreWhitespace;
-  const files = await queryClient.fetchQuery({
-    queryKey: gitKeys.changes(path),
-    queryFn: () => invoke<GitFile[]>("git_changes", { path }),
-  });
-  const parts = await Promise.all(
-    files.map(async (f) => {
-      // The index column is blank for a purely unstaged edit; anything else
-      // means part of the change only shows under `--cached`.
-      const staged =
-        !f.untracked && f.status[0] !== " "
-          ? await fileDiff(path, f, true, ignoreWhitespace)
-          : "";
-      const unstaged = await fileDiff(path, f, false, ignoreWhitespace);
-      const body = [staged, unstaged].map((d) => d.trim()).filter(Boolean).join("\n");
-      return body ? `--- ${f.path}\n${body}` : "";
-    })
+  const halves = await Promise.all(
+    [true, false].map((staged) =>
+      queryClient.fetchQuery({
+        queryKey: gitKeys.workingDiff(path, staged, ignoreWhitespace),
+        queryFn: () =>
+          invoke<string>("git_working_diff", { path, staged, ignoreWhitespace }),
+      })
+    )
   );
-  return parts.filter(Boolean).join("\n\n");
+  return halves.map((d) => d.trim()).filter(Boolean).join("\n");
 };
 
 // `file` null → disabled; the key includes the file so a fast A→B selection
@@ -495,7 +482,14 @@ export const useInvalidateGit = () => {
       ];
       // Turn-review ranges: the open-ended newest turn's answer changes with
       // every git mutation, and settle snapshots land between invalidations.
-      qc.invalidateQueries({ queryKey: ["checkpoints", p] });
+      // A closed range cannot move, so it is left alone — otherwise every card
+      // the transcript has mounted refires its git subprocess at once.
+      qc.invalidateQueries({
+        predicate: (q) =>
+          q.queryKey[0] === "checkpoints" &&
+          q.queryKey[1] === p &&
+          q.meta?.openEnded !== false,
+      });
       for (const key of views) {
         qc.invalidateQueries({ queryKey: ["git", key, p] });
       }
@@ -810,12 +804,15 @@ export const useProjectFiles = (path: string, enabled: boolean) =>
     staleTime: 60_000,
   });
 
+/** One directory's listing. Shared with the tree, which asks for many at once
+ *  through `useQueries` and so needs the options rather than the hook. */
+export const dirEntriesQuery = (path: string) => ({
+  queryKey: fileKeys.dir(path),
+  queryFn: () => invoke<DirEntry[]>("list_dir", { path }),
+});
+
 export const useDirEntries = (path: string, enabled: boolean) =>
-  useQuery({
-    queryKey: fileKeys.dir(path),
-    queryFn: () => invoke<DirEntry[]>("list_dir", { path }),
-    enabled,
-  });
+  useQuery({ ...dirEntriesQuery(path), enabled });
 
 /** `path` null → disabled. Never auto-refetches: the pane owns an editable
  *  buffer, so a background refetch would fight the user's typing. */

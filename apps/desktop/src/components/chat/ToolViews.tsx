@@ -6,7 +6,6 @@
  */
 
 import { Fragment, memo, useMemo, useState } from "react";
-import { diffLines } from "diff";
 import { Check, ChevronRight, Loader2 } from "lucide-react";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { isFileReference } from "@/lib/fileRef";
@@ -20,6 +19,7 @@ import {
 import { TOOL_ICONS, TOOL_TINT } from "@/lib/toolIcons";
 import { useAgentStore } from "@/lib/agentStore";
 import { highlightCached } from "@/lib/highlight";
+import { DIFF_PREVIEW_LINES, diffPreview, type DiffRow } from "@/lib/toolDiff";
 import { cn } from "@/lib/utils";
 import type { ToolCall } from "@/hooks/useAgentChat";
 
@@ -28,6 +28,36 @@ const TODO_MARK: Record<TodoItem["status"], { mark: string; className: string }>
   in_progress: { mark: "▸", className: "text-primary" },
   pending: { mark: "○", className: "text-muted-foreground" },
 };
+
+const TINT: Record<string, string> = {
+  "+": "border-emerald-500/50 bg-emerald-500/15",
+  "-": "border-red-500/50 bg-red-500/15",
+  " ": "border-transparent",
+};
+
+/** One diff line. Highlighting happens here rather than in the parent's memo:
+ *  it is per-line work that survives the parent re-rendering, and a turn going
+ *  from streaming to finished must not re-tokenize the whole file. */
+const DiffLine = memo(function DiffLine({
+  row,
+  lang,
+  persist,
+}: {
+  row: Extract<DiffRow, { kind: "line" }>;
+  lang: string | null;
+  persist: boolean;
+}) {
+  return (
+    <div className={cn("flex gap-2 border-l-2 px-1", TINT[row.sign])}>
+      <span className="select-none text-muted-foreground">{row.sign}</span>
+      <code
+        className="hljs"
+        style={{ background: "transparent", padding: 0 }}
+        dangerouslySetInnerHTML={{ __html: highlightCached(row.text, lang, persist) }}
+      />
+    </div>
+  );
+});
 
 export const ToolDiff = memo(function ToolDiff({
   before,
@@ -40,40 +70,39 @@ export const ToolDiff = memo(function ToolDiff({
   lang: string | null;
   streaming?: boolean;
 }) {
-  const rows = useMemo(
-    () =>
-      diffLines(before, after).flatMap((part, i) =>
-        part.value
-          .replace(/\n$/, "")
-          .split("\n")
-          .map((line, j) => ({
-            key: `${i}-${j}`,
-            sign: part.added ? "+" : part.removed ? "-" : " ",
-            tint: part.added
-              ? "border-emerald-500/50 bg-emerald-500/15"
-              : part.removed
-                ? "border-red-500/50 bg-red-500/15"
-                : "border-transparent",
-            html: highlightCached(line, lang, !streaming),
-          }))
-      ),
-    [before, after, lang, streaming]
+  const [showAll, setShowAll] = useState(false);
+  const { rows, hidden } = useMemo(
+    () => diffPreview(before, after, showAll ? Infinity : DIFF_PREVIEW_LINES),
+    [before, after, showAll]
   );
   return (
-    <pre className="max-h-64 overflow-auto whitespace-pre font-mono text-[0.7rem] leading-relaxed">
-      <div className="w-max min-w-full">
-        {rows.map((row) => (
-          <div key={row.key} className={cn("flex gap-2 border-l-2 px-1", row.tint)}>
-            <span className="select-none text-muted-foreground">{row.sign}</span>
-            <code
-              className="hljs"
-              style={{ background: "transparent", padding: 0 }}
-              dangerouslySetInnerHTML={{ __html: row.html }}
-            />
-          </div>
-        ))}
-      </div>
-    </pre>
+    <div>
+      <pre className="max-h-64 overflow-auto whitespace-pre font-mono text-[0.7rem] leading-relaxed">
+        <div className="w-max min-w-full">
+          {rows.map((row) =>
+            row.kind === "gap" ? (
+              <div
+                key={row.key}
+                className="border-l-2 border-transparent px-1 text-muted-foreground"
+              >
+                ⋯ {row.hidden} unchanged {row.hidden === 1 ? "line" : "lines"}
+              </div>
+            ) : (
+              <DiffLine key={row.key} row={row} lang={lang} persist={!streaming} />
+            )
+          )}
+        </div>
+      </pre>
+      {hidden > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAll(true)}
+          className="mt-1 text-[0.7rem] text-muted-foreground hover:text-foreground"
+        >
+          Show {hidden} more {hidden === 1 ? "line" : "lines"}
+        </button>
+      )}
+    </div>
   );
 });
 

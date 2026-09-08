@@ -20,6 +20,8 @@ import type {
   PermissionDecision,
   ToolCall,
 } from "@/hooks/useAgentChat";
+import { upsertActivities } from "@/lib/activities";
+import { codexActivity, codexReasoning } from "./activities";
 import { codexCost } from "@/lib/pricing";
 import { describeTool } from "@/lib/toolDisplay";
 import type { SubagentActivity } from "@/lib/agentStore";
@@ -42,7 +44,7 @@ import type {
   ToolUserInputQuestion,
 } from "./protocol";
 import { statusForEvent } from "@/lib/status";
-import type { SessionStatus } from "@/types";
+import type { ActivityItem, SessionStatus } from "@/types";
 
 /** One file the turn touched, in the shape the changes feed diffs. */
 export interface CodexFileChange {
@@ -163,6 +165,45 @@ const upsertTool = (
     else tools[i] = patch(tools[i]);
     return { ...m, tools };
   });
+
+/** Fold one activity row into the draft message. Rows are ordered by first
+ *  appearance, which for Codex is the order the model produced them — items
+ *  arrive as they happen, so reasoning already sits between the tool calls it
+ *  came between. */
+const upsertActivity = (
+  state: CodexChatState,
+  item: ActivityItem | null
+): CodexChatState =>
+  item
+    ? patchDraftMessage(state, (m) => ({
+        ...m,
+        activities: upsertActivities(m.activities, [item]),
+      }))
+    : state;
+
+/** The row already on the draft for this item id, so live output that streamed
+ *  in is not dropped by the completed item that carries none. */
+const activityFor = (state: CodexChatState, id: string): ActivityItem | undefined => {
+  const draft = state.draft;
+  if (!draft) return undefined;
+  const message = state.messages.find((m) => m.id === draft.messageId);
+  return message?.activities?.find((a) => a.id === id);
+};
+
+/** Write a reasoning sink and republish it as an activity row. Both, because
+ *  `thinking` still feeds the transcript's own block until every provider is
+ *  on the activity stream. */
+const writeReasoning = (
+  state: CodexChatState,
+  itemId: string,
+  write: (previous: string) => string,
+  done: boolean
+): CodexChatState => {
+  const previous = state.draft?.thinking.find((s) => s.id === itemId)?.text ?? "";
+  const text = write(previous);
+  const next = writeSink(state, "thinking", itemId, () => text);
+  return upsertActivity(next, codexReasoning(itemId, text, done));
+};
 
 /** Codex tool items rendered under the tool names the pane already draws. */
 const toolShapeFor = (
@@ -385,6 +426,7 @@ const startTurn = (state: CodexChatState, turnId: string): CodexChatState => {
     text: "",
     thinking: "",
     tools: [],
+    activities: [],
     streaming: true,
     startedAt: Date.now(),
   };
@@ -469,7 +511,7 @@ export function applyCodexNotification(
       if (item.type === "reasoning") {
         const text = reasoningText(item);
         return none(
-          writeSink(state, "thinking", item.id, (prev) => (done && text ? text : prev))
+          writeReasoning(state, item.id, (prev) => (done && text ? text : prev), done)
         );
       }
 
@@ -487,8 +529,12 @@ export function applyCodexNotification(
         result: outcome ? outcome.result || prev?.result : prev?.result,
         isError: outcome ? outcome.isError : prev?.isError,
       }));
+      const withActivity = upsertActivity(
+        next,
+        codexActivity(item, done, activityFor(next, item.id))
+      );
       return {
-        state: { ...next, status: done ? next.status : "tool" },
+        state: { ...withActivity, status: done ? withActivity.status : "tool" },
         changes: done ? changesFrom(item) : [],
         subagents: [],
       };
@@ -505,41 +551,61 @@ export function applyCodexNotification(
     case "item/reasoning/summaryTextDelta": {
       const d = decodeDelta(params);
       if (!d) return none(state);
-      return none(writeSink(state, "thinking", d.itemId, (prev) => prev + d.delta));
+      return none(writeReasoning(state, d.itemId, (prev) => prev + d.delta, false));
     }
 
     case "item/commandExecution/outputDelta": {
       const d = decodeDelta(params);
       if (!d) return none(state);
+      const next = upsertTool(state, d.itemId, (prev) => ({
+        id: d.itemId,
+        name: prev?.name ?? "Bash",
+        input: prev?.input ?? {},
+        partial: prev?.partial ?? "",
+        result: (prev?.result ?? "") + d.delta,
+        isError: prev?.isError,
+      }));
+      const row = activityFor(next, d.itemId);
       return none(
-        upsertTool(state, d.itemId, (prev) => ({
+        upsertActivity(next, {
           id: d.itemId,
-          name: prev?.name ?? "Bash",
-          input: prev?.input ?? {},
-          partial: prev?.partial ?? "",
-          result: (prev?.result ?? "") + d.delta,
-          isError: prev?.isError,
-        }))
+          kind: "command",
+          title: "Bash",
+          ...row,
+          output: (row?.output ?? "") + d.delta,
+          failed: row?.failed ?? false,
+          complete: false,
+        })
       );
     }
 
     case "item/plan/delta": {
       const d = decodeDelta(params);
       if (!d) return none(state);
+      let planText = "";
+      const next = upsertTool(state, d.itemId, (prev) => {
+        const plan =
+          isRecord(prev?.input) && typeof prev.input.plan === "string"
+            ? prev.input.plan
+            : "";
+        planText = plan + d.delta;
+        return {
+          id: d.itemId,
+          name: "Plan",
+          input: { plan: planText },
+          partial: prev?.partial ?? "",
+          result: prev?.result,
+          isError: prev?.isError,
+        };
+      });
       return none(
-        upsertTool(state, d.itemId, (prev) => {
-          const plan =
-            isRecord(prev?.input) && typeof prev.input.plan === "string"
-              ? prev.input.plan
-              : "";
-          return {
-            id: d.itemId,
-            name: "Plan",
-            input: { plan: plan + d.delta },
-            partial: prev?.partial ?? "",
-            result: prev?.result,
-            isError: prev?.isError,
-          };
+        upsertActivity(next, {
+          id: d.itemId,
+          kind: "plan",
+          title: "Plan",
+          arguments: JSON.stringify({ plan: planText }, null, 2),
+          failed: false,
+          complete: false,
         })
       );
     }
@@ -552,13 +618,21 @@ export function applyCodexNotification(
         content: s.step,
         status: s.status === "inProgress" ? "in_progress" : s.status,
       }));
+      const next = upsertTool(state, id, () => ({
+        id,
+        name: "TodoWrite",
+        input: { todos },
+        partial: "",
+      }));
       return none(
-        upsertTool(state, id, () => ({
+        upsertActivity(next, {
           id,
-          name: "TodoWrite",
-          input: { todos },
-          partial: "",
-        }))
+          kind: "plan",
+          title: "TodoWrite",
+          arguments: JSON.stringify({ todos }, null, 2),
+          failed: false,
+          complete: true,
+        })
       );
     }
 

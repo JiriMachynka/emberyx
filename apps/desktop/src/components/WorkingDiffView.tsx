@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { parsePatchFiles } from "@pierre/diffs";
 import {
   CodeView,
@@ -61,12 +68,16 @@ export function WorkingDiffView({
   const [filter, setFilter] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 
-  // One parse per patch. Annotations are built alongside the items because both
-  // come from the same parsed hunks, and re-deriving them separately would walk
-  // the patch twice on every render.
+  // One parse per patch, and it is the expensive one — a wide working tree is
+  // megabytes of text on the main thread. Deferred so a turn that rewrites the
+  // patch mid-stream can't freeze the toolbar and the tree with it; the parse
+  // itself still runs whole, this only stops it from blocking the interaction
+  // that triggered it. Content-equal patches share a dep, so an invalidation
+  // that fetched the same bytes re-parses nothing.
+  const parsed = useDeferredValue(patch);
   const items = useMemo(() => {
-    if (!patch.trim()) return [];
-    return parsePatchFiles(patch, `working:${patch.length}`, true)
+    if (!parsed.trim()) return [];
+    return parsePatchFiles(parsed, `working:${parsed.length}`, true)
       .flatMap((entry) => entry.files)
       .map((fileDiff) => ({
         id: fileDiff.name,
@@ -83,7 +94,7 @@ export function WorkingDiffView({
           metadata: { file: fileDiff.name, hunkIndex },
         })),
       }));
-  }, [patch]);
+  }, [parsed]);
 
   const rows = useMemo(() => {
     const query = filter.trim().toLowerCase();
@@ -95,16 +106,15 @@ export function WorkingDiffView({
 
   // Hide rows inside a collapsed directory. Depth alone can't say it — the
   // check is whether any collapsed directory is a prefix of the row's path.
-  const shown = useMemo(
-    () =>
-      rows.filter(
-        (row) =>
-          ![...collapsed].some(
-            (dir) => row.path !== dir && row.path.startsWith(`${dir}/`)
-          )
-      ),
-    [rows, collapsed]
-  );
+  const shown = useMemo(() => {
+    if (collapsed.size === 0) return rows;
+    // Spread once, not once per row.
+    const dirs = [...collapsed];
+    return rows.filter(
+      (row) =>
+        !dirs.some((dir) => row.path !== dir && row.path.startsWith(`${dir}/`))
+    );
+  }, [rows, collapsed]);
 
   const options = useMemo(() => workingDiffOptions, []);
 
@@ -119,7 +129,9 @@ export function WorkingDiffView({
     anchor: HunkAnchor,
     action: "stage" | "unstage" | "discard"
   ) => {
-    const slice = fileHunkPatch(patch, anchor.file, anchor.hunkIndex);
+    // Sliced out of the patch the rendered hunks came from, not the newest
+    // one: the index the user clicked only means anything in that text.
+    const slice = fileHunkPatch(parsed, anchor.file, anchor.hunkIndex);
     // Null means the tree moved under the render — applying hunk N of a patch
     // that no longer matches would edit the wrong lines.
     if (!slice) return;

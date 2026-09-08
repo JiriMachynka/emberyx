@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use crate::activity::{ActivityItem, ActivityStream};
 use crate::error::Result;
 
 /// Events streamed from a headless Claude Code process back to the frontend.
@@ -19,6 +20,12 @@ pub enum AgentEvent {
     /// Several stdout lines coalesced into one IPC message. A burst of partial
     /// message events would otherwise cross the boundary one tiny event at a time.
     Lines(Vec<String>),
+    /// The work in the lines just sent, normalized into provider-neutral rows.
+    /// Rides *after* the lines it was derived from, never instead of them: the
+    /// frontend still reads usage, session ids and permission requests off the
+    /// raw stream. Each entry is a whole row, so a consumer that missed one
+    /// self-heals on the next.
+    Activities(Vec<ActivityItem>),
     /// A line of stderr (debug/diagnostics only).
     Stderr(String),
     /// Process exited (exit code if known).
@@ -30,6 +37,23 @@ pub enum AgentEvent {
 /// consumer is gone and the reader should stop — that is the only backpressure
 /// signal either sink has.
 pub type AgentSink = Arc<dyn Fn(AgentEvent) -> bool + Send + Sync>;
+
+/// Collapse a batch of row snapshots to one per row, keeping the last state
+/// and the order each row was first seen in. Without this, streaming one
+/// paragraph of reasoning sends the same growing string once per token.
+fn coalesce(items: Vec<ActivityItem>) -> Vec<ActivityItem> {
+    let mut order: Vec<String> = Vec::new();
+    let mut latest: HashMap<String, ActivityItem> = HashMap::new();
+    for item in items {
+        if latest.insert(item.id.clone(), item.clone()).is_none() {
+            order.push(item.id);
+        }
+    }
+    order
+        .into_iter()
+        .filter_map(|id| latest.remove(&id))
+        .collect()
+}
 
 struct AgentSession {
     child: Child,
@@ -229,6 +253,7 @@ mcp__emberyx__preview_console",
         let sessions = Arc::clone(&self.sessions);
         std::thread::spawn(move || {
             const MAX_BATCH: usize = 512;
+            let mut activity_stream = ActivityStream::new();
             let reap = || {
                 sessions
                     .lock()
@@ -260,11 +285,23 @@ mcp__emberyx__preview_console",
                         Err(_) => break,
                     }
                 }
+                // One pass over the batch: a burst of deltas that all touch
+                // the same row crosses the boundary as that row's last state,
+                // not as one event per token.
+                let activities = coalesce(
+                    batch
+                        .iter()
+                        .flat_map(|line| activity_stream.push_line(line))
+                        .collect(),
+                );
                 let event = match batch.len() {
                     1 => AgentEvent::Line(batch.remove(0)),
                     _ => AgentEvent::Lines(batch),
                 };
                 if !out_channel(event) {
+                    return;
+                }
+                if !activities.is_empty() && !out_channel(AgentEvent::Activities(activities)) {
                     return;
                 }
                 if done {
