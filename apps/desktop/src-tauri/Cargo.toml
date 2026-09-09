@@ -1,6 +1,6 @@
 [package]
 name = "emberyx"
-version = "0.2.23"
+version = "0.2.24"
 description = "Desktop cockpit for AI coding agents — run Claude Code and Codex across projects in integrated terminals."
 authors = ["Jiri Machynka <machynka.j@gmail.com>"]
 edition = "2021"
@@ -25,7 +25,10 @@ path = "src/bin/emberyxd.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `unstable` is the multiwebview API the native preview surface (preview.rs)
+# is built on — child webviews, bounds, show/hide. Tauri marks these free to
+# change between minor versions; the spike accepts that explicitly.
+tauri = { version = "2", features = ["unstable"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
