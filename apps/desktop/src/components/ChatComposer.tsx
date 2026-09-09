@@ -1,4 +1,11 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -125,6 +132,11 @@ const processImage = (file: File, mediaType: string): Promise<ChatImage> =>
     };
     reader.readAsDataURL(file);
   });
+
+/** The same chip a step down, for the session strip under the input: that row
+ *  describes the run rather than composing a message, so it reads quieter. */
+const chipTriggerSm =
+  "flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-foreground outline-none transition-colors hover:bg-white/[0.04] hover:text-primary focus-visible:ring-1 focus-visible:ring-ring";
 
 /** Trigger styling shared by the access/mode chips — matches ModelPicker. */
 const chipTrigger =
@@ -279,9 +291,13 @@ const ClaudeProfileChip = memo(function ClaudeProfileChip({
 const BranchChip = memo(function BranchChip({
   cwd,
   busy,
+  compact,
 }: {
   cwd: string;
   busy: boolean;
+  /** Rendered in the session strip under the input rather than in the
+   *  composer's own control row, where the type is a step larger. */
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const branch = useGitBranch(cwd).data?.branch;
@@ -313,10 +329,17 @@ const BranchChip = memo(function BranchChip({
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger className={chipTrigger} title={`On branch ${branch}`}>
-        <GitBranch className="size-4 shrink-0 opacity-70" />
-        <span className="max-w-32 truncate">{branch}</span>
-        <ChevronDown className="size-3.5 shrink-0 opacity-50" />
+      <DropdownMenuTrigger
+        className={compact ? chipTriggerSm : chipTrigger}
+        title={`On branch ${branch}`}
+      >
+        <GitBranch
+          className={cn("shrink-0 opacity-70", compact ? "size-3.5" : "size-4")}
+        />
+        <span className="whitespace-nowrap">{branch}</span>
+        <ChevronDown
+          className={cn("shrink-0 opacity-50", compact ? "size-3" : "size-3.5")}
+        />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-h-80 w-56 overflow-auto">
         <DropdownMenuLabel>Checkout</DropdownMenuLabel>
@@ -375,6 +398,8 @@ const ContextMeter = memo(function ContextMeter({
   onCompact,
   compactDisabled,
   compactDisabledReason: disabledReason,
+  compact,
+  className,
 }: {
   contextTokens?: number;
   model: string;
@@ -384,6 +409,10 @@ const ContextMeter = memo(function ContextMeter({
   onCompact?: () => void;
   compactDisabled?: boolean;
   compactDisabledReason?: string | null;
+  /** In the session strip: a smaller ring, with the percentage spelled out —
+   *  a 24px ring alone is a shape, not a reading. */
+  compact?: boolean;
+  className?: string;
 }) {
   const max = resolveContextWindow(model, backend, resolved, contextWindow);
   const used = contextTokens ?? 0;
@@ -393,9 +422,17 @@ const ContextMeter = memo(function ContextMeter({
     <DropdownMenu>
       <DropdownMenuTrigger
         title="Context window"
-        className="grid size-8 place-items-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground"
+        className={cn(
+          compact
+            ? "flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-white/[0.04] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+            : "grid size-8 place-items-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground",
+          className
+        )}
       >
-        <svg viewBox="0 0 24 24" className="size-8 -rotate-90">
+        <svg
+          viewBox="0 0 24 24"
+          className={cn("-rotate-90", compact ? "size-4" : "size-8")}
+        >
           <circle
             cx="12"
             cy="12"
@@ -420,6 +457,9 @@ const ContextMeter = memo(function ContextMeter({
             }
           />
         </svg>
+        {compact && (
+          <span className="tabular-nums">{max > 0 ? `${pct}%` : fmtTokens(used)}</span>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent side="top" align="end" className="w-64 p-3">
         <div className="flex items-center justify-between gap-2">
@@ -887,19 +927,36 @@ export const ChatComposer = memo(function ChatComposer({
   // Measuring forces a reflow, so coalesce a burst of keystrokes into one frame,
   // skip the write when the height is unchanged, and only reset to `auto` when
   // the text got shorter — growing text can be measured in place.
-  useEffect(() => {
+  // Layout effect, not effect: the height is measured and written before the
+  // browser paints, so the composer never shows a frame at its unmeasured
+  // height on mount.
+  useLayoutEffect(() => {
     const el = inputRef.current;
     if (!el) return;
-    cancelAnimationFrame(frameRef.current);
-    frameRef.current = requestAnimationFrame(() => {
-      if (input.length <= lengthRef.current) el.style.height = "auto";
+    // First pass runs inline; only a burst of keystrokes needs coalescing.
+    const size = () => {
+      if (input.length <= lengthRef.current) {
+        // Measuring needs the height released, but `auto` is a jump the
+        // transition would then animate *from* — so the reset happens with
+        // transitions off and is flushed before they come back.
+        el.style.transition = "none";
+        el.style.height = "auto";
+        void el.offsetHeight;
+        el.style.transition = "";
+      }
       lengthRef.current = input.length;
       const next = `${Math.min(el.scrollHeight, 160)}px`;
       if (next !== heightRef.current || el.style.height === "auto") {
         heightRef.current = next;
         el.style.height = next;
       }
-    });
+    };
+    if (heightRef.current === "") {
+      size();
+      return;
+    }
+    cancelAnimationFrame(frameRef.current);
+    frameRef.current = requestAnimationFrame(size);
     return () => cancelAnimationFrame(frameRef.current);
   }, [input]);
 
@@ -936,6 +993,11 @@ export const ChatComposer = memo(function ChatComposer({
   };
 
   const canCompact = capabilitiesOf(backend).compact && onCompact;
+  // Read here too, so the strip under the input can stay out of the DOM
+  // entirely for a project that is not a git repo. Same query key as the
+  // chip's, so it costs a cache read rather than a second `git branch`.
+  const branch = useGitBranch(cwd).data?.branch;
+  const hasStrip = !!branch || capabilitiesOf(backend).usage;
   const compactBlocked = compactDisabledReason({
     busy,
     ready: ready && !exited,
@@ -1087,10 +1149,19 @@ export const ChatComposer = memo(function ChatComposer({
         }}
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
-         className={cn(
-            "chat-composer-surface overflow-hidden rounded-3xl border transition-colors focus-within:border-ring/60 focus-within:ring-1 focus-within:ring-ring/40",
-           dragging && "border-ring ring-1 ring-ring/50"
-         )}
+        className={cn(
+          // rounded-xl, not 3xl: every card in the app is on the --radius
+          // scale, and a 24px pill next to 10px tool cards reads as a
+          // different design system.
+          // Rounded all the way round: the session strip tucks *under* this
+          // surface rather than squaring its bottom corners, the same trick
+          // TasksCard uses above the composer.
+          "chat-composer-surface relative z-10 overflow-hidden rounded-xl border transition-colors",
+          "focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/50",
+          // A drop target, but never louder than focus — dragging used to draw
+          // the stronger ring of the two.
+          dragging && "border-primary/50 bg-primary/5 ring-1 ring-primary/25"
+        )}
       >
         {images.length > 0 && (
           <div className="flex flex-wrap gap-2 px-5 pt-4">
@@ -1204,7 +1275,12 @@ export const ChatComposer = memo(function ChatComposer({
           // textarea's inner editor gets a min-content floor, so one long
           // unbreakable token (an @path mention) pushes the line wider than the
           // box instead of wrapping. `break-words` wraps the token itself.
-           className="block max-h-40 min-h-24 resize-none overscroll-contain overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent px-5 pb-1 pt-5 text-[15px] leading-6 shadow-none placeholder:text-muted-foreground/80 focus-visible:ring-0"
+          // `min-h-0`, not a one-line floor: the measured height is the only
+          // thing that governs, so an empty composer is exactly one line of
+          // padding + text with no slack under the placeholder. The shadcn
+          // base ships `min-h-16`, which is where the old blank strip came
+          // from. It still grows to max-h-40 and then scrolls.
+          className="block max-h-40 min-h-0 resize-none overscroll-contain overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent px-5 pb-2 pt-3 text-base leading-6 shadow-none transition-[height] duration-150 ease-out placeholder:text-muted-foreground/80 focus-visible:ring-0 motion-reduce:transition-none"
         />
           {resumeOffer && (
             <div className="flex flex-col gap-2 border-t border-border px-4 py-2">
@@ -1240,7 +1316,10 @@ export const ChatComposer = memo(function ChatComposer({
           {/* pl-2.5 rather than the textarea's px-5: each chip carries its own
               px-2.5, so this is what puts the first chip's glyph on the same
               left edge as the prompt text above it. */}
-          <div className="composer-controls-scroll flex min-w-0 flex-nowrap items-center justify-between gap-2 overflow-x-auto overscroll-contain pb-4 pl-2.5 pr-4 pt-2">
+          {/* Wraps rather than scrolling sideways: chips that slid out of view
+              inside the input were discoverable only by scrolling a toolbar
+              nobody knows scrolls. */}
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-2 pb-4 pl-2.5 pr-5 pt-2">
           <UsageFooter
             queued={queued}
             backend={backend}
@@ -1259,21 +1338,8 @@ export const ChatComposer = memo(function ChatComposer({
             queue={queue}
           />
           <div className="flex shrink-0 items-center gap-1.5">
-            <BranchChip cwd={cwd} busy={busy} />
-            {capabilitiesOf(backend).usage && (
-              <>
-                <ContextMeter
-                  contextTokens={usage.contextTokens}
-                  model={model}
-                  backend={backend}
-                  resolved={usage.model}
-                  contextWindow={usage.contextWindow}
-                  onCompact={canCompact ? onCompact : undefined}
-                  compactDisabled={!!compactBlocked}
-                  compactDisabledReason={compactBlocked}
-                />
-                {usage.quota && <QuotaChip quota={usage.quota} />}
-              </>
+            {capabilitiesOf(backend).usage && usage.quota && (
+              <QuotaChip quota={usage.quota} />
             )}
             <input
               ref={fileRef}
@@ -1296,27 +1362,61 @@ export const ChatComposer = memo(function ChatComposer({
               <ImagePlus className="size-4" />
             </button>
             {busy && (
-              <button
+              <Button
                 type="button"
+                variant="secondary"
+                size="icon"
                 onClick={onStop}
                 title="Stop"
-                className="grid size-8 place-items-center rounded-full bg-card text-foreground transition-colors hover:bg-muted"
+                className="rounded-full"
               >
                 <Square className="size-3.5 fill-current" />
-              </button>
+              </Button>
             )}
-            <button
+            {/* The shared primary button, not a hand-rolled circle: the
+                composer's most-used control was the one place missing the
+                press-scale and the ember shadow every other primary has. */}
+            <Button
               type="button"
+              size="icon"
               onClick={submit}
               title={busy ? "Queue message" : "Send"}
               disabled={(!input.trim() && images.length === 0) || !ready || exited}
-              className="grid size-8 place-items-center rounded-full bg-primary text-primary-foreground transition-opacity disabled:opacity-40"
+              className="rounded-full"
             >
               <ArrowUp className="size-4" />
-            </button>
+            </Button>
           </div>
         </div>
       </div>
+
+      {/* Session strip. The branch you are on and how full the window is
+          describe the run, not the message being written — they were competing
+          for room with send inside the input. Its own quieter box under it,
+          rendered only when it has something to say. */}
+      {hasStrip && (
+        // A centred shelf slightly narrower than the input, tucked behind its
+        // rounded bottom edge: the negative margin is covered by the composer's
+        // own opaque surface, so the two read as one object without the input
+        // giving up its corners.
+        <div className="relative z-0 -mt-3 mx-auto flex w-[95%] items-center gap-3 rounded-b-xl border border-border/60 bg-card/40 px-2 pb-1 pt-4">
+          <BranchChip cwd={cwd} busy={busy} compact />
+          {capabilitiesOf(backend).usage && (
+            <ContextMeter
+              contextTokens={usage.contextTokens}
+              model={model}
+              backend={backend}
+              resolved={usage.model}
+              contextWindow={usage.contextWindow}
+              onCompact={canCompact ? onCompact : undefined}
+              compactDisabled={!!compactBlocked}
+              compactDisabledReason={compactBlocked}
+              compact
+              className="ml-auto"
+            />
+          )}
+        </div>
+      )}
     </>
   );
 });

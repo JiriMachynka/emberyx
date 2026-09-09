@@ -104,9 +104,11 @@ import { PROVIDER_LABEL } from "@/lib/providers";
 import { useGitChanges, useTurnFiles } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
 import { rememberRowSizes, rowSize } from "@/lib/rowSizes";
-import { buildTree } from "@/lib/fileTree";
+import { buildTree, dirTotals } from "@/lib/fileTree";
 import { cn } from "@/lib/utils";
 import { buildActivityRow, kindForToolName } from "@/lib/activities";
+import { modelFitsBackend } from "@/lib/modelCatalog";
+import { getCustomModels } from "@/lib/modelFavorites";
 import { formatDuration, groupTurns, isAgentTool, type Turn } from "@/components/chat/turns";
 import { ActivityList } from "@/components/chat/ActivityRow";
 import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
@@ -116,7 +118,10 @@ import { useRunningTimer } from "@/hooks/useRunningTimer";
 
 /** Reconstruct a data: URL for rendering from a stored ChatImage. */
 
-/** The turn clock sits under the transcript, not on each tool card. */
+/** The turn clock sits under the transcript, not on each tool card — and on
+ *  the left, where the transcript's own text starts, rather than centred under
+ *  it. Travelling dots carry the "still going" signal so the line reads as
+ *  live at a glance, without a second look at the seconds. */
 function WorkingFooter({
   turnKey,
   busy,
@@ -127,8 +132,14 @@ function WorkingFooter({
   const label = useRunningTimer(turnKey, busy);
   if (!label) return null;
   return (
-    <div className="relative z-10 mb-2 text-center text-xs text-muted-foreground">
-      {label}
+    <div className="relative z-10 mb-2 flex items-center gap-2 px-1 text-xs">
+      <span aria-hidden className="working-dots flex items-center gap-1">
+        <span className="size-1 rounded-full bg-muted-foreground" />
+        <span className="size-1 rounded-full bg-muted-foreground" />
+        <span className="size-1 rounded-full bg-muted-foreground" />
+      </span>
+      {/* Same "this is live work" signal as a running tool row, not a new one. */}
+      <span className="tool-running-label">{label}</span>
     </div>
   );
 }
@@ -157,6 +168,12 @@ interface ChatPaneProps {
   model: string;
   /** Persist a new default when the user switches this pane's model. */
   onModelChange: (model: string) => void;
+  /** Persist a new default backend when the picker moves a chat to another
+   *  provider — the stored model/backend pair must stay coherent or the next
+   *  new chat launches as one provider told to run another's model. A thread
+   *  handoff does not go through this: moving one conversation is not a
+   *  statement about the next one. */
+  onBackendChange: (backend: AgentBackend) => void;
   /** Default reasoning effort for new chats; "" = let the CLI decide. */
   effort: string;
   /** Persist a new default when the user switches this pane's effort. */
@@ -202,6 +219,7 @@ export const ChatPane = memo(function ChatPane({
   permissionMode,
   model,
   onModelChange,
+  onBackendChange,
   effort,
   onEffortChange,
   onAccessChange,
@@ -216,8 +234,13 @@ export const ChatPane = memo(function ChatPane({
   onThreadStarted,
 }: ChatPaneProps) {
   // Seed from the global default but keep the running model local so switching
-  // it respawns only this pane, not every mounted chat.
-  const [activeModel, setActiveModel] = useState(model);
+  // it respawns only this pane, not every mounted chat. The stored default is
+  // provider-blind and a per-project pin can override the provider it was
+  // picked under, so a model this backend cannot run is dropped here rather
+  // than handed to the CLI.
+  const [activeModel, setActiveModel] = useState(() =>
+    modelFitsBackend(model, backend, getCustomModels()) ? model : ""
+  );
   const changeModel = useCallback(
     (m: string) => {
       setActiveModel(m);
@@ -364,6 +387,12 @@ export const ChatPane = memo(function ChatPane({
       useAgentStore.getState().setDraft(sessionId, context);
     }
     setActiveBackend(to);
+    // A carried thread keeps its pinned model only when the new provider can
+    // run it. The picker's switch re-pins the model right after this runs, so
+    // this is the handoff path's guard.
+    if (!modelFitsBackend(activeModel, to, getCustomModels())) {
+      setActiveModel("");
+    }
     // Both halves of the switch are one durable fact on this thread.
     void invoke("thread_timeline_append", {
       threadId: sessionId,
@@ -547,10 +576,15 @@ export const ChatPane = memo(function ChatPane({
 
   // ChatComposer is memoized and owns its own draft precisely so typing does
   // not re-render the transcript. Handing it a fresh arrow each frame defeats
-  // that in the other direction.
+  // that in the other direction. The backend is persisted here — this is the
+  // picker's provider move — so the stored default pair stays coherent; the
+  // model half is written by the pick itself, right after this.
   const switchBackend = useCallback(
-    (to: AgentBackend) => switchProvider(to, false),
-    [switchProvider]
+    (to: AgentBackend) => {
+      onBackendChange(to);
+      switchProvider(to, false);
+    },
+    [switchProvider, onBackendChange]
   );
   const changeClaudeProfile = useCallback(
     (id: string | null) => {
@@ -614,6 +648,13 @@ export const ChatPane = memo(function ChatPane({
   for (let i = slots.length - 1; i >= 0; i -= 1) {
     if (slots[i].kind === "turn") {
       lastTurnIndex = i;
+      break;
+    }
+  }
+  let firstTurnIndex = -1;
+  for (let i = 0; i < slots.length; i += 1) {
+    if (slots[i].kind === "turn") {
+      firstTurnIndex = i;
       break;
     }
   }
@@ -747,14 +788,14 @@ export const ChatPane = memo(function ChatPane({
       (path) => !openProjectPaths.has(path)
     );
     return (
-    <h2 className="text-center text-3xl font-normal tracking-tight text-foreground">
+    <h2 className="text-center text-3xl font-medium tracking-tight text-balance text-foreground">
       {inputReady ? (
         <>
           What should we build in{" "}
           <DropdownMenu>
-            <DropdownMenuTrigger className="inline-flex items-center gap-1 underline decoration-border underline-offset-4 outline-none transition-colors hover:decoration-foreground focus-visible:rounded focus-visible:ring-1 focus-visible:ring-ring">
+            <DropdownMenuTrigger className="ember-text inline-flex items-center gap-1 underline decoration-border underline-offset-4 outline-none transition-colors hover:decoration-foreground focus-visible:rounded focus-visible:ring-1 focus-visible:ring-ring">
               {basename(cwd)}
-              <ChevronDown className="size-4 no-underline opacity-60" />
+              <ChevronDown className="size-4 no-underline text-muted-foreground opacity-60" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="center">
               {projects.map((project) => (
@@ -805,7 +846,7 @@ export const ChatPane = memo(function ChatPane({
       {imported && (
         // Said once, at the top, rather than per turn: the history below is
         // real, but the agent that answers the next prompt never saw it.
-        <div className="z-10 flex items-center gap-2 border-b border-border/60 bg-muted/40 px-5 py-2 text-xs text-muted-foreground">
+        <div className="z-10 flex items-center gap-2 border-b border-border/60 px-5 py-2 text-xs text-muted-foreground">
           <Archive className="size-3.5 shrink-0" />
           <span className="min-w-0 flex-1">
             Imported history. The agent has no memory of this conversation —
@@ -822,7 +863,11 @@ export const ChatPane = memo(function ChatPane({
         {/* Padding stays outside the sized box: folding it in would put the
             bottom gutter *inside* getTotalSize() and leave the last turn ending
             flush with the scroll end, hidden under the composer. */}
-        <div className="mx-auto min-h-full w-full max-w-3xl px-5 pb-64 pt-10">
+        {/* No width of its own: the transcript and the composer are one column,
+            so both are bounded by `.chat-content-width` and the same px-5. A
+            narrower cap here left the answer text ending well short of the
+            input it belongs to. */}
+        <div className="mx-auto min-h-full w-full px-5 pb-64 pt-10">
           <div className="relative w-full" style={{ height: rowVirt.getTotalSize() }}>
             {rowVirt.getVirtualItems().map((vItem) => {
               const slot = slots[vItem.index];
@@ -853,6 +898,13 @@ export const ChatPane = memo(function ChatPane({
                     )}
                     {slot.kind === "turn" && (
                       <Fragment>
+                        {/* The turn rule is the transcript's rhythm: one hairline
+                            centred in the gap between entries. A provider switch
+                            is itself a separator, so it stands in for the rule
+                            rather than stacking under one. */}
+                        {vItem.index !== firstTurnIndex && !slot.mark && (
+                          <div className="h-px shrink-0 bg-border/40" />
+                        )}
                         {slot.mark && <ProviderSwitchDivider mark={slot.mark} />}
                         <TurnRow
                           turn={slot.turn}
@@ -868,6 +920,16 @@ export const ChatPane = memo(function ChatPane({
                 </div>
               );
             })}
+          </div>
+          {/* Docked to the end of the output, not floated above the input: the
+              clock belongs to the turn being written, so it trails the last
+              message and scrolls with it. It sits inside the same column, so
+              its dots line up with the transcript's own left edge. */}
+          <div className="chat-content-width mx-auto pt-4">
+            <WorkingFooter
+              turnKey={busy ? (turns[turns.length - 1]?.key ?? sessionId) : undefined}
+              busy={busy}
+            />
           </div>
         </div>
         {showScrollEnd && (
@@ -924,9 +986,12 @@ export const ChatPane = memo(function ChatPane({
           {/* The picker keeps showing the model you asked for, so a refusal has
               to say what is actually running or the two quietly disagree. */}
           {modelError && !terminal && (
-            <div className="mb-2 truncate text-center text-xs text-muted-foreground">
-              {modelError}
-              {usage.model ? ` — still on ${usage.model}.` : "."}
+            <div className="mb-2 flex items-start gap-2 rounded-lg border border-border/60 px-3 py-2 text-xs">
+              <TriangleAlert className="mt-0.5 size-3.5 shrink-0 text-red-400" />
+              <span className="min-w-0 flex-1">
+                {modelError}
+                {usage.model ? ` — still on ${usage.model}.` : "."}
+              </span>
             </div>
           )}
           <div className="flex items-start gap-3">
@@ -953,10 +1018,6 @@ export const ChatPane = memo(function ChatPane({
                       />
                     </div>
                   )}
-                  <WorkingFooter
-                    turnKey={busy ? (turns[turns.length - 1]?.key ?? sessionId) : undefined}
-                    busy={busy}
-                  />
                   <div className="relative z-10">
                 <ChatComposer
                   cwd={cwd}
@@ -1030,21 +1091,22 @@ function QuotaNotice({
   return (
     <div
       className={cn(
-        "mb-2 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs",
-        spent
-          ? "border-red-500/40 bg-red-500/10 text-red-300"
-          : "border-amber-500/40 bg-amber-500/10 text-amber-300"
+        "mb-2 flex items-start gap-2 rounded-lg border border-border/60 px-3 py-2 text-xs",
+        // The icon carries the severity; a filled status box is costume.
+        spent ? "text-red-400" : "text-amber-400"
       )}
     >
       <Gauge className="mt-0.5 size-3.5 shrink-0" />
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 text-foreground">
         <span className="font-medium">{quotaMessage(alert)}</span>
-        {alert.resets && <span className="ml-1 opacity-80">{alert.resets}.</span>}
+        {alert.resets && (
+          <span className="ml-1 text-muted-foreground">{alert.resets}.</span>
+        )}
       </div>
       <button
         type="button"
         onClick={onDismiss}
-        className="shrink-0 rounded-md p-0.5 opacity-70 hover:opacity-100"
+        className="shrink-0 rounded-md p-0.5 text-muted-foreground opacity-70 hover:opacity-100"
         aria-label="Dismiss usage warning"
       >
         <X className="size-3.5" />
@@ -1063,17 +1125,17 @@ function AccountNotice({ issue }: { issue: AccountIssue }) {
   return (
     <div
       className={cn(
-        "mb-2 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs",
-        limited
-          ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
-          : "border-red-500/40 bg-red-500/10 text-red-300"
+        "mb-2 flex items-start gap-2 rounded-lg border border-border/60 px-3 py-2 text-xs",
+        limited ? "text-amber-400" : "text-red-400"
       )}
     >
       <Icon className="mt-0.5 size-3.5 shrink-0" />
-      <div className="min-w-0">
+      <div className="min-w-0 text-foreground">
         <div className="font-medium">{issueTitle(issue)}</div>
-        <div className="mt-0.5 break-words opacity-80">{issue.message}</div>
-        {reset && <div className="mt-0.5 opacity-70">{reset}</div>}
+        <div className="mt-0.5 break-words text-muted-foreground">
+          {issue.message}
+        </div>
+        {reset && <div className="mt-0.5 text-muted-foreground">{reset}</div>}
       </div>
     </div>
   );
@@ -1135,7 +1197,7 @@ const TasksCard = memo(function TasksCard({
   return (
     <div
       className={cn(
-        "border border-border bg-card/70",
+        "chat-work-panel border",
         // Tucked behind the composer, which is why the bottom corners are
         // square: the seam is covered rather than drawn.
         // pb-6 against the composer's -mb-4 overlap: 16px of this card is
@@ -1223,14 +1285,11 @@ const TasksCard = memo(function TasksCard({
   );
 });
 
-/** How many files the card lists before the panel takes over. */
-const CHANGED_FILES_PREVIEW = 3;
-const CHANGED_FILES_LIMIT = 12;
-
 /** The file delta one settled turn produced, from the snapshot taken before it
  *  to its settle snapshot (or the next turn's — the Rust side resolves it).
  *  The full diff lives in the dock's diff tab; this card is the doorway to it,
- *  the way Waku scopes Review to a turn. */
+ *  the way Waku scopes Review to a turn. Directories start folded — the card
+ *  opens as one summary row per tree, not a wall of paths. */
 const ChangedFilesCard = memo(function ChangedFilesCard({
   projectPath,
   threadId,
@@ -1244,19 +1303,40 @@ const ChangedFilesCard = memo(function ChangedFilesCard({
   openEnded: boolean;
 }) {
   const { data: files } = useTurnFiles(projectPath, threadId, fromId, true, openEnded);
-  const [expanded, setExpanded] = useState(false);
+  // Null until the user folds or unfolds something — the default (everything
+  // folded) is recomputed from the tree each render, so a refetch of the
+  // newest turn's delta can't resurrect rows the user hasn't ruled on, and
+  // their explicit toggles survive one.
+  const [collapsed, setCollapsed] = useState<Set<string> | null>(null);
   const requestTurnReview = useAgentStore((s) => s.requestTurnReview);
   if (!files || files.length === 0) return null;
   const { additions, deletions } = sumRangeFiles(files);
-  const visible = files.slice(0, expanded ? CHANGED_FILES_LIMIT : CHANGED_FILES_PREVIEW);
-  const clipped = expanded && files.length > CHANGED_FILES_LIMIT;
-  const canExpand = files.length > CHANGED_FILES_PREVIEW;
+  const tree = buildTree(
+    files.map((file) => ({ path: file.path, status: "  " }))
+  );
+  const dirPaths = tree.filter((row) => row.kind === "dir").map((row) => row.path);
+  const folded = collapsed ?? new Set(dirPaths);
+  const toggleDir = (path: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev ?? dirPaths);
+      if (!next.delete(path)) next.add(path);
+      return next;
+    });
+  };
+  const shown =
+    folded.size === 0
+      ? tree
+      : tree.filter(
+          (row) =>
+            ![...folded].some(
+              (dir) => row.path !== dir && row.path.startsWith(`${dir}/`)
+            )
+        );
+  const totals = dirTotals(files);
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-card/70">
-      <div className="flex items-center gap-3 px-3 py-2.5">
-        <div className="flex size-9 flex-none items-center justify-center rounded-lg bg-muted/60">
-          <FileDiff className="size-4 text-muted-foreground" />
-        </div>
+    <div className="chat-work-panel overflow-hidden rounded-xl border">
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <FileDiff className="size-4 flex-none shrink-0 text-muted-foreground" />
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <span className="truncate text-sm font-medium">
             {files.length === 1 ? "Changed 1 file" : `Changed ${files.length} files`}
@@ -1276,21 +1356,37 @@ const ChangedFilesCard = memo(function ChangedFilesCard({
         </button>
       </div>
       <div className="flex flex-col border-t border-border py-1">
-        {buildTree(
-          visible.map((file) => ({ path: file.path, status: "  " }))
-        ).map((row) => {
+        {shown.map((row) => {
           const file = row.kind === "file" ? files.find((f) => f.path === row.path) : undefined;
           const indent = { paddingLeft: 12 + row.depth * 12 };
           if (row.kind === "dir") {
+            const closed = folded.has(row.path);
+            const total = totals.get(row.path);
             return (
-              <div
+              <button
                 key={`dir:${row.path}`}
+                type="button"
                 style={indent}
-                className="flex h-7 items-center gap-1.5 pr-3 text-xs text-muted-foreground"
+                onClick={() => toggleDir(row.path)}
+                title={closed ? `Show files in ${row.path}` : `Hide files in ${row.path}`}
+                className="flex h-7 items-center gap-1.5 pr-3 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
+                <span className="flex size-3 shrink-0 items-center justify-center">
+                  {closed ? (
+                    <ChevronRight className="size-3 opacity-60" />
+                  ) : (
+                    <ChevronDown className="size-3 opacity-60" />
+                  )}
+                </span>
                 <Folder className="size-3.5 shrink-0" />
-                <span className="truncate">{row.name}</span>
-              </div>
+                <span className="min-w-0 flex-1 truncate">{row.name}</span>
+                {total?.counted && (
+                  <span className="flex flex-none gap-2 tabular-nums">
+                    <span className="text-emerald-400/80">+{total.additions}</span>
+                    <span className="text-red-400/80">−{total.deletions}</span>
+                  </span>
+                )}
+              </button>
             );
           }
           return (
@@ -1300,6 +1396,7 @@ const ChangedFilesCard = memo(function ChangedFilesCard({
               className="flex h-7 items-center gap-1.5 pr-3 text-xs"
               title={row.path}
             >
+              <span className="size-3 shrink-0" />
               <FileTypeIcon path={row.path} />
               <span className="min-w-0 flex-1 truncate">{row.name}</span>
               {file?.additions != null && (
@@ -1316,20 +1413,6 @@ const ChangedFilesCard = memo(function ChangedFilesCard({
           );
         })}
       </div>
-      {clipped && (
-        <div className="border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
-          Showing first {CHANGED_FILES_LIMIT} of {files.length} — open Review for the rest
-        </div>
-      )}
-      {canExpand && !clipped && (
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="w-full border-t border-border px-3 py-1.5 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-        >
-          {expanded ? "Show fewer" : `Show ${files.length - CHANGED_FILES_PREVIEW} more`}
-        </button>
-      )}
     </div>
   );
 });
@@ -1405,30 +1488,18 @@ const TurnRow = memo(
           ) : (
             <div className="flex flex-col gap-2">
               {turnTodos && <TasksCard items={turnTodos} planKey={turn.key} />}
-              <WorkedAccordion
-                durationMs={
-                  last?.endedAt != null && assistants[0]?.startedAt != null
-                    ? last.endedAt - assistants[0].startedAt
-                    : undefined
-                }
-                agentsRunning={agentsRunning}
-              >
+              <TurnWork label={turnWorkLabel(assistants)} agentsRunning={agentsRunning}>
                 {assistants.map((a, i) => (
-                  <div key={a.id} className="flex flex-col gap-2">
-                    {/* Each message's work says what it did, not just that it
-                        happened — a count is what tells you whether the group
-                        is worth opening. */}
-                    <WorkGroup label={workLabel(a)}>
-                      <MessageWork message={a} active={false} />
-                    </WorkGroup>
+                  <Fragment key={a.id}>
+                    <MessageWork message={a} active={false} />
                     {/* Only interstitial narration stays inside; the final
                         answer is shown below the accordion. */}
                     {i < assistants.length - 1 && a.text && (
                       <Markdown text={a.text} fontSize={fontSize} />
                     )}
-                  </div>
+                  </Fragment>
                 ))}
-              </WorkedAccordion>
+              </TurnWork>
               {last?.text && (
                 <div className="group relative flex flex-col gap-2">
                   <Markdown text={last.text} fontSize={fontSize} />
@@ -1458,43 +1529,61 @@ const TurnRow = memo(
     a.turn.assistants.every((m, i) => m === b.turn.assistants[i])
 );
 
-/** What one message's work amounts to, in words. Falls back to a tool count for
- *  a replayed message that never carried an activity stream. */
-function workLabel(message: ChatMessage): string | null {
-  const rows = message.activities?.filter((a) => !isTodoTool(a.title));
-  if (rows?.length) return summarizeWork(rows);
-  const tools = message.tools.filter((t) => !isTodoTool(t.name)).length;
-  if (tools) return `Used ${tools} ${tools === 1 ? "tool" : "tools"}`;
-  return message.thinking ? "Ran 1 thought" : null;
+/** What one turn's work amounts to, in words. Falls back to a tool count for
+ *  a replayed transcript that never carried an activity stream. */
+function turnWorkLabel(assistants: ChatMessage[]): string | null {
+  const rows = assistants.flatMap(
+    (m) => m.activities?.filter((a) => !isTodoTool(a.title)) ?? []
+  );
+  if (rows.length) return summarizeWork(rows);
+  const tools = assistants.flatMap((m) => m.tools.filter((t) => !isTodoTool(t.name)));
+  if (tools.length)
+    return `Used ${tools.length} ${tools.length === 1 ? "tool" : "tools"}`;
+  return assistants.some((m) => m.thinking) ? "Ran 1 thought" : null;
 }
 
-/** One message's work under its own summary line. Open by default — the turn
- *  above it is already collapsed, and making the user open two things to read
- *  one is how a log stops being read at all. */
-function WorkGroup({
+/** A settled turn's work: one summary line — "Ran 1 thought · 5 commands" —
+ *  over the turn's rows, one work panel per message. Collapsed by default, but
+ *  stays open while the turn's subagents are still running: `null` means the
+ *  user hasn't decided, so the running count does. */
+function TurnWork({
   label,
+  agentsRunning,
   children,
 }: {
   label: string | null;
+  agentsRunning: number;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(true);
-  if (!label) return <>{children}</>;
+  const [open, setOpen] = useState<boolean | null>(null);
+  const expanded = open ?? agentsRunning > 0;
   return (
     <div className="flex flex-col gap-2">
       <button
         type="button"
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 self-start text-xs text-muted-foreground transition-colors hover:text-foreground"
+        onClick={() => setOpen(!expanded)}
+        className={cn(
+          "flex items-center gap-1.5 self-start text-xs font-medium transition-colors hover:text-foreground",
+          agentsRunning > 0 ? "text-violet-400" : "text-muted-foreground"
+        )}
       >
-        {label}
+        {agentsRunning > 0 ? (
+          <>
+            <Loader2 className="size-3 animate-spin" />
+            {agentsRunning === 1
+              ? "1 agent running"
+              : `${agentsRunning} agents running`}
+          </>
+        ) : (
+          (label ?? "Work log")
+        )}
         <ChevronRight
-          className={cn("size-3 transition-transform", open && "rotate-90")}
+          className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
         />
       </button>
       <div
         className="grid transition-[grid-template-rows] duration-200 ease-out"
-        style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
+        style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
       >
         <div className="overflow-hidden">
           <div className="flex flex-col gap-2">{children}</div>
@@ -1504,66 +1593,17 @@ function WorkGroup({
   );
 }
 
-/** Collapsible "Worked for Ns" header over a turn's work — centered on a rule,
- *  the way a turn boundary reads. Collapsed by default, but stays open while
- *  the turn's subagents are still running: `null` means the user hasn't
- *  decided, so the running count does. */
-function WorkedAccordion({
-  durationMs,
-  agentsRunning,
-  children,
-}: {
-  durationMs?: number;
-  agentsRunning: number;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState<boolean | null>(null);
-  const expanded = open ?? agentsRunning > 0;
-  return (
-    <div>
-      <div className="flex items-center gap-2">
-        <span className="h-px flex-1 bg-border/60" />
-        <button
-          type="button"
-          onClick={() => setOpen(!expanded)}
-          className={cn(
-            "flex items-center gap-1.5 text-xs transition-colors hover:text-foreground",
-            agentsRunning > 0 ? "text-violet-400" : "text-muted-foreground"
-          )}
-        >
-          {agentsRunning > 0 ? (
-            <>
-              <Loader2 className="size-3 animate-spin" />
-              {agentsRunning === 1
-                ? "1 agent running"
-                : `${agentsRunning} agents running`}
-            </>
-          ) : durationMs != null ? (
-            `Worked for ${formatDuration(durationMs)}`
-          ) : (
-            "Work log"
-          )}
-          <ChevronRight
-            className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
-          />
-        </button>
-        <span className="h-px flex-1 bg-border/60" />
-      </div>
-      <div
-        className="grid transition-[grid-template-rows] duration-200 ease-out"
-        style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
-      >
-        <div className="overflow-hidden">
-          <div className="flex flex-col gap-2 pt-2">{children}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /** Tool cards for a message; agent/Task tools render their subagent inline.
  *  TodoWrite is lifted into TasksCard so it isn't a generic tool row. */
-function ToolList({ tools, live }: { tools: ToolCall[]; live?: boolean }) {
+function ToolList({
+  tools,
+  live,
+  framed = true,
+}: {
+  tools: ToolCall[];
+  live?: boolean;
+  framed?: boolean;
+}) {
   const rest = tools.filter((t) => !isTodoTool(t.name));
   if (rest.length === 0) return null;
   const activities = rest.map((t) =>
@@ -1581,6 +1621,7 @@ function ToolList({ tools, live }: { tools: ToolCall[]; live?: boolean }) {
     <ActivityList
       activities={activities}
       live={live}
+      framed={framed}
       renderAgent={(a) => {
         const tool = rest.find((t) => t.id === a.id);
         return tool && isAgentTool(tool.name) ? (
@@ -1622,8 +1663,11 @@ function MessageWork({
       />
     );
   }
+  if (!message.thinking && message.tools.length === 0) return null;
+  // No recorded order, so thinking stays above tools — but on the same one
+  // panel the streamed path uses, as hairline rows on it rather than boxes.
   return (
-    <>
+    <div className="chat-work-panel flex flex-col divide-y divide-border/50 overflow-hidden rounded-xl border">
       {message.thinking && (
         <ThinkingBlock
           text={message.thinking}
@@ -1631,8 +1675,10 @@ function MessageWork({
           timingKey={message.id}
         />
       )}
-      {message.tools.length > 0 && <ToolList tools={message.tools} live={live} />}
-    </>
+      {message.tools.length > 0 && (
+        <ToolList tools={message.tools} live={live} framed={false} />
+      )}
+    </div>
   );
 }
 
@@ -1667,9 +1713,8 @@ const SubagentInline = memo(function SubagentInline({
   const shown = showAll ? run.activity : run.activity.slice(-LIMIT);
 
   return (
-    <div className="relative rounded-lg">
-    <div className="rounded-lg border border-border/70 bg-card/40 px-2.5 py-2 text-xs">
-      <div className="flex items-center gap-2">
+    <div className="text-xs">
+      <div className="flex items-center gap-2 px-3 py-2">
         <Bot className="size-3.5 shrink-0 text-violet-400" />
         <span
           className={cn(
@@ -1690,12 +1735,12 @@ const SubagentInline = memo(function SubagentInline({
         ) : null}
       </div>
       {run.activity.length > 0 && (
-        <div className="mt-1.5 flex flex-col gap-1 border-l border-border/60 pl-2.5 text-muted-foreground">
+        <div className="mx-3 mb-2 flex flex-col gap-1 border-l border-border/60 pl-2.5 text-muted-foreground">
           {run.activity.length > LIMIT && (
             <button
               type="button"
               onClick={() => setShowAll((v) => !v)}
-              className="self-start text-[11px] transition-colors hover:text-foreground"
+              className="self-start text-xs transition-colors hover:text-foreground"
             >
               {showAll
                 ? "Show fewer log entries"
@@ -1717,7 +1762,6 @@ const SubagentInline = memo(function SubagentInline({
           })}
         </div>
       )}
-    </div>
     </div>
   );
 });
@@ -1741,7 +1785,7 @@ const MessageRow = memo(function MessageRow({
     return (
       <div className="group flex flex-col items-end gap-1.5">
         {message.images && message.images.length > 0 && (
-          <div className="flex max-w-[85%] flex-wrap justify-end gap-2">
+          <div className="flex max-w-prose flex-wrap justify-end gap-2">
             {message.images.map((img) => (
               <button
                 key={img.id}
@@ -1759,7 +1803,7 @@ const MessageRow = memo(function MessageRow({
           </div>
         )}
         {message.text && (
-          <div className="chat-bubble max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5">
+          <div className="chat-bubble max-w-prose whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-foreground/90">
             <TextWithFileRefs text={message.text} />
           </div>
         )}
@@ -1808,7 +1852,7 @@ interface ChatContext {
  *  toast, because which provider wrote which turn is part of reading it back. */
 function ProviderSwitchDivider({ mark }: { mark: ProviderSwitchMark }) {
   return (
-    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+    <div className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
       <span className="h-px flex-1 bg-border" />
       <span className="flex items-center gap-1.5">
         <ArrowRightLeft className="size-3" />
