@@ -2,17 +2,10 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use emberyx_lib::daemon_protocol::{default_socket, default_state, Request, Response, State};
 use emberyx_lib::daemon_runtime::Runtime;
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
+use emberyx_lib::time::now_ms;
 
 /// Ops that need the live children. `State` is metadata only and rejects these.
 fn handle_runtime(runtime: &Runtime, request: Request) -> Response {

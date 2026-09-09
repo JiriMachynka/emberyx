@@ -29,6 +29,7 @@ use serde_json::json;
 use crate::error::Result;
 use crate::models::{Provider, TimelineEvent, TimelineEventKind, TurnAttribution};
 use crate::store::Store;
+use crate::paths::home_dir;
 
 /// Where T3 Code keeps its store, relative to `$HOME`.
 const SOURCE_REL: &str = ".t3/userdata/state.sqlite";
@@ -78,7 +79,7 @@ struct Entry {
 
 /// Default source path, or `None` when `$HOME` is unset.
 pub fn default_source() -> Option<PathBuf> {
-    std::env::var("HOME").ok().map(|home| PathBuf::from(home).join(SOURCE_REL))
+    home_dir().map(|home| home.join(SOURCE_REL))
 }
 
 /// Whether a T3 store is present to import from. The UI asks before offering

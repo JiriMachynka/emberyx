@@ -14,16 +14,43 @@
  * the target session is backend-bound.
  */
 
-import { BACKEND_LABEL, type AgentBackend } from "@/lib/agentBackend";
+import {
+  AGENT_BACKENDS,
+  BACKEND_LABEL,
+  type AgentBackend,
+} from "@/lib/agentBackend";
 import type { ChatMessage } from "@/hooks/useAgentChat";
 import { PROVIDER_LABEL, type Provider } from "@/lib/providers";
 import type { Session } from "@/types";
 
-export const otherBackend = (backend: AgentBackend): AgentBackend =>
-  backend === "claude" ? "codex" : "claude";
+/**
+ * Who a conversation can be handed to: every other backend, in table order.
+ *
+ * There is no "the other one" — five backends means four candidates, and the
+ * two-way flip this replaced sent a Grok thread to Claude without asking. The
+ * caller offers this list; nothing here picks for the user.
+ */
+export const handoffTargets = (from: AgentBackend): AgentBackend[] =>
+  AGENT_BACKENDS.filter((backend) => backend !== from);
 
-export const handoffLabel = (from: AgentBackend): string =>
-  `Hand off to ${BACKEND_LABEL[otherBackend(from)]}`;
+/**
+ * The target for a caller that hasn't got a chooser yet. Claude is the landing
+ * spot because it is the only backend with every surface wired, so the package
+ * always arrives somewhere that can act on it; from Claude the same reasoning
+ * picks Codex, the next most complete. A default, not an answer — anything
+ * that can show a menu should offer `handoffTargets` instead.
+ */
+export const defaultHandoffTarget = (from: AgentBackend): AgentBackend =>
+  from === "claude" ? "codex" : "claude";
+
+/** @deprecated The name only makes sense with two backends. Kept while
+ *  `ChatPane` still assumes a single target; use `handoffTargets`. */
+export const otherBackend = defaultHandoffTarget;
+
+export const handoffLabel = (
+  from: AgentBackend,
+  to: AgentBackend = defaultHandoffTarget(from)
+): string => `Hand off to ${BACKEND_LABEL[to]}`;
 
 /** The project's live chat on the target backend. Reused rather than opened
  *  again, or every handed-off message would stack another tab. */

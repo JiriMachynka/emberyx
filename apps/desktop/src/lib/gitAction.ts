@@ -54,26 +54,6 @@ const prReachable = (s: GitActionState) =>
 /** Whether a commit is possible at all — staged or not. */
 const canCommit = (s: GitActionState) => s.staged + s.unstaged > 0;
 
-/** The action the primary button runs. Committing and pushing is the move this
- *  app is for; opening a PR is still one item away in the dropdown. */
-export function primaryAction(s: GitActionState): GitAction {
-  if (canCommit(s)) return { kind: "commitPush", label: "Commit & push" };
-  if (s.ahead > 0 || (!s.upstream && !s.isDefaultBranch)) {
-    return prReachable(s)
-      ? { kind: "pushPr", label: "Push & open PR" }
-      : { kind: "push", label: "Push" };
-  }
-  if (prReachable(s) && s.upstream) {
-    return { kind: "openPr", label: "Open PR" };
-  }
-  if (s.behind > 0) return { kind: "pull", label: "Pull" };
-  return {
-    kind: "push",
-    label: "Push",
-    disabledReason: "Nothing to commit or push",
-  };
-}
-
 /** Why a commit or a push can't run right now, or undefined when it can. An
  *  action that is listed but unavailable says why rather than disappearing —
  *  a menu whose items move around is a menu you have to read every time. */

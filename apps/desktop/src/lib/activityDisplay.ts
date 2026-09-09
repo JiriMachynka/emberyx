@@ -7,6 +7,7 @@
  * lives and the cost is paid once, on click.
  */
 
+import { isFileReference } from "@/lib/fileRef";
 import type { ToolIcon } from "@/lib/toolDisplay";
 import type { ActivityItem, ActivityKind } from "@/types";
 
@@ -68,3 +69,68 @@ export const isMonoActivity = (activity: ActivityItem): boolean =>
   activity.kind === "fileChange" ||
   activity.kind === "fileRead" ||
   activity.kind === "fileList";
+
+const looksLikeGlob = (value: string): boolean => /[*?]/.test(value);
+
+/** File reads, edits, and directory listings — the work that belongs in a
+ *  folder tree rather than a stack of path-titled cards. A glob is a search
+ *  pattern, not a path, so it stays a normal row. */
+export const isFileActivity = (activity: ActivityItem): boolean => {
+  if (activity.kind === "fileRead" || activity.kind === "fileChange") return true;
+  if (activity.kind === "fileList") {
+    const target = activity.displayTarget;
+    return !!target && !looksLikeGlob(target);
+  }
+  // MCP read/write and other tools that still name a file.
+  return (
+    activity.kind === "tool" &&
+    !!activity.displayTarget &&
+    !looksLikeGlob(activity.displayTarget) &&
+    isFileReference(activity.displayTarget)
+  );
+};
+
+/** Paths this row touched. Multi-file edits carry their own list; a single
+ *  read or write has the path as its target. */
+export const pathsForActivity = (activity: ActivityItem): string[] => {
+  if (activity.fileChanges?.length) {
+    return activity.fileChanges.map((change) => change.path);
+  }
+  if (activity.displayTarget && !looksLikeGlob(activity.displayTarget)) {
+    return [activity.displayTarget];
+  }
+  return [];
+};
+
+export type ActivityGroup =
+  | { type: "single"; activity: ActivityItem }
+  | { type: "files"; activities: ActivityItem[] };
+
+/** Consecutive file rows collapse into one tree. Bash, search, and reasoning
+ *  break the run so the tree stays the files that happened together. */
+export const groupActivities = (activities: ActivityItem[]): ActivityGroup[] => {
+  const groups: ActivityGroup[] = [];
+  for (const activity of activities) {
+    if (isFileActivity(activity) && pathsForActivity(activity).length > 0) {
+      const last = groups[groups.length - 1];
+      if (last?.type === "files") last.activities.push(activity);
+      else groups.push({ type: "files", activities: [activity] });
+    } else {
+      groups.push({ type: "single", activity });
+    }
+  }
+  return groups;
+};
+
+/** Live turns keep running tools, reasoning, and file rows. File rows stay so
+ *  the tree can accumulate the way T3's does; settled bash belongs in the
+ *  finished-turn accordion. */
+export const visibleActivities = (
+  activities: ActivityItem[],
+  live: boolean
+): ActivityItem[] =>
+  live
+    ? activities.filter(
+        (a) => a.kind === "reasoning" || isFileActivity(a) || !a.complete
+      )
+    : activities;

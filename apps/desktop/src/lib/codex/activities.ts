@@ -11,7 +11,7 @@
  * only MCP and dynamic tools fall back to the shared name table.
  */
 
-import { kindForToolName, targetForInput } from "@/lib/activities";
+import { buildActivityRow, kindForToolName } from "@/lib/activities";
 import type { ActivityFileChange, ActivityItem, ActivityKind } from "@/types";
 import type { CodexItem } from "./protocol";
 
@@ -138,20 +138,22 @@ export const codexActivity = (
 ): ActivityItem | null => {
   const kind = kindFor(item);
   if (!kind) return null;
-  const input = inputFor(item);
   const outcome = done ? outcomeFor(item) : null;
   return {
-    id: item.id,
-    kind,
-    title: titleFor(item),
-    // A command's argument *is* its target; repeating it as a JSON blob shows
-    // the same string twice in the disclosure.
-    arguments: kind === "command" ? undefined : JSON.stringify(input, null, 2),
-    output: outcome ? outcome.output || previous?.output : previous?.output,
-    displayTarget: targetForInput(kind, input),
+    ...buildActivityRow(
+      {
+        id: item.id,
+        kind,
+        title: titleFor(item),
+        input: inputFor(item),
+        // A settled item that reports an empty result is reporting no result.
+        output: outcome?.output || undefined,
+        failed: outcome?.failed,
+        complete: done,
+      },
+      previous
+    ),
     fileChanges: fileChangesFor(item),
-    failed: outcome ? outcome.failed : previous?.failed ?? false,
-    complete: done,
   };
 };
 

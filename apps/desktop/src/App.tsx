@@ -55,6 +55,7 @@ import { PreviewPanel } from "@/components/PreviewPanel";
 import { useGitRemoteHost } from "@/lib/queries";
 import { useDevServers } from "@/hooks/useDevServers";
 import { useAgentBackend } from "@/hooks/useAgentBackend";
+import { resolveLoginCommand } from "@/lib/agentBackend";
 import { useProjectActions } from "@/hooks/useProjectActions";
 import { ActionDialog } from "@/components/ActionDialog";
 import { getStoredActions, type ProjectAction } from "@/lib/actions";
@@ -299,15 +300,20 @@ function App() {
 
   // Signing in is interactive (browser hand-off, then a code pasted back) —
   // that needs a real terminal, and the app no longer hosts one, so the flow
-  // runs in the system terminal. The binary comes from the configured agent
-  // command so a wrapper or absolute path still resolves.
+  // runs in the system terminal. The configured agent command belongs to the
+  // default backend, so only then does its binary — a wrapper or an absolute
+  // path — stand in for the CLI's own name.
+  const loginCommand = resolveLoginCommand(
+    agentBackend.backend,
+    agentBackend.backend === settings.agentBackend
+      ? settings.agentCommand.split(" ")[0]
+      : undefined
+  );
+
   const startLogin = () => {
-    const bin =
-      agentBackend.backend === "claude"
-        ? settings.agentCommand.split(" ")[0]
-        : "claude";
-    void invoke("open_in_terminal", { command: `${bin} auth login` }).catch(
-      (e) => toast.error("Couldn't open Terminal", { description: String(e) })
+    if (!loginCommand) return;
+    void invoke("open_in_terminal", { command: loginCommand }).catch((e) =>
+      toast.error("Couldn't open Terminal", { description: String(e) })
     );
   };
 
@@ -571,7 +577,9 @@ function App() {
               onToggleDock={toggleDock}
             />
 
-            <AccountBanner onLogin={activeProject ? startLogin : undefined} />
+            <AccountBanner
+              onLogin={activeProject && loginCommand ? startLogin : undefined}
+            />
 
             {agent && activeProjectId && (
               <AttentionBanner

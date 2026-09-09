@@ -189,6 +189,27 @@ export interface ChatQuota {
   planType: string | null;
 }
 
+const sameWindow = (a: QuotaWindow | null, b: QuotaWindow | null): boolean =>
+  a === b ||
+  (a != null &&
+    b != null &&
+    a.usedPercent === b.usedPercent &&
+    a.resetsAt === b.resetsAt &&
+    a.windowDurationMins === b.windowDurationMins);
+
+/** Value equality for a decoded quota. Every `rate_limit_event` builds a new
+ *  object, so identity alone would report a change every turn. */
+export const sameQuota = (
+  a: ChatQuota | undefined,
+  b: ChatQuota | undefined
+): boolean =>
+  a === b ||
+  (a != null &&
+    b != null &&
+    a.planType === b.planType &&
+    sameWindow(a.primary, b.primary) &&
+    sameWindow(a.secondary, b.secondary));
+
 export interface ChatUsage {
   /** Models offered by a provider session, when its protocol exposes a catalog. */
   models?: { value: string; label: string }[];
@@ -920,6 +941,18 @@ export function useAgentChat({
       }
       const type = msg.type as string;
 
+      // Stop has already flipped the pane idle. Further tokens would put it
+      // back on "Responding…" and keep the square button spinning until the
+      // CLI happens to notice the interrupt. Result/exit still settle usage.
+      if (
+        interruptedRef.current &&
+        type !== "result" &&
+        type !== "system" &&
+        type !== "control_cancel_request"
+      ) {
+        return;
+      }
+
       if (type === "system" && msg.subtype === "init") {
         const sid = msg.session_id as string | undefined;
         if (sid) {
@@ -967,7 +1000,9 @@ export function useAgentChat({
           blockToolRef.current = {};
           const message = ev.message as Record<string, unknown> | undefined;
           const model = message?.model as string | undefined;
-          if (model) setUsage((u) => ({ ...u, model }));
+          // A fresh usage object per assistant message would defeat the
+          // composer's memo once a turn, for a model that almost never changes.
+          if (model) setUsage((u) => (u.model === model ? u : { ...u, model }));
           const t = turnUsageRef.current;
           if (!t.active) {
             t.active = true;
@@ -1130,7 +1165,9 @@ export function useAgentChat({
       // its own over the app-server; this is the Claude half of the same chip.
       if (type === "rate_limit_event") {
         const quota = decodeClaudeQuota(msg);
-        if (quota) setUsage((u) => ({ ...u, quota }));
+        // Decoded fresh every turn, but the numbers only move when a window
+        // does — compare by value so an unchanged quota keeps `usage` stable.
+        if (quota) setUsage((u) => (sameQuota(u.quota, quota) ? u : { ...u, quota }));
         return;
       }
 
@@ -1603,9 +1640,16 @@ export function useAgentChat({
 
   // Stop the current turn, keeping everything it already produced.
   const stop = useCallback(() => {
-    if (idRef.current === null) return;
+    // A send that hasn't reached stdin yet (spawn still in flight) must not
+    // go out after the user already hit stop.
+    pendingSendRef.current = null;
+    interruptedRef.current = true;
     // No further tokens are coming — publish what the frame still owed.
     flushPending();
+    if (idRef.current === null) {
+      applyStatus("idle");
+      return;
+    }
     interrupt();
   }, [interrupt, flushPending]);
 

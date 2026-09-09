@@ -1,9 +1,9 @@
-use std::process::Command;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+use crate::git::remote_url;
 
 const API_BASE: &str = "https://gitlab.com/api/v4";
 const NOT_GITLAB: &str = "Not a gitlab.com repository";
@@ -16,19 +16,6 @@ fn token() -> Result<String> {
 // ---------------------------------------------------------------------------
 // Repo → project path
 // ---------------------------------------------------------------------------
-
-/// `remote.origin.url` for the repo at `cwd`, if it has one.
-fn remote_url(cwd: &str) -> Option<String> {
-    let out = Command::new("git")
-        .args(["-C", cwd, "config", "--get", "remote.origin.url"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!s.is_empty()).then_some(s)
-}
 
 /// Full gitlab.com project path (`group/sub/repo`) for a git remote URL, or
 /// `None` when the remote points elsewhere. Unlike the two-segment slug used

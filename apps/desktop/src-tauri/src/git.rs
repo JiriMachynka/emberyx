@@ -4,7 +4,7 @@ use std::process::{Command, Output, Stdio};
 
 use serde::Serialize;
 
-use crate::error::{Error, Result};
+use crate::error::{blocking, Error, Result};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -953,11 +953,7 @@ fn clone_into(url: String, destination: String) -> Result<String> {
 /// Clone `url` into `destination`. The last path segment is the new folder.
 #[tauri::command]
 pub async fn git_clone(url: String, destination: String) -> Result<String> {
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || clone_into(url, destination))
-            .await
-            .map_err(|e| e.to_string())??,
-    )
+    blocking(move || clone_into(url, destination)).await
 }
 
 /// What a combined commit-and-push actually did. The two halves are reported
@@ -1271,11 +1267,7 @@ pub async fn git_worktree_add(
     base: Option<String>,
 ) -> Result<String> {
     // Off the main thread: checking out a big tree takes seconds.
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || worktree_add(path, branch, create, base))
-            .await
-            .map_err(|e| e.to_string())??,
-    )
+    blocking(move || worktree_add(path, branch, create, base)).await
 }
 
 fn worktree_add(
@@ -1482,9 +1474,7 @@ fn repo_file_path(root: &str, file: &str) -> Result<PathBuf> {
 #[tauri::command]
 pub async fn git_fetch(path: String, remote: Option<String>) -> Result<()> {
     // Off the main thread: network calls take seconds.
-    Ok(tauri::async_runtime::spawn_blocking(move || fetch(path, remote))
-        .await
-        .map_err(|e| e.to_string())??)
+    blocking(move || fetch(path, remote)).await
 }
 
 fn fetch(path: String, remote: Option<String>) -> Result<()> {
@@ -1501,11 +1491,7 @@ pub async fn git_checkout_remote(
     branch: String,
     remote: Option<String>,
 ) -> Result<()> {
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || checkout_remote(path, branch, remote))
-            .await
-            .map_err(|e| e.to_string())??,
-    )
+    blocking(move || checkout_remote(path, branch, remote)).await
 }
 
 fn checkout_remote(path: String, branch: String, remote: Option<String>) -> Result<()> {
@@ -1529,11 +1515,7 @@ fn checkout_remote(path: String, branch: String, remote: Option<String>) -> Resu
 /// an error — the caller resolves them through `git_resolve`.
 #[tauri::command]
 pub async fn git_merge(path: String, git_ref: String) -> Result<MergeOutcome> {
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || merge(path, git_ref))
-            .await
-            .map_err(|e| e.to_string())??,
-    )
+    blocking(move || merge(path, git_ref)).await
 }
 
 fn merge(path: String, git_ref: String) -> Result<MergeOutcome> {
@@ -1578,21 +1560,13 @@ fn merge(path: String, git_ref: String) -> Result<MergeOutcome> {
 /// Paths still unresolved in an in-progress merge.
 #[tauri::command]
 pub async fn git_conflicts(path: String) -> Result<Vec<String>> {
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || conflicted_files(&path))
-            .await
-            .map_err(|e| e.to_string())??,
-    )
+    blocking(move || conflicted_files(&path)).await
 }
 
 /// The three sides of one conflicted file plus the marked-up working copy.
 #[tauri::command]
 pub async fn git_conflict_stages(path: String, file: String) -> Result<ConflictStages> {
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || conflict_stages(path, file))
-            .await
-            .map_err(|e| e.to_string())??,
-    )
+    blocking(move || conflict_stages(path, file)).await
 }
 
 fn conflict_stages(path: String, file: String) -> Result<ConflictStages> {
@@ -1609,11 +1583,7 @@ fn conflict_stages(path: String, file: String) -> Result<ConflictStages> {
 /// clears the conflict as far as git is concerned.
 #[tauri::command]
 pub async fn git_resolve(path: String, file: String, content: String) -> Result<()> {
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || resolve(path, file, content))
-            .await
-            .map_err(|e| e.to_string())??,
-    )
+    blocking(move || resolve(path, file, content)).await
 }
 
 fn resolve(path: String, file: String, content: String) -> Result<()> {
@@ -1626,21 +1596,13 @@ fn resolve(path: String, file: String, content: String) -> Result<()> {
 /// Throw the merge away and restore the pre-merge working tree.
 #[tauri::command]
 pub async fn git_merge_abort(path: String) -> Result<()> {
-    Ok(tauri::async_runtime::spawn_blocking(move || {
-        run_git(&path, &["merge", "--abort"]).map(|_| ())
-    })
-    .await
-    .map_err(|e| e.to_string())??)
+    blocking(move || run_git(&path, &["merge", "--abort"]).map(|_| ())).await
 }
 
 /// Commit the merge once every conflict is staged.
 #[tauri::command]
 pub async fn git_merge_continue(path: String, message: Option<String>) -> Result<()> {
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || merge_continue(path, message))
-            .await
-            .map_err(|e| e.to_string())??,
-    )
+    blocking(move || merge_continue(path, message)).await
 }
 
 fn merge_continue(path: String, message: Option<String>) -> Result<()> {
@@ -1662,7 +1624,7 @@ fn merge_continue(path: String, message: Option<String>) -> Result<()> {
 /// Whether a merge is in progress (MERGE_HEAD exists).
 #[tauri::command]
 pub async fn git_merge_state(path: String) -> Result<bool> {
-    Ok(tauri::async_runtime::spawn_blocking(move || {
+    blocking(move || {
         if !is_repo(&path) {
             return Ok(false);
         }
@@ -1673,15 +1635,11 @@ pub async fn git_merge_state(path: String) -> Result<bool> {
         )
     })
     .await
-    .map_err(|e| e.to_string())??)
 }
 
 /// `remote.origin.url` for the repo at `cwd`, if it has one.
-fn remote_url(cwd: &str) -> Option<String> {
-    let out = Command::new("git")
-        .args(["-C", cwd, "config", "--get", "remote.origin.url"])
-        .output()
-        .ok()?;
+pub(crate) fn remote_url(cwd: &str) -> Option<String> {
+    let out = git(cwd, &["config", "--get", "remote.origin.url"]).ok()?;
     if !out.status.success() {
         return None;
     }

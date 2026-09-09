@@ -8,10 +8,16 @@
  * change is a one-file fix, and anything unmatched is logged in dev.
  *
  * The patterns are Claude's wording alone, so every entry point takes the
- * backend and other backends classify as nothing rather than as a bad guess.
+ * backend and only a backend whose wording is described here — the
+ * `accountIssues` capability — is classified at all; the rest get nothing
+ * rather than a bad guess.
  */
 
-import { BACKEND_LABEL, type AgentBackend } from "@/lib/agentBackend";
+import {
+  BACKEND_LABEL,
+  capabilitiesOf,
+  type AgentBackend,
+} from "@/lib/agentBackend";
 
 export type AccountIssueKind = "rate_limit" | "logged_out";
 
@@ -109,7 +115,7 @@ export function classify(
   raw: string,
   backend: AgentBackend = "claude"
 ): AccountIssue | null {
-  if (backend !== "claude") return null;
+  if (!capabilitiesOf(backend).accountIssues) return null;
   const text = stripAnsi(raw);
   if (!text.trim()) return null;
 

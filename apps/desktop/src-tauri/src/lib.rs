@@ -27,6 +27,7 @@ mod menu;
 mod mcp;
 pub mod models;
 pub mod pty;
+mod paths;
 mod preview;
 mod providers;
 mod queue;
@@ -37,6 +38,7 @@ mod store;
 pub mod supervisor;
 mod t3_import;
 mod threads;
+pub mod time;
 mod usage;
 mod workspace;
 

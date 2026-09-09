@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::err;
-use crate::error::Result;
+use crate::error::{blocking, Result};
 use crate::fs_walk::{is_noise_dir, walk_files};
 
 /// One entry in a listed directory.
@@ -58,9 +58,7 @@ pub fn list_dir(path: String) -> Result<Vec<DirEntry>> {
 #[tauri::command]
 pub async fn list_files(path: String) -> Result<Vec<String>> {
     // Off the main thread: a full walk of a big repo would stall the UI.
-    Ok(tauri::async_runtime::spawn_blocking(move || walk_list(path))
-        .await
-        .map_err(|e| e.to_string())??)
+    blocking(move || walk_list(path)).await
 }
 
 fn walk_list(path: String) -> Result<Vec<String>> {

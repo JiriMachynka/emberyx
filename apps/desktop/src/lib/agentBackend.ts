@@ -43,6 +43,35 @@ export interface AgentCapabilities {
   compact: boolean;
   /** Revert turn also drops this turn from the provider conversation. */
   conversationRewind: boolean;
+  /** Failure output can be classified into an account-level state (spent usage
+   *  window, no valid login). The patterns in `accountState.ts` are one CLI's
+   *  wording, so a backend only claims this once its own wording is described —
+   *  a wrong guess tells the user they are signed out when they are not. */
+  accountIssues: boolean;
+  /** The live session announces its own model catalog (ACP hands one back with
+   *  `session/new`), so the chat's own provider never has to be probed a second
+   *  time. Claude's list is hand-written and Codex's has to be read off an
+   *  `app-server` even for the session already running on it. */
+  sessionModelCatalog: boolean;
+  /** Several named launch configurations can be saved and picked per session —
+   *  a second account, a router in front of the API. Only Claude has them:
+   *  `Settings.claudeProfiles` holds a Claude launch line, and applying one to
+   *  another backend would spawn it with the wrong CLI's arguments. */
+  launchProfiles: boolean;
+  /** The CLI's config directory can be redirected per session. Only the Claude
+   *  transport applies it (`agent.rs` sets `CLAUDE_CONFIG_DIR` and nothing
+   *  else), so offering the field elsewhere is a control that does nothing. */
+  configDirOverride: boolean;
+  /** Listing this backend's threads boots a child process — Codex opens an
+   *  `app-server` probe for it — so repeated scans need a cooldown. Claude
+   *  reads transcript files and the ACP backends read the event log; both are
+   *  cheap enough to run per refresh. */
+  threadScanSpawnsChild: boolean;
+  /** Argv that starts the CLI's interactive sign-in, binary first, or null when
+   *  the backend has no login flow of its own (an API key in the environment,
+   *  say) and the sign-in control must be absent rather than run something else.
+   *  Verified against the installed CLIs on 2026-09-09. */
+  loginCommand: readonly string[] | null;
 }
 
 export const AGENT_BACKENDS: readonly AgentBackend[] = [
@@ -70,6 +99,22 @@ export const COMMAND_SIGIL: Record<AgentBackend, string> = {
   grok: "/",
   cursor: "/",
 };
+
+/** The driver a backend's chat runs through. Five backends, three transports —
+ *  so "is it Codex" and "is it ACP" are one lookup rather than a chain of name
+ *  tests that each have to be extended when a backend is added. */
+export type AgentTransport = "claude" | "codex" | "acp";
+
+export const BACKEND_TRANSPORT: Record<AgentBackend, AgentTransport> = {
+  claude: "claude",
+  codex: "codex",
+  opencode: "acp",
+  grok: "acp",
+  cursor: "acp",
+};
+
+export const transportOf = (backend: AgentBackend): AgentTransport =>
+  BACKEND_TRANSPORT[backend];
 
 /**
  * Fallback context window per backend, used only when neither the transport nor
@@ -113,6 +158,11 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     steering: true,
     compact: true,
     conversationRewind: true,
+    accountIssues: true,
+    launchProfiles: true,
+    configDirOverride: true,
+    threadScanSpawnsChild: false,
+    loginCommand: ["claude", "auth", "login"],
   },
   // Codex reaches all of these over the app-server rather than Claude's
   // out-of-band surfaces: hook runs arrive in-band as `hook/started` /
@@ -131,6 +181,14 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     steering: true,
     compact: true,
     conversationRewind: true,
+    // Codex's failure wording is its own and nothing here describes it yet, so
+    // it classifies as nothing rather than through Claude's patterns.
+    accountIssues: false,
+    launchProfiles: false,
+    configDirOverride: false,
+    // `codex thread list` runs through a fresh app-server child.
+    threadScanSpawnsChild: true,
+    loginCommand: ["codex", "login"],
   },
   // Driven over ACP. The protocol carries prompts, streamed updates, tool calls
   // and permission requests — and nothing else here, so the rest stay off until
@@ -156,6 +214,12 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     steering: false,
     compact: false,
     conversationRewind: false,
+    accountIssues: false,
+    launchProfiles: false,
+    configDirOverride: false,
+    threadScanSpawnsChild: false,
+    // `opencode providers`, aliased `auth`, is the credential flow.
+    loginCommand: ["opencode", "auth", "login"],
   },
   // Also ACP, over `grok agent stdio`. Grok advertises more than OpenCode does
   // — reasoning effort and a session list among them — but each still needs the
@@ -177,6 +241,11 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     steering: false,
     compact: false,
     conversationRewind: false,
+    accountIssues: false,
+    launchProfiles: false,
+    configDirOverride: false,
+    threadScanSpawnsChild: false,
+    loginCommand: ["grok", "login"],
   },
   // Cursor ACP (`cursor-agent acp`). Same transport as Grok: prompts, streamed
   // updates, permission requests, and a model catalog on `session/new` once
@@ -195,6 +264,12 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     steering: false,
     compact: false,
     conversationRewind: false,
+    accountIssues: false,
+    launchProfiles: false,
+    configDirOverride: false,
+    threadScanSpawnsChild: false,
+    // The ACP server is `cursor-agent`, and so is the login flow.
+    loginCommand: ["cursor-agent", "login"],
   },
 };
 
@@ -211,6 +286,23 @@ export const isAgentBackend = (value: unknown): value is AgentBackend =>
 export const backendFromCommand = (command: string): AgentBackend =>
   command.startsWith("claude") ? "claude" : "codex";
 
+/**
+ * The sign-in command line for a backend, or null when it has no login flow —
+ * in which case the caller must drop the control, not substitute another CLI's.
+ * `binary` replaces the CLI's own name and is only meaningful when the caller
+ * knows the configured command drives *this* backend; a wrapper or absolute
+ * path has to resolve the same way the session's spawn does.
+ */
+export const resolveLoginCommand = (
+  backend: AgentBackend,
+  binary?: string
+): string | null => {
+  const argv = CAPABILITIES[backend].loginCommand;
+  if (!argv) return null;
+  const [own, ...args] = argv;
+  return [binary?.trim() || own, ...args].join(" ");
+};
+
 /** Backends driven over ACP rather than their own transport. */
 export const isAcpBackend = (backend: AgentBackend): boolean =>
-  backend === "opencode" || backend === "grok" || backend === "cursor";
+  transportOf(backend) === "acp";

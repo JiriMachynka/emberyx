@@ -1,4 +1,4 @@
-import type { AgentBackend } from "@/lib/agentBackend";
+import { capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
 import type { SlashCommand } from "@/types";
 
 /** Claude Code's built-in slash commands. The Rust scan only finds project /
@@ -32,10 +32,25 @@ const CLAUDE_BUILTIN_COMMANDS: SlashCommand[] = [
   { name: "release-notes", description: "Show release notes", source: "built-in" },
 ];
 
-/** The backend's own built-ins. Only Claude's are hand-listed; anything else
- *  shows what the scan found and nothing invented. */
+/**
+ * Hand-listed built-ins per backend. Empty is a real answer: Codex runs its
+ * commands as `$name` skills that the scan already finds, and nobody has
+ * transcribed a built-in list for it — inventing one would put commands in the
+ * picker that the CLI answers with "unknown". A backend earns entries here only
+ * once its list has been read off the installed binary.
+ */
+const BUILTIN_COMMANDS: Record<AgentBackend, SlashCommand[]> = {
+  claude: CLAUDE_BUILTIN_COMMANDS,
+  codex: [],
+  opencode: [],
+  grok: [],
+  cursor: [],
+};
+
+/** The backend's own built-ins, or nothing when its CLI has no command sigil
+ *  at all — a picker offered there would insert text that is sent as prose. */
 export const builtinCommandsFor = (backend: AgentBackend): SlashCommand[] =>
-  backend === "claude" ? CLAUDE_BUILTIN_COMMANDS : [];
+  capabilitiesOf(backend).slashCommands ? BUILTIN_COMMANDS[backend] : [];
 
 /** Built-ins plus fetched commands, deduped by name — a custom command wins over
  *  a built-in with the same name. */

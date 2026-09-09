@@ -6,6 +6,7 @@ import {
   Bot,
   Check,
   ChevronDown,
+  Folder,
   Gauge,
   ChevronRight,
   Copy,
@@ -17,13 +18,12 @@ import {
   X,
 } from "lucide-react";
 import { issueTitle, resetLabel, type AccountIssue } from "@/lib/accountState";
-import { basename, dirname } from "@/lib/path";
+import { basename } from "@/lib/path";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { Button } from "@/components/ui/button";
 import { FileRefProject, TextWithFileRefs } from "@/components/FileRef";
 import { BACKEND_LABEL, capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
 import {
-  describeTool,
   currentTodo,
   isTodoTool,
   lastTodos,
@@ -42,7 +42,6 @@ import { useChatSession } from "@/hooks/useChatSession";
 import {
   type ChatImage,
   type ChatMessage,
-  type ChatStatus,
   type ToolCall,
 } from "@/hooks/useAgentChat";
 import {
@@ -98,20 +97,42 @@ import { launchFor } from "@/lib/settings";
 import { getThreadMeta, setThreadMeta, threadMetaKey } from "@/lib/threadMeta";
 import { lastActivityAt } from "@/lib/compact";
 import { ThreadLinkProvider } from "@/components/PrLink";
+import { PaneVisibleProvider, usePaneVisible } from "@/components/chat/PaneVisible";
 import type { Project } from "@/types";
 import { projectLabel } from "@/lib/worktree";
 import { PROVIDER_LABEL } from "@/lib/providers";
 import { useGitChanges, useTurnFiles } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
 import { rememberRowSizes, rowSize } from "@/lib/rowSizes";
+import { buildTree } from "@/lib/fileTree";
 import { cn } from "@/lib/utils";
+import { buildActivityRow, kindForToolName } from "@/lib/activities";
 import { formatDuration, groupTurns, isAgentTool, type Turn } from "@/components/chat/turns";
 import { ActivityList } from "@/components/chat/ActivityRow";
 import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { ToolCard } from "@/components/chat/ToolViews";
 import { AskPrompt, PermissionPrompt } from "@/components/chat/Prompts";
+import { useRunningTimer } from "@/hooks/useRunningTimer";
 
 /** Reconstruct a data: URL for rendering from a stored ChatImage. */
+
+/** The turn clock sits under the transcript, not on each tool card. */
+function WorkingFooter({
+  turnKey,
+  busy,
+}: {
+  turnKey: string | undefined;
+  busy: boolean;
+}) {
+  const label = useRunningTimer(turnKey, busy);
+  if (!label) return null;
+  return (
+    <div className="relative z-10 mb-2 text-center text-xs text-muted-foreground">
+      {label}
+    </div>
+  );
+}
+
 const imageSrc = (img: ChatImage) => `data:${img.mediaType};base64,${img.data}`;
 
 interface ChatPaneProps {
@@ -165,17 +186,7 @@ const LOAD_EARLIER_PX = 600;
 /** Pages the scroll position may pull in before the button takes over. */
 const AUTO_LOAD_PAGES = 3;
 
-const STATUS_LABEL: Record<ChatStatus, string> = {
-  idle: "",
-  thinking: "Thinking…",
-  streaming: "Responding…",
-  tool: "Running tool…",
-  awaiting_permission: "Waiting for your decision…",
-  awaiting_answer: "Waiting for your answer…",
-  retrying: "Server busy, retrying…",
-  error: "Error",
-  exited: "Session ended",
-};
+
 
 export const ChatPane = memo(function ChatPane({
   sessionId,
@@ -313,6 +324,10 @@ export const ChatPane = memo(function ChatPane({
     startedRef.current = true;
     onThreadStarted?.(threadId, firstUserMessage);
   }, [resume, imported, threadId, firstUserMessage, onThreadStarted]);
+
+  // Walks the whole thread, and the pane re-renders per published frame — a
+  // 500-message thread would scan it several times a second otherwise.
+  const lastActivity = useMemo(() => lastActivityAt(messages), [messages]);
 
   // The transcript is read at switch/handoff time, not published per token —
   // publishing it on every token would re-render the world.
@@ -522,21 +537,6 @@ export const ChatPane = memo(function ChatPane({
   const terminal = status === "exited" || status === "error";
   const accountIssue = useAgentStore((s) => s.accountIssue);
 
-  // While a tool runs, say what it's doing instead of a generic "Running tool…".
-  const running =
-    status === "tool"
-      ? messages[messages.length - 1]?.tools.find((t) => t.result == null)
-      : undefined;
-  // `describeTool` re-serialises tool input that is routinely tens of KB and
-  // builds a full body this caller never reads. Unmemoized it ran on every
-  // frame for the whole life of the tool call.
-  const runningLabel = useMemo(() => {
-    if (!running) return null;
-    const d = describeTool(running.name, running.input);
-    return d.title ? `${d.label} ${d.title}` : d.label;
-  }, [running?.name, running?.input]);
-  const statusLabel = (active && runningLabel) || STATUS_LABEL[status];
-
   // Stable across renders so memoized rows don't re-render on every update.
   const openPreview = useCallback((dataUrl: string) => setPreview(dataUrl), []);
 
@@ -575,10 +575,10 @@ export const ChatPane = memo(function ChatPane({
   // tools, subagents) can collapse under one "Worked for Ns" header.
   const turns = useMemo(() => groupTurns(thread), [thread]);
 
-  // The scroll stream as virtual slots: optional load-earlier bookend, one
-  // entry per turn (its provider-switch divider travels with it), and the
-  // busy footer. Keys are stable across prepends, which is what lets the
-  // virtualizer reuse measured heights for already-seen rows.
+  // The scroll stream as virtual slots: optional load-earlier bookend and one
+  // entry per turn (its provider-switch divider travels with it). Keys are
+  // stable across prepends, which is what lets the virtualizer reuse measured
+  // heights for already-seen rows.
   type Slot =
     | { key: string; kind: "load" }
     | {
@@ -586,8 +586,7 @@ export const ChatPane = memo(function ChatPane({
         kind: "turn";
         turn: (typeof turns)[number];
         mark: ProviderSwitchMark | null;
-      }
-    | { key: string; kind: "busy" };
+      };
   // Every divider in one pass, rather than a scan of the thread per turn.
   const marks = useMemo(() => switchMarks(carried, thread), [carried, thread]);
   const slots = useMemo<Slot[]>(() => {
@@ -601,17 +600,14 @@ export const ChatPane = memo(function ChatPane({
         mark: marks.get(turn.key) ?? null,
       });
     }
-    if (busy) list.push({ key: "busy", kind: "busy" });
     return list;
-  }, [turns, hasMore, busy, marks]);
+  }, [turns, hasMore, marks]);
 
   // Read by the prepend settle loop below, which runs off rAF and so cannot
   // close over the render's `slots`.
   const slotsRef = useRef(slots);
   slotsRef.current = slots;
 
-  // The busy footer is a slot of its own, so the last slot is not the last
-  // turn — the streaming turn is the one before it.
   // Not memoized: `slots` is a new array on every streamed frame, so a memo here
   // could never hit and only cost a deps comparison.
   let lastTurnIndex = -1;
@@ -799,6 +795,9 @@ export const ChatPane = memo(function ChatPane({
         not compare — and PrLink renders every link in every message, each one
         re-reading thread meta from localStorage. Per streamed frame. */}
     <ThreadLinkProvider value={threadLink}>
+    {/* A boolean, so no identity to stabilize. The tickers below read it
+        rather than repainting a pane the `hidden` class has taken off screen. */}
+    <PaneVisibleProvider value={active}>
     <div
       className="chat-pane relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
       style={{ fontFamily }}
@@ -864,12 +863,6 @@ export const ChatPane = memo(function ChatPane({
                           onPreview={openPreview}
                         />
                       </Fragment>
-                    )}
-                    {slot.kind === "busy" && (
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Loader2 className="size-3.5 animate-spin" />
-                        <span className="min-w-0 truncate">{statusLabel}</span>
-                      </div>
                     )}
                   </div>
                 </div>
@@ -960,6 +953,10 @@ export const ChatPane = memo(function ChatPane({
                       />
                     </div>
                   )}
+                  <WorkingFooter
+                    turnKey={busy ? (turns[turns.length - 1]?.key ?? sessionId) : undefined}
+                    busy={busy}
+                  />
                   <div className="relative z-10">
                 <ChatComposer
                   cwd={cwd}
@@ -987,7 +984,7 @@ export const ChatPane = memo(function ChatPane({
                   onTyping={wake}
                   onSend={send}
                   onCompact={compact}
-                  lastActivityAt={lastActivityAt(messages)}
+                  lastActivityAt={lastActivity}
                   onStop={stop}
                   onRewind={rewind}
                   onPreview={setPreview}
@@ -1013,6 +1010,7 @@ export const ChatPane = memo(function ChatPane({
         </DialogContent>
       </Dialog>
     </div>
+    </PaneVisibleProvider>
     </ThreadLinkProvider>
     </FileRefProject>
   );
@@ -1277,27 +1275,47 @@ const ChangedFilesCard = memo(function ChangedFilesCard({
           Review
         </button>
       </div>
-      <ul className="flex flex-col border-t border-border">
-        {visible.map((file) => (
-          <li key={file.path} className="flex h-8 items-center gap-2 px-3 text-xs">
-            <FileTypeIcon path={file.path} />
-            <span className="flex min-w-0 flex-1 items-baseline gap-1.5" title={file.path}>
-              <span className="flex-none truncate">{basename(file.path)}</span>
-              {file.path.includes("/") && (
-                <span className="min-w-0 truncate text-muted-foreground">
-                  {dirname(file.path)}
+      <div className="flex flex-col border-t border-border py-1">
+        {buildTree(
+          visible.map((file) => ({ path: file.path, status: "  " }))
+        ).map((row) => {
+          const file = row.kind === "file" ? files.find((f) => f.path === row.path) : undefined;
+          const indent = { paddingLeft: 12 + row.depth * 12 };
+          if (row.kind === "dir") {
+            return (
+              <div
+                key={`dir:${row.path}`}
+                style={indent}
+                className="flex h-7 items-center gap-1.5 pr-3 text-xs text-muted-foreground"
+              >
+                <Folder className="size-3.5 shrink-0" />
+                <span className="truncate">{row.name}</span>
+              </div>
+            );
+          }
+          return (
+            <div
+              key={row.path}
+              style={indent}
+              className="flex h-7 items-center gap-1.5 pr-3 text-xs"
+              title={row.path}
+            >
+              <FileTypeIcon path={row.path} />
+              <span className="min-w-0 flex-1 truncate">{row.name}</span>
+              {file?.additions != null && (
+                <span className="flex-none tabular-nums text-emerald-400">
+                  +{file.additions}
                 </span>
               )}
-            </span>
-            {file.additions != null && (
-              <span className="flex-none tabular-nums text-emerald-400">+{file.additions}</span>
-            )}
-            {file.deletions != null && (
-              <span className="flex-none tabular-nums text-red-400">−{file.deletions}</span>
-            )}
-          </li>
-        ))}
-      </ul>
+              {file?.deletions != null && (
+                <span className="flex-none tabular-nums text-red-400">
+                  −{file.deletions}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
       {clipped && (
         <div className="border-t border-border px-3 py-1.5 text-xs text-muted-foreground">
           Showing first {CHANGED_FILES_LIMIT} of {files.length} — open Review for the rest
@@ -1380,6 +1398,7 @@ const TurnRow = memo(
                   fontSize={fontSize}
                   chat={chat}
                   onPreview={onPreview}
+                  live
                 />
               ))}
             </div>
@@ -1544,19 +1563,31 @@ function WorkedAccordion({
 
 /** Tool cards for a message; agent/Task tools render their subagent inline.
  *  TodoWrite is lifted into TasksCard so it isn't a generic tool row. */
-function ToolList({ tools }: { tools: ToolCall[] }) {
+function ToolList({ tools, live }: { tools: ToolCall[]; live?: boolean }) {
   const rest = tools.filter((t) => !isTodoTool(t.name));
   if (rest.length === 0) return null;
+  const activities = rest.map((t) =>
+    buildActivityRow({
+      id: t.id,
+      kind: kindForToolName(t.name),
+      title: t.name,
+      input: t.input,
+      output: t.result,
+      failed: t.isError,
+      complete: t.result != null,
+    })
+  );
   return (
-    <div className="flex flex-col divide-y divide-border">
-      {rest.map((t) =>
-        isAgentTool(t.name) ? (
-          <SubagentInline key={t.id} id={t.id} tool={t} />
-        ) : (
-          <ToolCard key={t.id} tool={t} />
-        )
-      )}
-    </div>
+    <ActivityList
+      activities={activities}
+      live={live}
+      renderAgent={(a) => {
+        const tool = rest.find((t) => t.id === a.id);
+        return tool && isAgentTool(tool.name) ? (
+          <SubagentInline id={a.id} tool={tool} />
+        ) : null;
+      }}
+    />
   );
 }
 
@@ -1566,7 +1597,15 @@ function ToolList({ tools }: { tools: ToolCall[] }) {
  *  between the tool calls it came between. A replayed transcript has only
  *  `thinking` and `tools` — it never recorded an order — so it keeps the old
  *  shape rather than being given one it cannot back up. */
-function MessageWork({ message, active }: { message: ChatMessage; active: boolean }) {
+function MessageWork({
+  message,
+  active,
+  live,
+}: {
+  message: ChatMessage;
+  active: boolean;
+  live?: boolean;
+}) {
   const stream = message.activities;
   if (stream?.length) {
     // TodoWrite is lifted into TasksCard, so it is not a row here either.
@@ -1575,6 +1614,7 @@ function MessageWork({ message, active }: { message: ChatMessage; active: boolea
     return (
       <ActivityList
         activities={rows}
+        live={live}
         renderAgent={(a) => {
           const tool = message.tools.find((t) => t.id === a.id);
           return tool ? <SubagentInline id={a.id} tool={tool} /> : null;
@@ -1591,7 +1631,7 @@ function MessageWork({ message, active }: { message: ChatMessage; active: boolea
           timingKey={message.id}
         />
       )}
-      {message.tools.length > 0 && <ToolList tools={message.tools} />}
+      {message.tools.length > 0 && <ToolList tools={message.tools} live={live} />}
     </>
   );
 }
@@ -1608,13 +1648,17 @@ const SubagentInline = memo(function SubagentInline({
 }) {
   const run = useAgentStore((s) => s.subagents[id]);
   const settle = useAgentStore((s) => s.settleSubagents);
+  const visible = usePaneVisible();
   const [showAll, setShowAll] = useState(false);
   const running = run ? run.endedAt == null : false;
   useEffect(() => {
-    if (!running) return;
+    // Same reason as the running timers: a hidden pane's runs settle when it
+    // comes back, which is the first moment anyone can see the difference.
+    if (!running || !visible) return;
+    settle();
     const t = window.setInterval(() => settle(), 1000);
     return () => window.clearInterval(t);
-  }, [running, settle]);
+  }, [running, visible, settle]);
 
   // Not tracked as a run (shouldn't happen) — fall back to a plain tool card.
   if (!run) return <ToolCard tool={tool} />;
@@ -1643,9 +1687,7 @@ const SubagentInline = memo(function SubagentInline({
           <Loader2 className="size-3.5 shrink-0 animate-spin text-violet-400" />
         ) : run.isError ? (
           <span className="shrink-0 text-red-400">error</span>
-        ) : (
-          <Check className="size-3.5 shrink-0 text-emerald-400" />
-        )}
+        ) : null}
       </div>
       {run.activity.length > 0 && (
         <div className="mt-1.5 flex flex-col gap-1 border-l border-border/60 pl-2.5 text-muted-foreground">
@@ -1687,11 +1729,13 @@ const MessageRow = memo(function MessageRow({
   fontSize,
   chat,
   onPreview,
+  live,
 }: {
   message: ChatMessage;
   fontSize: number;
   chat: ChatContext;
   onPreview: (dataUrl: string) => void;
+  live?: boolean;
 }) {
   if (message.role === "user") {
     return (
@@ -1736,6 +1780,7 @@ const MessageRow = memo(function MessageRow({
       <MessageWork
         message={message}
         active={message.streaming && !message.text && message.tools.length === 0}
+        live={live}
       />
       {message.text && (
         <Markdown text={message.text} fontSize={fontSize} streaming={message.streaming} />

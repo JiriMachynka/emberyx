@@ -6,15 +6,15 @@ import { type Settings } from "@/lib/settings";
 import {
   BACKEND_LABEL,
   capabilitiesOf,
-  isAcpBackend,
+  transportOf,
   type AgentBackend,
 } from "@/lib/agentBackend";
 import { listCodexThreads } from "@/lib/codex/transport";
 import { projectBackend } from "@/lib/projectConfig";
 import {
   INSTRUCTION_FILES,
+  defaultHandoffTarget,
   findHandoffTarget,
-  otherBackend,
   renderHandoffContext,
   type HandoffContext,
 } from "@/lib/handoff";
@@ -41,9 +41,10 @@ import type {
 /** Thread titles are truncated to this in tab labels. */
 const LABEL_MAX = 24;
 
-/** Minimum spacing between Codex thread scans: each one boots a probe child
- *  (`listCodexThreads`), so a burst of refreshes must coalesce into one. */
-const CODEX_SCAN_COOLDOWN_MS = 30_000;
+/** Minimum spacing between thread scans for a backend whose scan boots a child
+ *  (`threadScanSpawnsChild` — Codex's probe today), so a burst of refreshes
+ *  coalesces into one. */
+const SCAN_COOLDOWN_MS = 30_000;
 
 /** The branch the project sits on. Best-effort — a non-repo directory simply
  *  has no branch to name. */
@@ -93,8 +94,8 @@ const recordProviderSwitch = (
  *  transcripts for it would file another agent's history under its name. */
 const listThreads = async (backend: AgentBackend, cwd: string): Promise<Thread[]> => {
   if (!capabilitiesOf(backend).threads) return [];
-  if (backend === "codex") return listCodexThreads(cwd);
-  if (isAcpBackend(backend)) {
+  if (transportOf(backend) === "codex") return listCodexThreads(cwd);
+  if (transportOf(backend) === "acp") {
     // Only threads this app recorded for this backend. The store also holds
     // imported history from other providers, and an ACP pane cannot render
     // their Claude-shaped payloads — showing them here would promise a
@@ -220,9 +221,10 @@ export function useWorkspace(settings: Settings) {
     if (!capabilitiesOf(backend).threads) return Promise.resolve(null);
     const inFlight = threadScans.current.get(path);
     if (inFlight) return inFlight;
-    if (backend === "codex") {
+    const cooled = capabilitiesOf(backend).threadScanSpawnsChild;
+    if (cooled) {
       const last = lastScanAt.current.get(path);
-      if (last != null && Date.now() - last < CODEX_SCAN_COOLDOWN_MS) {
+      if (last != null && Date.now() - last < SCAN_COOLDOWN_MS) {
         return Promise.resolve(null);
       }
     }
@@ -234,7 +236,7 @@ export function useWorkspace(settings: Settings) {
       })
       .finally(() => {
         threadScans.current.delete(path);
-        if (backend === "codex") lastScanAt.current.set(path, Date.now());
+        if (cooled) lastScanAt.current.set(path, Date.now());
       });
     threadScans.current.set(path, scan);
     return scan;
@@ -342,7 +344,6 @@ export function useWorkspace(settings: Settings) {
       sessionId: id,
       cwd,
       command,
-      maxLines: settings.scrollback,
       // A server that exited on its own — drop it so "running" stops lying.
       onExit: () => {
         disposeLog(id);
@@ -448,7 +449,7 @@ export function useWorkspace(settings: Settings) {
     const source = sessions.find((s) => s.id === sourceSessionId);
     if (!source) return;
     const from = source.backend ?? "claude";
-    const target = otherBackend(from);
+    const target = defaultHandoffTarget(from);
     const existing = findHandoffTarget(sessions, source.projectId, target);
     const id =
       existing?.id ??

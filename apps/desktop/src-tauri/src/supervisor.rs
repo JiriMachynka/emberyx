@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
@@ -17,6 +17,7 @@ use crate::models::{
 };
 use crate::queue::{PromptQueue, QueuedPrompt};
 use crate::store::Store;
+use crate::time::now_ms;
 
 pub const MAX_TRANSCRIPT: usize = 400;
 pub const AGENT_EVENT: &str = "agent-event";
@@ -213,13 +214,6 @@ pub struct Supervisor {
 
 static ACTIVE: OnceLock<Mutex<Option<Supervisor>>> = OnceLock::new();
 
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
 /// Drain buffered timeline events into the store in ONE transaction. Failure
 /// rolls the whole batch back (the store guarantees that), and the events stay
 /// buffered for the next flush — retry-safe because nothing half-landed.
@@ -368,7 +362,7 @@ impl Supervisor {
     ) -> AgentRecord {
         let (lock, _) = &*self.inner;
         let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let timestamp = now();
+        let timestamp = now_ms();
         let record = inner
             .agents
             .entry(agent_id.clone())
@@ -479,7 +473,7 @@ impl Supervisor {
             } else {
                 Lifecycle::Idle
             };
-            record.updated_at = now();
+            record.updated_at = now_ms();
             let copy = record.clone();
             ready.notify_all();
             (copy, failed)
@@ -554,34 +548,6 @@ impl Supervisor {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn observe_process_event(
-        &self,
-        process_id: u32,
-        lifecycle: Lifecycle,
-        kind: &str,
-        payload: String,
-    ) {
-        let agent_id = self
-            .list()
-            .into_iter()
-            .find(|record| record.process_session_id == Some(process_id))
-            .map(|record| record.agent_id);
-        if let Some(agent_id) = agent_id {
-            self.observe(&agent_id, lifecycle, kind, payload);
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn observe_turn_finished(&self, agent_id: &str, failed: bool, payload: String) {
-        self.observe(
-            agent_id,
-            if failed { Lifecycle::Failed } else { Lifecycle::Idle },
-            if failed { "turn-failed" } else { "turn-completed" },
-            payload,
-        );
-    }
-
     fn update(&self, agent_id: &str, change: impl FnOnce(&mut AgentRecord)) -> Result<AgentRecord> {
         let (lock, ready) = &*self.inner;
         let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -590,7 +556,7 @@ impl Supervisor {
             .get_mut(agent_id)
             .ok_or_else(|| crate::err!("unknown agent {agent_id}"))?;
         change(record);
-        record.updated_at = now();
+        record.updated_at = now_ms();
         let copy = record.clone();
         inner.mutations += 1;
         ready.notify_all();
@@ -629,7 +595,7 @@ impl Supervisor {
             agent_id: agent_id.to_string(),
             kind,
             payload,
-            timestamp: now(),
+            timestamp: now_ms(),
         };
         let transcript = inner.transcript.entry(agent_id.to_string()).or_default();
         transcript.push_back(event.clone());
@@ -699,7 +665,7 @@ impl Supervisor {
             thread_id: thread_id.to_string(),
             kind,
             attribution,
-            timestamp: now(),
+            timestamp: now_ms(),
             payload,
             raw_line: None,
         };
@@ -769,9 +735,10 @@ impl Supervisor {
         }
     }
 
-    /// Force a state snapshot now, regardless of the dirty counter. The
-    /// timer-flush path is what production relies on; tests and explicit
-    /// durability points call this.
+    /// Force a state snapshot now, regardless of the dirty counter. Production
+    /// relies on the timer flush; this is the only way a test can stand in for
+    /// it, so it exists for the crash-durability tests alone.
+    #[cfg(test)]
     pub fn snapshot_now(&self) -> Result<()> {
         let (lock, _) = &*self.inner;
         let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -802,7 +769,7 @@ impl Supervisor {
         payload: String,
         ttl_ms: u64,
     ) -> Approval {
-        let created_at = now();
+        let created_at = now_ms();
         let approval = Approval {
             approval_id: approval_id.clone(),
             thread_id: thread_id.clone(),
@@ -872,7 +839,7 @@ impl Supervisor {
     /// Requests still worth showing: unanswered and not yet expired. Expired
     /// ones are dropped here rather than lingering as answerable prompts.
     pub fn pending_approvals(&self, thread_id: Option<&str>) -> Vec<Approval> {
-        let cutoff = now();
+        let cutoff = now_ms();
         let expired: Vec<String> = {
             let (lock, _) = &*self.inner;
             let inner = lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -1056,7 +1023,7 @@ impl Supervisor {
     ) -> Result<Delegation> {
         self.get(source_agent_id)?;
         self.get(target_agent_id)?;
-        let timestamp = now();
+        let timestamp = now_ms();
         let delegation = {
             let (lock, _) = &*self.inner;
             let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -1118,7 +1085,7 @@ impl Supervisor {
         delegation.status = status;
         delegation.result = result;
         delegation.error = error;
-        delegation.completed_at = Some(now());
+        delegation.completed_at = Some(now_ms());
         let copy = delegation.clone();
         inner.mutations += 1;
         let clear_task = inner
@@ -1135,7 +1102,7 @@ impl Supervisor {
                     Lifecycle::Cancelled => Lifecycle::Idle,
                     _ => Lifecycle::Idle,
                 };
-                agent.updated_at = now();
+                agent.updated_at = now_ms();
             }
         }
         ready.notify_all();
@@ -1191,7 +1158,7 @@ impl Supervisor {
         let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
         for record in inner.agents.values_mut() {
             record.lifecycle = Lifecycle::Exited;
-            record.updated_at = now();
+            record.updated_at = now_ms();
         }
     }
 
@@ -1238,7 +1205,7 @@ impl Supervisor {
             if matches!(agent.lifecycle, Lifecycle::Working | Lifecycle::Blocked) {
                 agent.lifecycle = Lifecycle::Orphaned;
             }
-            agent.updated_at = now();
+            agent.updated_at = now_ms();
         }
         let (lock, _) = &*self.inner;
         let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -1344,7 +1311,7 @@ pub fn thread_adopt(
     source: String,
 ) -> Result<()> {
     let store = supervisor.store().ok_or("event log not attached")?;
-    store.attach_thread_context(&thread_id, &project_path, now())?;
+    store.attach_thread_context(&thread_id, &project_path, now_ms())?;
     store.mark_thread_source(&thread_id, &source)?;
     Ok(())
 }
@@ -1856,7 +1823,7 @@ mod tests {
     fn fresh_dir(name: &str) -> std::path::PathBuf {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("emberyx-supervisor-{name}-{}-{n}", now()));
+        let dir = std::env::temp_dir().join(format!("emberyx-supervisor-{name}-{}-{n}", now_ms()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -1869,7 +1836,7 @@ mod tests {
         // Tests run in parallel threads; ms timestamps collide.
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("emberyx-supervisor-db-{}-{n}", now()));
+        let dir = std::env::temp_dir().join(format!("emberyx-supervisor-db-{}-{n}", now_ms()));
         let _ = std::fs::remove_dir_all(&dir);
         supervisor_at(&dir.join("emberyx.db"))
     }
@@ -2044,11 +2011,8 @@ mod tests {
             Some(7),
         );
 
-        s.observe_process_event(7, Lifecycle::Working, "turn-started", "".into());
-        assert_eq!(s.get("a").unwrap().lifecycle, Lifecycle::Working);
-        s.observe_turn_finished("a", false, "completed".into());
-        assert_eq!(s.get("a").unwrap().lifecycle, Lifecycle::Idle);
-        s.observe_process_exit("a", Some(1));
+        // The transport only knows the OS process; the registry resolves it.
+        s.observe_process_exit_by_process(7, Some(1));
         assert_eq!(s.get("a").unwrap().lifecycle, Lifecycle::Failed);
 
         let kinds: Vec<_> = s
@@ -2057,7 +2021,7 @@ mod tests {
             .into_iter()
             .map(|event| event.kind)
             .collect();
-        assert_eq!(kinds, ["turn-started", "turn-completed", "process-exited"]);
+        assert_eq!(kinds, ["process-exited"]);
     }
 
     #[test]
@@ -2087,7 +2051,7 @@ mod tests {
 
     #[test]
     fn persistence_round_trip_resets_runtime_process_state() {
-        let path = std::env::temp_dir().join(format!("emberyx-registry-{}.json", now()));
+        let path = std::env::temp_dir().join(format!("emberyx-registry-{}.json", now_ms()));
         let s = supervisor();
         s.register(
             "a".into(),
@@ -2134,7 +2098,7 @@ mod tests {
 
     #[test]
     fn queue_survives_persistence_round_trip() {
-        let path = std::env::temp_dir().join(format!("emberyx-registry-q-{}.json", now()));
+        let path = std::env::temp_dir().join(format!("emberyx-registry-q-{}.json", now_ms()));
         let s = supervisor();
         s.enqueue_prompt("t1", "survive".into(), None).unwrap();
         s.pause_queue("t1").unwrap();
@@ -2229,7 +2193,7 @@ mod tests {
 
     #[test]
     fn timeline_survives_a_supervisor_restart_and_continues_the_sequence() {
-        let dir = std::env::temp_dir().join(format!("emberyx-restart-db-{}", now()));
+        let dir = std::env::temp_dir().join(format!("emberyx-restart-db-{}", now_ms()));
         let _ = std::fs::remove_dir_all(&dir);
         let db = dir.join("emberyx.db");
 
@@ -2260,7 +2224,7 @@ mod tests {
     #[test]
     fn restore_imports_legacy_registry_timelines_into_the_store() {
         let path =
-            std::env::temp_dir().join(format!("emberyx-legacy-tl-{}.json", now()));
+            std::env::temp_dir().join(format!("emberyx-legacy-tl-{}.json", now_ms()));
         // A pre-store registry.json: timelines rode along in the snapshot and
         // `next_seq` guarded the cursor. Restore must land them in the event
         // log, then keep appending past them without a collision.
@@ -2312,7 +2276,7 @@ mod tests {
 
     #[test]
     fn an_agent_caught_mid_turn_restores_as_orphaned_not_exited() {
-        let path = std::env::temp_dir().join(format!("emberyx-registry-orph-{}.json", now()));
+        let path = std::env::temp_dir().join(format!("emberyx-registry-orph-{}.json", now_ms()));
         let s = supervisor();
         register(&s, "working", Some("t1"));
         register(&s, "blocked", Some("t2"));
@@ -2360,7 +2324,7 @@ mod tests {
 
     #[test]
     fn a_pending_approval_outlives_the_window_that_asked() {
-        let path = std::env::temp_dir().join(format!("emberyx-registry-ap-{}.json", now()));
+        let path = std::env::temp_dir().join(format!("emberyx-registry-ap-{}.json", now_ms()));
         let s = supervisor();
         s.open_approval("ask-1".into(), "t1".into(), "ask", "{}".into(), 60_000);
         s.persist(&path).unwrap();

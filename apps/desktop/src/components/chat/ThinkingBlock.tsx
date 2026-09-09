@@ -1,7 +1,7 @@
-import { ChevronRight, Sparkle } from "lucide-react";
+import { Sparkle } from "lucide-react";
 import { useState } from "react";
 
-import { useRunningTimer } from "@/hooks/useRunningTimer";
+import { Disclosure, DisclosureChevron } from "@/components/chat/Disclosure";
 import { formatDuration } from "@/components/chat/turns";
 import { recordThinkTiming, thinkTimings } from "@/lib/thinkTimings";
 import { cn } from "@/lib/utils";
@@ -33,7 +33,6 @@ export function ThinkingBlock({
     : null;
   const ran =
     timing?.endedAt != null ? formatDuration(timing.endedAt - timing.startedAt) : null;
-  const runningLabel = useRunningTimer(timingKey, active);
   return (
     <div className="overflow-hidden text-xs">
       <button
@@ -46,20 +45,9 @@ export function ThinkingBlock({
         <span className="min-w-0 truncate">
           {active ? "Thinking…" : ran ? `Thought for ${ran}` : "Thought for a moment"}
         </span>
-        <ChevronRight
-          className={cn("ml-auto size-3 shrink-0 transition-transform", open && "rotate-90")}
-        />
+        <DisclosureChevron open={open} className="ml-auto shrink-0" />
       </button>
-      {runningLabel && (
-        <div className="animate-in fade-in pb-2 text-[0.65rem] text-muted-foreground duration-300">
-          {runningLabel}
-        </div>
-      )}
-      <div
-        className="grid transition-[grid-template-rows] duration-200 ease-out"
-        style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
-      >
-        <div className="overflow-hidden">
+      <Disclosure open={open}>
           <div className="relative">
             {/* The fade belongs to the scroll container, not the text: it marks
                 that there is more above rather than dimming the first line. */}
@@ -73,8 +61,7 @@ export function ThinkingBlock({
               {text}
             </div>
           </div>
-        </div>
-      </div>
+      </Disclosure>
     </div>
   );
 }

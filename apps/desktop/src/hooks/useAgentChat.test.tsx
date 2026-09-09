@@ -922,6 +922,45 @@ describe("useAgentChat sending", () => {
     expect(result.current.status).toBe("idle");
   });
 
+  it("stays idle when tokens arrive after stop", async () => {
+    const { result, emit } = await mount();
+    act(() => result.current.send("go"));
+    act(() => result.current.stop());
+    expect(result.current.status).toBe("idle");
+    emit({
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "still going" },
+      },
+    });
+    expect(result.current.status).toBe("idle");
+    expect(result.current.messages.some((m) => m.text.includes("still going"))).toBe(
+      false
+    );
+  });
+
+  it("does not send a turn that was stopped before the process was ready", async () => {
+    let resolveSpawn!: (value: unknown) => void;
+    invoke.mockImplementation((command: string) => {
+      if (command === "agent_spawn") {
+        return new Promise((resolve) => {
+          resolveSpawn = resolve;
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+    const view = renderHook(() => useAgentChat(options));
+    act(() => view.result.current.send("too soon"));
+    act(() => view.result.current.stop());
+    expect(view.result.current.status).toBe("idle");
+    await act(async () => {
+      resolveSpawn({ id: 1, reattached: false, truncated: false });
+    });
+    expect(sentTo("agent_send")).toEqual([]);
+  });
+
   // The CLI reports a stopped turn as `error_during_execution`. Reading that as
   // a failure put the pane in its "Session failed / Restart session" dead end
   // for a session that was still alive.

@@ -11,6 +11,7 @@ import {
   Forward,
   Gauge,
   GitBranch,
+  ImagePlus,
   Lock,
   Minimize2,
   Pause,
@@ -61,6 +62,7 @@ import {
   shouldOfferResumeCompaction,
 } from "@/lib/compact";
 import { pasteInsertion } from "@/lib/fileRef";
+import { mimeForImageFile } from "@/lib/chatImage";
 import { applySlash, filterCommands, slashAt, type SlashToken } from "@/lib/slash";
 import {
   useCodexModels,
@@ -88,23 +90,23 @@ const imageSrc = (img: ChatImage) => `data:${img.mediaType};base64,${img.data}`;
  *  base64 (which lives in the in-memory message history) small. */
 const MAX_EDGE = 1568;
 
-const processImage = (file: File): Promise<ChatImage> =>
+const processImage = (file: File, mediaType: string): Promise<ChatImage> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(reader.error);
     reader.onload = () => {
       const dataUrl = reader.result as string;
-      const strip = (url: string, mediaType: string): ChatImage => ({
+      const strip = (url: string, type: string): ChatImage => ({
         id: crypto.randomUUID(),
-        mediaType,
+        mediaType: type,
         data: url.slice(url.indexOf(",") + 1),
       });
       const img = new Image();
-      img.onerror = () => resolve(strip(dataUrl, file.type));
+      img.onerror = () => resolve(strip(dataUrl, mediaType));
       img.onload = () => {
         const scale = Math.min(1, MAX_EDGE / Math.max(img.width, img.height));
         if (scale === 1) {
-          resolve(strip(dataUrl, file.type));
+          resolve(strip(dataUrl, mediaType));
           return;
         }
         const canvas = document.createElement("canvas");
@@ -112,11 +114,11 @@ const processImage = (file: File): Promise<ChatImage> =>
         canvas.height = Math.round(img.height * scale);
         const ctx = canvas.getContext("2d");
         if (!ctx) {
-          resolve(strip(dataUrl, file.type));
+          resolve(strip(dataUrl, mediaType));
           return;
         }
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const type = file.type === "image/png" ? "image/png" : "image/jpeg";
+        const type = mediaType === "image/png" ? "image/png" : "image/jpeg";
         resolve(strip(canvas.toDataURL(type, 0.9), type));
       };
       img.src = dataUrl;
@@ -1001,18 +1003,30 @@ export const ChatComposer = memo(function ChatComposer({
     return false;
   };
 
+  const fileRef = useRef<HTMLInputElement>(null);
+
   const appendImages = (files: File[]) => {
-    if (files.length === 0) return;
-    void Promise.all(files.map(processImage)).then((imgs) => {
-      setImages((prev) => [...prev, ...imgs]);
+    const jobs = files.flatMap((file) => {
+      const mime = mimeForImageFile(file);
+      return mime ? [processImage(file, mime)] : [];
     });
+    if (jobs.length === 0) return;
+    void Promise.all(jobs)
+      .then((imgs) => setImages((prev) => [...prev, ...imgs]))
+      .catch((e) => console.error("[emberyx] image attach failed", e));
   };
 
   const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = Array.from(e.clipboardData?.items ?? [])
-      .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+    const fromItems = Array.from(e.clipboardData?.items ?? [])
+      .filter((it) => it.kind === "file")
       .map((it) => it.getAsFile())
-      .filter((f): f is File => f !== null);
+      .filter((f): f is File => f !== null && mimeForImageFile(f) !== null);
+    const files =
+      fromItems.length > 0
+        ? fromItems
+        : Array.from(e.clipboardData?.files ?? []).filter(
+            (f) => mimeForImageFile(f) !== null
+          );
     if (files.length > 0) {
       e.preventDefault();
       appendImages(files);
@@ -1038,7 +1052,7 @@ export const ChatComposer = memo(function ChatComposer({
     e.preventDefault();
     setDragging(false);
     appendImages(
-      Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"))
+      Array.from(e.dataTransfer.files).filter((f) => mimeForImageFile(f) !== null)
     );
   };
 
@@ -1261,6 +1275,26 @@ export const ChatComposer = memo(function ChatComposer({
                 {usage.quota && <QuotaChip quota={usage.quota} />}
               </>
             )}
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                appendImages(Array.from(e.target.files ?? []));
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              title="Attach image"
+              onClick={() => fileRef.current?.click()}
+              disabled={!ready || exited}
+              className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+            >
+              <ImagePlus className="size-4" />
+            </button>
             {busy && (
               <button
                 type="button"

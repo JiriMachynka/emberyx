@@ -45,7 +45,7 @@ export function TerminalPane({
   const scrollbackRef = useRef(scrollback);
 
   useEffect(() => {
-    void spawnLog({ sessionId, cwd, maxLines: scrollbackRef.current, mode: "raw" });
+    void spawnLog({ sessionId, cwd });
     // The dock keeps this pane mounted after its tab closes precisely so the
     // shell survives; unmounting means the project is going away.
     return () => {

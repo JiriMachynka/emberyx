@@ -9,6 +9,7 @@ import {
   KeyRound,
   Trash2,
 } from "lucide-react";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { SidePanel } from "@/components/SidePanel";
 import { useAgentStore } from "@/lib/agentStore";
 import type { AppNotification, NotificationKind } from "@/lib/notifications";
@@ -95,10 +96,9 @@ export function NotificationPanel({ onClose, onSelect }: NotificationPanelProps)
       }
     >
       {notifications.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-xs text-muted-foreground">
-          <Bell className="size-5" />
+        <EmptyState icon={<Bell className="size-5" />}>
           Nothing yet — finished runs and prompts land here.
-        </div>
+        </EmptyState>
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">
           {groups.map(([project, items]) => (

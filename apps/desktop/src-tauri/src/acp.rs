@@ -41,7 +41,7 @@ use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::ipc::Channel;
 
@@ -640,18 +640,37 @@ pub async fn acp_session_list(manager: tauri::State<'_, AcpManager>, id: u32) ->
 /// `session/prompt` only arrives when the turn *ends*, so it is awaited on its
 /// own thread and reported as `TurnEnded` / `TurnFailed` on the spawn channel.
 /// Blocking a command on it would tie a request timeout to the length of a turn.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpImage {
+    media_type: String,
+    data: String,
+}
+
 #[tauri::command]
 pub fn acp_prompt(
     manager: tauri::State<'_, AcpManager>,
     id: u32,
     session_id: String,
     text: String,
+    images: Option<Vec<AcpImage>>,
 ) -> Result<()> {
     let handle = manager.handle(id)?;
     std::thread::spawn(move || {
+        let mut prompt = Vec::new();
+        if !text.trim().is_empty() {
+            prompt.push(json!({ "type": "text", "text": text }));
+        }
+        for img in images.unwrap_or_default() {
+            prompt.push(json!({
+                "type": "image",
+                "mimeType": img.media_type,
+                "data": img.data,
+            }));
+        }
         let params = json!({
             "sessionId": session_id,
-            "prompt": [{ "type": "text", "text": text }],
+            "prompt": prompt,
         });
         let started = std::time::Instant::now();
         let event = match request_with(&handle, "session/prompt", params, TURN_TIMEOUT) {

@@ -195,6 +195,7 @@ export function useCodexChat({
   const wake = useCallback(() => setAwake(true), []);
   // Turns accepted before the process existed, delivered in order once it is.
   const pendingSendRef = useRef<{ text: string; images?: ChatImage[] }[]>([]);
+  const interruptedRef = useRef(false);
   const [exitReason, setExitReason] = useState<string | null>(null);
   const [pendingPermission, setPendingPermission] = useState<PendingPermission | null>(
     null
@@ -345,6 +346,16 @@ export function useCodexChat({
 
   const applyNotification = useCallback(
     (method: string, params: unknown) => {
+      if (
+        interruptedRef.current &&
+        method !== "turn/completed" &&
+        method !== "turn/failed"
+      ) {
+        return;
+      }
+      if (method === "turn/completed" || method === "turn/failed") {
+        interruptedRef.current = false;
+      }
       const { state, changes, subagents, sessionStatus } = applyCodexNotification(
         stateRef.current,
         method,
@@ -608,9 +619,12 @@ export function useCodexChat({
   }, []);
 
   const stop = useCallback(() => {
+    pendingSendRef.current = [];
+    interruptedRef.current = true;
     publish();
     interrupt();
-  }, [interrupt, publish]);
+    setLocalStatus("idle");
+  }, [interrupt, publish, setLocalStatus]);
 
   const deliver = useCallback((text: string, images?: ChatImage[]) => {
     const id = idRef.current;
@@ -635,6 +649,7 @@ export function useCodexChat({
     (text: string, images?: ChatImage[]) => {
       const hasImages = !!images && images.length > 0;
       if (!enabled || (!text.trim() && !hasImages)) return;
+      interruptedRef.current = false;
       if (firstMsgRef.current === null && text.trim()) firstMsgRef.current = text;
       const message: ChatMessage = {
         id: localId(),

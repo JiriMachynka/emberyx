@@ -32,12 +32,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 import {
   disposeLog,
   killLog,
-  logLines,
-  logState,
   rawLog,
   resizeLog,
   spawnLog,
-  subscribeLog,
   subscribeRaw,
 } from "@/lib/ptyLog";
 
@@ -51,41 +48,20 @@ beforeEach(() => {
 });
 
 describe("ptyLog", () => {
-  it("spawns, buffers output, and notifies subscribers", async () => {
-    let pings = 0;
-    subscribeLog("dev-1", () => pings++);
-    await spawnLog({ sessionId: "dev-1", cwd: "/p", command: "bun dev", maxLines: 100 });
+  it("spawns and buffers output", async () => {
+    await spawnLog({ sessionId: "dev-1", cwd: "/p", command: "bun dev" });
 
     expect(calls.map(([c]) => c)).toContain("pty_spawn");
     channels[0].onmessage?.({ type: "output", data: b64("ready on :3000\n") });
 
-    expect(logLines("dev-1")).toEqual(["ready on :3000", ""]);
-    expect(pings).toBeGreaterThan(0);
-    expect(logState("dev-1")?.status).toBe("running");
+    expect(rawLog("dev-1")).toBe("ready on :3000\n");
     disposeLog("dev-1");
-  });
-
-  it("keeps a raw session out of the line screen", async () => {
-    let pings = 0;
-    subscribeLog("sh-raw", () => pings++);
-    await spawnLog({ sessionId: "sh-raw", cwd: "/p", maxLines: 100, mode: "raw" });
-    const chunks: string[] = [];
-    subscribeRaw("sh-raw", (c) => chunks.push(c));
-    // The spawn itself notifies once, for the status. Output must not.
-    const afterSpawn = pings;
-
-    channels[0].onmessage?.({ type: "output", data: b64("\x1b[2Kprompt$ ") });
-
-    expect(chunks).toEqual(["\x1b[2Kprompt$ "]);
-    expect(logLines("sh-raw").join("")).toBe("");
-    expect(pings).toBe(afterSpawn);
-    disposeLog("sh-raw");
   });
 
   it("applies a size requested while the spawn is still in flight", async () => {
     let resolveSpawn: ((id: number) => void) | null = null;
     state.spawn = () => new Promise<number>((res) => (resolveSpawn = res));
-    const spawning = spawnLog({ sessionId: "sh-size", cwd: "/p", maxLines: 100, mode: "raw" });
+    const spawning = spawnLog({ sessionId: "sh-size", cwd: "/p" });
 
     await resizeLog("sh-size", 97, 31);
     expect(calls.filter(([c]) => c === "pty_resize")).toHaveLength(0);
@@ -98,10 +74,10 @@ describe("ptyLog", () => {
   });
 
   it("spawns at the size a previous view measured", async () => {
-    await spawnLog({ sessionId: "sh-resize", cwd: "/p", maxLines: 100, mode: "raw" });
+    await spawnLog({ sessionId: "sh-resize", cwd: "/p" });
     await resizeLog("sh-resize", 120, 40);
     channels[0].onmessage?.({ type: "exit", data: 0 });
-    await spawnLog({ sessionId: "sh-resize", cwd: "/p", maxLines: 100, mode: "raw" });
+    await spawnLog({ sessionId: "sh-resize", cwd: "/p" });
 
     const spawns = calls.filter(([c]) => c === "pty_spawn");
     expect(spawns[1][1]).toMatchObject({ cols: 120, rows: 40 });
@@ -109,48 +85,45 @@ describe("ptyLog", () => {
   });
 
   it("does not spawn a second PTY for a live session", async () => {
-    await spawnLog({ sessionId: "dev-2", cwd: "/p", maxLines: 100 });
-    await spawnLog({ sessionId: "dev-2", cwd: "/p", maxLines: 100 });
+    await spawnLog({ sessionId: "dev-2", cwd: "/p" });
+    await spawnLog({ sessionId: "dev-2", cwd: "/p" });
     expect(calls.filter(([c]) => c === "pty_spawn")).toHaveLength(1);
     disposeLog("dev-2");
   });
 
-  it("reports exit and fires the onExit callback", async () => {
+  it("fires the onExit callback on exit", async () => {
     const exits: (number | null)[] = [];
     await spawnLog({
       sessionId: "dev-3",
       cwd: "/p",
-      maxLines: 100,
       onExit: (code) => exits.push(code),
     });
     channels[0].onmessage?.({ type: "exit", data: 1 });
 
-    expect(logState("dev-3")).toEqual({ status: "exited", exitCode: 1 });
     expect(exits).toEqual([1]);
     disposeLog("dev-3");
   });
 
   it("kill sends pty_kill and forgets the buffer", async () => {
-    await spawnLog({ sessionId: "dev-4", cwd: "/p", maxLines: 100 });
+    await spawnLog({ sessionId: "dev-4", cwd: "/p" });
     await killLog("dev-4");
 
     expect(calls.some(([c, a]) => c === "pty_kill" && a.id === 1)).toBe(true);
-    expect(logState("dev-4")).toBeNull();
-    expect(logLines("dev-4")).toEqual([]);
+    expect(rawLog("dev-4")).toBe("");
   });
 
   it("assembles output split across events", async () => {
-    await spawnLog({ sessionId: "dev-5", cwd: "/p", maxLines: 100 });
+    await spawnLog({ sessionId: "dev-5", cwd: "/p" });
     channels[0].onmessage?.({ type: "output", data: b64("a\x1b[3") });
     channels[0].onmessage?.({ type: "output", data: b64("1mred\x1b[0m\n") });
-    expect(logLines("dev-5")).toEqual(["a\x1b[31mred\x1b[0m", ""]);
+    expect(rawLog("dev-5")).toBe("a\x1b[31mred\x1b[0m\n");
     disposeLog("dev-5");
   });
 
   it("keeps the raw stream for a terminal grid, escape sequences intact", async () => {
-    // The line buffer normalises; a VT needs exactly what the child wrote —
-    // this is a cursor-up redraw, the shape that made p10k draw twice.
-    await spawnLog({ sessionId: "sh-1", cwd: "/p", maxLines: 100 });
+    // A VT needs exactly what the child wrote — this is a cursor-up redraw,
+    // the shape that made p10k draw twice once anything normalised the stream.
+    await spawnLog({ sessionId: "sh-1", cwd: "/p" });
     channels[0].onmessage?.({ type: "output", data: b64("first\r\n") });
     channels[0].onmessage?.({ type: "output", data: b64("\x1b[1A\x1b[2Ksecond\r\n") });
 
@@ -159,7 +132,7 @@ describe("ptyLog", () => {
   });
 
   it("streams new chunks to a grid that attached after the fact", async () => {
-    await spawnLog({ sessionId: "sh-2", cwd: "/p", maxLines: 100 });
+    await spawnLog({ sessionId: "sh-2", cwd: "/p" });
     channels[0].onmessage?.({ type: "output", data: b64("before\r\n") });
 
     const seen: string[] = [];
@@ -176,11 +149,10 @@ describe("ptyLog", () => {
   });
 
   it("a session can be respawned after it exited", async () => {
-    await spawnLog({ sessionId: "dev-6", cwd: "/p", maxLines: 100 });
+    await spawnLog({ sessionId: "dev-6", cwd: "/p" });
     channels[0].onmessage?.({ type: "exit", data: 0 });
-    await spawnLog({ sessionId: "dev-6", cwd: "/p", maxLines: 100 });
+    await spawnLog({ sessionId: "dev-6", cwd: "/p" });
     expect(calls.filter(([c]) => c === "pty_spawn")).toHaveLength(2);
-    expect(logState("dev-6")?.status).toBe("running");
     disposeLog("dev-6");
   });
 
@@ -191,9 +163,9 @@ describe("ptyLog", () => {
         resolvers.push(resolve);
       });
 
-    const first = spawnLog({ sessionId: "dev-7", cwd: "/p", maxLines: 100 });
+    const first = spawnLog({ sessionId: "dev-7", cwd: "/p" });
     await killLog("dev-7");
-    const second = spawnLog({ sessionId: "dev-7", cwd: "/p", maxLines: 100 });
+    const second = spawnLog({ sessionId: "dev-7", cwd: "/p" });
 
     resolvers[0]?.(1);
     await Promise.resolve();
@@ -202,7 +174,6 @@ describe("ptyLog", () => {
 
     expect(calls.filter(([c]) => c === "pty_spawn")).toHaveLength(2);
     expect(calls.some(([c]) => c === "pty_kill")).toBe(true);
-    expect(logState("dev-7")?.status).toBe("running");
     disposeLog("dev-7");
   });
 });

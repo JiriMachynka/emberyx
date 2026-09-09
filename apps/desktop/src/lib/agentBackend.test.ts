@@ -6,6 +6,7 @@ import {
   capabilitiesOf,
   isAcpBackend,
   isAgentBackend,
+  resolveLoginCommand,
 } from "@/lib/agentBackend";
 
 describe("capabilitiesOf", () => {
@@ -31,6 +32,10 @@ describe("capabilitiesOf", () => {
       steering: true,
       compact: true,
       conversationRewind: true,
+      // Only Claude's failure wording is described, so Codex classifies as
+      // nothing rather than through another CLI's patterns.
+      accountIssues: false,
+      loginCommand: ["codex", "login"],
     });
   });
 
@@ -54,6 +59,46 @@ describe("capabilitiesOf", () => {
 
   it("hands back one shared record per backend, so memoized panes see a stable prop", () => {
     expect(capabilitiesOf("claude")).toBe(capabilitiesOf("claude"));
+  });
+});
+
+describe("resolveLoginCommand", () => {
+  // Every backend used to be signed in with `claude auth login`, which signed
+  // the user into the wrong product four times out of five.
+  it("gives each backend its own CLI's sign-in", () => {
+    expect(resolveLoginCommand("claude")).toBe("claude auth login");
+    expect(resolveLoginCommand("codex")).toBe("codex login");
+    expect(resolveLoginCommand("opencode")).toBe("opencode auth login");
+    expect(resolveLoginCommand("grok")).toBe("grok login");
+    // The ACP server is `cursor-agent`, not the editor binary.
+    expect(resolveLoginCommand("cursor")).toBe("cursor-agent login");
+  });
+
+  it("lets a configured wrapper or absolute path stand in for the binary", () => {
+    expect(resolveLoginCommand("claude", "/opt/bin/claude")).toBe(
+      "/opt/bin/claude auth login"
+    );
+    expect(resolveLoginCommand("codex", "  ")).toBe("codex login");
+    expect(resolveLoginCommand("codex", undefined)).toBe("codex login");
+  });
+
+  // Absence has to be expressible: a backend with no login flow of its own must
+  // drop the control, and null is what the caller reads to do that. Every
+  // backend names one today, so this pins the correspondence, not the count.
+  it("resolves a command exactly when the table names one", () => {
+    for (const backend of AGENT_BACKENDS) {
+      const declared = capabilitiesOf(backend).loginCommand;
+      expect(resolveLoginCommand(backend) === null).toBe(declared === null);
+    }
+  });
+});
+
+describe("accountIssues", () => {
+  // `accountState.ts` holds Claude's wording alone. Any other backend claiming
+  // this would have its output read through the wrong CLI's error patterns.
+  it("is claimed only by the backend whose error wording is described", () => {
+    const claiming = AGENT_BACKENDS.filter((b) => capabilitiesOf(b).accountIssues);
+    expect(claiming).toEqual(["claude"]);
   });
 });
 

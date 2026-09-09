@@ -68,9 +68,8 @@ fn detect_package_manager(root: &Path) -> String {
         "pnpm".into()
     } else if root.join("yarn.lock").exists() {
         "yarn".into()
-    } else if root.join("package-lock.json").exists() {
-        "npm".into()
     } else {
+        // npm is both the package-lock.json answer and the no-lockfile default.
         "npm".into()
     }
 }

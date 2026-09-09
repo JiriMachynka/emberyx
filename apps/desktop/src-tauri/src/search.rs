@@ -5,7 +5,7 @@ use regex::RegexBuilder;
 use serde::Serialize;
 
 use crate::err;
-use crate::error::Result;
+use crate::error::{blocking, Result};
 use crate::files::looks_binary;
 use crate::fs_walk::walk_files;
 
@@ -49,13 +49,7 @@ pub async fn search_text(
     is_regex: bool,
 ) -> Result<Vec<SearchFile>> {
     // Reading every file in the project must not block the main thread.
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || {
-            search_blocking(path, query, case_sensitive, is_regex)
-        })
-        .await
-        .map_err(|e| e.to_string())??,
-    )
+    blocking(move || search_blocking(path, query, case_sensitive, is_regex)).await
 }
 
 fn search_blocking(

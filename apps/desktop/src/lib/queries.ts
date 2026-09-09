@@ -64,13 +64,6 @@ export const queryClient = new QueryClient({
 // ChangesPanel, GitActions) share one cache entry and one fetch per path.
 export const gitKeys = {
   changes: (path: string) => ["git", "changes", path] as const,
-  diff: (
-    path: string,
-    file: string,
-    untracked: boolean,
-    staged: boolean,
-    ignoreWhitespace = false
-  ) => ["git", "diff", path, file, untracked, staged, ignoreWhitespace] as const,
   workingDiff: (path: string, staged: boolean, ignoreWhitespace: boolean) =>
     ["git", "workingDiff", path, staged, ignoreWhitespace] as const,
   branch: (path: string) => ["git", "branch", path] as const,
@@ -216,28 +209,6 @@ export const fetchWorkingDiff = async (path: string): Promise<string> => {
   );
   return halves.map((d) => d.trim()).filter(Boolean).join("\n");
 };
-
-// `file` null → disabled; the key includes the file so a fast A→B selection
-// can't land A's diff under B's selection (the stale query is dropped).
-export const useGitFileDiff = (
-  path: string,
-  file: string | null,
-  untracked: boolean,
-  staged: boolean,
-  ignoreWhitespace = false
-) =>
-  useQuery({
-    queryKey: gitKeys.diff(path, file ?? "", untracked, staged, ignoreWhitespace),
-    queryFn: () =>
-      invoke<string>("git_file_diff", {
-        path,
-        file,
-        untracked,
-        staged,
-        ignoreWhitespace,
-      }),
-    enabled: !!file,
-  });
 
 /** The whole working tree as one multi-file patch — what the changes panel
  *  renders. One query rather than one per file: the panel shows every file in a
@@ -688,10 +659,6 @@ export const useProviderStatus = (enabled = true) => {
   });
 };
 
-export const invalidateProviders = (qc: QueryClient) => {
-  qc.invalidateQueries({ queryKey: ["providers"] });
-};
-
 // MCP servers across harness configs, for the Settings → MCP surface. The
 // harness files are the source of truth, so the list is a read-back, not
 // state Emberyx owns.
@@ -831,9 +798,6 @@ export const dirEntriesQuery = (path: string) => ({
   queryKey: fileKeys.dir(path),
   queryFn: () => invoke<DirEntry[]>("list_dir", { path }),
 });
-
-export const useDirEntries = (path: string, enabled: boolean) =>
-  useQuery({ ...dirEntriesQuery(path), enabled });
 
 /** `path` null → disabled. Never auto-refetches: the pane owns an editable
  *  buffer, so a background refetch would fight the user's typing. */

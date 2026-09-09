@@ -7,6 +7,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::error::Result;
+use crate::paths::home_dir;
 
 /// A Claude Code conversation thread stored under ~/.claude/projects.
 #[derive(Serialize)]
@@ -58,8 +59,7 @@ fn ms(d: Duration) -> f64 {
 }
 
 pub(crate) fn projects_dir() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
-    Some(PathBuf::from(home).join(".claude").join("projects"))
+    Some(home_dir()?.join(".claude").join("projects"))
 }
 
 /// Claude Code names a project's dir by replacing every non-alphanumeric
@@ -579,7 +579,7 @@ fn list_threads_impl(cwd: &str) -> Result<Vec<Thread>> {
         });
     }
 
-    out.sort_by(|a, b| b.modified.cmp(&a.modified));
+    out.sort_by_key(|t| std::cmp::Reverse(t.modified));
     if timings_on() {
         eprintln!(
             "[timing] list_threads files={files} listed={} total_bytes_scanned~-{} took={:.2}ms \

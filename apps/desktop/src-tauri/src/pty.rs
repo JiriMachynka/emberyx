@@ -375,7 +375,7 @@ pub fn pty_spawn(
     rows: u16,
     on_event: Channel<PtyEvent>,
 ) -> Result<u32> {
-    Ok(manager.spawn(cwd, command, cols, rows, on_event)?)
+    manager.spawn(cwd, command, cols, rows, on_event)
 }
 
 #[tauri::command]
@@ -384,7 +384,7 @@ pub fn pty_write(
     id: u32,
     data: String,
 ) -> Result<()> {
-    Ok(manager.write(id, &data)?)
+    manager.write(id, &data)
 }
 
 #[tauri::command]
@@ -394,12 +394,12 @@ pub fn pty_resize(
     cols: u16,
     rows: u16,
 ) -> Result<()> {
-    Ok(manager.resize(id, cols, rows)?)
+    manager.resize(id, cols, rows)
 }
 
 #[tauri::command]
 pub fn pty_kill(manager: tauri::State<'_, PtyManager>, id: u32) -> Result<()> {
-    Ok(manager.kill(id)?)
+    manager.kill(id)
 }
 
 #[cfg(test)]

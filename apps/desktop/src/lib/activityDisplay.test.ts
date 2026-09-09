@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  groupActivities,
   iconForActivity,
   isAgentActivity,
+  isFileActivity,
   labelForActivity,
   metaForActivity,
+  pathsForActivity,
   titleForActivity,
+  visibleActivities,
 } from "./activityDisplay";
 import type { ActivityItem } from "@/types";
 
@@ -74,5 +78,94 @@ describe("metaForActivity", () => {
 
   it("has nothing to say about work that touched no files", () => {
     expect(metaForActivity(row({ kind: "command" }))).toBeUndefined();
+  });
+});
+
+describe("visibleActivities", () => {
+  it("hides settled tools on a live turn and keeps reasoning", () => {
+    const thinking = row({ id: "t", kind: "reasoning", complete: true });
+    const done = row({ id: "d", kind: "command", complete: true });
+    const running = row({ id: "r", kind: "command", complete: false });
+    expect(visibleActivities([thinking, done, running], true)).toEqual([
+      thinking,
+      running,
+    ]);
+  });
+
+  it("keeps settled file rows on a live turn so the tree can accumulate", () => {
+    const read = row({
+      id: "read",
+      kind: "fileRead",
+      complete: true,
+      displayTarget: "src/a.ts",
+    });
+    const bash = row({ id: "bash", kind: "command", complete: true });
+    expect(visibleActivities([read, bash], true)).toEqual([read]);
+  });
+
+  it("keeps the full log once the turn has settled", () => {
+    const done = row({ id: "d", kind: "command", complete: true });
+    const running = row({ id: "r", kind: "command", complete: false });
+    expect(visibleActivities([done, running], false)).toEqual([done, running]);
+  });
+});
+
+describe("isFileActivity", () => {
+  it("treats reads and edits as file rows", () => {
+    expect(isFileActivity(row({ kind: "fileRead", displayTarget: "a.ts" }))).toBe(
+      true
+    );
+    expect(isFileActivity(row({ kind: "fileChange", displayTarget: "a.ts" }))).toBe(
+      true
+    );
+  });
+
+  it("drops a glob listing — that is a pattern, not a path", () => {
+    expect(
+      isFileActivity(row({ kind: "fileList", displayTarget: "**/*.ts" }))
+    ).toBe(false);
+  });
+
+  it("treats an MCP tool that names a file as a file row", () => {
+    expect(
+      isFileActivity(
+        row({
+          kind: "tool",
+          title: "mcp__codedb__read_file",
+          displayTarget: "src/lib/foo.ts",
+        })
+      )
+    ).toBe(true);
+    expect(
+      isFileActivity(row({ kind: "tool", displayTarget: "cargo test" }))
+    ).toBe(false);
+  });
+});
+
+describe("pathsForActivity", () => {
+  it("prefers the multi-file edit list over a single target", () => {
+    expect(
+      pathsForActivity(
+        row({
+          kind: "fileChange",
+          displayTarget: "a.ts",
+          fileChanges: [{ path: "a.ts" }, { path: "b.ts" }],
+        })
+      )
+    ).toEqual(["a.ts", "b.ts"]);
+  });
+});
+
+describe("groupActivities", () => {
+  it("collapses consecutive file rows and breaks on bash", () => {
+    const a = row({ id: "a", kind: "fileRead", displayTarget: "src/a.ts" });
+    const b = row({ id: "b", kind: "fileChange", displayTarget: "src/b.ts" });
+    const bash = row({ id: "bash", kind: "command" });
+    const c = row({ id: "c", kind: "fileRead", displayTarget: "src/c.ts" });
+    const groups = groupActivities([a, b, bash, c]);
+    expect(groups.map((g) => g.type)).toEqual(["files", "single", "files"]);
+    expect(groups[0].type === "files" && groups[0].activities).toEqual([a, b]);
+    expect(groups[1].type === "single" && groups[1].activity).toBe(bash);
+    expect(groups[2].type === "files" && groups[2].activities).toEqual([c]);
   });
 });

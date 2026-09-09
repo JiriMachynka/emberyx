@@ -1,7 +1,7 @@
-import type { AgentBackend } from "@/lib/agentBackend";
+import { capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
 
-/** T3's resume-compaction ask: a Claude session that's been sitting with a
- *  large prompt. Codex auto-compacts on its own terms and isn't asked. */
+/** T3's resume-compaction ask: a session that's been sitting with a large
+ *  prompt, on a backend that can actually compact on demand. */
 export const RESUME_COMPACTION_MINUTES = 70;
 export const RESUME_COMPACTION_TOKENS = 100_000;
 
@@ -11,7 +11,8 @@ export const shouldOfferResumeCompaction = (input: {
   lastActivityAt: number | undefined;
   now: number;
 }): boolean => {
-  if (input.backend !== "claude") return false;
+  // Offering it where there is no compact command leaves an ask nothing can do.
+  if (!capabilitiesOf(input.backend).compact) return false;
   if (input.usedTokens < RESUME_COMPACTION_TOKENS) return false;
   if (input.lastActivityAt == null) return false;
   return input.now - input.lastActivityAt >= RESUME_COMPACTION_MINUTES * 60_000;

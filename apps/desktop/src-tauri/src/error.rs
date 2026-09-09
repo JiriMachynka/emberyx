@@ -65,6 +65,22 @@ impl From<rusqlite::Error> for Error {
     }
 }
 
+impl From<tauri::Error> for Error {
+    fn from(e: tauri::Error) -> Self {
+        Error(e.to_string())
+    }
+}
+
+/// Runs blocking work off the async runtime's worker threads, flattening the
+/// join error into `Error`. Every async Tauri command that wraps a synchronous
+/// helper goes through here rather than repeating the `spawn_blocking` /
+/// `.await` / double-`?` dance.
+pub async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    tauri::async_runtime::spawn_blocking(f).await?
+}
+
 /// `format!`-style bail: `err!("not a directory: {}", path)`.
 #[macro_export]
 macro_rules! err {

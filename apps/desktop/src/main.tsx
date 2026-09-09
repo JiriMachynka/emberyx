@@ -3,10 +3,10 @@ import ReactDOM from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import { queryClient } from "@/lib/queries";
-import "@fontsource-variable/dm-sans";
-import "@fontsource-variable/geist";
-import "@fontsource-variable/geist-mono";
-import "@fontsource-variable/jetbrains-mono";
+// The four faces, minus the subsets that can never paint here. See fonts.css:
+// the variable packages have no per-subset entrypoint, so the barrels are not
+// importable without every one of them.
+import "./fonts.css";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

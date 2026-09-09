@@ -5,7 +5,6 @@ import {
   anchorCorrection,
   isPinnedAtBottom,
   nextPinState,
-  shouldAutoFollow,
   showLoadOlder,
   type PrependAnchor,
 } from "@/lib/chatVirtual";
@@ -101,17 +100,6 @@ describe("anchorCorrection", () => {
 
   it("clamps a target that would sit above the top of the scroller", () => {
     expect(anchorCorrection({ key: "turn:0", offsetInView: 300 }, 80)?.scrollTop).toBe(0);
-  });
-});
-
-describe("shouldAutoFollow", () => {
-  it("follows while pinned with no frame in flight", () => {
-    expect(shouldAutoFollow(true, false)).toBe(true);
-  });
-
-  it("never follows when unparked or already scheduled", () => {
-    expect(shouldAutoFollow(false, false)).toBe(false);
-    expect(shouldAutoFollow(true, true)).toBe(false);
   });
 });
 

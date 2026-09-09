@@ -8,9 +8,10 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::Manager;
 
-use crate::error::Result;
+use crate::error::{blocking, Result};
 use crate::fs_walk::walk_files;
 use crate::models::Provider;
+use crate::paths::home_dir;
 
 /// One day's usage for a single project/model pair.
 #[derive(Serialize)]
@@ -123,11 +124,7 @@ fn now_secs() -> u64 {
 pub async fn usage_summary(app: tauri::AppHandle, days: u32) -> Result<UsageSummary> {
     // The first scan reads every transcript on disk; keep it off the main
     // thread so the window stays responsive while it runs.
-    Ok(tauri::async_runtime::spawn_blocking(move || {
-        summary_blocking(&app.state::<SummaryCache>(), days)
-    })
-    .await
-    .map_err(|e| e.to_string())??)
+    blocking(move || summary_blocking(&app.state::<SummaryCache>(), days)).await
 }
 
 fn summary_blocking(cache: &SummaryCache, days: u32) -> Result<UsageSummary> {
@@ -143,8 +140,8 @@ fn summary_blocking(cache: &SummaryCache, days: u32) -> Result<UsageSummary> {
     if let Some(base) = crate::threads::projects_dir() {
         scan_jsonl_tree(&base, cutoff_secs, &mut map, parse_claude);
     }
-    if let Some(home) = std::env::var_os("HOME") {
-        let codex = Path::new(&home).join(".codex");
+    if let Some(home) = home_dir() {
+        let codex = home.join(".codex");
         for sub in ["sessions", "archived_sessions"] {
             scan_jsonl_tree(&codex.join(sub), cutoff_secs, &mut map, parse_codex);
         }
@@ -389,7 +386,7 @@ fn xdg_data_home() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("XDG_DATA_HOME") {
         return Some(PathBuf::from(dir));
     }
-    std::env::var_os("HOME").map(|home| Path::new(&home).join(".local/share"))
+    home_dir().map(|home| home.join(".local/share"))
 }
 
 /// OpenCode and Kilo keep per-turn `tokens` + `cost` on `message.data`.

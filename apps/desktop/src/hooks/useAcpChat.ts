@@ -58,6 +58,7 @@ import { useAgentStore } from "@/lib/agentStore";
 import { settleTurnCheckpoint } from "@/lib/queries";
 import {
   SESSION_STATUS,
+  type ChatImage,
   type ChatMessage,
   type ChatStatus,
   type ChatUsage,
@@ -72,6 +73,11 @@ const STDERR_CAP = 4000;
 
 /** A thread title longer than this stops being a label. */
 const TITLE_MAX = 80;
+
+/** ACP has no title notification, so a thread is named after its opening
+ *  prompt's first line — the sidebar row and the recorded `threadTitle` event
+ *  must be the same string, or the name changes when the pane goes away. */
+const threadTitleFrom = (text: string) => text.trim().split("\n")[0].slice(0, TITLE_MAX);
 
 /**
  * Rebuild chat messages from a projected page — the history of a thread the
@@ -176,6 +182,7 @@ export function useAcpChat({
   skipPermissions = false,
   permissionMode = "default",
   enabled,
+  onTitled,
   visible = true,
 }: Options) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -201,6 +208,13 @@ export function useAcpChat({
   /** The session id this pane has already adopted into the event log. A
    *  restart issues a new id, which is adopted on its first prompt. */
   const adoptedForRef = useRef<string | null>(null);
+  // The opening prompt, plus a one-shot guard: the sidebar is told the name
+  // once, after the first turn settles. Reading it in a ref keeps the titling
+  // effect off the send path's deps.
+  const firstMsgRef = useRef("");
+  const titledRef = useRef(false);
+  const onTitledRef = useRef(onTitled);
+  onTitledRef.current = onTitled;
 
   // Committed turns, plus the one being streamed. Held in refs so a token
   // doesn't have to round-trip through React to be folded in.
@@ -518,6 +532,14 @@ export function useAcpChat({
       // StrictMode's double-mount kills the first process; its exit must not
       // flip the live session to "exited".
       if (disposed) return;
+      // Stop already committed the turn. Further chunks would reopen it as a
+      // live bubble; the cancelled `session/prompt` reply just clears the flag.
+      if (stoppedRef.current && turnRef.current.status === "idle") {
+        if (ev.type === "turnEnded" || ev.type === "turnFailed") {
+          stoppedRef.current = false;
+        }
+        if (ev.type !== "exit") return;
+      }
       switch (ev.type) {
         case "notification": {
           applyNotification(ev.data.method, ev.data.params);
@@ -707,11 +729,12 @@ export function useAcpChat({
   }, [enabled, ready, model, provider]);
 
   const send = useCallback(
-    (text: string) => {
+    (text: string, images?: ChatImage[]) => {
       const id = processRef.current;
       const sessionId = sessionRef.current;
       const channel = channelRef.current;
-      if (id === null || !sessionId || !channel || !text.trim()) return;
+      const hasImages = !!images && images.length > 0;
+      if (id === null || !sessionId || !channel || (!text.trim() && !hasImages)) return;
       committedRef.current = [
         ...committedRef.current,
         {
@@ -721,8 +744,10 @@ export function useAcpChat({
           thinking: "",
           tools: [],
           streaming: false,
+          images: hasImages ? images : undefined,
         },
       ];
+      if (!firstMsgRef.current) firstMsgRef.current = text;
       // A new turn outlives the last stop; its ending is the agent's own.
       stoppedRef.current = false;
       turnRef.current = { message: null, status: "thinking" };
@@ -733,7 +758,7 @@ export function useAcpChat({
       if (adoptedForRef.current !== sessionId) {
         adoptedForRef.current = sessionId;
         adoptThread(sessionId);
-        recordTimeline(sessionId, "threadTitle", text.trim().split("\n")[0].slice(0, TITLE_MAX));
+        recordTimeline(sessionId, "threadTitle", threadTitleFrom(text));
       }
       recordTimeline(sessionId, "userPrompt", text);
       void createCheckpoint(cwd, emberyxSessionId, text).then((point) => {
@@ -742,10 +767,22 @@ export function useAcpChat({
         committedRef.current = attachCheckpoint(committedRef.current, point.id);
         publish();
       });
-      void acpPrompt(id, sessionId, text);
+      void acpPrompt(id, sessionId, text, images);
     },
     [cwd, emberyxSessionId, publish, adoptThread, recordTimeline]
   );
+
+  // Name a fresh chat once its first turn settles. No ACP agent announces a
+  // title, so the name is derived here rather than awaited — without it the
+  // sidebar row keeps its first-message placeholder for the thread's whole
+  // life. A resumed thread already has one.
+  useEffect(() => {
+    if (!enabled || status !== "idle" || resume || titledRef.current) return;
+    const title = threadTitleFrom(firstMsgRef.current);
+    if (!title) return;
+    titledRef.current = true;
+    onTitledRef.current?.(title);
+  }, [enabled, status, resume]);
 
   const stop = useCallback(() => {
     const id = processRef.current;
@@ -757,7 +794,11 @@ export function useAcpChat({
     // handler never processes `session/cancel`, so answer first, then cancel.
     clearPermissions(true);
     void acpCancel(id, sessionId);
-  }, [clearPermissions]);
+    // Settle the UI now. The agent's cancelled reply is a no-op once the
+    // turn is already committed; waiting for it left the square button live
+    // for the rest of the in-flight generation.
+    commitTurn("cancelled");
+  }, [clearPermissions, commitTurn]);
 
   const restart = useCallback(() => {
     // The prompt belongs to the process about to be killed: its request ids

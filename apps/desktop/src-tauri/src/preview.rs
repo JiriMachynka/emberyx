@@ -154,10 +154,7 @@ pub fn preview_webview_attach(
         match guard.as_ref() {
             Some(existing) => {
                 existing
-                    .eval(&format!(
-                        "location.replace({})",
-                        serde_json::json!(url)
-                    ))
+                    .eval(format!("location.replace({})", serde_json::json!(url)))
                     .map_err(|e| e.to_string())?;
                 existing.clone()
             }

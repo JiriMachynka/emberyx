@@ -368,6 +368,34 @@ describe("useAcpChat permission requests", () => {
     expect(view.result.current.pendingPermission).toBeNull();
   });
 
+  it("goes idle as soon as stop is clicked, not when the agent replies", async () => {
+    const view = await mount();
+    await act(async () => view.result.current.send("go"));
+    expect(view.result.current.status).toBe("thinking");
+    await act(async () => view.result.current.stop());
+    expect(view.result.current.status).toBe("idle");
+    expect(
+      invoke.mock.calls.some(([name]) => name === "acp_cancel")
+    ).toBe(true);
+  });
+
+  it("sends attached images as prompt blocks", async () => {
+    const view = await mount();
+    await act(async () =>
+      view.result.current.send("look", [
+        { id: "i1", mediaType: "image/png", data: "AAAA" },
+      ])
+    );
+    const prompt = invoke.mock.calls.find(([name]) => name === "acp_prompt");
+    expect(prompt?.[1]).toMatchObject({
+      text: "look",
+      images: [{ mediaType: "image/png", data: "AAAA" }],
+    });
+    expect(view.result.current.messages[0].images).toEqual([
+      { id: "i1", mediaType: "image/png", data: "AAAA" },
+    ]);
+  });
+
   it("settles a Grok turn on prompt_complete without waiting for turnEnded", async () => {
     const view = await mount();
     await act(async () => {
@@ -527,6 +555,53 @@ describe("useAcpChat resuming", () => {
     // Losing the history is survivable; losing the chat is not.
     expect(calls("acp_session_new")).toHaveLength(2);
     expect(view.result.current.exitReason).toBeNull();
+  });
+});
+
+describe("useAcpChat auto-titling", () => {
+  const endTurn = () =>
+    channels[0]?.onmessage?.({
+      type: "turnEnded",
+      data: { sessionId: "s1", result: { stopReason: "end_turn" } },
+    });
+
+  it("names the thread from the first prompt once its turn settles", async () => {
+    const onTitled = vi.fn();
+    const view = await mount({ onTitled });
+    await act(async () => view.result.current.send("Fix the parser\nplease"));
+    await act(async () => endTurn());
+    await waitFor(() => expect(view.result.current.status).toBe("idle"));
+
+    // ACP announces no title, so the name is the opening prompt's first line —
+    // the same string the thread's own threadTitle event records.
+    expect(onTitled).toHaveBeenCalledTimes(1);
+    expect(onTitled).toHaveBeenCalledWith("Fix the parser");
+  });
+
+  it("does not rename the thread on a later turn", async () => {
+    const onTitled = vi.fn();
+    const view = await mount({ onTitled });
+    await act(async () => view.result.current.send("Fix the parser"));
+    await act(async () => endTurn());
+    await waitFor(() => expect(onTitled).toHaveBeenCalledTimes(1));
+
+    await act(async () => view.result.current.send("now the tests"));
+    await act(async () => endTurn());
+    await waitFor(() => expect(view.result.current.status).toBe("idle"));
+
+    // A thread is named by how it opened; the second prompt would rewrite the
+    // sidebar row out from under a name the user has been reading.
+    expect(onTitled).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a resumed thread's existing name alone", async () => {
+    const onTitled = vi.fn();
+    const view = await mount({ resume: "s9", onTitled });
+    await act(async () => view.result.current.send("carry on"));
+    await act(async () => endTurn());
+    await waitFor(() => expect(view.result.current.status).toBe("idle"));
+
+    expect(onTitled).not.toHaveBeenCalled();
   });
 });
 

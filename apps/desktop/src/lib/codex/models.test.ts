@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  codexDefaultEffort,
-  codexEffortForModel,
-  codexEfforts,
-  codexModelGroups,
-} from "./models";
+import { codexDefaultEffort, codexEffortForModel, codexEfforts } from "./models";
 import type { CodexModel } from "./protocol";
 
 const model = (over: Partial<CodexModel> = {}): CodexModel => ({
@@ -14,51 +9,6 @@ const model = (over: Partial<CodexModel> = {}): CodexModel => ({
   reasoningEfforts: ["low", "high"],
   defaultReasoningEffort: "medium",
   ...over,
-});
-
-describe("codexModelGroups", () => {
-  it("groups one generation's releases under a family, labelled by variant", () => {
-    const models = [
-      model({ id: "gpt-5.6-terra", displayName: "GPT-5.6-Terra" }),
-      model({ id: "gpt-5.6-luna", displayName: "GPT-5.6-Luna" }),
-      model({ id: "gpt-5.4-mini", displayName: "GPT-5.4-Mini" }),
-    ];
-    expect(codexModelGroups(models)).toEqual([
-      {
-        label: "GPT-5.6",
-        options: [
-          { value: "gpt-5.6-terra", label: "Terra", chip: "GPT-5.6-Terra" },
-          { value: "gpt-5.6-luna", label: "Luna", chip: "GPT-5.6-Luna" },
-        ],
-      },
-      {
-        label: "GPT-5.4",
-        options: [{ value: "gpt-5.4-mini", label: "Mini", chip: "GPT-5.4-Mini" }],
-      },
-    ]);
-  });
-
-  it("calls a family's unsuffixed member Standard", () => {
-    const groups = codexModelGroups([
-      model({ id: "gpt-5.5", displayName: "GPT-5.5" }),
-    ]);
-    expect(groups).toEqual([
-      {
-        label: "GPT-5.5",
-        options: [{ value: "gpt-5.5", label: "Standard", chip: "GPT-5.5" }],
-      },
-    ]);
-  });
-
-  it("leaves an id it can't parse as its own group", () => {
-    const groups = codexModelGroups([model({ id: "o4", displayName: "o4" })]);
-    expect(groups[0].label).toBe("o4");
-  });
-
-  // The catalog marks retired models hidden; the picker isn't a place to find them.
-  it("drops hidden models", () => {
-    expect(codexModelGroups([model({ hidden: true })])).toEqual([]);
-  });
 });
 
 describe("codexEfforts", () => {

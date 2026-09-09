@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::error::Result;
+use crate::paths::home_dir;
 
 /// A slash command the chat composer can offer, as Claude Code resolves them:
 /// project commands, personal commands, and commands/skills from installed
@@ -168,8 +169,7 @@ fn scan(cwd: &str) -> Vec<SlashCommand> {
     collect_commands(&project.join("commands"), "project", "", &mut out);
     collect_skills(&project.join("skills"), "project", "", &mut out);
 
-    if let Ok(home) = std::env::var("HOME") {
-        let home = PathBuf::from(home);
+    if let Some(home) = home_dir() {
         let user = home.join(".claude");
         collect_commands(&user.join("commands"), "user", "", &mut out);
         collect_skills(&user.join("skills"), "user", "", &mut out);

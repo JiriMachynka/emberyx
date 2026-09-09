@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::mcp::Harness;
+use crate::paths::home_dir;
 
 /// User-scope directories each harness reads skills from, in scan order.
 /// The shared roots appear under several harnesses — that is the point.
@@ -64,10 +65,6 @@ fn managed_root_of(home: &Path, skill_dir: &Path) -> Option<PathBuf> {
         .into_iter()
         .flat_map(|h| read_dirs(h, home))
         .find(|root| parent == root.as_path())
-}
-
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
 }
 
 /// One physical skill folder and every harness that reads it. The shared

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildActivityRow,
   emptyOwnerIndex,
   routeActivities,
   syncOwnerIndex,
@@ -115,5 +116,65 @@ describe("routeActivities", () => {
     const index = syncOwnerIndex(emptyOwnerIndex(), [draft]);
     const routing = routeActivities([row("t1", { complete: true })], draft, index);
     expect(routing.draft.map((r) => r.id)).toEqual(["t1"]);
+  });
+});
+
+describe("buildActivityRow", () => {
+  const source = {
+    id: "t1",
+    kind: "fileRead" as const,
+    title: "Read",
+    input: { file_path: "src/app.ts" },
+    complete: false,
+  };
+
+  it("keeps the output an earlier snapshot carried when this one has none", () => {
+    const previous = row("t1", { output: "streamed so far" });
+    expect(buildActivityRow(source, previous).output).toBe("streamed so far");
+  });
+
+  it("lets a later output replace the earlier one", () => {
+    const previous = row("t1", { output: "streamed so far" });
+    expect(buildActivityRow({ ...source, output: "done" }, previous).output).toBe("done");
+  });
+
+  it("keeps the earlier target when this snapshot's input names none", () => {
+    const previous = row("t1", { displayTarget: "src/app.ts" });
+    const built = buildActivityRow({ ...source, input: {} }, previous);
+    expect(built.displayTarget).toBe("src/app.ts");
+  });
+
+  it("keeps the earlier failure while the call is still running", () => {
+    const previous = row("t1", { failed: true });
+    expect(buildActivityRow(source, previous).failed).toBe(true);
+  });
+
+  it("lets a settled snapshot clear an earlier failure", () => {
+    const previous = row("t1", { failed: true });
+    const built = buildActivityRow({ ...source, failed: false, complete: true }, previous);
+    expect(built.failed).toBe(false);
+  });
+
+  it("defaults failed to false with nothing to inherit", () => {
+    expect(buildActivityRow(source).failed).toBe(false);
+  });
+
+  it("does not repeat a command's argument as a JSON blob", () => {
+    const built = buildActivityRow({
+      ...source,
+      kind: "command",
+      title: "Bash",
+      input: { command: "ls -la" },
+    });
+    expect(built.arguments).toBeUndefined();
+    expect(built.displayTarget).toBe("ls -la");
+  });
+
+  it("discloses nothing when the backend sent no input at all", () => {
+    expect(buildActivityRow({ ...source, input: undefined }).arguments).toBeUndefined();
+  });
+
+  it("discloses an empty input, which is not the same as no input", () => {
+    expect(buildActivityRow({ ...source, input: {} }).arguments).toBe("{}");
   });
 });

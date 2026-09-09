@@ -19,20 +19,6 @@ export type PatchApplyStatus = CommandExecutionStatus;
 export type ToolCallStatus = "inProgress" | "completed" | "failed";
 export type TurnPlanStepStatus = "pending" | "inProgress" | "completed";
 
-/** Errors the client reacts to; the rest are reported verbatim. */
-export type CodexErrorCode =
-  | "contextWindowExceeded"
-  | "sessionBudgetExceeded"
-  | "usageLimitExceeded"
-  | "serverOverloaded"
-  | "unauthorized"
-  | "other";
-
-export interface TurnError {
-  message: string;
-  codexErrorInfo: unknown;
-}
-
 // --- items -----------------------------------------------------------------
 
 export type PatchChangeKind =
@@ -222,5 +208,3 @@ export type CodexApprovalDecision =
   | "acceptForSession"
   | "decline"
   | "cancel";
-
-export type ElicitationAction = "accept" | "decline" | "cancel";

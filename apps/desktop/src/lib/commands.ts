@@ -93,6 +93,3 @@ export const COMMANDS: readonly CommandDef[] = [
     rebindable: false,
   },
 ];
-
-export const commandById = (id: CommandId): CommandDef | undefined =>
-  COMMANDS.find((c) => c.id === id);

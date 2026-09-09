@@ -1,19 +1,21 @@
-import { Check, ChevronRight } from "lucide-react";
 import { Fragment, memo, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { FileTypeIcon } from "@/components/FileTypeIcon";
-import { useRunningTimer } from "@/hooks/useRunningTimer";
+import { ActivityFileTree } from "@/components/chat/ActivityFileTree";
+import { Disclosure, DisclosureChevron } from "@/components/chat/Disclosure";
 import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { ToolBody } from "@/components/chat/ToolViews";
 import { useAgentStore } from "@/lib/agentStore";
 import {
+  groupActivities,
   iconForActivity,
   isAgentActivity,
   isMonoActivity,
   labelForActivity,
   metaForActivity,
   titleForActivity,
+  visibleActivities,
 } from "@/lib/activityDisplay";
 import { TOOL_ICONS, TOOL_TINT } from "@/lib/toolIcons";
 import { isFileReference } from "@/lib/fileRef";
@@ -45,7 +47,6 @@ export const ActivityRow = memo(function ActivityRow({
   const running = !activity.complete;
   const isAgent = isAgentActivity(activity);
   const expandable = activity.arguments != null || activity.output != null;
-  const runningLabel = useRunningTimer(activity.id, running);
 
   // Always closed until clicked. A card that auto-opened while working pushed
   // the conversation off-screen on every command and shut again the moment you
@@ -84,7 +85,7 @@ export const ActivityRow = memo(function ActivityRow({
   );
 
   return (
-    <div className="text-xs">
+    <div className="rounded-lg border border-border/70 bg-card/40 px-2.5 text-xs">
       <button
         type="button"
         onClick={() =>
@@ -125,35 +126,18 @@ export const ActivityRow = memo(function ActivityRow({
           </span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-2 pl-2">
-          {!running &&
-            (activity.failed ? (
-              <span className="text-[0.7rem] text-red-400">error</span>
-            ) : (
-              <Check className="size-3.5 text-emerald-400" />
-            ))}
+          {!running && activity.failed && (
+            <span className="text-[0.7rem] text-red-400">error</span>
+          )}
           {expandable && !isAgent && (
-            <ChevronRight
-              className={cn(
-                "size-3 text-muted-foreground transition-transform duration-200",
-                open && "rotate-90"
-              )}
+            <DisclosureChevron
+              open={open}
+              className="text-muted-foreground duration-200"
             />
           )}
         </div>
       </button>
-      {runningLabel && (
-        <div className="animate-in fade-in pb-2 text-[0.65rem] text-muted-foreground duration-300">
-          {runningLabel}
-        </div>
-      )}
-      <div
-        className="grid transition-[grid-template-rows] duration-200 ease-out"
-        style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
-        onTransitionEnd={(e) => {
-          if (!open && e.propertyName === "grid-template-rows") setBodyMounted(false);
-        }}
-      >
-        <div className="overflow-hidden">
+      <Disclosure open={open} onClosed={() => setBodyMounted(false)}>
           {bodyMounted && (
             <div className="flex flex-col gap-2 pb-2 pl-6">
               {bodyParts.map((part, idx) => (
@@ -171,8 +155,7 @@ export const ActivityRow = memo(function ActivityRow({
               ))}
             </div>
           )}
-        </div>
-      </div>
+      </Disclosure>
     </div>
   );
 });
@@ -187,16 +170,30 @@ export const ActivityRow = memo(function ActivityRow({
 export function ActivityList({
   activities,
   renderAgent,
+  live,
 }: {
   activities: ActivityItem[];
   /** A subagent run has a whole inline log of its own; the pane supplies it
    *  rather than this file reaching into the agent store for a second view of
    *  the same run. */
   renderAgent?: (activity: ActivityItem) => ReactNode;
+  /** Live turns hide settled tools; the finished-turn accordion keeps the log. */
+  live?: boolean;
 }) {
+  const rows = visibleActivities(activities, live === true);
+  if (rows.length === 0) return null;
   return (
-    <div className="flex flex-col divide-y divide-border">
-      {activities.map((activity) => {
+    <div className="flex flex-col gap-2">
+      {groupActivities(rows).map((group) => {
+        if (group.type === "files") {
+          return (
+            <ActivityFileTree
+              key={`files:${group.activities[0].id}`}
+              activities={group.activities}
+            />
+          );
+        }
+        const activity = group.activity;
         if (activity.kind === "reasoning") {
           return (
             <ThinkingBlock

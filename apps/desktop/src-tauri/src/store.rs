@@ -164,17 +164,6 @@ impl Store {
         f(&mut conn)
     }
 
-    /// Durably record one timeline event. `event.seq` is the per-thread
-    /// stream version; the global `seq` column is assigned by SQLite. The
-    /// unique index makes a duplicate append an error rather than a silent
-    /// double-write of history.
-    pub fn append_event(&self, event: &TimelineEvent) -> Result<()> {
-        self.with_writer(|conn| {
-            insert_event(conn, event, "INSERT")?;
-            Ok(())
-        })
-    }
-
     /// Record a batch of timeline events in ONE transaction. This is the
     /// write path's unit of durability: a reader with its own connection sees
     /// either the whole turn's events or none of them, never a half-written
@@ -802,16 +791,9 @@ fn upsert_cursor(conn: &Connection, name: &str, seq: i64) -> Result<()> {
          ON CONFLICT(projector) DO UPDATE SET
            last_applied_seq = excluded.last_applied_seq,
            updated_at = excluded.updated_at",
-        params![name, seq, now_ms()],
+        params![name, seq, crate::time::now_ms() as i64],
     )?;
     Ok(())
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
 }
 
 fn apply_projector(conn: &Connection, name: &str, batch: &[LoggedEvent]) -> Result<()> {
@@ -1173,9 +1155,9 @@ mod tests {
         let store = Store::open(&path).unwrap();
         // Interleave threads deliberately: per-thread order is what reads
         // guarantee, not insertion order across threads.
-        store.append_event(&event("t1", 1, "first")).unwrap();
-        store.append_event(&event("t2", 1, "other")).unwrap();
-        store.append_event(&event("t1", 2, "second")).unwrap();
+        store.append_events(&[event("t1", 1, "first")]).unwrap();
+        store.append_events(&[event("t2", 1, "other")]).unwrap();
+        store.append_events(&[event("t1", 2, "second")]).unwrap();
 
         let timeline = store.read_timeline("t1", None).unwrap();
         assert_eq!(timeline.len(), 2);
@@ -1198,8 +1180,8 @@ mod tests {
     fn a_reissued_stream_version_is_rejected_not_overwritten() {
         let path = test_dir("events_unique").join("emberyx.db");
         let store = Store::open(&path).unwrap();
-        store.append_event(&event("t1", 1, "kept")).unwrap();
-        assert!(store.append_event(&event("t1", 1, "duplicate")).is_err());
+        store.append_events(&[event("t1", 1, "kept")]).unwrap();
+        assert!(store.append_events(&[event("t1", 1, "duplicate")]).is_err());
         let timeline = store.read_timeline("t1", None).unwrap();
         assert_eq!(timeline[0].payload, "kept");
         let _ = std::fs::remove_dir_all(test_dir("events_unique"));
@@ -1209,7 +1191,7 @@ mod tests {
     fn importing_already_stored_events_converges_without_duplicating() {
         let path = test_dir("events_import").join("emberyx.db");
         let store = Store::open(&path).unwrap();
-        store.append_event(&event("t1", 2, "live")).unwrap();
+        store.append_events(&[event("t1", 2, "live")]).unwrap();
 
         // A legacy backfill carrying an event older than anything this process
         // appended, plus a replay of one already stored.
@@ -1248,9 +1230,9 @@ mod tests {
     fn projectors_fill_threads_messages_and_turns_from_the_log() {
         let path = test_dir("project").join("emberyx.db");
         let store = Store::open(&path).unwrap();
-        store.append_event(&prompt("t1", 1, "hello there")).unwrap();
+        store.append_events(&[prompt("t1", 1, "hello there")]).unwrap();
         store
-            .append_event(&completion("t1", 2, "turn-9", "x-5"))
+            .append_events(&[completion("t1", 2, "turn-9", "x-5")])
             .unwrap();
 
         store.run_projectors().unwrap();
@@ -1311,15 +1293,15 @@ mod tests {
     fn re_projecting_every_event_changes_nothing() {
         let path = test_dir("replay").join("emberyx.db");
         let store = Store::open(&path).unwrap();
-        store.append_event(&prompt("t1", 1, "one")).unwrap();
-        store.append_event(&prompt("t1", 2, "two")).unwrap();
+        store.append_events(&[prompt("t1", 1, "one")]).unwrap();
+        store.append_events(&[prompt("t1", 2, "two")]).unwrap();
         store
-            .append_event(&TimelineEvent {
+            .append_events(&[TimelineEvent {
                 kind: TimelineEventKind::Error,
                 attribution: None,
                 payload: "{}".into(),
                 ..event("t1", 3, "boom")
-            })
+            }])
             .unwrap();
         store.run_projectors().unwrap();
 
@@ -1347,11 +1329,11 @@ mod tests {
     fn projecting_new_events_advances_the_cursor_without_touching_old_rows() {
         let path = test_dir("cursor").join("emberyx.db");
         let store = Store::open(&path).unwrap();
-        store.append_event(&prompt("t1", 1, "only")).unwrap();
+        store.append_events(&[prompt("t1", 1, "only")]).unwrap();
         store.run_projectors().unwrap();
 
         let cursor_after_first = cursor_of(&store, "threads");
-        store.append_event(&prompt("t1", 2, "later")).unwrap();
+        store.append_events(&[prompt("t1", 2, "later")]).unwrap();
         store.run_projectors().unwrap();
         assert!(cursor_of(&store, "threads") > cursor_after_first);
 
@@ -1389,7 +1371,7 @@ mod tests {
                 )?)
             })
             .unwrap();
-        assert_eq!(kept, i64::from(STATE_SNAPSHOT_KEEP), "older generations fall off");
+        assert_eq!(kept, STATE_SNAPSHOT_KEEP, "older generations fall off");
         // Kinds don't collide.
         store.save_state_snapshot("other", "x").unwrap();
         assert_eq!(
@@ -1419,12 +1401,13 @@ mod tests {
         // the zero-padded id suffix, which is where unpadded lexicographic
         // paging would tear ("10" < "9").
         for seq in 1..=12u64 {
-            store.append_event(&TimelineEvent {
-                timestamp: 42,
-                raw_line: Some(format!("line-{seq}")),
-                ..prompt("t1", seq, "p")
-            })
-            .unwrap();
+            store
+                .append_events(&[TimelineEvent {
+                    timestamp: 42,
+                    raw_line: Some(format!("line-{seq}")),
+                    ..prompt("t1", seq, "p")
+                }])
+                .unwrap();
         }
         store.run_projectors().unwrap();
 
@@ -1479,7 +1462,7 @@ mod tests {
         let store = Store::open(&path).unwrap();
         for seq in 1..=3u64 {
             store
-                .append_event(&completion("t1", seq, &format!("t-{seq}"), "x"))
+                .append_events(&[completion("t1", seq, &format!("t-{seq}"), "x")])
                 .unwrap();
         }
         store.run_projectors().unwrap();
@@ -1519,18 +1502,18 @@ mod tests {
             native_thread_id: Some("acp-1".into()),
         };
         store
-            .append_event(&TimelineEvent {
+            .append_events(&[TimelineEvent {
                 kind: TimelineEventKind::UserPrompt,
                 attribution: Some(grok.clone()),
                 ..prompt("acp-1", 1, "fix the parser")
-            })
+            }])
             .unwrap();
         store
-            .append_event(&TimelineEvent {
+            .append_events(&[TimelineEvent {
                 kind: TimelineEventKind::ThreadTitle,
                 attribution: Some(grok),
                 ..event("acp-1", 2, "fix the parser")
-            })
+            }])
             .unwrap();
         store.run_projectors().unwrap();
         store.attach_thread_context("acp-1", "/repo", 42).unwrap();
@@ -1547,7 +1530,7 @@ mod tests {
         // so neither side of the race can strand a thread outside the listing.
         store.attach_thread_context("acp-2", "/repo", 42).unwrap();
         store.mark_thread_source("acp-2", "acp").unwrap();
-        store.append_event(&prompt("acp-2", 1, "hello")).unwrap();
+        store.append_events(&[prompt("acp-2", 1, "hello")]).unwrap();
         store.run_projectors().unwrap();
         let mut ids = store
             .imported_threads("/repo")

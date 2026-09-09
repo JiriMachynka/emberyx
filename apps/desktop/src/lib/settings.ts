@@ -1,6 +1,7 @@
 import { useCallback, useLayoutEffect, useState } from "react";
 import {
   backendFromCommand,
+  capabilitiesOf,
   isAgentBackend,
   type AgentBackend,
 } from "@/lib/agentBackend";
@@ -79,12 +80,6 @@ export const CODEX_SANDBOX_LABEL: Record<CodexSandbox, string> = {
 // Membership, not `in`: "toString" is on every object's prototype chain.
 export const isCodexSandbox = (value: string): value is CodexSandbox =>
   CODEX_SANDBOXES.some((s) => s === value);
-
-export const PERMISSION_MODE_LABEL: Record<PermissionMode, string> = {
-  default: "Ask every time",
-  acceptEdits: "Accept edits",
-  bypassPermissions: "Bypass permissions",
-};
 
 /** How much the agent may do without asking. Claude splits this across two
  *  flags — `--permission-mode` and `--dangerously-skip-permissions`, which are
@@ -349,7 +344,9 @@ export const launchFor = (
   backend: AgentBackend,
   profileId?: string | null
 ): ResolvedLaunch => {
-  if (backend === "claude" && profileId) {
+  // A profile is one backend's launch line; handing it to another would spawn
+  // that CLI with arguments meant for this one.
+  if (profileId && capabilitiesOf(backend).launchProfiles) {
     const profile = settings.claudeProfiles.find((p) => p.id === profileId);
     if (profile) return resolveLaunch(profile);
   }

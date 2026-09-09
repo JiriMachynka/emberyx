@@ -181,27 +181,6 @@ pub enum TimelineEventKind {
     Completion,
 }
 
-/// One usage record. `cost_usd` may be provider-reported (authoritative) or
-/// derived; `cost_estimated` flags the latter so the UI never presents it as
-/// billed.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct UsageRecord {
-    pub provider: Provider,
-    pub account: Option<String>,
-    pub model: Option<String>,
-    pub project_id: String,
-    pub thread_id: String,
-    pub turn_id: Option<String>,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cached_tokens: u64,
-    /// Wall-clock duration of the turn, ms.
-    pub duration_ms: u64,
-    pub cost_usd: Option<f64>,
-    pub cost_estimated: bool,
-    pub timestamp: u64,
-}
 
 #[cfg(test)]
 mod tests {
@@ -233,28 +212,6 @@ mod tests {
         assert!(!AgentLifecycle::WaitingApproval.is_terminal());
         assert!(!AgentLifecycle::WaitingInput.is_terminal());
         assert!(!AgentLifecycle::Created.is_terminal());
-    }
-
-    #[test]
-    fn usage_record_flags_estimated_cost() {
-        let rec = UsageRecord {
-            provider: Provider::Kilo,
-            account: None,
-            model: Some("anthropic/claude-sonnet-4".into()),
-            project_id: "p".into(),
-            thread_id: "t".into(),
-            turn_id: Some("u".into()),
-            input_tokens: 10,
-            output_tokens: 5,
-            cached_tokens: 2,
-            duration_ms: 100,
-            cost_usd: Some(0.01),
-            cost_estimated: true,
-            timestamp: 1,
-        };
-        let json = serde_json::to_value(&rec).unwrap();
-        assert_eq!(json["costEstimated"], true);
-        assert_eq!(json["provider"], "kilo");
     }
 
     #[test]

@@ -85,17 +85,6 @@ export function setThreadMeta(key: string, patch: ThreadMeta): Store {
   return store;
 }
 
-export function clearThreadMeta(key: string): Store {
-  return setThreadMeta(key, {
-    pinnedAt: undefined,
-    archivedAt: undefined,
-    snoozedUntil: undefined,
-    settledOverride: undefined,
-    linkedPr: undefined,
-    claudeProfileId: undefined,
-  });
-}
-
 export interface DeriveInput {
   /** Thread's last-modified time, unix *seconds* (as `list_threads` reports). */
   modified: number;

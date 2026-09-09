@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AGENT_BACKENDS, capabilitiesOf } from "@/lib/agentBackend";
 import {
   type AccountIssue,
   classify,
@@ -260,6 +261,25 @@ describe("resetLabel", () => {
     expect(resetLabel({ kind: "logged_out", backend: "claude", message: "x" })).toBeNull();
     // 0 is a real (if absurd) epoch — the `!= null` guard keeps it.
     expect(resetLabel({ kind: "rate_limit", backend: "claude", message: "x", resetAt: 0 })).toMatch(/^Resets /);
+  });
+});
+
+describe("classify — the backend gate", () => {
+  // The patterns are one CLI's wording, so the gate is the `accountIssues`
+  // capability rather than a backend name spelled out here. A backend that
+  // doesn't declare it gets nothing — which is what `useCodexChat`'s stderr
+  // call site correctly receives.
+  it("classifies only backends that declare accountIssues", () => {
+    for (const backend of AGENT_BACKENDS) {
+      const issue = classify("API Error: Invalid API key · Please run /login", backend);
+      expect(issue?.kind ?? null).toBe(
+        capabilitiesOf(backend).accountIssues ? "logged_out" : null
+      );
+    }
+  });
+
+  it("names the backend it classified, since the banner quotes it", () => {
+    expect(classify("Usage limit reached", "claude")?.backend).toBe("claude");
   });
 });
 

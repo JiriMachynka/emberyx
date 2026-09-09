@@ -15,17 +15,10 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::agent::{AgentEvent, AgentManager, AgentSink};
 use crate::daemon_protocol::{AgentFrame, AgentSpec, SpawnOutcome, MAX_FRAMES};
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
+use crate::time::now_ms;
 
 #[derive(Default)]
 struct AgentStream {

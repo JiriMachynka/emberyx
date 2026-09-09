@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  clearThreadMeta,
   deriveThreadState,
   getAllThreadMeta,
   getThreadMeta,
@@ -105,12 +104,6 @@ describe("the meta store", () => {
   it("keys threads by project so the same id in two repos stays separate", () => {
     setThreadMeta(threadMetaKey("/a", "same"), { pinnedAt: 1 });
     expect(getThreadMeta(threadMetaKey("/b", "same"))).toEqual({});
-  });
-
-  it("clears every field at once", () => {
-    setThreadMeta(key, { pinnedAt: 1, archivedAt: 2, settledOverride: "settled" });
-    clearThreadMeta(key);
-    expect(getThreadMeta(key)).toEqual({});
   });
 
   it("survives unparseable stored data", () => {

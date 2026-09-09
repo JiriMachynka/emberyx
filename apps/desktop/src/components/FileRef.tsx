@@ -18,6 +18,8 @@ const ProjectContext = createContext<string | null>(null);
 
 export const FileRefProject = ProjectContext.Provider;
 
+export const useProjectCwd = (): string | null => useContext(ProjectContext);
+
 /**
  * A file named in the conversation: its filetype icon, its project path on
  * hover, and the editor on click.

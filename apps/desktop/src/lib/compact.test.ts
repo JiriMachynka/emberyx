@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AGENT_BACKENDS, capabilitiesOf } from "@/lib/agentBackend";
 import {
   compactDisabledReason,
   formatResumeCompactionQuestion,
@@ -24,16 +25,25 @@ describe("shouldOfferResumeCompaction", () => {
     ).toBe(true);
   });
 
-  it("does not ask Codex, a fresh turn, or a small prompt", () => {
+  // The ask is only worth making where a compact command exists, so it follows
+  // the capability table rather than a Claude-only test of its own — Codex
+  // compacts over `thread/compact/start` and used to be skipped anyway.
+  it("follows the compact capability, not the backend name", () => {
     const idle = now - hour * 2;
-    expect(
-      shouldOfferResumeCompaction({
-        backend: "codex",
-        usedTokens: RESUME_COMPACTION_TOKENS,
-        lastActivityAt: idle,
-        now,
-      })
-    ).toBe(false);
+    for (const backend of AGENT_BACKENDS) {
+      expect(
+        shouldOfferResumeCompaction({
+          backend,
+          usedTokens: RESUME_COMPACTION_TOKENS,
+          lastActivityAt: idle,
+          now,
+        })
+      ).toBe(capabilitiesOf(backend).compact);
+    }
+  });
+
+  it("does not ask on a fresh turn or a small prompt", () => {
+    const idle = now - hour * 2;
     expect(
       shouldOfferResumeCompaction({
         backend: "claude",

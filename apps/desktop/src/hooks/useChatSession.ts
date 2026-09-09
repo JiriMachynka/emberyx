@@ -5,7 +5,7 @@
  * is ever spawned.
  */
 
-import { isAcpBackend, type AgentBackend } from "@/lib/agentBackend";
+import { transportOf, type AgentBackend } from "@/lib/agentBackend";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import { useCodexChat } from "@/hooks/useCodexChat";
 import { useAcpChat } from "@/hooks/useAcpChat";
@@ -43,8 +43,9 @@ interface Options {
 }
 
 export function useChatSession(options: Options) {
-  const acp = isAcpBackend(options.backend);
-  const codex = options.backend === "codex";
+  const transport = transportOf(options.backend);
+  const acp = transport === "acp";
+  const codex = transport === "codex";
   const claude = useAgentChat({ ...options, enabled: !codex && !acp });
   const codexChat = useCodexChat({ ...options, enabled: codex });
   const acpChat = useAcpChat({

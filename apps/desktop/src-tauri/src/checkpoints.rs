@@ -23,6 +23,7 @@ use serde::Serialize;
 
 use crate::error::{Error, Result};
 use crate::git::{failure, git, is_repo, run_git};
+use crate::time::now_ms;
 
 /// Where checkpoint commits are parked. Under `refs/` but outside `refs/heads`
 /// and `refs/remotes`, so no branch listing, log, or push ever sees them.
@@ -68,13 +69,6 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn next_seq() -> u64 {
     SEQ.fetch_add(1, Ordering::SeqCst)
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// A scratch index file, removed when the checkpoint is done with it. Building

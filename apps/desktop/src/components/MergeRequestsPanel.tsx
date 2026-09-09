@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useQueryClient } from "@tanstack/react-query";
@@ -33,6 +33,8 @@ import {
   type RemoteHost,
 } from "@/lib/forge";
 import type { MergeOutcome, MergeRequest, MrState } from "@/lib/gitlab";
+import { HunkBody } from "@/components/diff/HunkBody";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { SidePanel } from "@/components/SidePanel";
 
 const STATES: MrState[] = ["opened", "merged", "closed", "all"];
@@ -144,13 +146,13 @@ export function MergeRequestsPanel({
       }
     >
       {!path ? (
-        <Empty icon={<GitPullRequest className="size-5" />}>
+        <EmptyState icon={<GitPullRequest className="size-5" />}>
           {`Open a project to see its ${FORGE_NOUN[host].one}s.`}
-        </Empty>
+        </EmptyState>
       ) : !hasToken ? (
-        <Empty icon={<GitPullRequest className="size-5" />}>
+        <EmptyState icon={<GitPullRequest className="size-5" />}>
           {`Log in with ${host === "github" ? "gh" : "glab"} auth login to see ${FORGE_NOUN[host].one}s.`}
-        </Empty>
+        </EmptyState>
       ) : selectedIid !== null ? (
         <MrDetail
           // Keyed so busy/error/expanded state never carries to the next MR.
@@ -186,19 +188,19 @@ function MrList({
   onSelect: (iid: number) => void;
 }) {
   const noun = FORGE_NOUN[host].one;
-  if (query.isPending) return <Empty>{`Loading ${noun}s…`}</Empty>;
+  if (query.isPending) return <EmptyState>{`Loading ${noun}s…`}</EmptyState>;
   if (query.error) {
     return isBenign(query.error) ? (
-      <Empty icon={<GitPullRequest className="size-5" />}>
+      <EmptyState icon={<GitPullRequest className="size-5" />}>
         {`Not a ${host}.com repository.`}
-      </Empty>
+      </EmptyState>
     ) : (
-      <Empty>
+      <EmptyState>
         <span className="text-red-400">{String(query.error)}</span>
-      </Empty>
+      </EmptyState>
     );
   }
-  if (mrs.length === 0) return <Empty>{`No ${noun}s.`}</Empty>;
+  if (mrs.length === 0) return <EmptyState>{`No ${noun}s.`}</EmptyState>;
 
   return (
     <ul className="min-h-0 flex-1 overflow-auto">
@@ -272,9 +274,9 @@ function MrDetail({
 
   if (!mr) {
     if (detailQuery.error) {
-      return <Empty>{String(detailQuery.error)}</Empty>;
+      return <EmptyState>{String(detailQuery.error)}</EmptyState>;
     }
-    return <Empty>Loading merge request…</Empty>;
+    return <EmptyState>Loading merge request…</EmptyState>;
   }
 
   async function checkout() {
@@ -458,84 +460,6 @@ function MrDetail({
   );
 }
 
-/** True for unified-diff header lines that aren't source code. */
-function isDiffMeta(line: string): boolean {
-  return (
-    line.startsWith("@@") ||
-    line.startsWith("+++") ||
-    line.startsWith("---") ||
-    line.startsWith("diff ") ||
-    line.startsWith("index ") ||
-    line.startsWith("new file") ||
-    line.startsWith("deleted file") ||
-    line.startsWith("rename ") ||
-    line.startsWith("similarity ")
-  );
-}
-
-/** Memoized so expanding another file doesn't re-highlight this one's lines. */
-const DiffLine = memo(function DiffLine({
-  marker,
-  code,
-  lang,
-  tint,
-}: {
-  marker: string;
-  code: string;
-  lang: string | null;
-  tint: string;
-}) {
-  return (
-    <div className={cn("border-l-2 border-transparent pr-2", tint)}>
-      <span className="inline-block w-5 shrink-0 select-none text-center opacity-40">
-        {marker}
-      </span>
-      <span dangerouslySetInnerHTML={{ __html: highlightCode(code, lang) || " " }} />
-    </div>
-  );
-});
-
-function HunkBody({ text, lang }: { text: string; lang: string | null }) {
-  return (
-    <>
-      {text.split("\n").map((line, i) => {
-        if (line === "")
-          return (
-            <div key={i} className="border-l-2 border-transparent pl-5">
-              {" "}
-            </div>
-          );
-        if (isDiffMeta(line)) {
-          return (
-            <div
-              key={i}
-              className="border-l-2 border-transparent pl-5 pr-2 text-muted-foreground"
-            >
-              {line}
-            </div>
-          );
-        }
-        const c = line[0];
-        const tint =
-          c === "+"
-            ? "border-emerald-500/50 bg-emerald-500/15"
-            : c === "-"
-              ? "border-red-500/50 bg-red-500/15"
-              : "";
-        return (
-          <DiffLine
-            key={i}
-            marker={c === "+" || c === "-" ? c : " "}
-            code={line.slice(1)}
-            lang={lang}
-            tint={tint}
-          />
-        );
-      })}
-    </>
-  );
-}
-
 /** The same hunk rendering ChangesPanel uses, without the apply actions —
  *  an MR's diff belongs to the server, not the working tree. */
 function ReadOnlyDiff({ text, lang }: { text: string; lang: string | null }) {
@@ -548,7 +472,7 @@ function ReadOnlyDiff({ text, lang }: { text: string; lang: string | null }) {
     return (
       <pre className="overflow-x-auto whitespace-pre py-1 font-mono text-xs leading-relaxed">
         <div className="w-max min-w-full">
-          <HunkBody text={text} lang={lang} />
+          <HunkBody text={text} lang={lang} highlight={highlightCode} />
         </div>
       </pre>
     );
@@ -563,7 +487,11 @@ function ReadOnlyDiff({ text, lang }: { text: string; lang: string | null }) {
           </div>
           <pre className="overflow-x-auto whitespace-pre py-1">
             <div className="w-max min-w-full">
-              <HunkBody text={hunk.text.slice(hunk.header.length + 1)} lang={lang} />
+              <HunkBody
+                text={hunk.text.slice(hunk.header.length + 1)}
+                lang={lang}
+                highlight={highlightCode}
+              />
             </div>
           </pre>
         </div>
@@ -664,17 +592,3 @@ function TabButton({
   );
 }
 
-function Empty({
-  icon,
-  children,
-}: {
-  icon?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-xs text-muted-foreground">
-      {icon}
-      {children}
-    </div>
-  );
-}

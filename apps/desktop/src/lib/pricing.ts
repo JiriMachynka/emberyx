@@ -1,3 +1,5 @@
+import type { Provider } from "@/lib/providers";
+
 /** Token usage summed from a Claude Code transcript (mirrors Rust `Usage`). */
 export interface Usage {
   input: number;
@@ -28,6 +30,35 @@ const DEFAULT_RATE = FALLBACK_RATES[0].rate;
 // A model from another backend isn't in the catalog and isn't priced here;
 // quoting Claude's rates for it would invent a number.
 const UNPRICED_RATE: Rate = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+/**
+ * How a provider's cost is arrived at. **The row's provider decides the table,
+ * never the model id.** A model id is not evidence of who served it: another
+ * provider can route a model named `claude-…` — which used to be billed at
+ * Anthropic's list prices — and Anthropic models appear under ids that never
+ * say "claude", which used to be reported as free.
+ *
+ * - `anthropic` — the rate tables below, live from LiteLLM when it has been
+ *   fetched; an unknown Anthropic model falls back to Opus (the priciest, so
+ *   the estimate errs high rather than reading as cheap).
+ * - `openai` — `CODEX_RATES`, kept by hand.
+ * - `reported` — the agent records its own USD on the row; nothing is derived.
+ * - `unpriced` — no rate table exists. The cost is 0 and the panel's footer
+ *   names who is counted, so an absent provider doesn't read as "spent nothing".
+ */
+const COST_MODEL: Record<
+  Provider,
+  "anthropic" | "openai" | "reported" | "unpriced"
+> = {
+  claude: "anthropic",
+  codex: "openai",
+  opencode: "reported",
+  kilo: "reported",
+  // Neither publishes a per-token rate Emberyx can read, and neither reports
+  // usage yet (`capabilitiesOf(…).usage` is false for both).
+  grok: "unpriced",
+  cursor: "unpriced",
+};
 
 // Per-million-token USD rates for the OpenAI models `codex` runs, from
 // developers.openai.com/api/docs/pricing (checked 2026-08-07). The LiteLLM
@@ -136,12 +167,17 @@ function lookup<T>(table: Record<string, T> | undefined, model: string): T | und
   return best?.value;
 }
 
-function rateFor(model: string): Rate {
+/** Anthropic's rate for a model. Both tables are keyed by Anthropic's own ids,
+ *  so they are only consulted for a row Anthropic actually served — the caller
+ *  establishes that from the provider, not from the id. */
+function rateFor(model: string, provider: Provider): Rate {
+  if (COST_MODEL[provider] !== "anthropic") return UNPRICED_RATE;
   const m = model.toLowerCase();
-  const known =
-    lookup(liveRates, m) ?? FALLBACK_RATES.find((r) => m.includes(r.match))?.rate;
-  if (known) return known;
-  return m === "" || m.includes("claude") ? DEFAULT_RATE : UNPRICED_RATE;
+  return (
+    lookup(liveRates, m) ??
+    FALLBACK_RATES.find((r) => m.includes(r.match))?.rate ??
+    DEFAULT_RATE
+  );
 }
 
 /** The model's context window in tokens, from the LiteLLM catalog. Undefined
@@ -173,6 +209,12 @@ export async function refreshPricing(): Promise<void> {
     const rates: Record<string, Rate> = {};
     const contexts: Record<string, number> = {};
     for (const [key, entry] of Object.entries(catalog)) {
+      // A filter on this catalog's own key namespace, not a test of who ran the
+      // turn: LiteLLM keys Anthropic's models as `claude-…`, and caching the
+      // other few thousand entries would put ~1MB in localStorage for rates
+      // nothing reads. An Anthropic model served under some other id simply
+      // misses the live table and falls back to `FALLBACK_RATES` — priced high,
+      // never priced as another vendor's.
       if (!key.toLowerCase().includes("claude")) continue;
       if (entry.max_input_tokens) contexts[key.toLowerCase()] = entry.max_input_tokens;
       if (entry.input_cost_per_token == null || entry.output_cost_per_token == null) continue;
@@ -197,9 +239,12 @@ export function totalTokens(u: Usage): number {
   return u.input + u.output + u.cacheRead + u.cacheCreation;
 }
 
-/** Estimated USD cost for the usage, per the model's pricing. */
-export function costOf(u: Usage): number {
-  const r = rateFor(u.model);
+/** Estimated USD cost for the usage, per the model's pricing. `provider` is
+ *  required: without it the only thing left to guess from is the model id, and
+ *  that guess is what mispriced both directions. Always an estimate — the CLIs
+ *  report tokens, never what was billed. */
+export function costOf(u: Usage, provider: Provider): number {
+  const r = rateFor(u.model, provider);
   return (
     (u.input * r.input +
       u.output * r.output +
@@ -209,39 +254,43 @@ export function costOf(u: Usage): number {
   );
 }
 
-/** Cost for a usage dashboard row. Codex rates are a separate table;
- *  OpenCode/Kilo store their own USD on the row. */
-export function rowCost(row: Usage & { provider: string; cost?: number }): number {
-  if (row.provider === "opencode" || row.provider === "kilo") {
-    return row.cost ?? 0;
+/** Cost for a usage dashboard row, by the provider's cost model. */
+export function rowCost(row: Usage & { provider: Provider; cost?: number }): number {
+  switch (COST_MODEL[row.provider]) {
+    case "reported":
+      return row.cost ?? 0;
+    case "openai":
+      return (
+        codexCost(row.model, {
+          inputTokens: row.input + row.cacheRead,
+          cachedInputTokens: row.cacheRead,
+          outputTokens: row.output,
+        }) ?? 0
+      );
+    case "anthropic":
+      return costOf(row, row.provider);
+    case "unpriced":
+      return 0;
   }
-  if (row.provider === "codex") {
-    return (
-      codexCost(row.model, {
-        inputTokens: row.input + row.cacheRead,
-        cachedInputTokens: row.cacheRead,
-        outputTokens: row.output,
-      }) ?? 0
-    );
-  }
-  return costOf(row);
 }
 
 /** What cache hits saved versus paying the full input rate. */
-export function cacheSavingsOf(row: Usage & { provider: string }): number {
-  if (row.provider === "opencode" || row.provider === "kilo") {
-    // Those agents don't publish cache rates; inventing Claude's would
-    // overstate the saving.
-    return 0;
+export function cacheSavingsOf(row: Usage & { provider: Provider }): number {
+  switch (COST_MODEL[row.provider]) {
+    case "openai": {
+      const m = row.model.toLowerCase();
+      const rate = CODEX_RATES.find((r) => m.includes(r.match));
+      return rate ? (row.cacheRead * (rate.input - rate.cached)) / 1_000_000 : 0;
+    }
+    case "anthropic": {
+      const r = rateFor(row.model, row.provider);
+      return (row.cacheRead * (r.input - r.cacheRead)) / 1_000_000;
+    }
+    // Reported and unpriced providers publish no cache rate; inventing
+    // Anthropic's would overstate the saving.
+    default:
+      return 0;
   }
-  if (row.provider === "codex") {
-    const m = row.model.toLowerCase();
-    const rate = CODEX_RATES.find((r) => m.includes(r.match));
-    if (!rate) return 0;
-    return (row.cacheRead * (rate.input - rate.cached)) / 1_000_000;
-  }
-  const r = rateFor(row.model);
-  return (row.cacheRead * (r.input - r.cacheRead)) / 1_000_000;
 }
 
 /** Compact token count, e.g. 12345 → "12.3k". */

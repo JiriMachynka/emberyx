@@ -10,8 +10,6 @@
 
 import { isValidMcpName, MCP_HARNESS_ORDER, type McpHarness } from "@/lib/mcp";
 
-export type SkillHarness = McpHarness;
-
 export interface SkillSource {
   /** The skill folder, e.g. `~/.claude/skills/deploy`. */
   skillDir: string;

@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::error::Result;
+use crate::paths::home_dir;
 
 /// The harnesses whose MCP config Emberyx manages, in display order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -308,10 +309,6 @@ fn read_kilo(text: &str) -> Vec<RawEntry> {
 }
 
 // ── Paths ─────────────────────────────────────────────────────────────────
-
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 /// First existing candidate, so a legacy filename (Kilo's old
 /// `opencode.json`, for one) still shows up.

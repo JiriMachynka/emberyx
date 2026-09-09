@@ -13,7 +13,7 @@
  * workaround for the missing id.
  */
 
-import { kindForToolName, targetForInput } from "@/lib/activities";
+import { buildActivityRow, kindForToolName } from "@/lib/activities";
 import type { ActivityItem, ActivityKind } from "@/types";
 import type { AcpToolCallUpdate, AcpToolKind } from "./protocol";
 
@@ -54,22 +54,24 @@ export const acpActivity = (
   // A tool call's title is what the agent chose to call it; the kind is the
   // fallback, because an untitled row reading "other" says nothing.
   const title = call.title ?? previous?.title ?? call.kind ?? "tool";
-  const kind = acpKind(call, title);
-  const input = call.rawInput ?? {};
   return {
-    id: call.toolCallId,
-    kind,
-    title,
-    arguments:
-      kind === "command" || call.rawInput === undefined
-        ? undefined
-        : JSON.stringify(input, null, 2),
-    output: output ?? previous?.output,
-    displayTarget: targetForInput(kind, input) ?? previous?.displayTarget,
-    failed: call.status === "failed" ? true : previous?.failed ?? false,
-    // `pending` and `in_progress` are both still running. The tool card threw
-    // this away entirely and inferred it from whether a result had landed.
-    complete: call.status === "completed" || call.status === "failed",
+    ...buildActivityRow(
+      {
+        id: call.toolCallId,
+        kind: acpKind(call, title),
+        title,
+        input: call.rawInput,
+        output,
+        // Only a failure is decided here; anything else leaves the verdict to
+        // whatever the previous update knew.
+        failed: call.status === "failed" ? true : undefined,
+        // `pending` and `in_progress` are both still running. The tool card
+        // threw this away entirely and inferred it from whether a result had
+        // landed.
+        complete: call.status === "completed" || call.status === "failed",
+      },
+      previous
+    ),
     autoApproved: autoApproved || previous?.autoApproved || undefined,
   };
 };

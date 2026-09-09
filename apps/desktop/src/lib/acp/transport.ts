@@ -116,8 +116,9 @@ export const acpSessionLoad = (
 export const acpPrompt = (
   id: number,
   sessionId: string,
-  text: string
-): Promise<void> => invoke("acp_prompt", { id, sessionId, text });
+  text: string,
+  images?: { mediaType: string; data: string }[]
+): Promise<void> => invoke("acp_prompt", { id, sessionId, text, images: images ?? [] });
 
 export const acpCancel = (id: number, sessionId: string): Promise<void> =>
   invoke("acp_cancel", { id, sessionId });

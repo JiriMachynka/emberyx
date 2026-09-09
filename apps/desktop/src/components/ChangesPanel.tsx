@@ -1,4 +1,4 @@
-import { Suspense, lazy, memo, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { isStaged, isUnstaged } from "@/lib/gitStatus";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+import { HunkBody } from "@/components/diff/HunkBody";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -50,87 +52,6 @@ const GitRewind = lazy(() =>
 import { SidePanel } from "@/components/SidePanel";
 import { WorkingDiffView } from "@/components/WorkingDiffView";
 
-/** True for unified-diff header lines that aren't source code. */
-function isDiffMeta(line: string): boolean {
-  return (
-    line.startsWith("@@") ||
-    line.startsWith("+++") ||
-    line.startsWith("---") ||
-    line.startsWith("diff ") ||
-    line.startsWith("index ") ||
-    line.startsWith("new file") ||
-    line.startsWith("deleted file") ||
-    line.startsWith("rename ") ||
-    line.startsWith("similarity ")
-  );
-}
-
-/** One syntax-highlighted diff line: marker gutter + highlighted code.
- *  Memoized so re-renders (e.g. streaming agent events) don't re-highlight
- *  unchanged lines — highlightCode is the expensive per-line work. */
-const DiffLine = memo(function DiffLine({
-  marker,
-  code,
-  lang,
-  tint,
-}: {
-  marker: string;
-  code: string;
-  lang: string | null;
-  tint: string;
-}) {
-  return (
-    <div className={cn("border-l-2 border-transparent pr-2", tint)}>
-      <span className="inline-block w-5 shrink-0 select-none text-center opacity-40">
-        {marker}
-      </span>
-      <span dangerouslySetInnerHTML={{ __html: highlightCached(code, lang) || " " }} />
-    </div>
-  );
-});
-
-/** The body of one hunk, syntax-highlighted line by line. */
-function HunkBody({ text, lang }: { text: string; lang: string | null }) {
-  return (
-    <>
-      {text.split("\n").map((line, i) => {
-        if (line === "")
-          return (
-            <div key={i} className="border-l-2 border-transparent pl-5">
-              {" "}
-            </div>
-          );
-        if (isDiffMeta(line)) {
-          return (
-            <div
-              key={i}
-              className="border-l-2 border-transparent pl-5 pr-2 text-muted-foreground"
-            >
-              {line}
-            </div>
-          );
-        }
-        const c = line[0];
-        const tint =
-          c === "+"
-            ? "border-emerald-500/50 bg-emerald-500/15"
-            : c === "-"
-              ? "border-red-500/50 bg-red-500/15"
-              : "";
-        return (
-          <DiffLine
-            key={i}
-            marker={c === "+" || c === "-" ? c : " "}
-            code={line.slice(1)}
-            lang={lang}
-            tint={tint}
-          />
-        );
-      })}
-    </>
-  );
-}
-
 /** Unified diff rendered hunk by hunk, each with its own apply actions. */
 function UnifiedDiff({
   text,
@@ -156,7 +77,7 @@ function UnifiedDiff({
     return (
       <pre className="overflow-x-auto whitespace-pre py-1 font-mono text-xs leading-relaxed">
         <div className="w-max min-w-full">
-          <HunkBody text={text} lang={lang} />
+          <HunkBody text={text} lang={lang} highlight={highlightCached} />
         </div>
       </pre>
     );
@@ -176,7 +97,11 @@ function UnifiedDiff({
           </div>
           <pre className="overflow-x-auto whitespace-pre py-1">
             <div className="w-max min-w-full">
-              <HunkBody text={hunk.text.slice(hunk.header.length + 1)} lang={lang} />
+              <HunkBody
+                text={hunk.text.slice(hunk.header.length + 1)}
+                lang={lang}
+                highlight={highlightCached}
+              />
             </div>
           </pre>
         </div>
@@ -411,9 +336,9 @@ export function ChangesPanel({
           ) : (
             <>
               {gitFiles.length === 0 ? (
-            <Empty icon={<GitBranch className="size-5" />}>
+            <EmptyState icon={<GitBranch className="size-5" />}>
               No working-tree changes (or not a git repo).
-            </Empty>
+            </EmptyState>
           ) : (
             <>
               <div className="min-h-0 flex-1 overflow-auto">
@@ -593,9 +518,9 @@ function TurnReview({
         </button>
       </div>
       {!files ? (
-        <Empty>Loading changes…</Empty>
+        <EmptyState>Loading changes…</EmptyState>
       ) : files.length === 0 ? (
-        <Empty>This turn changed no files.</Empty>
+        <EmptyState>This turn changed no files.</EmptyState>
       ) : (
         <>
           <div className="shrink-0 border-b p-2">
@@ -639,7 +564,7 @@ function TurnReview({
             {sel && diff.data ? (
               <PatchDiff patch={diff.data} options={options} className="pierre-diffs" />
             ) : sel ? (
-              <Empty>No diff to show.</Empty>
+              <EmptyState>No diff to show.</EmptyState>
             ) : null}
           </div>
         </>
@@ -652,17 +577,3 @@ function TurnReview({
 
 
 
-function Empty({
-  icon,
-  children,
-}: {
-  icon?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-xs text-muted-foreground">
-      {icon}
-      {children}
-    </div>
-  );
-}

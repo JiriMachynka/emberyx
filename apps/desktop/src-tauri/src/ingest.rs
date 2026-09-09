@@ -448,11 +448,6 @@ fn classify_assistant(line: &str) -> Option<ClassifiedLine> {
     })
 }
 
-/// Extracted display text for prompt rows; tool-traffic rows carry only raw
-/// JSON, so nothing readable would be gained by summarizing them here.
-#[allow(dead_code)]
-fn unused_display_helper(_line: &str) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

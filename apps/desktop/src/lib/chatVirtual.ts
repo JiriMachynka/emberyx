@@ -91,14 +91,6 @@ export function anchorCorrection(
 }
 
 /**
- * Whether a just-finished stream chunk should trigger an auto-follow scroll:
- * only while pinned, and never mid-flight of an earlier scheduled frame.
- */
-export function shouldAutoFollow(pinned: boolean, frameInFlight: boolean): boolean {
-  return pinned && !frameInFlight;
-}
-
-/**
  * Load-earlier affordance visibility: an empty thread has nothing earlier. It
  * stays mounted while its page loads — the button disables itself, and pulling
  * the row out would move the prepend anchor by its own height at the exact

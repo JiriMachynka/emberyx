@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::error::{Error, Result};
+use crate::error::{blocking, Error, Result};
 use crate::providers::{probe_version, resolve_on_path};
 
 const ENV_WAIT: Duration = Duration::from_secs(5);
@@ -261,11 +261,7 @@ pub async fn forge_clone(
     repository: String,
     destination: String,
 ) -> Result<String> {
-    Ok(tauri::async_runtime::spawn_blocking(move || {
-        clone_with_cli(provider, repository, destination)
-    })
-    .await
-    .map_err(|e| e.to_string())??)
+    blocking(move || clone_with_cli(provider, repository, destination)).await
 }
 
 #[derive(Serialize)]
@@ -371,11 +367,7 @@ pub async fn forge_publish(
     name: String,
     visibility: String,
 ) -> Result<PublishResult> {
-    Ok(tauri::async_runtime::spawn_blocking(move || {
-        publish_with_cli(path, provider, name, visibility)
-    })
-    .await
-    .map_err(|e| e.to_string())??)
+    blocking(move || publish_with_cli(path, provider, name, visibility)).await
 }
 
 /// The PR/MR already open for a branch: its URL, or None when there is none.
@@ -476,11 +468,7 @@ pub async fn forge_pr_create(
     body: String,
     base: Option<String>,
 ) -> Result<String> {
-    Ok(tauri::async_runtime::spawn_blocking(move || {
-        create_pr_with_cli(path, provider, title, body, base)
-    })
-    .await
-    .map_err(|e| e.to_string())??)
+    blocking(move || create_pr_with_cli(path, provider, title, body, base)).await
 }
 
 #[cfg(test)]

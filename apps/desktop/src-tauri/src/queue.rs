@@ -11,18 +11,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+use crate::time::now_ms;
 
 /// Soft cap so a runaway queue can't grow unbounded on disk.
 pub const QUEUE_MAX: usize = 256;
 
 static NEXT_QUEUE_ID: AtomicU64 = AtomicU64::new(0);
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

@@ -104,10 +104,6 @@ export function restoreCheckpoint(
   }).then((changes) => (Array.isArray(changes) ? changes : []));
 }
 
-export function deleteCheckpoint(projectPath: string, id: string): Promise<void> {
-  return invoke<void>("checkpoint_delete", { path: projectPath, id });
-}
-
 export interface CheckpointRangeFile {
   path: string;
   /** `modified`, `added` (created inside the range), or `deleted` (gone). */

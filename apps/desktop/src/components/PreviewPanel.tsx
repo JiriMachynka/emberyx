@@ -21,6 +21,8 @@ const memoryKey = (project: string) => `emberyx.preview.${project}`;
 /** The native-preview spike flag: set `emberyx.preview.native` to 1 in
  *  localStorage and reload. Off means the plain iframe, as always. */
 const NATIVE_FLAG = "emberyx.preview.native";
+/** The console is a tail, not a log: only the end of it is ever read. */
+const MAX_CONSOLE_LINES = 50;
 
 interface ConsoleLine {
   level: string;
@@ -61,6 +63,12 @@ export function PreviewPanel({
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const [consoleLines, setConsoleLines] = useState<ConsoleLine[]>([]);
   const [showConsole, setShowConsole] = useState(false);
+  // Every line lands here; state only follows while the drawer is open. A
+  // chatty dev server otherwise re-renders the whole panel per batch — the
+  // bounds effects below included, which is a command per batch to a real
+  // child webview for output nobody is looking at.
+  const consoleBuffer = useRef<ConsoleLine[]>([]);
+  const consoleOpen = useRef(showConsole);
 
   // Restore the project's last address when the panel opens on it.
   useEffect(() => {
@@ -152,22 +160,40 @@ export function PreviewPanel({
   // bridge the initialization script installed.
   useEffect(() => {
     if (!useNative || !url) return;
+    consoleBuffer.current = [];
     setConsoleLines([]);
     let unlisten: (() => void) | undefined;
+    let raf: number | null = null;
+    const flush = () => {
+      raf = null;
+      setConsoleLines(consoleBuffer.current);
+    };
     void listen<string>("preview-console", (e) => {
       try {
         const batch = JSON.parse(e.payload) as ConsoleLine[];
-        setConsoleLines((prev) => [...prev, ...batch].slice(-50));
+        consoleBuffer.current = [...consoleBuffer.current, ...batch].slice(-MAX_CONSOLE_LINES);
       } catch {
         // A malformed batch is skipped; the next one is whole.
+        return;
       }
+      if (consoleOpen.current && raf === null) raf = window.requestAnimationFrame(flush);
     })
       .then((fn) => {
         unlisten = fn;
       })
       .catch(() => {});
-    return () => unlisten?.();
+    return () => {
+      if (raf !== null) window.cancelAnimationFrame(raf);
+      unlisten?.();
+    };
   }, [useNative, url, generation]);
+
+  // Opening the drawer shows everything that arrived while it was shut; from
+  // there the flush above keeps it live.
+  useEffect(() => {
+    consoleOpen.current = showConsole;
+    if (showConsole) setConsoleLines(consoleBuffer.current);
+  }, [showConsole]);
 
   const go = (raw: string) => {
     const next = normalizePreviewUrl(raw);
@@ -267,7 +293,10 @@ export function PreviewPanel({
                 >
                   <Terminal className="size-3" />
                   Console
-                  {consoleLines.length > 0 && (
+                  {/* Only while open: the count follows state, and state stops
+                      following the buffer once the drawer is shut. A frozen
+                      number is worse than none. */}
+                  {showConsole && consoleLines.length > 0 && (
                     <span className="tabular-nums opacity-70">{consoleLines.length}</span>
                   )}
                   <ChevronDown

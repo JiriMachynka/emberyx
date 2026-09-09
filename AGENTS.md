@@ -428,6 +428,12 @@ forever. A message with no `activities` falls back to the old
 `thinking` + `ToolList` shape rather than being given an order it never
 recorded.
 
+Live tool cards are boxes that only stay on screen while they run — no
+checkmark row after they finish. The turn clock (`Working for 3.2s`) sits under
+the transcript, not on each card. Consecutive file reads and edits group into a
+folder tree (`ActivityFileTree`) the way T3 Code shows them, and that tree
+accumulates for the turn instead of vanishing as each read settles.
+
 ### Backends and capabilities
 
 `lib/agentBackend.ts` owns `AgentBackend` (`"claude" | "codex"`) and a

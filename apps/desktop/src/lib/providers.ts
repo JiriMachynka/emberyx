@@ -40,16 +40,6 @@ export const PROVIDER_LABEL: Record<Provider, string> = {
   kilo: "Kilo",
 };
 
-/** The binary that announces the provider on PATH (install detection). */
-export const PROVIDER_BINARY: Record<Provider, string> = {
-  claude: "claude",
-  cursor: "cursor-agent",
-  codex: "codex",
-  grok: "grok",
-  opencode: "opencode",
-  kilo: "kilo",
-};
-
 /** Install + version probe result, mirrored from `providers.rs`. */
 export interface ProviderStatus {
   id: Provider;
@@ -58,10 +48,6 @@ export interface ProviderStatus {
   installed: boolean;
   version: string | null;
 }
-
-// Membership, not `in`: "toString" is on every object's prototype chain.
-export const isProvider = (value: unknown): value is Provider =>
-  PROVIDERS.some((p) => p === value);
 
 /** Which of the live-chat backends a provider maps to, when it has one. */
 export const providerToBackend = (provider: Provider): AgentBackend | null => {

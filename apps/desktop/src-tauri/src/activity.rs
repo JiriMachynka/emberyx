@@ -338,25 +338,6 @@ fn reasoning_id(message_id: &str, index: usize) -> String {
     format!("{message_id}:{index}")
 }
 
-/// Normalize one complete line into `items`, appending new work and completing
-/// calls already there. This is the replay path — a transcript on disk has no
-/// partial messages.
-pub fn activities_from_claude_line(line: &str, items: &mut Vec<ActivityItem>) {
-    match line_outcome(line, "message") {
-        LineOutcome::Nothing => {}
-        LineOutcome::Items(_, new) => {
-            for item in new {
-                merge_into(items, item);
-            }
-        }
-        LineOutcome::Results(results) => {
-            for (id, output, failed) in results {
-                attach_result(items, &id, output, failed);
-            }
-        }
-    }
-}
-
 /// Insert an item, or fold it into the one already carrying its id.
 ///
 /// The live stream sees each block twice — once as deltas, then again in the
@@ -749,6 +730,16 @@ mod tests {
         assert!(items[0].output.is_none());
     }
 
+    /// Replay stored lines through the production path and flatten the
+    /// per-message buckets — these tests are about one turn's rows, not the
+    /// grouping.
+    fn replay(lines: &[String]) -> Vec<ActivityItem> {
+        transcript_activities(lines)
+            .into_iter()
+            .flat_map(|m| m.activities)
+            .collect()
+    }
+
     #[test]
     fn a_claude_turn_orders_reasoning_against_tool_calls() {
         let line = json!({
@@ -765,8 +756,7 @@ mod tests {
         })
         .to_string();
 
-        let mut items = Vec::new();
-        activities_from_claude_line(&line, &mut items);
+        let items = replay(&[line]);
 
         let kinds: Vec<ActivityKind> = items.iter().map(|i| i.kind).collect();
         // The whole point of the model: this used to collapse into one
@@ -788,9 +778,8 @@ mod tests {
 
     #[test]
     fn a_tool_result_line_completes_the_call_it_names() {
-        let mut items = Vec::new();
-        activities_from_claude_line(
-            &json!({
+        let items = replay(&[
+            json!({
                 "type": "assistant",
                 "message": { "id": "m", "content": [
                     { "type": "tool_use", "id": "t1", "name": "Read",
@@ -798,10 +787,7 @@ mod tests {
                 ]}
             })
             .to_string(),
-            &mut items,
-        );
-        activities_from_claude_line(
-            &json!({
+            json!({
                 "type": "user",
                 "message": { "content": [
                     { "type": "tool_result", "tool_use_id": "t1",
@@ -809,8 +795,7 @@ mod tests {
                 ]}
             })
             .to_string(),
-            &mut items,
-        );
+        ]);
         assert_eq!(items.len(), 1);
         assert!(items[0].complete);
         assert_eq!(items[0].output.as_deref(), Some("file body"));
@@ -818,35 +803,29 @@ mod tests {
 
     #[test]
     fn a_sidechain_line_contributes_nothing_to_the_parent_stream() {
-        let mut items = Vec::new();
-        activities_from_claude_line(
-            &json!({
-                "isSidechain": true,
-                "type": "assistant",
-                "message": { "id": "m", "content": [
-                    { "type": "tool_use", "id": "t9", "name": "Bash",
-                      "input": { "command": "ls" } }
-                ]}
-            })
-            .to_string(),
-            &mut items,
-        );
+        let items = replay(&[json!({
+            "isSidechain": true,
+            "type": "assistant",
+            "message": { "id": "m", "content": [
+                { "type": "tool_use", "id": "t9", "name": "Bash",
+                  "input": { "command": "ls" } }
+            ]}
+        })
+        .to_string()]);
         // A subagent's work is reported by the Task tool that owns it.
         assert!(items.is_empty());
     }
 
     #[test]
     fn malformed_lines_are_skipped_rather_than_panicking() {
-        let mut items = Vec::new();
-        activities_from_claude_line("not json", &mut items);
-        activities_from_claude_line("{}", &mut items);
-        activities_from_claude_line(
-            &json!({ "type": "assistant", "message": { "content": [
+        let items = replay(&[
+            "not json".to_string(),
+            "{}".to_string(),
+            json!({ "type": "assistant", "message": { "content": [
                 { "type": "tool_use", "name": "Bash" }
             ]}})
             .to_string(),
-            &mut items,
-        );
+        ]);
         assert!(items.is_empty());
     }
 

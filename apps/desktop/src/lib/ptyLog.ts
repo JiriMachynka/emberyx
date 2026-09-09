@@ -8,33 +8,25 @@
  * explicit act (stop button, project teardown) or the child exiting.
  */
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { createAnsiScreen, type AnsiScreen } from "@/lib/ansi";
 
 type PtyEvent =
   | { type: "output"; data: string }
   | { type: "exit"; data: number | null };
 
-export type PtyLogStatus = "starting" | "running" | "exited";
-
-export type PtyLogMode = "lines" | "raw";
+type PtyLogStatus = "starting" | "running" | "exited";
 
 interface Entry {
   ptyId: number | null;
-  /** A grid-backed view feeds on `raw` alone; parsing lines for it as well is
-   *  a second VT pass and a React notify per chunk, for a screen nobody reads. */
-  mode: PtyLogMode;
   /** Last size a view asked for, applied when the spawn lands. Without it a
    *  fit that resolves before the PTY does leaves the child at the default
    *  width, and a shell redraws its prompt against a screen of another size. */
   size: { cols: number; rows: number } | null;
-  screen: AnsiScreen;
-  /** The stream as it arrived, for a view that owns a terminal grid: line
-   *  buffers can't feed one, because a redraw is cursor motion, not lines. */
+  /** The stream as it arrived. Every consumer owns a terminal grid, and a
+   *  redraw is cursor motion — the bytes have to survive verbatim. */
   raw: RawBuffer;
   decoder: TextDecoder;
+  /** Read by spawn (is one already live?) and kill (did it resolve yet?). */
   status: PtyLogStatus;
-  exitCode: number | null;
-  subs: Set<() => void>;
   rawSubs: Set<(chunk: string) => void>;
   onExit?: (code: number | null) => void;
   /** False on the placeholder a subscriber creates ahead of the spawn. */
@@ -74,16 +66,10 @@ const base64ToBytes = (b64: string): Uint8Array => {
   return bytes;
 };
 
-const notify = (entry: Entry) => {
-  for (const cb of entry.subs) cb();
-};
-
 export interface SpawnLogOptions {
   sessionId: string;
   cwd: string;
   command?: string;
-  maxLines: number;
-  mode?: PtyLogMode;
   cols?: number;
   rows?: number;
   onExit?: (code: number | null) => void;
@@ -96,21 +82,16 @@ export async function spawnLog(opts: SpawnLogOptions): Promise<void> {
     return;
   }
 
-  const mode = opts.mode ?? "lines";
   const size = existing?.size ?? null;
   const cols = opts.cols ?? size?.cols ?? 160;
   const rows = opts.rows ?? size?.rows ?? 40;
 
   const entry: Entry = {
     ptyId: null,
-    mode,
     size,
-    screen: createAnsiScreen(mode === "raw" ? 1 : opts.maxLines),
     raw: existing?.raw ?? createRawBuffer(),
     decoder: new TextDecoder(),
     status: "starting",
-    exitCode: null,
-    subs: existing?.subs ?? new Set(),
     rawSubs: existing?.rawSubs ?? new Set(),
     onExit: opts.onExit,
     spawned: true,
@@ -125,14 +106,8 @@ export async function spawnLog(opts: SpawnLogOptions): Promise<void> {
       const chunk = entry.decoder.decode(base64ToBytes(event.data), { stream: true });
       pushRaw(entry.raw, chunk);
       for (const cb of entry.rawSubs) cb(chunk);
-      if (entry.mode === "lines") {
-        entry.screen.push(chunk);
-        notify(entry);
-      }
     } else {
       entry.status = "exited";
-      entry.exitCode = event.data;
-      notify(entry);
       entry.onExit?.(event.data);
     }
   };
@@ -167,40 +142,11 @@ export async function spawnLog(opts: SpawnLogOptions): Promise<void> {
       void invoke("pty_kill", { id });
       return;
     }
-    notify(entry);
-  } catch (e) {
+  } catch {
     entry.status = "exited";
-    entry.screen.push(`${String(e)}\n`);
-    notify(entry);
     entry.onExit?.(null);
   }
 }
-
-export const subscribeLog = (sessionId: string, cb: () => void): (() => void) => {
-  let entry = sessions.get(sessionId);
-  if (!entry) {
-    // Subscribing ahead of the spawn is fine — keep the seat.
-    entry = {
-      ptyId: null,
-      mode: "lines",
-      size: null,
-      screen: createAnsiScreen(1),
-      raw: createRawBuffer(),
-      decoder: new TextDecoder(),
-      status: "starting",
-      exitCode: null,
-      subs: new Set(),
-      rawSubs: new Set(),
-      spawned: false,
-      killWhenSpawned: false,
-    };
-    sessions.set(sessionId, entry);
-  }
-  entry.subs.add(cb);
-  return () => {
-    sessions.get(sessionId)?.subs.delete(cb);
-  };
-};
 
 /** Everything the session has emitted that is still buffered, for a view
  *  attaching after the fact. */
@@ -218,19 +164,6 @@ export const subscribeRaw = (
   return () => {
     sessions.get(sessionId)?.rawSubs.delete(cb);
   };
-};
-
-export const logLines = (sessionId: string): readonly string[] =>
-  sessions.get(sessionId)?.screen.lines() ?? [];
-
-export const logVersion = (sessionId: string): number =>
-  sessions.get(sessionId)?.screen.version() ?? 0;
-
-export const logState = (
-  sessionId: string
-): { status: PtyLogStatus; exitCode: number | null } | null => {
-  const entry = sessions.get(sessionId);
-  return entry ? { status: entry.status, exitCode: entry.exitCode } : null;
 };
 
 /** Kill the child (SIGTERM, then SIGKILL) and forget the buffer. */

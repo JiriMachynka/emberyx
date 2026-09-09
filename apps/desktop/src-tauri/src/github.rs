@@ -10,12 +10,12 @@
 //! Auth is the GitHub CLI (`gh auth token`). Reviews never take a PAT of their
 //! own — `gh` already stored one when the user logged in.
 
-use std::process::Command;
 use std::time::Duration;
 
 use serde::Deserialize;
 
 use crate::error::Result;
+use crate::git::remote_url;
 use crate::gitlab::{MergeRequest, MergeRequestDetail, MrDiffFile, MrNote};
 
 const API_BASE: &str = "https://api.github.com";
@@ -31,18 +31,6 @@ fn token() -> Result<String> {
 // ---------------------------------------------------------------------------
 // Repo → owner/repo
 // ---------------------------------------------------------------------------
-
-fn remote_url(cwd: &str) -> Option<String> {
-    let out = Command::new("git")
-        .args(["-C", cwd, "config", "--get", "remote.origin.url"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!s.is_empty()).then_some(s)
-}
 
 /// `owner/repo` for a github.com remote, or `None` when it points elsewhere.
 /// GitHub repos are always exactly two segments — unlike GitLab, a longer path

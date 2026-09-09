@@ -190,3 +190,48 @@ export const targetForInput = (kind: ActivityKind, input: unknown): string | und
   }
   return undefined;
 };
+
+/** What a backend knows about one row; everything else is the merge, which is
+ *  the same for all of them. */
+export interface ActivityRowSource {
+  id: string;
+  kind: ActivityKind;
+  title: string;
+  /** The tool's raw input. `undefined` means the backend sent none — not the
+   *  same as an empty object, which is an input that happens to be empty. */
+  input: unknown;
+  /** The result so far, or `undefined` while there is none. An empty string is
+   *  no result: pass `undefined` rather than blanking what already streamed in. */
+  output?: string;
+  /** `undefined` until the call settles, so a running row keeps the verdict the
+   *  previous snapshot carried. */
+  failed?: boolean;
+  complete: boolean;
+}
+
+/** Build one activity row, folding in the row it revises.
+ *
+ *  Both TypeScript-side normalizers replace a row wholesale on every update —
+ *  ACP sends `tool_call` then any number of `tool_call_update`s, Codex restates
+ *  an item on completion — so a later snapshot that carries no output, no
+ *  target or no verdict must not erase the one an earlier snapshot did. That
+ *  merge is the shared half; what a row *is* stays with the backend that knows.
+ */
+export const buildActivityRow = (
+  source: ActivityRowSource,
+  previous?: ActivityItem
+): ActivityItem => ({
+  id: source.id,
+  kind: source.kind,
+  title: source.title,
+  // A command's argument *is* its target; repeating it as a JSON blob shows the
+  // same string twice in the disclosure.
+  arguments:
+    source.kind === "command" || source.input === undefined
+      ? undefined
+      : JSON.stringify(source.input, null, 2),
+  output: source.output ?? previous?.output,
+  displayTarget: targetForInput(source.kind, source.input) ?? previous?.displayTarget,
+  failed: source.failed ?? previous?.failed ?? false,
+  complete: source.complete,
+});
