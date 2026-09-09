@@ -1,8 +1,9 @@
-import { Check, ChevronRight, Loader2 } from "lucide-react";
+import { Check, ChevronRight } from "lucide-react";
 import { Fragment, memo, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { FileTypeIcon } from "@/components/FileTypeIcon";
+import { useRunningTimer } from "@/hooks/useRunningTimer";
 import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { ToolBody } from "@/components/chat/ToolViews";
 import { useAgentStore } from "@/lib/agentStore";
@@ -44,6 +45,7 @@ export const ActivityRow = memo(function ActivityRow({
   const running = !activity.complete;
   const isAgent = isAgentActivity(activity);
   const expandable = activity.arguments != null || activity.output != null;
+  const runningLabel = useRunningTimer(activity.id, running);
 
   // Always closed until clicked. A card that auto-opened while working pushed
   // the conversation off-screen on every command and shut again the moment you
@@ -82,94 +84,93 @@ export const ActivityRow = memo(function ActivityRow({
   );
 
   return (
-    <div className="relative rounded-lg">
-      <div className="overflow-hidden rounded-lg border border-border bg-card/50 text-xs">
-        <button
-          type="button"
-          onClick={() =>
-            isAgent
-              ? selectAgent(selected ? null : activity.id)
-              : expandable && setOverride(!open)
-          }
-          disabled={!clickable}
-          className={cn(
-            "flex w-full items-center gap-2 px-3 py-2 text-left transition-colors",
-            clickable && "hover:bg-muted/40",
-            selected && "bg-primary/10"
-          )}
-        >
-          <Icon className={cn("size-3.5 shrink-0", activity.failed ? "text-red-400" : tint)} />
-          <span className={cn("shrink-0 font-medium", running && "tool-running-label")}>
-            {label}
+    <div className="text-xs">
+      <button
+        type="button"
+        onClick={() =>
+          isAgent
+            ? selectAgent(selected ? null : activity.id)
+            : expandable && setOverride(!open)
+        }
+        disabled={!clickable}
+        className={cn(
+          "flex w-full items-center gap-2 py-2 text-left",
+          selected && "bg-primary/10"
+        )}
+      >
+        <Icon className={cn("size-3.5 shrink-0", activity.failed ? "text-red-400" : tint)} />
+        <span className={cn("shrink-0 font-medium", running && "tool-running-label")}>
+          {label}
+        </span>
+        {title && isFileReference(title) && <FileTypeIcon path={title} />}
+        {title && (
+          <span
+            className={cn(
+              "min-w-0 truncate text-muted-foreground",
+              isMonoActivity(activity) && "font-mono text-[0.7rem]"
+            )}
+          >
+            {title}
           </span>
-          {title && isFileReference(title) && <FileTypeIcon path={title} />}
-          {title && (
-            <span
-              className={cn(
-                "min-w-0 truncate text-muted-foreground",
-                isMonoActivity(activity) && "font-mono text-[0.7rem]"
-              )}
-            >
-              {title}
-            </span>
-          )}
-          {meta && (
-            <span className="shrink-0 rounded border border-border px-1.5 py-px text-[0.65rem] text-muted-foreground">
-              {meta}
-            </span>
-          )}
-          {activity.autoApproved && (
-            <span
-              className="shrink-0 text-[0.65rem] text-muted-foreground/70"
-              title="Approved by Emberyx because this session runs at full access"
-            >
-              auto-approved
-            </span>
-          )}
-          <div className="ml-auto flex shrink-0 items-center gap-2 pl-2">
-            {running ? (
-              <Loader2 className="size-3 animate-spin text-muted-foreground" />
-            ) : activity.failed ? (
+        )}
+        {meta && (
+          <span className="shrink-0 text-[0.65rem] text-muted-foreground">{meta}</span>
+        )}
+        {activity.autoApproved && (
+          <span
+            className="shrink-0 text-[0.65rem] text-muted-foreground/70"
+            title="Approved by Emberyx because this session runs at full access"
+          >
+            auto-approved
+          </span>
+        )}
+        <div className="ml-auto flex shrink-0 items-center gap-2 pl-2">
+          {!running &&
+            (activity.failed ? (
               <span className="text-[0.7rem] text-red-400">error</span>
             ) : (
               <Check className="size-3.5 text-emerald-400" />
-            )}
-            {expandable && !isAgent && (
-              <ChevronRight
-                className={cn(
-                  "size-3 text-muted-foreground transition-transform duration-200",
-                  open && "rotate-90"
-                )}
-              />
-            )}
-          </div>
-        </button>
-        <div
-          className="grid transition-[grid-template-rows] duration-200 ease-out"
-          style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
-          onTransitionEnd={(e) => {
-            if (!open && e.propertyName === "grid-template-rows") setBodyMounted(false);
-          }}
-        >
-          <div className="overflow-hidden">
-            {bodyMounted && (
-              <div className="flex flex-col gap-2 border-t border-border px-3 py-2">
-                {bodyParts.map((part, idx) => (
-                  <ToolBody key={idx} part={part} streaming={running} />
-                ))}
-                {resultParts?.map((part, idx) => (
-                  <div
-                    key={idx}
-                    className={cn(
-                      idx === 0 && bodyParts.length > 0 && "border-t border-border pt-2"
-                    )}
-                  >
-                    <ToolBody part={part} />
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+            ))}
+          {expandable && !isAgent && (
+            <ChevronRight
+              className={cn(
+                "size-3 text-muted-foreground transition-transform duration-200",
+                open && "rotate-90"
+              )}
+            />
+          )}
+        </div>
+      </button>
+      {runningLabel && (
+        <div className="animate-in fade-in pb-2 text-[0.65rem] text-muted-foreground duration-300">
+          {runningLabel}
+        </div>
+      )}
+      <div
+        className="grid transition-[grid-template-rows] duration-200 ease-out"
+        style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
+        onTransitionEnd={(e) => {
+          if (!open && e.propertyName === "grid-template-rows") setBodyMounted(false);
+        }}
+      >
+        <div className="overflow-hidden">
+          {bodyMounted && (
+            <div className="flex flex-col gap-2 pb-2 pl-6">
+              {bodyParts.map((part, idx) => (
+                <ToolBody key={idx} part={part} streaming={running} />
+              ))}
+              {resultParts?.map((part, idx) => (
+                <div
+                  key={idx}
+                  className={cn(
+                    idx === 0 && bodyParts.length > 0 && "border-t border-border pt-2"
+                  )}
+                >
+                  <ToolBody part={part} />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -194,7 +195,7 @@ export function ActivityList({
   renderAgent?: (activity: ActivityItem) => ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col divide-y divide-border">
       {activities.map((activity) => {
         if (activity.kind === "reasoning") {
           return (

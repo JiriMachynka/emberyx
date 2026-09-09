@@ -1,6 +1,7 @@
 import { ChevronRight, Sparkle } from "lucide-react";
 import { useState } from "react";
 
+import { useRunningTimer } from "@/hooks/useRunningTimer";
 import { formatDuration } from "@/components/chat/turns";
 import { recordThinkTiming, thinkTimings } from "@/lib/thinkTimings";
 import { cn } from "@/lib/utils";
@@ -32,15 +33,16 @@ export function ThinkingBlock({
     : null;
   const ran =
     timing?.endedAt != null ? formatDuration(timing.endedAt - timing.startedAt) : null;
+  const runningLabel = useRunningTimer(timingKey, active);
   return (
-    <div className="overflow-hidden rounded-lg border border-border bg-card text-xs">
+    <div className="overflow-hidden text-xs">
       <button
         type="button"
         onClick={() => setOverride(!open)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+        className="flex w-full items-center gap-2 py-2 text-left text-muted-foreground"
       >
         <Sparkle className={cn("size-3.5 shrink-0", active && "animate-pulse")} />
-        <span className="font-medium">Think</span>
+        <span className="shrink-0 font-medium text-foreground">Think</span>
         <span className="min-w-0 truncate">
           {active ? "Thinking…" : ran ? `Thought for ${ran}` : "Thought for a moment"}
         </span>
@@ -48,18 +50,23 @@ export function ThinkingBlock({
           className={cn("ml-auto size-3 shrink-0 transition-transform", open && "rotate-90")}
         />
       </button>
+      {runningLabel && (
+        <div className="animate-in fade-in pb-2 text-[0.65rem] text-muted-foreground duration-300">
+          {runningLabel}
+        </div>
+      )}
       <div
         className="grid transition-[grid-template-rows] duration-200 ease-out"
         style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
       >
         <div className="overflow-hidden">
-          <div className="relative border-t border-border">
+          <div className="relative">
             {/* The fade belongs to the scroll container, not the text: it marks
                 that there is more above rather than dimming the first line. */}
-            <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b from-card to-transparent" />
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b from-background to-transparent" />
             <div
               className={cn(
-                "overflow-y-auto whitespace-pre-wrap px-3 py-2 text-muted-foreground",
+                "overflow-y-auto whitespace-pre-wrap pb-2 pl-6 pr-1 text-muted-foreground",
                 BODY_MAX
               )}
             >

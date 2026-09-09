@@ -413,6 +413,26 @@ describe("useWorkspace registerThread", () => {
     });
     // Recorded on the session too, so resuming that thread comes back here.
     expect(result.current.sessionsFor(projectId)[0].threadId).toBe("t9");
+
+    // The backend rides along as the row's provider, so the resume picker can
+    // tell whose thread it is once the project's backend changes.
+    act(() =>
+      result.current.registerThread(session.id, projectId, "t10", "Second", "codex")
+    );
+    expect(
+      result.current.projects.find((p) => p.id === projectId)?.threads[0]
+    ).toMatchObject({ id: "t10", provider: "codex" });
+  });
+
+  // The latest cached thread may belong to a provider the project no longer
+  // runs — resuming its id would fail the CLI outright.
+  it("does not resume another provider's thread when launching", async () => {
+    cacheThreads("/p", [
+      { id: "t9", title: "Codex thread", modified: 10, provider: "codex" },
+    ]);
+    const { result, projectId } = await openProject();
+
+    expect(result.current.sessionsFor(projectId)[0].resume).toBeUndefined();
   });
 
   it("does not duplicate a thread the scan already listed", async () => {

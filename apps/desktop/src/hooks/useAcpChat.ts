@@ -13,7 +13,8 @@
  *   * the agent blocks on `session/request_permission` and `fs/*` until they
  *     are answered, so every request is either answered or explicitly refused;
  *   * `session/prompt` replies when the turn *ends*, which arrives here as the
- *     `turnEnded` event rather than as the result of sending.
+ *     `turnEnded` event rather than as the result of sending. Grok also fires
+ *     `_x.ai/session/prompt_complete` first; either one settles the turn.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -29,6 +30,7 @@ import {
   autoPermission,
   emptyTurn,
   endTurn,
+  grokTurnStop,
   permissionOutcome,
   readPermission,
   type AcpPermission,
@@ -51,6 +53,7 @@ import {
   type AcpServerRequest,
 } from "@/lib/acp/transport";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
+import { fetchThreadPage, type ProjectedMessageRow } from "@/lib/threadPage";
 import { useAgentStore } from "@/lib/agentStore";
 import { settleTurnCheckpoint } from "@/lib/queries";
 import {
@@ -61,10 +64,79 @@ import {
   type PendingAsk,
   type PendingPermission,
   type PermissionDecision,
+  type ToolCall,
 } from "@/hooks/useAgentChat";
 
 /** Keep the tail of stderr for an exit message; the rest is diagnostics. */
 const STDERR_CAP = 4000;
+
+/** A thread title longer than this stops being a label. */
+const TITLE_MAX = 80;
+
+/**
+ * Rebuild chat messages from a projected page — the history of a thread the
+ * event log owns entirely. Rows are plain: user and assistant text, tool rows
+ * carrying the invocation JSON this pane wrote at settle. Tool rows attach to
+ * the assistant message that follows them, which is the order the writer
+ * emits (prompt, tools, reply), so reopened history renders through the same
+ * fallback shape a replayed transcript does.
+ */
+const messagesFromPage = (rows: ProjectedMessageRow[]): ChatMessage[] => {
+  const out: ChatMessage[] = [];
+  let pendingTools: ToolCall[] = [];
+  for (const row of rows) {
+    if (row.role === "user") {
+      out.push({
+        id: row.messageId,
+        role: "user",
+        text: row.text,
+        thinking: "",
+        tools: [],
+        streaming: false,
+      });
+      continue;
+    }
+    if (row.role === "tool") {
+      try {
+        const parsed = JSON.parse(row.payloadJson ?? "{}") as {
+          name?: string;
+          input?: unknown;
+          result?: string | null;
+          isError?: boolean;
+        };
+        if (parsed.name) {
+          pendingTools.push({
+            id: row.messageId,
+            name: parsed.name,
+            input: parsed.input ?? {},
+            partial: "",
+            // The turn ended before this tool reported, or it reported
+            // nothing — either way it is over. A null result would render
+            // history as a card that is still running.
+            result: parsed.result ?? "",
+            isError: parsed.isError || undefined,
+          });
+        }
+      } catch {
+        // A row that fails to parse is skipped, not fatal; the rest of the
+        // history is still history.
+      }
+      continue;
+    }
+    if (row.role === "assistant") {
+      out.push({
+        id: row.messageId,
+        role: "assistant",
+        text: row.text,
+        thinking: "",
+        tools: pendingTools,
+        streaming: false,
+      });
+      pendingTools = [];
+    }
+  }
+  return out;
+};
 
 interface Options {
   cwd: string;
@@ -117,6 +189,18 @@ export function useAcpChat({
   /** Set when the agent refused a model switch. The picker would otherwise go on
    *  showing the model you asked for while the session runs another one. */
   const [modelError, setModelError] = useState<string | null>(null);
+  /** The session id this provider issued, once it exists. Published so the pane
+   *  registers the running thread with the sidebar — without it, a conversation
+   *  you are mid-way through is missing from the list for its whole life. It
+   *  resumes only inside this pane (`canLoad`); the provider's session store
+   *  dies with the child process, so a row reopened elsewhere starts fresh. */
+  const [liveThreadId, setLiveThreadId] = useState<string | undefined>(undefined);
+  /** The model actually driving the session — the attribution this pane stamps
+   *  onto the timeline events it records. */
+  const modelRef = useRef("");
+  /** The session id this pane has already adopted into the event log. A
+   *  restart issues a new id, which is adopted on its first prompt. */
+  const adoptedForRef = useRef<string | null>(null);
 
   // Committed turns, plus the one being streamed. Held in refs so a token
   // doesn't have to round-trip through React to be folded in.
@@ -278,6 +362,40 @@ export function useAcpChat({
     []
   );
 
+  /** One record into the thread timeline. This is what makes an ACP
+   *  conversation outlive its pane: the provider keeps no resumable history,
+   *  so the event log is the only store there is. */
+  const recordTimeline = useCallback(
+    (threadId: string, kind: string, payload: string) => {
+      void invoke("thread_timeline_append", {
+        threadId,
+        kind,
+        attribution: {
+          provider,
+          model: modelRef.current || null,
+          nativeThreadId: threadId,
+        },
+        payload,
+      }).catch(() => {});
+    },
+    [provider]
+  );
+
+  /** Register a thread with the event log: the project path is what the
+   *  sidebar's store listing finds it by, and the source marker is what says
+   *  no CLI can ever resume it. Idempotent Rust-side; this side guards it to
+   *  once per session id. */
+  const adoptThread = useCallback(
+    (threadId: string) => {
+      void invoke("thread_adopt", {
+        threadId,
+        projectPath: cwd,
+        source: "acp",
+      }).catch(() => {});
+    },
+    [cwd]
+  );
+
   /** Fold the streamed turn into the committed transcript. */
   const commitTurn = useCallback(
     (reason: string) => {
@@ -288,12 +406,41 @@ export function useAcpChat({
       // weight past the turn that approved them.
       autoApprovedRef.current.clear();
       publish();
+      // Persist the settled turn. The event log is the only durable store an
+      // ACP conversation has — the provider keeps no history of its own — so
+      // this is recorded or it is gone when the pane closes. Tool rows ride
+      // ahead of the reply, which is the order a reopened page reads back in.
+      const sessionId = sessionRef.current;
+      if (sessionId && ended.message) {
+        for (const tool of ended.message.tools) {
+          recordTimeline(
+            sessionId,
+            "toolInvocation",
+            JSON.stringify({
+              name: tool.name,
+              input: tool.input ?? null,
+              result: tool.result ?? null,
+              isError: tool.isError ?? false,
+            })
+          );
+        }
+        if (ended.message.text.trim()) {
+          recordTimeline(sessionId, "assistantResponse", ended.message.text);
+        }
+      }
+      if (sessionId) {
+        recordTimeline(
+          sessionId,
+          ended.status === "error" ? "error" : "completion",
+          JSON.stringify({ stopReason: ended.status === "error" ? reason : ended.status })
+        );
+      }
       // Freeze this turn's file delta at its settle, so edits made between
       // turns land in no turn's card. Best-effort.
       const settledId = lastCheckpointIdRef.current;
       if (settledId) void settleTurnCheckpoint(cwd, settledId);
     },
-    [publish, cwd]
+    [publish, cwd, recordTimeline]
   );
 
   /**
@@ -372,14 +519,23 @@ export function useAcpChat({
       // flip the live session to "exited".
       if (disposed) return;
       switch (ev.type) {
-        case "notification":
+        case "notification": {
           applyNotification(ev.data.method, ev.data.params);
-          schedulePublish();
+          const stop = grokTurnStop(ev.data.method, ev.data.params);
+          if (stop) commitTurn(stop);
+          else schedulePublish();
           break;
-        case "notifications":
-          for (const n of ev.data) applyNotification(n.method, n.params);
-          schedulePublish();
+        }
+        case "notifications": {
+          let stop: string | null = null;
+          for (const n of ev.data) {
+            applyNotification(n.method, n.params);
+            stop = grokTurnStop(n.method, n.params) ?? stop;
+          }
+          if (stop) commitTurn(stop);
+          else schedulePublish();
           break;
+        }
         case "request":
           // A prompt reads the tool calls the updates produced, so publish first.
           publish();
@@ -440,13 +596,14 @@ export function useAcpChat({
         }
         processRef.current = spawned.id;
         // Resuming is only offered by agents that report `loadSession`, and only
-        // for an id *this provider* issued. Session ids are per-provider, and
-        // this hook publishes none (`threadId` below is undefined), so the id on
-        // an ACP session can only have come from the Claude or Codex thread it
-        // was switched away from — handing that to `grok agent stdio` fails the
-        // whole spawn with "session/load failed: Path not found." rather than
-        // opening a chat. A load is attempted only when a previous session in
-        // this pane produced the id.
+        // for an id *this provider* issued — a load is attempted only when a
+        // previous session in this pane produced the id, so a foreign id (say a
+        // Claude thread the pane was switched away from) is never handed to
+        // `grok agent stdio`, which would fail the whole spawn with
+        // "session/load failed: Path not found." rather than opening a chat.
+        // The id the hook publishes for the sidebar is not resume credit: it
+        // crosses remounts via the persisted session, and `issuedSessionRef`
+        // starts empty every mount, so only this pane's own id can match.
         const canLoad =
           spawned.initialize?.agentCapabilities?.loadSession === true &&
           resume !== undefined &&
@@ -464,7 +621,9 @@ export function useAcpChat({
         }
         sessionRef.current = session.sessionId;
         issuedSessionRef.current = session.sessionId;
+        setLiveThreadId(session.sessionId);
         appliedModelRef.current = currentModel(session);
+        modelRef.current = currentModel(session);
         setUsage((u) => ({
           ...u,
           model: currentModel(session),
@@ -482,6 +641,7 @@ export function useAcpChat({
     return () => {
       disposed = true;
       setReady(false);
+      setLiveThreadId(undefined);
       const id = processRef.current;
       processRef.current = null;
       sessionRef.current = null;
@@ -502,6 +662,28 @@ export function useAcpChat({
     clearPermissions,
   ]);
 
+  // Reopening a thread the event log owns: the turns it recorded are the
+  // history. The agent behind the pane starts fresh — the provider's session
+  // died with its process — but the conversation itself is not lost. A first
+  // page (the tail) is what the pane paints; the user's own first message
+  // beats a late-arriving page, so a seed is skipped if anything is committed.
+  useEffect(() => {
+    if (!enabled || !resume) return;
+    let cancelled = false;
+    void fetchThreadPage(cwd, resume, { fresh: false })
+      .then((page) => {
+        if (cancelled || committedRef.current.length > 0) return;
+        const seeded = messagesFromPage(page.rows);
+        if (!seeded.length) return;
+        committedRef.current = seeded;
+        publish();
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, resume, cwd, publish]);
+
   // Pin the picked model, at open and on a mid-session switch alike. "" means
   // the agent decides, and there is no id to hand back — the agent just keeps
   // whatever it is on. A refusal leaves `usage.model` naming what actually
@@ -517,6 +699,7 @@ export function useAcpChat({
     appliedModelRef.current = model;
     void acpSetModel(id, sessionId, model)
       .then(() => {
+        modelRef.current = model;
         setUsage((u) => ({ ...u, model }));
         setModelError(null);
       })
@@ -544,15 +727,24 @@ export function useAcpChat({
       stoppedRef.current = false;
       turnRef.current = { message: null, status: "thinking" };
       publish();
+      // Adopt the thread once per session id, and title it from the first
+      // prompt — the projection's title is how the sidebar's store listing
+      // names the thread once the pane that created it is gone.
+      if (adoptedForRef.current !== sessionId) {
+        adoptedForRef.current = sessionId;
+        adoptThread(sessionId);
+        recordTimeline(sessionId, "threadTitle", text.trim().split("\n")[0].slice(0, TITLE_MAX));
+      }
+      recordTimeline(sessionId, "userPrompt", text);
       void createCheckpoint(cwd, emberyxSessionId, text).then((point) => {
         if (!point) return;
         lastCheckpointIdRef.current = point.id;
         committedRef.current = attachCheckpoint(committedRef.current, point.id);
         publish();
       });
-      void acpPrompt(id, sessionId, text, channel);
+      void acpPrompt(id, sessionId, text);
     },
-    [cwd, emberyxSessionId, publish]
+    [cwd, emberyxSessionId, publish, adoptThread, recordTimeline]
   );
 
   const stop = useCallback(() => {
@@ -613,9 +805,10 @@ export function useAcpChat({
     // about to use — the process starts on mount and `wake` is already true.
     asleep: false,
     wake: () => {},
-    // ACP agents keep no listable thread store, so there is no id the sidebar
-    // could resume — see `capabilitiesOf(...).threads`.
-    threadId: undefined as string | undefined,
+    // ACP agents keep no listable thread store, so the id published here
+    // registers the running thread with the sidebar but resumes only inside
+    // this pane — see `capabilitiesOf(...).threads` and `canLoad`.
+    threadId: liveThreadId,
     send,
     compact: () => {},
     queued: 0,

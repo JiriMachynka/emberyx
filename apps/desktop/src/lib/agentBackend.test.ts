@@ -34,6 +34,17 @@ describe("capabilitiesOf", () => {
     });
   });
 
+  // ACP threads are the event log's record, not the provider's: listing is on,
+  // and everything that would promise the CLI can resume one stays off.
+  it("lists ACP threads from the event log, with no CLI resume", () => {
+    for (const backend of ["opencode", "grok", "cursor"] as const) {
+      const caps = capabilitiesOf(backend);
+      expect(caps.threads).toBe(true);
+      expect(caps.conversationRewind).toBe(false);
+      expect(caps.usage).toBe(false);
+    }
+  });
+
   it("describes the same capabilities for every backend", () => {
     const keys = AGENT_BACKENDS.map((b) =>
       Object.keys(capabilitiesOf(b)).sort().join(",")

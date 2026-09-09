@@ -3,7 +3,8 @@ name: Warm Rust cache
 # Release runs are triggered by tags, and GitHub scopes caches per tag — a cache
 # saved by `v0.1.6` is unreachable from `v0.1.7`. Tag runs *can* read the default
 # branch's cache, so build the dependency graph here on `main` and let releases
-# restore it. The `shared-key` must match the one in release.yml.
+# restore it. The `shared-key`, runner image, and cargo invocation (`tauri
+# build`, not bare `cargo build --release`) must match release.yml.
 on:
   push:
     branches:
@@ -25,7 +26,7 @@ jobs:
     # full release build here — competing with the tag's own release run for a
     # macOS runner, and saving its cache after that run had already restored one.
     if: "!startsWith(github.event.head_commit.message, 'Release v')"
-    runs-on: macos-latest
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
@@ -46,9 +47,10 @@ jobs:
       # has to exist before cargo runs.
       - run: bun run --cwd apps/desktop build
 
-      # Builds the real daemon rather than a stub: this job exists to warm the
-      # cache release.yml restores, and release.yml compiles emberyxd too.
-      - run: bun run --cwd apps/desktop sidecar -- --target aarch64-apple-darwin
-
-      - run: cargo build --release --target aarch64-apple-darwin
-        working-directory: apps/desktop/src-tauri
+      # Same cargo invocation as release.yml (tauri CLI, --bins, TAURI_ENV_*),
+      # on the same runner image. Bare `cargo build --release` is a different
+      # fingerprint and does not warm what the tag actually compiles.
+      - run: bun run --cwd apps/desktop sidecar -- --stub --target aarch64-apple-darwin
+      - name: Compile with the release fingerprint
+        working-directory: apps/desktop
+        run: bunx tauri build --target aarch64-apple-darwin --no-bundle --config src-tauri/tauri.ci.conf.json

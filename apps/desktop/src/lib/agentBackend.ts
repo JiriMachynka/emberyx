@@ -16,7 +16,10 @@
 export type AgentBackend = "claude" | "codex" | "opencode" | "grok" | "cursor";
 
 export interface AgentCapabilities {
-  /** Past conversations can be listed and resumed (`list_threads`). */
+  /** Past conversations can be listed (`list_threads` / the event log's store
+   *  listing). Claude and Codex threads resume on their own id; ACP threads
+   *  are history only — the provider keeps no resumable store, so reopening
+   *  one shows the recorded conversation under a fresh agent. */
   threads: boolean;
   /** Token counts and USD cost are reported per turn and per day. */
   usage: boolean;
@@ -133,9 +136,11 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
   // and permission requests — and nothing else here, so the rest stay off until
   // each has a driver rather than showing Claude's data under an ACP session.
   opencode: {
-    // `loadSession` is advertised per agent at initialize; there is no
-    // cross-session thread list to browse yet.
-    threads: false,
+    // Threads are Emberyx's own record: this pane appends settled turns to the
+    // event log and the store listing reads them back. OpenCode itself keeps
+    // no cross-session store (`loadSession` is advertised per agent at
+    // initialize), so a reopened thread is history under a fresh agent.
+    threads: true,
     usage: false,
     hookStatus: false,
     permissions: true,
@@ -156,7 +161,8 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
   // — reasoning effort and a session list among them — but each still needs the
   // client half wired before its control can promise anything.
   grok: {
-    threads: false,
+    // Same story as OpenCode: the event log is the thread store.
+    threads: true,
     usage: false,
     hookStatus: false,
     permissions: true,
@@ -176,7 +182,8 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
   // updates, permission requests, and a model catalog on `session/new` once
   // the parameterized picker opt-in is advertised. No native turn truncation.
   cursor: {
-    threads: false,
+    // Same story as OpenCode: the event log is the thread store.
+    threads: true,
     usage: false,
     hookStatus: false,
     permissions: true,

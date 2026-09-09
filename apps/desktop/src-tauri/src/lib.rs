@@ -166,6 +166,7 @@ pub fn run() {
             supervisor::agent_approvals_pending,
             supervisor::thread_timeline_read,
             supervisor::thread_timeline_append,
+            supervisor::thread_adopt,
             supervisor::agent_delegate,
             supervisor::agent_delegation_get,
             supervisor::agent_delegation_cancel,

@@ -6,7 +6,7 @@
  */
 
 import { Fragment, memo, useMemo, useState } from "react";
-import { Check, ChevronRight, Loader2 } from "lucide-react";
+import { Check, ChevronRight } from "lucide-react";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { isFileReference } from "@/lib/fileRef";
 import {
@@ -224,8 +224,7 @@ export const ToolCard = memo(function ToolCard({ tool }: { tool: ToolCall }) {
   if (open && !bodyMounted) setBodyMounted(true);
 
   return (
-    <div className="relative rounded-lg">
-      <div className="overflow-hidden rounded-lg border border-border bg-card/50 text-xs">
+    <div className="text-xs">
       <button
         type="button"
         onClick={() =>
@@ -235,8 +234,7 @@ export const ToolCard = memo(function ToolCard({ tool }: { tool: ToolCall }) {
         }
         disabled={!clickable}
         className={cn(
-          "flex w-full items-center gap-2 px-3 py-2 text-left transition-colors",
-          clickable && "hover:bg-muted/40",
+          "flex w-full items-center gap-2 py-2 text-left",
           selected && "bg-primary/10"
         )}
       >
@@ -264,18 +262,15 @@ export const ToolCard = memo(function ToolCard({ tool }: { tool: ToolCall }) {
           </span>
         )}
         {display.meta && (
-          <span className="shrink-0 rounded border border-border px-1.5 py-px text-[0.65rem] text-muted-foreground">
-            {display.meta}
-          </span>
+          <span className="shrink-0 text-[0.65rem] text-muted-foreground">{display.meta}</span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-2 pl-2">
-          {running ? (
-            <Loader2 className="size-3 animate-spin text-muted-foreground" />
-          ) : tool.isError ? (
-            <span className="text-[0.7rem] text-red-400">error</span>
-          ) : (
-            <Check className="size-3.5 text-emerald-400" />
-          )}
+          {!running &&
+            (tool.isError ? (
+              <span className="text-[0.7rem] text-red-400">error</span>
+            ) : (
+              <Check className="size-3.5 text-emerald-400" />
+            ))}
           {expandable && !isAgent && (
             <ChevronRight
               className={cn(
@@ -295,7 +290,7 @@ export const ToolCard = memo(function ToolCard({ tool }: { tool: ToolCall }) {
       >
         <div className="overflow-hidden">
           {bodyMounted && (
-            <div className="flex flex-col gap-2 border-t border-border px-3 py-2">
+            <div className="flex flex-col gap-2 pb-2 pl-6">
               {display.body.map((part, idx) => (
                 <ToolBody key={idx} part={part} streaming={running} />
               ))}
@@ -314,7 +309,6 @@ export const ToolCard = memo(function ToolCard({ tool }: { tool: ToolCall }) {
             </div>
           )}
         </div>
-      </div>
       </div>
     </div>
   );

@@ -18,7 +18,10 @@
 //! * `session/prompt` is a request whose **response arrives when the turn
 //!   ends**, not when it is accepted. Waiting on it inside a command would peg
 //!   a request timeout to the length of a turn, so it is dispatched and awaited
-//!   on its own thread, which reports the turn's `stopReason` as an event.
+//!   on its own thread, which reports the turn's `stopReason` as an event on
+//!   the **spawn** channel. A second Channel for that reply would restart
+//!   Tauri's message indices at 0; after any spawn notification the JS side
+//!   queues index 0 forever, and the pane stays on "Responding…".
 //! * The agent sends requests *to us* — `session/request_permission`,
 //!   `fs/read_text_file`, `fs/write_text_file` — and **blocks until they are
 //!   answered**. An unanswered permission request is an agent that has silently
@@ -121,6 +124,9 @@ struct Session {
     /// Agent->client requests handed to the frontend but not yet answered.
     /// Answering an unknown id is rejected rather than written to stdin.
     open_agent_requests: Arc<Mutex<HashMap<i64, OpenRequest>>>,
+    /// The channel spawn installed. Turn completion rides here too — see the
+    /// module comment on why `acp_prompt` must not take its own.
+    on_event: Channel<AcpEvent>,
 }
 
 /// The pieces a command needs to talk to a live session, cloned out from under
@@ -131,6 +137,7 @@ struct Handle {
     next_request_id: Arc<AtomicI64>,
     pending: Arc<Pending>,
     open_agent_requests: Arc<Mutex<HashMap<i64, OpenRequest>>>,
+    on_event: Channel<AcpEvent>,
 }
 
 #[derive(Default)]
@@ -173,6 +180,7 @@ impl AcpManager {
             next_request_id: Arc::clone(&session.next_request_id),
             pending: Arc::clone(&session.pending),
             open_agent_requests: Arc::clone(&session.open_agent_requests),
+            on_event: session.on_event.clone(),
         })
     }
 
@@ -249,12 +257,14 @@ impl Inner {
             next_request_id: Arc::new(AtomicI64::new(1)),
             pending: Arc::new(Pending::default()),
             open_agent_requests: Arc::new(Mutex::new(HashMap::new())),
+            on_event: on_event.clone(),
         };
         let handle = Handle {
             stdin: Arc::clone(&session.stdin),
             next_request_id: Arc::clone(&session.next_request_id),
             pending: Arc::clone(&session.pending),
             open_agent_requests: Arc::clone(&session.open_agent_requests),
+            on_event: on_event.clone(),
         };
         self.sessions.lock().unwrap().insert(id, session);
 
@@ -628,15 +638,14 @@ pub async fn acp_session_list(manager: tauri::State<'_, AcpManager>, id: u32) ->
 
 /// Start a turn. Returns as soon as the prompt is on the wire: the reply to
 /// `session/prompt` only arrives when the turn *ends*, so it is awaited on its
-/// own thread and reported as `TurnEnded` / `TurnFailed`. Blocking a command on
-/// it would tie a request timeout to the length of a turn.
+/// own thread and reported as `TurnEnded` / `TurnFailed` on the spawn channel.
+/// Blocking a command on it would tie a request timeout to the length of a turn.
 #[tauri::command]
 pub fn acp_prompt(
     manager: tauri::State<'_, AcpManager>,
     id: u32,
     session_id: String,
     text: String,
-    on_event: Channel<AcpEvent>,
 ) -> Result<()> {
     let handle = manager.handle(id)?;
     std::thread::spawn(move || {
@@ -655,7 +664,7 @@ pub fn acp_prompt(
         if timings_on() {
             eprintln!("[timing] acp turn took={:.2}ms", ms(started.elapsed()));
         }
-        let _ = on_event.send(event);
+        let _ = handle.on_event.send(event);
     });
     Ok(())
 }

@@ -92,6 +92,26 @@ export function toolResultText(update: AcpToolCallUpdate): string | undefined {
 export const statusForStop = (reason: AcpStopReason | string): ChatStatus =>
   reason === "refusal" ? "error" : "idle";
 
+/**
+ * Grok 1.0.24 announces turn end as vendor notifications *before* it replies
+ * to `session/prompt`. Waiting only on that reply left a finished turn on
+ * "Responding…". `stopReason` / `stop_reason` is `end_turn` when the agent
+ * says; anything else is still a completed turn.
+ */
+export const grokTurnStop = (method: string, params: unknown): string | null => {
+  if (!isRecord(params)) return null;
+  if (method === "_x.ai/session/prompt_complete") {
+    return typeof params.stopReason === "string" ? params.stopReason : "end_turn";
+  }
+  if (method === "_x.ai/session_notification") {
+    const update = isRecord(params.update) ? params.update : null;
+    if (update?.sessionUpdate === "turn_completed") {
+      return typeof update.stop_reason === "string" ? update.stop_reason : "end_turn";
+    }
+  }
+  return null;
+};
+
 /** Fold a row into a message's ordered stream. */
 const withActivity = (message: ChatMessage, item: ActivityItem): ChatMessage => ({
   ...message,

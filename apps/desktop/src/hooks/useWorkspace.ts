@@ -6,6 +6,7 @@ import { type Settings } from "@/lib/settings";
 import {
   BACKEND_LABEL,
   capabilitiesOf,
+  isAcpBackend,
   type AgentBackend,
 } from "@/lib/agentBackend";
 import { listCodexThreads } from "@/lib/codex/transport";
@@ -39,6 +40,10 @@ import type {
 
 /** Thread titles are truncated to this in tab labels. */
 const LABEL_MAX = 24;
+
+/** Minimum spacing between Codex thread scans: each one boots a probe child
+ *  (`listCodexThreads`), so a burst of refreshes must coalesce into one. */
+const CODEX_SCAN_COOLDOWN_MS = 30_000;
 
 /** The branch the project sits on. Best-effort — a non-repo directory simply
  *  has no branch to name. */
@@ -82,12 +87,24 @@ const recordProviderSwitch = (
   }).catch((e) => console.error("provider switch not recorded:", e));
 
 /** Each backend keeps its own conversation store: Claude's transcripts on disk,
- *  Codex's in its app-server. A backend with no store of its own lists nothing
- *  — reading Claude's transcripts for it would file another agent's history
- *  under its name. */
+ *  Codex's in its app-server, and ACP's in the event log — the provider keeps
+ *  no history of its own, so Emberyx's record is the only one there is. A
+ *  backend with no store of its own lists nothing — reading Claude's
+ *  transcripts for it would file another agent's history under its name. */
 const listThreads = async (backend: AgentBackend, cwd: string): Promise<Thread[]> => {
   if (!capabilitiesOf(backend).threads) return [];
   if (backend === "codex") return listCodexThreads(cwd);
+  if (isAcpBackend(backend)) {
+    // Only threads this app recorded for this backend. The store also holds
+    // imported history from other providers, and an ACP pane cannot render
+    // their Claude-shaped payloads — showing them here would promise a
+    // conversation it cannot open.
+    const store = await invoke<Thread[]>("list_store_threads", { cwd }).catch((e) => {
+      console.error("list_store_threads failed:", e);
+      return [] as Thread[];
+    });
+    return store.filter((t) => t.provider == null || t.provider === backend);
+  }
   // Two sources answering different questions: the transcript scan, and the
   // event log for imported history that was never a file here. Imported
   // threads are listed for Claude alone — it is the pane that can render the
@@ -105,9 +122,14 @@ const listThreads = async (backend: AgentBackend, cwd: string): Promise<Thread[]
   );
 };
 
-/** Threads a fresh agent can actually continue, newest first. */
-const resumable = (threads: Thread[]): Thread[] =>
-  threads.filter((t) => !t.imported).sort((a, b) => b.modified - a.modified);
+/** Threads a fresh agent can actually continue, newest first. A thread whose
+ *  provider is known and differs from the backend about to spawn carries an id
+ *  that backend cannot read — resuming it would fail the CLI outright, so it
+ *  waits for its own provider instead. */
+const resumable = (threads: Thread[], backend: AgentBackend): Thread[] =>
+  threads
+    .filter((t) => !t.imported && (t.provider == null || t.provider === backend))
+    .sort((a, b) => b.modified - a.modified);
 
 const labelFor = (thread: Thread) =>
   thread.title.length > LABEL_MAX
@@ -187,13 +209,23 @@ export function useWorkspace(settings: Settings) {
    *  for the next launch, and publish it to the project. Concurrent scans for
    *  the same path share the in-flight promise, so the pre-warm's scan and the
    *  reveal's don't each read the directory. Returns null when the backend has
-   *  no store of its own to list. */
+   *  no store of its own to list, and for a Codex rescan inside the cooldown:
+   *  that scan boots a whole `codex app-server` probe child, and a scan fired
+   *  per auto-title would pay a boot each time for a list the pane just
+   *  updated itself (`renameThread`). */
   const threadScans = useRef(new Map<string, Promise<Thread[]>>());
+  const lastScanAt = useRef(new Map<string, number>());
   function fetchThreads(projectId: string, path: string): Promise<Thread[] | null> {
     const backend = backendFor(path);
     if (!capabilitiesOf(backend).threads) return Promise.resolve(null);
     const inFlight = threadScans.current.get(path);
     if (inFlight) return inFlight;
+    if (backend === "codex") {
+      const last = lastScanAt.current.get(path);
+      if (last != null && Date.now() - last < CODEX_SCAN_COOLDOWN_MS) {
+        return Promise.resolve(null);
+      }
+    }
     const scan = listThreads(backend, path)
       .then((t) => {
         cacheThreads(path, t);
@@ -202,6 +234,7 @@ export function useWorkspace(settings: Settings) {
       })
       .finally(() => {
         threadScans.current.delete(path);
+        if (backend === "codex") lastScanAt.current.set(path, Date.now());
       });
     threadScans.current.set(path, scan);
     return scan;
@@ -211,13 +244,16 @@ export function useWorkspace(settings: Settings) {
    *  exists on disk. The scan behind `refreshThreads` only sees a thread once
    *  the CLI has written its first turn, which left a chat you are already
    *  talking to missing from the sidebar. The user's own message stands in as
-   *  the title until auto-titling replaces it, and the session is pointed at the
-   *  thread so resuming it comes back to this pane. */
+   *  the title until auto-titling replaces it, and the session is pointed at
+   *  the thread so resuming it comes back to this pane. The backend rides
+   *  along as the row's provider — without it, a thread from one backend could
+   *  be picked as the resume target after the project's backend changed. */
   function registerThread(
     sessionId: string,
     projectId: string,
     threadId: string,
-    firstMessage: string
+    firstMessage: string,
+    backend?: AgentBackend
   ) {
     sessionApi.setSessionThread(sessionId, threadId);
     const project = projects.find((p) => p.id === projectId);
@@ -227,8 +263,22 @@ export function useWorkspace(settings: Settings) {
       id: threadId,
       title: firstMessage.trim().split("\n")[0],
       modified: Date.now(),
+      provider: backend,
     };
     setThreads(projectId, [thread, ...project.threads]);
+  }
+
+  /** Rename the sidebar row of a thread the provider just re-titled. The scan
+   *  behind `refreshThreads` would pick the same title up eventually — this
+   *  makes the row honest immediately, and for Codex it removes the only
+   *  reason a title needs a scan at all (that scan boots a whole child). */
+  function renameThread(projectId: string, threadId: string, title: string) {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return;
+    setThreads(
+      projectId,
+      project.threads.map((t) => (t.id === threadId ? { ...t, title } : t))
+    );
   }
 
   /** Launch a project's primary agent: a chat pane resuming the most recent
@@ -246,7 +296,7 @@ export function useWorkspace(settings: Settings) {
       if (cached.length) {
         // Imported threads are history, not a conversation to continue — the
         // agent behind one has no memory of it, so launch never lands there.
-        const latest = resumable(cached)[0];
+        const latest = resumable(cached, backend)[0];
         if (latest) {
           startChat(id, path, latest.id, labelFor(latest), backend);
           // Show the cached list now; the scan refreshes it behind the boot.
@@ -257,7 +307,7 @@ export function useWorkspace(settings: Settings) {
       try {
         const threads = await fetchThreads(id, path);
         if (torndownRef.current.has(id)) return;
-        const latest = threads ? resumable(threads)[0] : undefined;
+        const latest = threads ? resumable(threads, backend)[0] : undefined;
         if (latest) {
           startChat(id, path, latest.id, labelFor(latest), backend);
           return;
@@ -627,6 +677,7 @@ export function useWorkspace(settings: Settings) {
     recents,
     refreshThreads,
     registerThread,
+    renameThread,
     openProjectAt,
     openWorktree,
     removeWorktree,

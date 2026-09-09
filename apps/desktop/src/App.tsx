@@ -205,6 +205,10 @@ function App() {
   const titledRef = useRef<(session: Session, title: string) => void>(() => {});
   titledRef.current = (session, title) => {
     ws.renameSession(session.id, title);
+    // The sidebar row carries the first message until the provider names the
+    // thread. Update it here — for Codex the alternative is a probe child per
+    // title, and the scan only re-reads what this pane just wrote.
+    if (session.threadId) ws.renameThread(session.projectId, session.threadId, title);
     ws.refreshThreads(session.projectId, session.cwd, true);
   };
   const onTitled = useCallback(
@@ -215,7 +219,7 @@ function App() {
     (session: Session, threadId: string, firstMessage: string) => void
   >(() => {});
   threadStartedRef.current = (session, threadId, firstMessage) => {
-    ws.registerThread(session.id, session.projectId, threadId, firstMessage);
+    ws.registerThread(session.id, session.projectId, threadId, firstMessage, session.backend);
   };
   const onThreadStarted = useCallback(
     (session: Session, threadId: string, firstMessage: string) =>

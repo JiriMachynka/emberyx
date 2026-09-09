@@ -379,12 +379,14 @@ Both prefill and never send, and both append a `providerSwitch` timeline event.
    - **Packaging ships it as a sidecar.** `Daemon::ensure()` looks for
      `emberyxd` beside the app executable, which is exactly where Tauri puts an
      `externalBin` — it resolves `binaries/emberyxd-<triple>` and drops the
-     suffix when bundling. `scripts/build-sidecar.ts` (`bun run sidecar`, and a
-     step in `release.yml`) produces that file; `binaries/` is gitignored build
-     output. Note the ordering trap: `tauri-build` refuses to run while a
-     declared sidecar is missing, and `emberyxd` links the same lib, so the
-     script writes a placeholder before compiling and overwrites it after. A
-     missing daemon now fails the bundle rather than the user's first click.
+     suffix when bundling. `scripts/build-sidecar.ts` (`bun run sidecar`)
+     writes a placeholder so `tauri-build` can compile, and
+     `beforeBundleCommand` (`--copy`) overwrites it from `target/` after cargo
+     finishes. `tauri build` already passes `--bins`, so emberyxd compiles in
+     the same invocation as the app; a separate `cargo build --bin emberyxd`
+     is a different fingerprint (`tauri/custom-protocol`, `TAURI_ENV_*`) and
+     rebuilds the graph. `binaries/` is gitignored build output. A missing
+     daemon now fails the bundle rather than the user's first click.
 
 ### One activity stream, three normalizers
 
@@ -454,6 +456,12 @@ that is still running, since the picker goes on showing the one you asked for
 and two surfaces quietly disagreeing is the failure worth avoiding. Claude and
 Codex return it as `null` by construction: they carry the model into spawn
 arguments and `turn/start`, where a bad model fails in the open.
+
+ACP turn completion rides the **spawn** channel. A second Tauri Channel on
+`acp_prompt` restarts message indices at 0; after any spawn notification the
+JS side queues that event forever and the pane stays on "Responding…". Grok
+1.0.24 also fires `_x.ai/session/prompt_complete` (and `turn_completed`)
+*before* it replies to `session/prompt` — either one settles the turn.
 
 `codex app-server` is flagged experimental and has renamed its core methods
 once already. Generate types from the installed binary
@@ -549,9 +557,11 @@ too**, or orphaned agent processes and shells survive the app.
 - **Release builds are `aarch64-apple-darwin` only** and are **not
   Apple-notarized**; first manual install needs right-click → Open.
 - **CI cache**: `release.yml` and `warm-cache.yml` must keep the same
-  `shared-key: release`. Tag runs can only restore caches from the default
-  branch, so the warm job on `main` is what makes release builds fast. Changing
-  either key silently reverts releases to a ~6min cold compile.
+  `shared-key: release`, the same runner (`macos-14`), and the same cargo
+  invocation (`tauri build`, not bare `cargo build --release`). Tag runs can
+  only restore caches from the default branch, so the warm job on `main` is
+  what makes release builds fast. Changing any of those silently reverts
+  releases to a cold compile.
 - **`[profile.release]` is deliberately `lto = "thin"` + `codegen-units = 16`.**
   The Rust side is I/O-bound; fat LTO buys nothing at runtime and costs CI link
   time. Don't "optimize" it.

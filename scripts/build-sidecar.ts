@@ -1,5 +1,5 @@
 /**
- * Builds `emberyxd` and files it where Tauri's `externalBin` expects it:
+ * Files `emberyxd` where Tauri's `externalBin` expects it:
  * `src-tauri/binaries/emberyxd-<target-triple>`.
  *
  * The suffix is not decoration — Tauri resolves a sidecar by appending the
@@ -8,8 +8,14 @@
  * without this file fails at bundle time rather than at runtime, which is the
  * good direction for a missing daemon to fail in.
  *
- * `--target` is optional; without it the host triple from `rustc -vV` is used,
- * which is what a local `tauri dev` needs.
+ * `tauri build` already passes `--bins`, so it compiles emberyxd in the same
+ * cargo invocation as the app. `--stub` satisfies tauri-build before that
+ * compile; `--copy` (from `beforeBundleCommand`) overwrites the stub with the
+ * real binary. A separate `cargo build --bin emberyxd` is a different
+ * fingerprint and is not what release CI should run.
+ *
+ * `--target` is optional; without it `TAURI_ENV_TARGET_TRIPLE` (set on Tauri
+ * hooks) or the host triple from `rustc -vV` is used.
  */
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -34,7 +40,10 @@ const hostTriple = () => {
 };
 
 const flagIndex = process.argv.indexOf("--target");
-const target = flagIndex === -1 ? hostTriple() : process.argv[flagIndex + 1];
+const target =
+  flagIndex === -1
+    ? (process.env.TAURI_ENV_TARGET_TRIPLE ?? hostTriple())
+    : process.argv[flagIndex + 1];
 if (!target) throw new Error("--target was given without a triple");
 
 const binaries = join(tauriDir, "binaries");
@@ -61,12 +70,39 @@ const writePlaceholder = () => {
   );
 };
 
+const profile = process.env.TAURI_ENV_DEBUG === "true" ? "debug" : "release";
+
+const copyBuilt = () => {
+  const primary = join(tauriDir, "target", target, profile, "emberyxd");
+  let built = existsSync(primary) ? primary : undefined;
+  // `tauri build` without `--target` writes to target/release/, even though
+  // the dest name is still the host triple. Don't fall back for a foreign
+  // triple — that would copy the host daemon under the wrong sidecar name.
+  const hostFallback = join(tauriDir, "target", profile, "emberyxd");
+  if (!built && target === hostTriple() && existsSync(hostFallback)) {
+    built = hostFallback;
+  }
+  if (!built) {
+    throw new Error(
+      `emberyxd was not compiled (looked in ${primary}). \`tauri build\` passes --bins; run that before --copy.`,
+    );
+  }
+  mkdirSync(binaries, { recursive: true });
+  copyFileSync(built, sidecar);
+  console.log(`emberyxd → binaries/emberyxd-${target}`);
+};
+
+if (process.argv.includes("--stub") && process.argv.includes("--copy")) {
+  throw new Error("--stub and --copy cannot be combined");
+}
+
 if (process.argv.includes("--stub")) {
   writePlaceholder();
   console.log(`placeholder → binaries/emberyxd-${target} (not a daemon)`);
+} else if (process.argv.includes("--copy")) {
+  copyBuilt();
 } else {
   if (!existsSync(sidecar)) writePlaceholder();
   run("cargo", ["build", "--release", "--bin", "emberyxd", "--target", target]);
-  copyFileSync(join(tauriDir, "target", target, "release", "emberyxd"), sidecar);
-  console.log(`emberyxd → binaries/emberyxd-${target}`);
+  copyBuilt();
 }

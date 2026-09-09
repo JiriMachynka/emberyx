@@ -1329,6 +1329,26 @@ pub fn thread_timeline_append(
     Ok(event)
 }
 
+/// First-seen registration of a thread the event log owns entirely — an ACP
+/// conversation, which no provider-side store lists and no transcript scan can
+/// ever find. Attaching the project path puts it in the sidebar's store
+/// listing; the source marker (`"acp"`) says the CLI can never resume it, so
+/// the pane treats it as history with a fresh agent. Idempotent, and safe to
+/// race a concurrent append: the projector may create the row first, which is
+/// why `attach_thread_context` fills the path in on conflict.
+#[tauri::command]
+pub fn thread_adopt(
+    supervisor: tauri::State<'_, Supervisor>,
+    thread_id: String,
+    project_path: String,
+    source: String,
+) -> Result<()> {
+    let store = supervisor.store().ok_or("event log not attached")?;
+    store.attach_thread_context(&thread_id, &project_path, now())?;
+    store.mark_thread_source(&thread_id, &source)?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn agent_list(supervisor: tauri::State<'_, Supervisor>) -> Vec<AgentRecord> {
     supervisor.list()

@@ -60,17 +60,17 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      # The daemon ships inside the .app as a sidecar, or persistent mode has
-      # nothing to launch. Tauri resolves `binaries/emberyxd-<triple>` and drops
-      # the suffix when bundling, which is what `Daemon::ensure` expects to find
-      # next to the main executable. The frontend build comes first because
-      # `generate_context!` embeds dist/ at compile time and emberyxd links the
-      # same lib.
-      - name: Build the emberyxd sidecar
+      # tauri-build refuses to compile without the declared sidecar on disk.
+      # `tauri build` already passes `--bins`, so it compiles emberyxd in the
+      # same cargo invocation as the app; beforeBundleCommand copies it over
+      # the stub. A separate `cargo build --bin emberyxd` is a different
+      # fingerprint (no `tauri/custom-protocol`, no TAURI_ENV_*) and rebuilds
+      # the graph. Frontend first because `generate_context!` embeds dist/.
+      - name: Frontend and sidecar placeholder
         working-directory: apps/desktop
         run: |
           bun run build
-          bun run sidecar -- --target aarch64-apple-darwin
+          bun run sidecar -- --stub --target aarch64-apple-darwin
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -84,4 +84,6 @@ jobs:
           releaseBody: "Download the .dmg to install. Existing installs update in-app."
           releaseDraft: false
           prerelease: false
-          args: --target aarch64-apple-darwin
+          # tauri.ci.conf.json clears beforeBuildCommand: dist/ is already
+          # built, and a second vite run dirties generate_context!.
+          args: --target aarch64-apple-darwin --config src-tauri/tauri.ci.conf.json

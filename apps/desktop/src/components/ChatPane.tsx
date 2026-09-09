@@ -1524,8 +1524,8 @@ function WorkedAccordion({
           ) : (
             "Work log"
           )}
-          <ChevronDown
-            className={cn("size-3.5 transition-transform", expanded && "rotate-180")}
+          <ChevronRight
+            className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
           />
         </button>
         <span className="h-px flex-1 bg-border/60" />
@@ -1548,7 +1548,7 @@ function ToolList({ tools }: { tools: ToolCall[] }) {
   const rest = tools.filter((t) => !isTodoTool(t.name));
   if (rest.length === 0) return null;
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col divide-y divide-border">
       {rest.map((t) =>
         isAgentTool(t.name) ? (
           <SubagentInline key={t.id} id={t.id} tool={t} />

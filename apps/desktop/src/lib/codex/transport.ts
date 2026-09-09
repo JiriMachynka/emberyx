@@ -126,6 +126,9 @@ export async function listCodexThreads(cwd: string): Promise<Thread[]> {
       title: t.name ?? t.preview,
       // Both sides count unix seconds.
       modified: t.updatedAt,
+      // So a project whose backend later changes never picks a Codex id as a
+      // Claude resume target.
+      provider: "codex",
     }));
   } finally {
     void codexKill(id);

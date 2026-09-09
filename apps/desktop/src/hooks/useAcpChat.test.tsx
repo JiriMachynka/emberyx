@@ -127,6 +127,180 @@ describe("useAcpChat model switching", () => {
   });
 });
 
+describe("useAcpChat thread registration", () => {
+  it("publishes the session id the provider issued", async () => {
+    const view = await mount();
+    expect(view.result.current.threadId).toBe("s1");
+  });
+
+  it("publishes nothing while the session is still opening", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "acp_spawn") {
+        return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
+      }
+      // A session/new that never resolves: the pane is booting, and a sidebar
+      // row for a thread nobody can name yet would be worse than none.
+      return new Promise(() => {});
+    });
+    const view = renderHook(() => useAcpChat(options));
+    await act(async () => {});
+    expect(view.result.current.threadId).toBeUndefined();
+    expect(view.result.current.ready).toBe(false);
+  });
+});
+
+describe("useAcpChat thread durability", () => {
+  const appended = () =>
+    invoke.mock.calls
+      .filter(([name]) => name === "thread_timeline_append")
+      .map(([, args]) => args as { threadId: string; kind: string; payload: string });
+
+  it("adopts the thread once and records the prompt with a title", async () => {
+    const view = await mount();
+    await act(async () => view.result.current.send("Fix the parser\nplease"));
+    expect(invoke.mock.calls.filter(([name]) => name === "thread_adopt")).toHaveLength(1);
+    const events = appended();
+    expect(events.map((e) => e.kind)).toEqual(["threadTitle", "userPrompt"]);
+    expect(events[0].payload).toBe("Fix the parser");
+    expect(events[1].payload).toBe("Fix the parser\nplease");
+    // Attribution names who ran it, so the projections can say so later.
+    expect(events[1].threadId).toBe("s1");
+
+    // A second prompt records under the same thread, without re-adopting or
+    // re-titling it.
+    await act(async () => view.result.current.send("again"));
+    const adopts = invoke.mock.calls.filter(([name]) => name === "thread_adopt");
+    expect(adopts).toHaveLength(1);
+    const later = appended();
+    expect(later[later.length - 1]?.kind).toBe("userPrompt");
+  });
+
+  it("records the tools, the reply and the completion when a turn settles", async () => {
+    const view = await mount();
+    await act(async () => view.result.current.send("fix it"));
+    await act(async () => {
+      channels[0]?.onmessage?.({
+        type: "notification",
+        data: {
+          method: "session/update",
+          params: {
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "c1",
+              title: "Read config",
+              kind: "read",
+              status: "pending",
+              rawInput: { path: "a.txt" },
+            },
+          },
+        },
+      });
+      channels[0]?.onmessage?.({
+        type: "notification",
+        data: {
+          method: "session/update",
+          params: {
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "c1",
+              status: "completed",
+              content: [{ type: "text", text: "file body" }],
+            },
+          },
+        },
+      });
+      channels[0]?.onmessage?.({
+        type: "notification",
+        data: {
+          method: "session/update",
+          params: {
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { text: "done" },
+            },
+          },
+        },
+      });
+      channels[0]?.onmessage?.({
+        type: "turnEnded",
+        data: { sessionId: "s1", result: { stopReason: "end_turn" } },
+      });
+    });
+    await waitFor(() => expect(view.result.current.status).toBe("idle"));
+
+    const kinds = appended().map((e) => e.kind);
+    expect(kinds).toEqual([
+      "threadTitle",
+      "userPrompt",
+      "toolInvocation",
+      "assistantResponse",
+      "completion",
+    ]);
+    const tool = JSON.parse(appended()[2].payload) as { name: string; result: string };
+    expect(tool.name).toBe("Read config");
+    expect(tool.result).toBe("file body");
+    expect(appended()[3].payload).toBe("done");
+    expect(JSON.parse(appended()[4].payload)).toEqual({ stopReason: "idle" });
+  });
+
+  it("records a failed turn as an error, not a completion", async () => {
+    const view = await mount();
+    await act(async () => {
+      channels[0]?.onmessage?.({
+        type: "turnFailed",
+        data: { sessionId: "s1", message: "agent gave up" },
+      });
+    });
+    await waitFor(() => expect(view.result.current.status).toBe("error"));
+    const kinds = appended().map((e) => e.kind);
+    expect(kinds[kinds.length - 1]).toBe("error");
+  });
+
+  it("seeds history from the event log when reopening a thread", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "acp_spawn") {
+        return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
+      }
+      if (command === "acp_session_new") return Promise.resolve(SESSION);
+      if (command === "thread_messages_page") {
+        return Promise.resolve({
+          rows: [
+            {
+              messageId: "s9:1",
+              threadId: "s9",
+              role: "user",
+              text: "earlier question",
+              provider: "grok",
+              createdAt: 1,
+              payloadJson: null,
+            },
+            {
+              messageId: "s9:2",
+              threadId: "s9",
+              role: "assistant",
+              text: "earlier answer",
+              provider: "grok",
+              createdAt: 2,
+              payloadJson: null,
+            },
+          ],
+          hasMore: false,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    const view = renderHook(() => useAcpChat({ ...options, resume: "s9" }));
+    await waitFor(() =>
+      expect(view.result.current.messages.map((m) => m.text)).toEqual([
+        "earlier question",
+        "earlier answer",
+      ])
+    );
+    // Replayed history is not streaming and carries no half-open tool cards.
+    expect(view.result.current.messages.every((m) => !m.streaming)).toBe(true);
+  });
+});
+
 describe("useAcpChat permission requests", () => {
   const OPTIONS = [
     { optionId: "yes", name: "Allow", kind: "allow_once" },
@@ -192,6 +366,71 @@ describe("useAcpChat permission requests", () => {
     expect(answered().map((a) => a.requestId)).toEqual([3, 4]);
     expect(answered()[0].result).toEqual({ outcome: { outcome: "cancelled" } });
     expect(view.result.current.pendingPermission).toBeNull();
+  });
+
+  it("settles a Grok turn on prompt_complete without waiting for turnEnded", async () => {
+    const view = await mount();
+    await act(async () => {
+      channels[0]?.onmessage?.({
+        type: "notification",
+        data: {
+          method: "session/update",
+          params: {
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { text: "ok" },
+            },
+          },
+        },
+      });
+    });
+    await waitFor(() => expect(view.result.current.status).toBe("streaming"));
+
+    await act(async () => {
+      channels[0]?.onmessage?.({
+        type: "notification",
+        data: {
+          method: "_x.ai/session/prompt_complete",
+          params: { sessionId: "s1", stopReason: "end_turn" },
+        },
+      });
+    });
+
+    await waitFor(() => expect(view.result.current.status).toBe("idle"));
+    expect(view.result.current.messages[0].text).toBe("ok");
+    expect(view.result.current.messages[0].streaming).toBe(false);
+  });
+
+  it("does not duplicate the turn if prompt_complete and turnEnded both fire", async () => {
+    const view = await mount();
+    await act(async () => {
+      channels[0]?.onmessage?.({
+        type: "notification",
+        data: {
+          method: "session/update",
+          params: {
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { text: "done" },
+            },
+          },
+        },
+      });
+      channels[0]?.onmessage?.({
+        type: "notification",
+        data: {
+          method: "_x.ai/session/prompt_complete",
+          params: { stopReason: "end_turn" },
+        },
+      });
+      channels[0]?.onmessage?.({
+        type: "turnEnded",
+        data: { sessionId: "s1", result: { stopReason: "end_turn" } },
+      });
+    });
+
+    await waitFor(() => expect(view.result.current.status).toBe("idle"));
+    expect(view.result.current.messages.map((m) => m.text)).toEqual(["done"]);
   });
 
   it("settles the turn when the process dies mid-stream", async () => {

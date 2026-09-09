@@ -5,6 +5,7 @@ import {
   blockText,
   emptyTurn,
   endTurn,
+  grokTurnStop,
   permissionOutcome,
   planEntriesOf,
   readPermission,
@@ -194,6 +195,36 @@ describe("endTurn", () => {
 
   it("survives a turn that produced nothing", () => {
     expect(endTurn(emptyTurn(), "end_turn").message).toBeNull();
+  });
+});
+
+describe("grokTurnStop", () => {
+  it("reads Grok's prompt_complete notification", () => {
+    expect(
+      grokTurnStop("_x.ai/session/prompt_complete", {
+        sessionId: "s1",
+        stopReason: "end_turn",
+      })
+    ).toBe("end_turn");
+  });
+
+  it("reads turn_completed nested under session_notification", () => {
+    expect(
+      grokTurnStop("_x.ai/session_notification", {
+        sessionId: "s1",
+        update: { sessionUpdate: "turn_completed", stop_reason: "cancelled" },
+      })
+    ).toBe("cancelled");
+  });
+
+  it("ignores Grok chatter that is not a turn end", () => {
+    expect(grokTurnStop("_x.ai/queue/changed", { entries: [] })).toBeNull();
+    expect(
+      grokTurnStop("_x.ai/session_notification", {
+        update: { sessionUpdate: "response_completed" },
+      })
+    ).toBeNull();
+    expect(grokTurnStop("session/update", { sessionUpdate: "agent_message_chunk" })).toBeNull();
   });
 });
 

@@ -608,7 +608,11 @@ impl Store {
 
     /// First-seen registration of a thread with the app-side facts that are
     /// not provider truths: which project dir the transcript lives under.
-    /// Idempotent; later projection inserts conflict-do-nothing around it.
+    /// Idempotent, and idempotent the other way around too: the projector may
+    /// create the row first (project_path defaults to `''`, the schema's
+    /// "unknown"), and adopting the thread later — an ACP conversation the
+    /// event log owns entirely — must still fill it in. An already-set path is
+    /// never overwritten.
     pub fn attach_thread_context(
         &self,
         thread_id: &str,
@@ -620,7 +624,10 @@ impl Store {
                 "INSERT INTO projection_threads
                    (thread_id, project_path, created_at, updated_at, message_count)
                  VALUES (?1, ?2, ?3, ?3, 0)
-                 ON CONFLICT(thread_id) DO NOTHING",
+                 ON CONFLICT(thread_id) DO UPDATE SET
+                   project_path = CASE
+                     WHEN projection_threads.project_path = '' THEN excluded.project_path
+                     ELSE projection_threads.project_path END",
                 params![thread_id, project_path, created_at_ms as i64],
             )?;
             Ok(())
@@ -1495,6 +1502,62 @@ mod tests {
             first.rows.iter().map(|t| t.requested_at).collect::<Vec<_>>()
         );
         let _ = std::fs::remove_dir_all(test_dir("turns_page"));
+    }
+
+    #[test]
+    fn adopting_a_log_owned_thread_makes_it_listable_regardless_of_arrival_order() {
+        let path = test_dir("adopt").join("emberyx.db");
+        let store = Store::open(&path).unwrap();
+
+        // The append may win the race: the projector creates the thread row
+        // with no project path before the adopt lands. The adopt must fill the
+        // path in anyway — the whole sidebar listing hangs off it. Attribution
+        // rides the title event, which is what stamps the row's provider.
+        let grok = TurnAttribution {
+            provider: Provider::Grok,
+            model: None,
+            native_thread_id: Some("acp-1".into()),
+        };
+        store
+            .append_event(&TimelineEvent {
+                kind: TimelineEventKind::UserPrompt,
+                attribution: Some(grok.clone()),
+                ..prompt("acp-1", 1, "fix the parser")
+            })
+            .unwrap();
+        store
+            .append_event(&TimelineEvent {
+                kind: TimelineEventKind::ThreadTitle,
+                attribution: Some(grok),
+                ..event("acp-1", 2, "fix the parser")
+            })
+            .unwrap();
+        store.run_projectors().unwrap();
+        store.attach_thread_context("acp-1", "/repo", 42).unwrap();
+        store.mark_thread_source("acp-1", "acp").unwrap();
+
+        let listed = store.imported_threads("/repo").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "acp-1");
+        assert_eq!(listed[0].source.as_deref(), Some("acp"));
+        assert_eq!(listed[0].provider.as_deref(), Some("grok"));
+        assert_eq!(listed[0].title, "fix the parser");
+
+        // And the other order — adopt first, append second — reads the same,
+        // so neither side of the race can strand a thread outside the listing.
+        store.attach_thread_context("acp-2", "/repo", 42).unwrap();
+        store.mark_thread_source("acp-2", "acp").unwrap();
+        store.append_event(&prompt("acp-2", 1, "hello")).unwrap();
+        store.run_projectors().unwrap();
+        let mut ids = store
+            .imported_threads("/repo")
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect::<Vec<_>>();
+        ids.sort();
+        assert_eq!(ids, ["acp-1", "acp-2"]);
+        let _ = std::fs::remove_dir_all(test_dir("adopt"));
     }
 
     /// Canonical dump of all four projected tables plus cursors — two runs
