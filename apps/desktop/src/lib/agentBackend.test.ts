@@ -13,7 +13,13 @@ describe("capabilitiesOf", () => {
   // Both CLIs take reasoning effort as a parameter of its own — Claude as a
   // spawn-time `--effort`, Codex per turn.
   it("gives Claude everything its CLI implements", () => {
-    expect(Object.values(capabilitiesOf("claude")).every(Boolean)).toBe(true);
+    const caps = capabilitiesOf("claude");
+    // Hand-written catalog, and listing reads files rather than spawning.
+    expect(caps.sessionModelCatalog).toBe(false);
+    expect(caps.threadScanSpawnsChild).toBe(false);
+    const { sessionModelCatalog: _catalog, threadScanSpawnsChild: _scan, ...rest } =
+      caps;
+    expect(Object.values(rest).every(Boolean)).toBe(true);
   });
 
   // Spelled out rather than asserted wholesale: a capability wrongly left on
@@ -35,6 +41,10 @@ describe("capabilitiesOf", () => {
       // Only Claude's failure wording is described, so Codex classifies as
       // nothing rather than through another CLI's patterns.
       accountIssues: false,
+      sessionModelCatalog: false,
+      launchProfiles: false,
+      configDirOverride: false,
+      threadScanSpawnsChild: true,
       loginCommand: ["codex", "login"],
     });
   });
@@ -47,6 +57,7 @@ describe("capabilitiesOf", () => {
       expect(caps.threads).toBe(true);
       expect(caps.conversationRewind).toBe(false);
       expect(caps.usage).toBe(false);
+      expect(caps.sessionModelCatalog).toBe(true);
     }
   });
 

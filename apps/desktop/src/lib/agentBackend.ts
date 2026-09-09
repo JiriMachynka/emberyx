@@ -159,6 +159,8 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     compact: true,
     conversationRewind: true,
     accountIssues: true,
+    // Catalog is hand-written in modelCatalog.ts, not announced by the session.
+    sessionModelCatalog: false,
     launchProfiles: true,
     configDirOverride: true,
     threadScanSpawnsChild: false,
@@ -184,6 +186,8 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     // Codex's failure wording is its own and nothing here describes it yet, so
     // it classifies as nothing rather than through Claude's patterns.
     accountIssues: false,
+    // Catalog is read off a separate app-server even for the running session.
+    sessionModelCatalog: false,
     launchProfiles: false,
     configDirOverride: false,
     // `codex thread list` runs through a fresh app-server child.
@@ -215,6 +219,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     compact: false,
     conversationRewind: false,
     accountIssues: false,
+    sessionModelCatalog: true,
     launchProfiles: false,
     configDirOverride: false,
     threadScanSpawnsChild: false,
@@ -242,6 +247,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     compact: false,
     conversationRewind: false,
     accountIssues: false,
+    sessionModelCatalog: true,
     launchProfiles: false,
     configDirOverride: false,
     threadScanSpawnsChild: false,
@@ -265,6 +271,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     compact: false,
     conversationRewind: false,
     accountIssues: false,
+    sessionModelCatalog: true,
     launchProfiles: false,
     configDirOverride: false,
     threadScanSpawnsChild: false,

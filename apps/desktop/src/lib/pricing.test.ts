@@ -37,34 +37,35 @@ describe("costOf", () => {
         output: 1_000_000,
         cacheRead: 1_000_000,
         cacheCreation: 1_000_000,
-      })
+      }),
+      "claude",
     );
     expect(cost).toBeCloseTo(3 + 15 + 0.3 + 3.75, 10);
   });
 
   it("matches the model by substring, case-insensitively", () => {
     const u = usage({ input: 1_000_000 });
-    expect(costOf({ ...u, model: "claude-OPUS-4-8" })).toBeCloseTo(15, 10);
-    expect(costOf({ ...u, model: "claude-haiku-4-5-20251001" })).toBeCloseTo(1, 10);
+    expect(costOf({ ...u, model: "claude-OPUS-4-8" }, "claude")).toBeCloseTo(15, 10);
+    expect(costOf({ ...u, model: "claude-haiku-4-5-20251001" }, "claude")).toBeCloseTo(1, 10);
   });
 
   it("falls back to opus rates for an unknown claude model", () => {
     expect(
-      costOf(usage({ input: 1_000_000, model: "claude-something-new" }))
+      costOf(usage({ input: 1_000_000, model: "claude-something-new" }), "claude")
     ).toBeCloseTo(15, 10);
   });
 
   it("prices a model from another backend at nothing rather than at opus", () => {
-    expect(costOf(usage({ input: 1_000_000, model: "gpt-5-codex" }))).toBe(0);
+    expect(costOf(usage({ input: 1_000_000, model: "gpt-5-codex" }), "codex")).toBe(0);
   });
 
   it("costs nothing when no tokens were used", () => {
-    expect(costOf(usage())).toBe(0);
+    expect(costOf(usage(), "claude")).toBe(0);
   });
 
   it("charges cache writes more than cache reads", () => {
-    const read = costOf(usage({ cacheRead: 1_000_000 }));
-    const write = costOf(usage({ cacheCreation: 1_000_000 }));
+    const read = costOf(usage({ cacheRead: 1_000_000 }), "claude");
+    const write = costOf(usage({ cacheCreation: 1_000_000 }), "claude");
     expect(write).toBeGreaterThan(read);
   });
 });
@@ -109,7 +110,7 @@ describe("refreshPricing", () => {
     }));
     await refreshPricing();
     // Live rate ($4/M) overrides the fallback table's $3/M for sonnet.
-    expect(costOf(usage({ input: 1_000_000, model: "claude-sonnet-4-5" }))).toBeCloseTo(4, 10);
+    expect(costOf(usage({ input: 1_000_000, model: "claude-sonnet-4-5" }), "claude")).toBeCloseTo(4, 10);
   });
 
   it("skips the network call when the cache is still fresh", async () => {
@@ -127,7 +128,7 @@ describe("refreshPricing", () => {
     await expect(refreshPricing()).resolves.toBeUndefined();
     expect(calls).toBe(1);
     // No live opus rate was ever hydrated, so the fallback table answers.
-    expect(costOf(usage({ input: 1_000_000, model: "claude-opus-4-8" }))).toBeCloseTo(15, 10);
+    expect(costOf(usage({ input: 1_000_000, model: "claude-opus-4-8" }), "claude")).toBeCloseTo(15, 10);
   });
 });
 
@@ -256,7 +257,7 @@ describe("rowCost", () => {
         cacheRead: 0,
         output: 0,
       }),
-      provider: "codex",
+      provider: "codex" as const,
     };
     expect(rowCost(row)).toBeCloseTo(0.2, 10);
   });
@@ -269,14 +270,14 @@ describe("rowCost", () => {
         cacheRead: 0,
         output: 0,
       }),
-      provider: "opencode",
+      provider: "opencode" as const,
       cost: 1.25,
     };
     expect(rowCost(row)).toBe(1.25);
     expect(
       rowCost({
         ...usage({ model: "minimax/minimax-m2.5:free" }),
-        provider: "kilo",
+        provider: "kilo" as const,
         cost: 0,
       }),
     ).toBe(0);
@@ -287,10 +288,10 @@ describe("cacheSavingsOf", () => {
   it("is the gap between full input and cache-read rates", () => {
     const row = {
       ...usage({ cacheRead: 1_000_000 }),
-      provider: "claude",
+      provider: "claude" as const,
     };
-    const asInput = costOf(usage({ input: 1_000_000 }));
-    const asCache = costOf(usage({ cacheRead: 1_000_000 }));
+    const asInput = costOf(usage({ input: 1_000_000 }), "claude");
+    const asCache = costOf(usage({ cacheRead: 1_000_000 }), "claude");
     expect(cacheSavingsOf(row)).toBeCloseTo(asInput - asCache, 10);
   });
 
@@ -298,7 +299,7 @@ describe("cacheSavingsOf", () => {
     expect(
       cacheSavingsOf({
         ...usage({ cacheRead: 1_000_000 }),
-        provider: "opencode",
+        provider: "opencode" as const,
       }),
     ).toBe(0);
   });
