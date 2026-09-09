@@ -1,12 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Emberyx",
-  "version": "0.2.22",
+  "version": "0.2.23",
   "identifier": "com.jiri.emberyx",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "bun run build",
+    "beforeBundleCommand": "bun run sidecar -- --copy",
     "frontendDist": "../dist"
   },
   "app": {
