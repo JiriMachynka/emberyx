@@ -429,11 +429,11 @@ function RailButton({
   );
 }
 
-/** One model, laid out like T3 Code's `ModelListRow`: the name on its own line,
- *  the provider as a quiet icon+label footer under it, and the shortcut and star
- *  flush right. The footer is shown on every rail, not only the mixed one — it
- *  is what keeps every row the same height, so the selected mark and the ⌘ keys
- *  line up down the list. */
+/** One model, laid out like T3 Code's `ModelListRow`: the provider icon sits
+ *  to the left, centered on the two-line label (name, then vendor), with the
+ *  shortcut and star flush right. The vendor line is shown on every rail, not
+ *  only the mixed one — it is what keeps every row the same height, so the
+ *  selected mark and the ⌘ keys line up down the list. */
 function Row({
   title,
   subtitle,
@@ -446,7 +446,7 @@ function Row({
   onSelect,
 }: {
   title: string;
-  /** Provider footer: icon + name, under the model. */
+  /** Provider name under the model. */
   subtitle?: string;
   provider: string;
   /** Context window, already formatted ("1M"). Absent when nothing knows it —
@@ -468,19 +468,25 @@ function Row({
       {selected && (
         <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />
       )}
-      <button type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
-        <span
-          className="block truncate text-sm font-medium leading-snug text-foreground"
-          title={title}
-        >
-          {title}
-        </span>
-        {subtitle && (
-          <span className="mt-0.5 flex items-center gap-1.5 text-xs font-normal leading-snug text-muted-foreground/70">
-            <ProviderIcon provider={provider} className="size-3" />
-            <span className="truncate">{subtitle}</span>
+      <button
+        type="button"
+        onClick={onSelect}
+        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+      >
+        <ProviderIcon provider={provider} className="size-5" />
+        <span className="min-w-0 flex-1">
+          <span
+            className="block truncate text-sm font-medium leading-snug text-foreground"
+            title={title}
+          >
+            {title}
           </span>
-        )}
+          {subtitle && (
+            <span className="mt-0.5 block truncate text-xs font-normal leading-snug text-muted-foreground/70">
+              {subtitle}
+            </span>
+          )}
+        </span>
       </button>
       <div className="flex shrink-0 items-center gap-1.5">
         {context && (

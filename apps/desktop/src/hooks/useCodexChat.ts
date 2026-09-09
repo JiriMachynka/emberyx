@@ -83,7 +83,7 @@ interface Options {
   effort?: string;
   /** Binary override + extra args from Settings → Providers. Identity-stable
    *  at the call site — it rides the spawn effect's deps. */
-  launch?: { command: string | null; args: string[] };
+  launch?: { command: string | null; args: string[]; env?: Record<string, string> };
   /** Sandbox posture for the thread; "" derives it from `skipPermissions`.
    *  Thread-scoped, so changing it respawns. */
   codexSandbox?: string;
@@ -239,12 +239,29 @@ export function useCodexChat({
   const setSessionStatus = useAgentStore((st) => st.setStatus);
   const reportAccountIssue = useAgentStore((st) => st.reportAccountIssue);
 
+  /** Mirror the chat's status into the store. Called from the publish path
+   *  rather than an effect over `status`: an effect needs a cleanup to reset,
+   *  and that cleanup ran on every thinking -> streaming -> tool step, so the
+   *  store saw working -> idle -> working and restarted the run clock. Writing
+   *  at the event also reaches a hidden pane, whose paints are skipped — its
+   *  sidebar row used to sit on a stale status until it was shown again. */
+  const mirroredStatusRef = useRef<ChatStatus | null>(null);
+  const syncSessionStatus = useCallback(
+    (next: ChatStatus) => {
+      if (!enabled || mirroredStatusRef.current === next) return;
+      mirroredStatusRef.current = next;
+      setSessionStatus(emberyxSessionId, SESSION_STATUS[next]);
+      void setAgentLifecycle(emberyxSessionId, next);
+    },
+    [enabled, emberyxSessionId, setSessionStatus]
+  );
+
+  // Idle belongs to the pane going away, which is the one thing that really is
+  // a lifetime, not an event.
   useEffect(() => {
     if (!enabled) return;
-    setSessionStatus(emberyxSessionId, SESSION_STATUS[status]);
-    void setAgentLifecycle(emberyxSessionId, status);
     return () => setSessionStatus(emberyxSessionId, "idle");
-  }, [enabled, status, emberyxSessionId, setSessionStatus]);
+  }, [enabled, emberyxSessionId, setSessionStatus]);
 
   const cancelFrame = useCallback(() => {
     cancelStreamPublish(frameRef.current);
@@ -255,6 +272,7 @@ export function useCodexChat({
   // untouched slice never re-renders its subscribers.
   const publish = useCallback(() => {
     cancelFrame();
+    syncSessionStatus(stateRef.current.status);
     if (!visibleRef.current) {
       dirtyRef.current = true;
       return;
@@ -267,9 +285,11 @@ export function useCodexChat({
     setStatus(s.status);
     setUsage(s.usage);
     setExitReason(s.errorMessage);
-  }, [cancelFrame]);
+  }, [cancelFrame, syncSessionStatus]);
 
   const schedulePublish = useCallback(() => {
+    // Ahead of the paint, and ahead of `publish`'s own hidden-pane bail.
+    syncSessionStatus(stateRef.current.status);
     dirtyRef.current = true;
     frameRef.current = scheduleStreamPublish(frameRef.current, {
       lastAt: lastPublishRef.current,
@@ -280,7 +300,7 @@ export function useCodexChat({
         publish();
       },
     });
-  }, [publish]);
+  }, [publish, syncSessionStatus]);
 
   // A queued frame can only render into a live component.
   useEffect(() => cancelFrame, [cancelFrame]);
@@ -463,7 +483,11 @@ export function useCodexChat({
       try {
         const spawned = await codexSpawn(
           cwd,
-          launch?.command ?? null,
+          {
+            command: launch?.command ?? null,
+            args: launch?.args ?? [],
+            env: launch?.env ?? {},
+          },
           channel
         );
         if (disposed) {

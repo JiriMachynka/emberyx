@@ -6,6 +6,7 @@
 //! migration. The frontend calls `provider_status` once and keys controls off
 //! the capability flags rather than hard-coding provider names.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -137,19 +138,36 @@ pub(crate) fn probe_version(binary: &std::path::Path, env: &[(String, String)]) 
 
 /// Probe one provider. Installed status is cheap; the version probe spawns a
 /// subprocess, so it is skipped when the binary is missing.
-fn probe(provider: Provider, shell_env: Option<&[(String, String)]>) -> ProviderStatus {
+/// `override_command` is the Settings → Providers binary override. Without it a
+/// provider you are actively chatting with reports "not installed", and
+/// `installed` gates the model picker, MCP and Skills surfaces.
+fn probe(
+    provider: Provider,
+    shell_env: Option<&[(String, String)]>,
+    override_command: Option<&str>,
+) -> ProviderStatus {
     let path = shell_env
         .and_then(|env| env.iter().find(|(key, _)| key == "PATH"))
         .map(|(_, value)| value.clone())
         .or_else(|| std::env::var_os("PATH").map(|value| value.to_string_lossy().into_owned()));
-    let binary = path
-        .as_deref()
-        .and_then(|value| resolve_on_path(provider.binary(), value));
+    let name = override_command
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(provider.binary());
+    // An override may be an absolute or relative path rather than a bare name,
+    // which is the point of the field — resolve it as a file first.
+    let binary = if name.contains('/') {
+        let candidate = PathBuf::from(name);
+        candidate.is_file().then_some(candidate)
+    } else {
+        path.as_deref()
+            .and_then(|value| resolve_on_path(name, value))
+    };
     let installed = binary.is_some();
     ProviderStatus {
         id: provider.id().to_string(),
         label: provider.label().to_string(),
-        binary: provider.binary().to_string(),
+        binary: name.to_string(),
         installed,
         version: binary.and_then(|binary| probe_version(&binary, shell_env.unwrap_or(&[]))),
     }
@@ -161,18 +179,27 @@ fn probe(provider: Provider, shell_env: Option<&[(String, String)]>) -> Provider
 /// non-async command runs on the main thread — which on macOS is the webview's
 /// thread, so six node startups would freeze the window while Settings opens.
 #[tauri::command]
-pub async fn provider_status() -> Vec<ProviderStatus> {
-    tauri::async_runtime::spawn_blocking(probe_all)
+pub async fn provider_status(
+    commands: Option<HashMap<String, String>>,
+) -> Vec<ProviderStatus> {
+    let commands = commands.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || probe_all(&commands))
         .await
         .unwrap_or_default()
 }
 
 /// The blocking probe itself: one `--version` subprocess per installed provider.
-pub(crate) fn probe_all() -> Vec<ProviderStatus> {
+pub(crate) fn probe_all(commands: &HashMap<String, String>) -> Vec<ProviderStatus> {
     let shell_env = crate::pty::shell_env_blocking(std::time::Duration::from_secs(5));
     Provider::all()
         .into_iter()
-        .map(|provider| probe(provider, shell_env.as_deref()))
+        .map(|provider| {
+            probe(
+                provider,
+                shell_env.as_deref(),
+                commands.get(provider.id()).map(String::as_str),
+            )
+        })
         .collect()
 }
 
@@ -212,7 +239,7 @@ mod tests {
     fn probe_skips_the_version_subprocess_when_missing() {
         let shell_env = std::env::var_os("PATH")
             .map(|path| vec![("PATH".to_string(), path.to_string_lossy().into_owned())]);
-        let status = probe(Provider::Kilo, shell_env.as_deref());
+        let status = probe(Provider::Kilo, shell_env.as_deref(), None);
         assert_eq!(status.id, "kilo");
         assert_eq!(status.binary, "kilo");
         // Installed or not, the struct is coherent — no crash, version None when
@@ -226,10 +253,38 @@ mod tests {
 
     #[test]
     fn provider_status_reports_all_six() {
-        let rows = probe_all();
+        let rows = probe_all(&HashMap::new());
         assert_eq!(rows.len(), 6);
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, ["claude", "cursor", "codex", "grok", "opencode", "kilo"]);
+    }
+
+    #[test]
+    fn a_binary_override_is_what_gets_probed() {
+        let shell_env = std::env::var_os("PATH")
+            .map(|path| vec![("PATH".to_string(), path.to_string_lossy().into_owned())]);
+        // `kilo` is almost certainly absent, but the override points at a
+        // binary every unix has — the provider must read as installed, because
+        // that is the binary the app would actually spawn.
+        let status = probe(Provider::Kilo, shell_env.as_deref(), Some("sh"));
+        assert!(status.installed);
+        assert_eq!(status.binary, "sh");
+
+        // An override is allowed to be a path, which is the whole point of the
+        // field: a CLI that is not on the login shell's PATH.
+        let by_path = probe(Provider::Kilo, shell_env.as_deref(), Some("/bin/sh"));
+        assert!(by_path.installed);
+
+        // Blank means "no override", not "a binary with an empty name".
+        let blank = probe(Provider::Kilo, shell_env.as_deref(), Some("   "));
+        assert_eq!(blank.binary, "kilo");
+
+        let missing = probe(
+            Provider::Kilo,
+            shell_env.as_deref(),
+            Some("/nowhere/emberyx-not-a-real-binary"),
+        );
+        assert!(!missing.installed);
     }
 
     #[test]

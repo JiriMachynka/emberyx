@@ -5,6 +5,8 @@
  */
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { SpawnLaunch } from "@/lib/acp/transport";
+import { launchFor, loadSettings } from "@/lib/settings";
 import type { SlashCommand, Thread } from "@/types";
 import type { CodexModel } from "./protocol";
 import {
@@ -38,9 +40,25 @@ export interface CodexSpawnResult {
 
 export const codexSpawn = (
   cwd: string,
-  command: string | null,
+  launch: SpawnLaunch,
   onEvent: Channel<CodexEvent>
-) => invoke<CodexSpawnResult>("codex_spawn", { cwd, command, onEvent });
+) =>
+  invoke<CodexSpawnResult>("codex_spawn", {
+    cwd,
+    command: launch.command,
+    extraArgs: launch.args,
+    env: launch.env,
+    onEvent,
+  });
+
+/** The launch override a throwaway probe runs under — see the ACP transport's
+ *  copy. A probe that spawned bare `codex` while the pane spawns the override
+ *  left the thread list, model catalog and skill menu empty for exactly the
+ *  users the override exists for. */
+export const codexProbeLaunch = (): SpawnLaunch => {
+  const { command, args, env } = launchFor(loadSettings(), "codex");
+  return { command, args, env };
+};
 
 export const codexKill = (id: number) => invoke("codex_kill", { id });
 
@@ -97,7 +115,7 @@ const THREAD_PAGE = 50;
  */
 export async function listCodexThreads(cwd: string): Promise<Thread[]> {
   const channel = new Channel<CodexEvent>();
-  const { id } = await codexSpawn(cwd, null, channel);
+  const { id } = await codexSpawn(cwd, codexProbeLaunch(), channel);
   try {
     const result = await invoke<unknown>("codex_thread_list", {
       id,
@@ -121,7 +139,7 @@ export async function listCodexThreads(cwd: string): Promise<Thread[]> {
  */
 export async function listCodexModels(cwd: string): Promise<CodexModel[]> {
   const channel = new Channel<CodexEvent>();
-  const { id } = await codexSpawn(cwd, null, channel);
+  const { id } = await codexSpawn(cwd, codexProbeLaunch(), channel);
   try {
     return decodeModels(await codexRequest(id, "model/list", {}));
   } finally {
@@ -137,7 +155,7 @@ export async function listCodexModels(cwd: string): Promise<CodexModel[]> {
  */
 export async function listCodexSkills(cwd: string): Promise<SlashCommand[]> {
   const channel = new Channel<CodexEvent>();
-  const { id } = await codexSpawn(cwd, null, channel);
+  const { id } = await codexSpawn(cwd, codexProbeLaunch(), channel);
   try {
     const result = await codexRequest(id, "skills/list", { cwds: [cwd] });
     return decodeSkills(result).map((s) => ({
@@ -192,7 +210,7 @@ export async function generateCodexTitle(
     if (ev.type === "exit") settle(text);
   };
 
-  const { id } = await codexSpawn(cwd, null, channel);
+  const { id } = await codexSpawn(cwd, codexProbeLaunch(), channel);
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const opened = await codexThreadStart(id, {

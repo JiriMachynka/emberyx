@@ -5,6 +5,8 @@
  */
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { AgentBackend } from "@/lib/agentBackend";
+import { launchFor, loadSettings } from "@/lib/settings";
 import type { AcpConfigOption } from "./protocol";
 
 export interface AcpNotify {
@@ -27,6 +29,13 @@ export type AcpEvent =
   | { type: "turnFailed"; data: { sessionId: string; message: string } }
   | { type: "stderr"; data: string }
   | { type: "exit"; data: number | null };
+
+/** Binary override, extra args and env a spawn runs under. */
+export interface SpawnLaunch {
+  command: string | null;
+  args: string[];
+  env: Record<string, string>;
+}
 
 export interface AcpSpawnResult {
   id: number;
@@ -71,12 +80,28 @@ export interface AcpSessionResult {
 export const acpSpawn = (
   provider: string,
   cwd: string,
-  command: string | null,
+  launch: SpawnLaunch,
   onEvent: Channel<AcpEvent>
 ): Promise<AcpSpawnResult> =>
-  invoke<AcpSpawnResult>("acp_spawn", { provider, cwd, command, onEvent });
+  invoke<AcpSpawnResult>("acp_spawn", {
+    provider,
+    cwd,
+    command: launch.command,
+    extraArgs: launch.args,
+    env: launch.env,
+    onEvent,
+  });
 
 export const acpKill = (id: number): Promise<void> => invoke("acp_kill", { id });
+
+/** The launch override a throwaway probe runs under. A probe that ignored it
+ *  would spawn a different installation than the chat pane does — the model
+ *  picker went empty for exactly the users the override exists for. */
+const probeLaunch = (provider: string): SpawnLaunch => {
+  const settings = loadSettings();
+  const { command, args, env } = launchFor(settings, provider as AgentBackend);
+  return { command, args, env };
+};
 
 export const acpSessionNew = (id: number, cwd: string): Promise<AcpSessionResult> =>
   invoke<AcpSessionResult>("acp_session_new", { id, cwd });
@@ -174,7 +199,12 @@ export async function readAcpModels(
   provider: string,
   cwd: string
 ): Promise<{ value: string; label: string }[]> {
-  const spawned = await acpSpawn(provider, cwd, null, new Channel<AcpEvent>());
+  const spawned = await acpSpawn(
+    provider,
+    cwd,
+    probeLaunch(provider),
+    new Channel<AcpEvent>()
+  );
   try {
     return modelOptions(await acpSessionNew(spawned.id, cwd));
   } finally {

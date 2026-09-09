@@ -78,7 +78,7 @@ interface Options {
   model?: string;
   /** Binary override + extra args from Settings → Providers. Identity-stable
    *  at the call site — it rides the spawn effect's deps. */
-  launch?: { command: string | null; args: string[] };
+  launch?: { command: string | null; args: string[]; env?: Record<string, string> };
   /** The composer's access level, as the pair Claude's flags need. ACP has no
    *  spawn-time equivalent, so the level is applied per request in
    *  `handleRequest` instead — see `autoPermission`. */
@@ -133,8 +133,12 @@ export function useAcpChat({
   const processRef = useRef<number | null>(null);
   const sessionRef = useRef<string | null>(null);
   const channelRef = useRef<Channel<AcpEvent> | null>(null);
-  /** The agent request a permission prompt is answering, kept for the reply. */
-  const permissionRef = useRef<AcpPermission | null>(null);
+  /** Requests the agent is blocked on, oldest first; the head is the one the
+   *  prompt is showing. A queue rather than a scalar because nothing in ACP
+   *  says only one may be outstanding — opencode runs tool calls in parallel,
+   *  and a second request used to overwrite the first, which was then never
+   *  answered and hung the turn until its timeout. */
+  const permissionQueueRef = useRef<AcpPermission[]>([]);
   // Held in a ref because `handleRequest` is the channel's handler: putting the
   // level in its deps would rebuild the handler mid-turn. Changing the level
   // takes effect on the next request, with no respawn — unlike Claude and
@@ -149,6 +153,10 @@ export function useAcpChat({
   // Tool calls this client approved on the user's behalf, so the row can say so
   // rather than looking like the agent was never gated at all.
   const autoApprovedRef = useRef(new Set<string>());
+  /** The last session id this provider handed us, which is the only id it can
+   *  be asked to load back. Survives a restart of the child within this pane;
+   *  nothing outside it stores an ACP session id. */
+  const issuedSessionRef = useRef<string | null>(null);
   /** The model the session is actually on, so a re-render never re-sends
    *  `session/set_model` for a switch that already took. */
   const appliedModelRef = useRef("");
@@ -159,11 +167,28 @@ export function useAcpChat({
 
   const setSessionStatus = useAgentStore((s) => s.setStatus);
 
+  /** Mirror the chat's status into the store. Called from the publish path
+   *  rather than an effect over `status`: an effect needs a cleanup to reset,
+   *  and that cleanup ran on every thinking -> streaming -> tool step, so the
+   *  store saw working -> idle -> working and restarted the run clock. Writing
+   *  at the event also reaches a hidden pane, whose paints are skipped — its
+   *  sidebar row used to sit on a stale status until it was shown again. */
+  const mirroredStatusRef = useRef<ChatStatus | null>(null);
+  const syncSessionStatus = useCallback(
+    (next: ChatStatus) => {
+      if (!enabled || mirroredStatusRef.current === next) return;
+      mirroredStatusRef.current = next;
+      setSessionStatus(emberyxSessionId, SESSION_STATUS[next]);
+    },
+    [enabled, emberyxSessionId, setSessionStatus]
+  );
+
+  // Idle belongs to the pane going away, which is the one thing that really is
+  // a lifetime, not an event.
   useEffect(() => {
     if (!enabled) return;
-    setSessionStatus(emberyxSessionId, SESSION_STATUS[status]);
     return () => setSessionStatus(emberyxSessionId, "idle");
-  }, [enabled, status, emberyxSessionId, setSessionStatus]);
+  }, [enabled, emberyxSessionId, setSessionStatus]);
 
   const cancelFrame = useCallback(() => {
     cancelStreamPublish(frameRef.current);
@@ -172,6 +197,7 @@ export function useAcpChat({
 
   const publish = useCallback(() => {
     cancelFrame();
+    syncSessionStatus(turnRef.current.status);
     if (!visibleRef.current) {
       dirtyRef.current = true;
       return;
@@ -184,9 +210,11 @@ export function useAcpChat({
       turn.message ? [...committedRef.current, turn.message] : committedRef.current
     );
     setStatus(turn.status);
-  }, [cancelFrame]);
+  }, [cancelFrame, syncSessionStatus]);
 
   const schedulePublish = useCallback(() => {
+    // Ahead of the paint, and ahead of `publish`'s own hidden-pane bail.
+    syncSessionStatus(turnRef.current.status);
     dirtyRef.current = true;
     frameRef.current = scheduleStreamPublish(frameRef.current, {
       lastAt: lastPublishRef.current,
@@ -197,7 +225,7 @@ export function useAcpChat({
         publish();
       },
     });
-  }, [publish]);
+  }, [publish, syncSessionStatus]);
 
   // A queued frame can only render into a live component.
   useEffect(() => cancelFrame, [cancelFrame]);
@@ -206,6 +234,49 @@ export function useAcpChat({
     if (!visible) return;
     if (dirtyRef.current) publish();
   }, [visible, publish]);
+
+  /** Show the oldest unanswered request, or nothing when the queue drained.
+   *  The turn keeps working while later requests wait their turn. */
+  const showHeadPermission = useCallback(() => {
+    const head = permissionQueueRef.current[0];
+    setPendingPermission(
+      head
+        ? {
+            requestId: String(head.requestId),
+            toolName: head.title,
+            input: head.description ?? {},
+            suggestions: [],
+            toolUseId: head.toolCallId ?? "",
+          }
+        : null
+    );
+    turnRef.current = {
+      ...turnRef.current,
+      status: head ? "awaiting_permission" : "tool",
+    };
+    publish();
+  }, [publish]);
+
+  /**
+   * Drop every queued request. `answer` tells the agent they were cancelled,
+   * which is what ACP asks a client to do on `session/cancel`; a dead or
+   * about-to-die process is dropped silently instead, since writing to it
+   * either fails or answers a request the next process never made.
+   */
+  const clearPermissions = useCallback(
+    (answer: boolean) => {
+      const id = processRef.current;
+      const queued = permissionQueueRef.current;
+      permissionQueueRef.current = [];
+      if (answer && id !== null) {
+        for (const permission of queued) {
+          void acpRespond(id, permission.requestId, permissionOutcome(null));
+        }
+      }
+      setPendingPermission(null);
+    },
+    []
+  );
 
   /** Fold the streamed turn into the committed transcript. */
   const commitTurn = useCallback(
@@ -248,16 +319,8 @@ export function useAcpChat({
           await acpRespond(id, request.id, permissionOutcome(auto));
           return;
         }
-        permissionRef.current = permission;
-        setPendingPermission({
-          requestId: String(permission.requestId),
-          toolName: permission.title,
-          input: permission.description ?? {},
-          suggestions: [],
-          toolUseId: permission.toolCallId ?? "",
-        });
-        turnRef.current = { ...turnRef.current, status: "awaiting_permission" };
-        publish();
+        permissionQueueRef.current = [...permissionQueueRef.current, permission];
+        showHeadPermission();
         return;
       }
 
@@ -282,7 +345,7 @@ export function useAcpChat({
         await acpRespond(id, request.id, null, String(e));
       }
     },
-    [publish]
+    [publish, showHeadPermission]
   );
 
   const applyNotification = useCallback((method: string, params: unknown) => {
@@ -343,8 +406,11 @@ export function useAcpChat({
           stderr = (stderr + ev.data).slice(-STDERR_CAP);
           break;
         case "exit": {
-          setPendingPermission(null);
-          permissionRef.current = null;
+          clearPermissions(false);
+          // A turn the process died in the middle of is still over: committing
+          // it stops the bubble rendering as live forever and lets its
+          // checkpoint settle, which a bare status change never did.
+          commitTurn("exited");
           turnRef.current = { ...turnRef.current, status: "exited" };
           publish();
           if (ev.data !== 0) {
@@ -361,7 +427,11 @@ export function useAcpChat({
         const spawned = await acpSpawn(
           provider,
           cwd,
-          launch?.command ?? null,
+          {
+            command: launch?.command ?? null,
+            args: launch?.args ?? [],
+            env: launch?.env ?? {},
+          },
           channel
         );
         if (disposed) {
@@ -369,18 +439,31 @@ export function useAcpChat({
           return;
         }
         processRef.current = spawned.id;
-        // Resuming is only offered by agents that report `loadSession`; asking
-        // one that doesn't would fail the whole spawn rather than start a chat.
-        const canLoad = spawned.initialize?.agentCapabilities?.loadSession === true;
-        const session =
-          resume && canLoad
-            ? await acpSessionLoad(spawned.id, resume, cwd)
-            : await acpSessionNew(spawned.id, cwd);
+        // Resuming is only offered by agents that report `loadSession`, and only
+        // for an id *this provider* issued. Session ids are per-provider, and
+        // this hook publishes none (`threadId` below is undefined), so the id on
+        // an ACP session can only have come from the Claude or Codex thread it
+        // was switched away from — handing that to `grok agent stdio` fails the
+        // whole spawn with "session/load failed: Path not found." rather than
+        // opening a chat. A load is attempted only when a previous session in
+        // this pane produced the id.
+        const canLoad =
+          spawned.initialize?.agentCapabilities?.loadSession === true &&
+          resume !== undefined &&
+          resume === issuedSessionRef.current;
+        // Even an id this provider issued can go stale — the agent prunes its own
+        // session store, and a load failure must cost the history, not the chat.
+        const session = canLoad
+          ? await acpSessionLoad(spawned.id, resume, cwd).catch(() =>
+              acpSessionNew(spawned.id, cwd)
+            )
+          : await acpSessionNew(spawned.id, cwd);
         if (disposed) {
           void acpKill(spawned.id);
           return;
         }
         sessionRef.current = session.sessionId;
+        issuedSessionRef.current = session.sessionId;
         appliedModelRef.current = currentModel(session);
         setUsage((u) => ({
           ...u,
@@ -416,6 +499,7 @@ export function useAcpChat({
     publish,
     schedulePublish,
     commitTurn,
+    clearPermissions,
   ]);
 
   // Pin the picked model, at open and on a mid-session switch alike. "" means
@@ -476,10 +560,17 @@ export function useAcpChat({
     const sessionId = sessionRef.current;
     if (id === null || !sessionId) return;
     stoppedRef.current = true;
+    // Cancelling while the agent waits on a permission is the common case —
+    // that is what the user is stopping. An agent blocked in its permission
+    // handler never processes `session/cancel`, so answer first, then cancel.
+    clearPermissions(true);
     void acpCancel(id, sessionId);
-  }, []);
+  }, [clearPermissions]);
 
   const restart = useCallback(() => {
+    // The prompt belongs to the process about to be killed: its request ids
+    // mean nothing to the next one, which numbers its own from scratch.
+    clearPermissions(false);
     setExitReason(null);
     // A fresh session has not refused anything yet, and `session/new` picks the
     // model up again on its own.
@@ -489,12 +580,12 @@ export function useAcpChat({
     turnRef.current = emptyTurn();
     publish();
     setRestartNonce((n) => n + 1);
-  }, [publish]);
+  }, [clearPermissions, publish]);
 
   /** Map the pane's three-way decision onto the options this agent offered. */
   const respond = useCallback((decision: PermissionDecision) => {
     const id = processRef.current;
-    const permission = permissionRef.current;
+    const permission = permissionQueueRef.current[0];
     if (id === null || !permission) return;
     const wanted =
       decision === "deny"
@@ -506,12 +597,12 @@ export function useAcpChat({
       wanted
         .map((kind) => permission.options.find((o) => o.kind === kind))
         .find(Boolean) ?? permission.options[0];
-    setPendingPermission(null);
-    permissionRef.current = null;
-    turnRef.current = { ...turnRef.current, status: "tool" };
-    publish();
+    permissionQueueRef.current = permissionQueueRef.current.slice(1);
     void acpRespond(id, permission.requestId, permissionOutcome(option.optionId));
-  }, [publish]);
+    // Whatever else the agent is blocked on becomes the prompt; an empty queue
+    // hands the turn back to the tool that is running.
+    showHeadPermission();
+  }, [showHeadPermission]);
 
   return {
     messages,

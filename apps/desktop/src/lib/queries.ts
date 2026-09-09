@@ -650,22 +650,43 @@ export const invalidateForge = (qc: QueryClient) => {
 
 // Provider install/auth detection, for the Settings → Providers surface.
 export const providerKeys = {
-  status: () => ["providers", "status"] as const,
+  status: (commands: Record<string, string>) =>
+    ["providers", "status", commands] as const,
+};
+
+/** Binary overrides, provider id → command. Detection resolves the binary the
+ *  app would actually spawn; without these a provider you are chatting with
+ *  through an override reads as "not installed", which hides its model picker
+ *  rail and its MCP and Skills rows. Read here rather than threaded through
+ *  six call sites, and carried in the query key so a changed override rescans. */
+const providerCommands = (): Record<string, string> => {
+  const { providerLaunch } = loadSettings();
+  const commands: Record<string, string> = {};
+  for (const [provider, launch] of Object.entries(providerLaunch)) {
+    const command = launch?.command.trim();
+    if (command) commands[provider] = command;
+  }
+  return commands;
 };
 
 /** Install + version probe for every provider CLI. Rescan on demand. One
  *  `--version` subprocess per provider, so it is refetched rarely and only
  *  where its answer is shown. */
-export const useProviderStatus = (enabled = true) =>
-  useQuery({
-    queryKey: providerKeys.status(),
-    queryFn: () => invoke<ProviderStatus[]>("provider_status"),
+export const useProviderStatus = (enabled = true) => {
+  // Per mount, not per render: every consumer of this hook would otherwise
+  // re-read localStorage on each pass. Surfaces that show it are opened fresh,
+  // so an override edited mid-session is picked up the next time one opens.
+  const commands = useMemo(providerCommands, []);
+  return useQuery({
+    queryKey: providerKeys.status(commands),
+    queryFn: () => invoke<ProviderStatus[]>("provider_status", { commands }),
     enabled,
     staleTime: 5 * 60_000,
     // Six `--version` subprocesses; window focus is not new information.
     refetchOnWindowFocus: false,
     retry: false,
   });
+};
 
 export const invalidateProviders = (qc: QueryClient) => {
   qc.invalidateQueries({ queryKey: ["providers"] });

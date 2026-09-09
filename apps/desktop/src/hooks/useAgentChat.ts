@@ -623,14 +623,35 @@ export function useAgentChat({
   const reportAccountIssue = useAgentStore((st) => st.reportAccountIssue);
   const setSessionStatus = useAgentStore((st) => st.setStatus);
 
-  // Mirror the chat's live status into the global store so the sidebar dot can
-  // turn orange while Claude works. Reset to idle on unmount.
+  // Read through a ref so `applyStatus` stays identity-stable: it is called
+  // from callbacks all over this file, and a new identity per `enabled` would
+  // have to be threaded through every one of their dependency lists.
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+
+  /** Set the chat's status and mirror it into the store in the same breath.
+   *  This used to be an effect over `status`, which needed a cleanup to reset —
+   *  and that cleanup ran on every thinking -> streaming -> tool step, so the
+   *  store saw working -> idle -> working and restarted the run clock the
+   *  "Working 12s" readout measures. A status change is an event, not a
+   *  lifetime, so it is written where it happens. */
+  const applyStatus = useCallback(
+    (next: ChatStatus) => {
+      setStatus(next);
+      if (!enabledRef.current) return;
+      setSessionStatus(emberyxSessionId, SESSION_STATUS[next]);
+      void setAgentLifecycle(emberyxSessionId, next);
+    },
+    [emberyxSessionId, setSessionStatus]
+  );
+
+  // Idle belongs to the pane going away, which is the one thing that really is
+  // a lifetime, not an event.
   useEffect(() => {
     if (!enabled) return;
-    setSessionStatus(emberyxSessionId, SESSION_STATUS[status]);
-    void setAgentLifecycle(emberyxSessionId, status);
     return () => setSessionStatus(emberyxSessionId, "idle");
-  }, [enabled, status, emberyxSessionId, setSessionStatus]);
+  }, [enabled, emberyxSessionId, setSessionStatus]);
+
   const clearAccountIssue = useAgentStore((st) => st.clearAccountIssue);
 
   // Turns typed while the agent was busy. The queue itself is owned by the Rust
@@ -918,7 +939,7 @@ export function useAgentChat({
             suggestions: (req.permission_suggestions as unknown[]) ?? [],
             toolUseId: req.tool_use_id as string,
           });
-          setStatus("awaiting_permission");
+          applyStatus("awaiting_permission");
         }
         return;
       }
@@ -966,7 +987,7 @@ export function useAgentChat({
             setUsage((u) => (u.contextTokens === ctx ? u : { ...u, contextTokens: ctx }));
           }
           scheduleUsage();
-          setStatus("thinking");
+          applyStatus("thinking");
         } else if (evType === "content_block_start") {
           const index = ev.index as number;
           if (!isRecord(ev.content_block)) return;
@@ -981,7 +1002,7 @@ export function useAgentChat({
                 partial: "",
               });
             });
-            setStatus("tool");
+            applyStatus("tool");
           }
         } else if (evType === "content_block_delta") {
           const index = ev.index as number;
@@ -989,7 +1010,7 @@ export function useAgentChat({
           const delta = ev.delta;
           const dType = typeof delta.type === "string" ? delta.type : "";
           if (dType === "text_delta") {
-            setStatus("streaming");
+            applyStatus("streaming");
             if (typeof delta.text !== "string") return;
             const text = delta.text;
             pushDraft((d) => {
@@ -1146,7 +1167,7 @@ export function useAgentChat({
           typeof subtype === "string" &&
           subtype.startsWith("error") &&
           !interruptedRef.current;
-        setStatus(failed ? "error" : "idle");
+        applyStatus(failed ? "error" : "idle");
         // Only the failure is announced here; the Stop hook covers success.
         if (failed) {
           const detail = typeof msg.result === "string" ? msg.result : "";
@@ -1415,17 +1436,17 @@ export function useAgentChat({
           // The user asked for this. Stay idle and quietly respawn against the
           // same thread id so the transcript stays live and sendable.
           interruptedRef.current = false;
-          setStatus("idle");
+          applyStatus("idle");
           setAttempt((n) => n + 1);
           return;
         }
         if (!usedRef.current && bootRetryRef.current < 1) {
           bootRetryRef.current += 1;
-          setStatus("idle");
+          applyStatus("idle");
           setAttempt((n) => n + 1);
           return;
         }
-        setStatus("exited");
+        applyStatus("exited");
         // A crash often says why only on stderr, and never reaches `result`.
         if (ev.data !== 0) {
           checkStderr();
@@ -1494,7 +1515,7 @@ export function useAgentChat({
           setAttempt((n) => n + 1);
           return;
         }
-        setStatus("error");
+        applyStatus("error");
         // Without this the pane says only "Session failed." — true, useless, and
         // indistinguishable between a missing CLI and a bad flag.
         setExitReason(String(e));
@@ -1538,7 +1559,7 @@ export function useAgentChat({
     interruptedRef.current = false;
     bootRetryRef.current = 0;
     setAwake(true);
-    setStatus("idle");
+    applyStatus("idle");
     setPending(null);
     setPendingAsk(null);
     setExitReason(null);
@@ -1557,7 +1578,7 @@ export function useAgentChat({
     void invoke("agent_send", { id, message: line }).catch((e) => {
       console.error("[emberyx] agent_send failed", e);
       if (!fatal) return;
-      setStatus("error");
+      applyStatus("error");
       setExitReason(e instanceof Error ? e.message : String(e));
     });
   }, []);
@@ -1577,7 +1598,7 @@ export function useAgentChat({
       sendLine(id, line, false);
     }
     setPending(null);
-    setStatus("idle");
+    applyStatus("idle");
   }, [setPending, sendLine]);
 
   // Stop the current turn, keeping everything it already produced.
@@ -1659,7 +1680,7 @@ export function useAgentChat({
       // deadlocks the pane exactly the way a failed prompt does.
       sendLine(id, line, decision !== "deny");
       setPending(null);
-      setStatus(decision === "deny" ? "idle" : "thinking");
+      applyStatus(decision === "deny" ? "idle" : "thinking");
     },
     [setPending, sendLine]
   );
@@ -1679,7 +1700,7 @@ export function useAgentChat({
       .then((pending) => {
         if (cancelled || !pending || askRef.current) return;
         setPendingAsk(pending);
-        setStatus("awaiting_answer");
+        applyStatus("awaiting_answer");
       })
       .catch((e) => console.error("[emberyx] pending ask read failed", e));
     const unlisten = listen<unknown>("ask-user", (ev) => {
@@ -1694,7 +1715,7 @@ export function useAgentChat({
         return;
       }
       setPendingAsk({ id: payload.id, questions });
-      setStatus("awaiting_answer");
+      applyStatus("awaiting_answer");
     });
     return () => {
       cancelled = true;
@@ -1708,7 +1729,7 @@ export function useAgentChat({
     if (!pending) return;
     setPendingAsk(null);
     void invoke("answer_ask", { id: pending.id, answer });
-    setStatus("thinking");
+    applyStatus("thinking");
   }, []);
 
   /** Put a turn on the wire. Callers must have checked the agent is free. */
@@ -1717,7 +1738,7 @@ export function useAgentChat({
     const id = idRef.current;
     const hasImages = !!images && images.length > 0;
     if (id === null) return;
-    setStatus("thinking");
+    applyStatus("thinking");
     // Snapshot the tree before the turn touches it. Fired here rather than in
     // `send` so a queued turn is covered too, and never awaited: a checkpoint
     // is a safety net, not a precondition for the turn the user asked for.
@@ -1778,7 +1799,7 @@ export function useAgentChat({
         // transcript already shows it) and go busy, so anything sent while the
         // spawn is in flight takes the queue path below instead of racing it.
         pendingSendRef.current = { text, images };
-        setStatus("thinking");
+        applyStatus("thinking");
         wake();
         return;
       }

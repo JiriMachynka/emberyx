@@ -293,20 +293,26 @@ impl Inner {
         self: &Arc<Self>,
         cwd: String,
         command: Option<String>,
+        extra_args: Vec<String>,
+        env: HashMap<String, String>,
         on_event: Channel<CodexEvent>,
     ) -> Result<SpawnResult> {
         let mut cmd = Command::new(command.as_deref().unwrap_or("codex"));
         cmd.arg("app-server")
+            .args(&extra_args)
             .current_dir(&cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        if let Some(env) = crate::pty::shell_env_blocking(ENV_WAIT) {
-            for (k, v) in &env {
+        if let Some(shell) = crate::pty::shell_env_blocking(ENV_WAIT) {
+            for (k, v) in &shell {
                 cmd.env(k, v);
             }
         }
+        // After the login-shell capture, so a user's row wins over the shell's
+        // value for the same name. Same ordering as the Claude transport.
+        crate::agent::apply_launch_env(&mut cmd, None, &env);
 
         let mut child = cmd.spawn().map_err(|e| e.to_string())?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
@@ -652,12 +658,22 @@ pub async fn codex_spawn(
     manager: tauri::State<'_, CodexManager>,
     cwd: String,
     command: Option<String>,
+    extra_args: Option<Vec<String>>,
+    env: Option<HashMap<String, String>>,
     on_event: Channel<CodexEvent>,
 ) -> Result<SpawnResult> {
     // Blocks on the initialize round trip and a `codex --version` subprocess,
     // so keep it off the async runtime's worker threads.
     let inner = manager.shared();
-    tauri::async_runtime::spawn_blocking(move || inner.spawn(cwd, command, on_event))
+    tauri::async_runtime::spawn_blocking(move || {
+        inner.spawn(
+            cwd,
+            command,
+            extra_args.unwrap_or_default(),
+            env.unwrap_or_default(),
+            on_event,
+        )
+    })
         .await
         .map_err(|e| crate::err!("codex spawn join failed: {e}"))?
 }

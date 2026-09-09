@@ -3,7 +3,6 @@ import {
   PROVIDERS,
   PROVIDER_BINARY,
   PROVIDER_LABEL,
-  capabilitiesOf,
   isProvider,
   providerToBackend,
 } from "@/lib/providers";
@@ -34,52 +33,6 @@ describe("PROVIDERS", () => {
     expect(providerToBackend("grok")).toBe("grok");
     expect(providerToBackend("opencode")).toBe("opencode");
     expect(providerToBackend("kilo")).toBeNull();
-  });
-});
-
-describe("capabilitiesOf", () => {
-  it("keeps Claude's full surface — the ten session flags plus the seam", () => {
-    const caps = capabilitiesOf("claude");
-    for (const key of [
-      "threads",
-      "usage",
-      "hookStatus",
-      "permissions",
-      "askUser",
-      "slashCommands",
-      "subagents",
-      "modelPicker",
-      "reasoningEffort",
-      "steering",
-      "conversationRewind",
-      "installDetection",
-      "authStatus",
-      "costReported",
-      "headless",
-    ] as const) {
-      expect(caps[key]).toBe(true);
-    }
-  });
-
-  it("codes Codex as real-cost-derived: install/auth yes, costReported no", () => {
-    expect(capabilitiesOf("codex").installDetection).toBe(true);
-    expect(capabilitiesOf("codex").authStatus).toBe(true);
-    expect(capabilitiesOf("codex").costReported).toBe(false);
-    expect(capabilitiesOf("codex").headless).toBe(true);
-  });
-
-  it("detects every provider but only claims a driver where one exists", () => {
-    for (const p of ["cursor", "grok", "opencode", "kilo"] as const) {
-      expect(capabilitiesOf(p).installDetection).toBe(true);
-      expect(capabilitiesOf(p).headless).toBe(false);
-      expect(capabilitiesOf(p).threads).toBe(false);
-      expect(capabilitiesOf(p).conversationRewind).toBe(false);
-    }
-  });
-
-  it("hands back one shared record per provider, so memoized panes see a stable prop", () => {
-    expect(capabilitiesOf("claude")).toBe(capabilitiesOf("claude"));
-    expect(capabilitiesOf("kilo")).toBe(capabilitiesOf("kilo"));
   });
 });
 

@@ -4,6 +4,13 @@
  * picker, slash commands, the model list) is gated on a capability here rather
  * than on the shape of the configured command, so adding a backend is a matter
  * of filling in one row.
+ *
+ * This is the **only** capability table. `providers.ts` carried a second one
+ * until 2026-09-09; nothing read it, and it had drifted out of agreement with
+ * this one — it called Grok and OpenCode permission-less while `useAcpChat`
+ * was answering their permission requests. Providers with no live-chat driver
+ * (Kilo) live there, not here: they have no capabilities to state, only
+ * detection.
  */
 
 export type AgentBackend = "claude" | "codex" | "opencode" | "grok" | "cursor";

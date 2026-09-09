@@ -543,7 +543,7 @@ pub async fn agent_spawn(
 /// User launch env after the login-shell capture so PATH still finds `claude`,
 /// and `CLAUDE_CONFIG_DIR` last so the dedicated field wins over a same-named
 /// env row.
-fn apply_launch_env(
+pub(crate) fn apply_launch_env(
     cmd: &mut Command,
     config_dir: Option<&str>,
     env: &HashMap<String, String>,

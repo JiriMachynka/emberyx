@@ -31,7 +31,7 @@
 //! vendor-namespaced `_meta["x.ai/sessionConfig"]` — so the client reads both
 //! rather than hand-writing a model list for either.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
@@ -52,6 +52,21 @@ pub const PROTOCOL_VERSION: i64 = 1;
 /// env capture, and these CLIs live in ~/.opencode/bin and friends, which
 /// Finder's stub PATH misses.
 const ENV_WAIT: Duration = Duration::from_secs(5);
+
+/// How often the stuck-request watchdog looks, and how old an unanswered
+/// agent->client request has to be before it is reported. Diagnostics only:
+/// both are inert unless EMBERYX_TIMINGS is set.
+const STUCK_POLL: Duration = Duration::from_secs(5);
+const STUCK_AFTER: Duration = Duration::from_secs(10);
+
+/// Same flag `threads.rs` uses, so one env var turns on every timing path.
+fn timings_on() -> bool {
+    std::env::var_os("EMBERYX_TIMINGS").is_some()
+}
+
+fn ms(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
+}
 
 /// Bounds round trips that are answered promptly (`initialize`, `session/new`).
 /// Never a turn: see `prompt` below.
@@ -89,14 +104,23 @@ pub enum AcpEvent {
     Exit(Option<i32>),
 }
 
+/// An agent->client request handed to the frontend and not yet answered. The
+/// agent is blocked the whole time, so its age is the entire latency budget —
+/// and a request that is never answered is a turn that never resumes, which
+/// otherwise looks identical to a slow model.
+struct OpenRequest {
+    method: String,
+    at: std::time::Instant,
+}
+
 struct Session {
     child: Child,
     stdin: Arc<Mutex<ChildStdin>>,
     next_request_id: Arc<AtomicI64>,
     pending: Arc<Pending>,
-    /// Agent->client request ids handed to the frontend but not yet answered.
+    /// Agent->client requests handed to the frontend but not yet answered.
     /// Answering an unknown id is rejected rather than written to stdin.
-    open_agent_requests: Arc<Mutex<HashSet<i64>>>,
+    open_agent_requests: Arc<Mutex<HashMap<i64, OpenRequest>>>,
 }
 
 /// The pieces a command needs to talk to a live session, cloned out from under
@@ -106,7 +130,7 @@ struct Handle {
     stdin: Arc<Mutex<ChildStdin>>,
     next_request_id: Arc<AtomicI64>,
     pending: Arc<Pending>,
-    open_agent_requests: Arc<Mutex<HashSet<i64>>>,
+    open_agent_requests: Arc<Mutex<HashMap<i64, OpenRequest>>>,
 }
 
 #[derive(Default)]
@@ -191,21 +215,27 @@ impl Inner {
         provider: String,
         cwd: String,
         command: Option<String>,
+        extra_args: Vec<String>,
+        env: HashMap<String, String>,
         on_event: Channel<AcpEvent>,
     ) -> Result<SpawnResult> {
         let (binary, args) = acp_command(&provider)?;
         let mut cmd = Command::new(command.as_deref().unwrap_or(binary));
         cmd.args(args)
+            .args(&extra_args)
             .current_dir(&cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        if let Some(env) = crate::pty::shell_env_blocking(ENV_WAIT) {
-            for (k, v) in &env {
+        if let Some(shell) = crate::pty::shell_env_blocking(ENV_WAIT) {
+            for (k, v) in &shell {
                 cmd.env(k, v);
             }
         }
+        // After the login-shell capture, so a user's row wins over the shell's
+        // value for the same name. Same ordering as the Claude transport.
+        crate::agent::apply_launch_env(&mut cmd, None, &env);
 
         let mut child = cmd.spawn().map_err(|e| e.to_string())?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
@@ -218,7 +248,7 @@ impl Inner {
             stdin: Arc::new(Mutex::new(stdin)),
             next_request_id: Arc::new(AtomicI64::new(1)),
             pending: Arc::new(Pending::default()),
-            open_agent_requests: Arc::new(Mutex::new(HashSet::new())),
+            open_agent_requests: Arc::new(Mutex::new(HashMap::new())),
         };
         let handle = Handle {
             stdin: Arc::clone(&session.stdin),
@@ -257,7 +287,19 @@ impl Inner {
         if provider == "cursor" {
             initialize_params["_meta"] = json!({ "parameterizedModelPicker": true });
         }
-        let initialize = request(&handle, "initialize", initialize_params)?;
+        // A failed initialize must not leave the child running: the id never
+        // reaches the frontend, so nothing else can ever kill it. The realistic
+        // case is the 120s timeout against an agent that started but is not
+        // answering — a wrong binary override, or a CLI sitting on an auth
+        // prompt — and one orphan per retry is how a machine ends up with a
+        // dozen of them.
+        let initialize = match request(&handle, "initialize", initialize_params) {
+            Ok(value) => value,
+            Err(e) => {
+                self.kill(id).ok();
+                return Err(e);
+            }
+        };
 
         Ok(SpawnResult { id, initialize })
     }
@@ -291,7 +333,13 @@ impl Inner {
                         continue;
                     }
                     Frame::Request(req) => {
-                        open.lock().unwrap().insert(req.id);
+                        open.lock().unwrap().insert(
+                            req.id,
+                            OpenRequest {
+                                method: req.method.clone(),
+                                at: std::time::Instant::now(),
+                            },
+                        );
                         AcpEvent::Request(ServerRequest {
                             id: req.id,
                             method: req.method,
@@ -310,6 +358,28 @@ impl Inner {
             pending.fail_all("the ACP agent exited");
             let _ = tx.send(Chunk::Done);
         });
+
+        if timings_on() {
+            let open = Arc::clone(&handle.open_agent_requests);
+            let inner = Arc::clone(self);
+            std::thread::spawn(move || loop {
+                std::thread::sleep(STUCK_POLL);
+                // The session is removed when the reader reaps, which is what
+                // ends this thread.
+                if !inner.sessions.lock().unwrap().contains_key(&id) {
+                    return;
+                }
+                for (request_id, request) in open.lock().unwrap().iter() {
+                    if request.at.elapsed() >= STUCK_AFTER {
+                        eprintln!(
+                            "[timing] acp {} id={request_id} UNANSWERED for {:.1}s",
+                            request.method,
+                            request.at.elapsed().as_secs_f64()
+                        );
+                    }
+                }
+            });
+        }
 
         let inner = Arc::clone(self);
         std::thread::spawn(move || {
@@ -454,8 +524,16 @@ fn request(handle: &Handle, method: &str, params: Value) -> Result<Value> {
 /// written, or the agent stays blocked; an unknown id is refused so a stale
 /// answer can't be mistaken for the live one.
 fn respond(handle: &Handle, id: i64, outcome: std::result::Result<Value, RpcError>) -> Result<()> {
-    if !handle.open_agent_requests.lock().unwrap().remove(&id) {
+    let open = handle.open_agent_requests.lock().unwrap().remove(&id);
+    let Some(open) = open else {
         return Err(crate::err!("no ACP request {id} is waiting for an answer"));
+    };
+    if timings_on() {
+        eprintln!(
+            "[timing] acp {} id={id} answered after={:.2}ms",
+            open.method,
+            ms(open.at.elapsed())
+        );
     }
     let body = match outcome {
         Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
@@ -478,12 +556,21 @@ pub async fn acp_spawn(
     provider: String,
     cwd: String,
     command: Option<String>,
+    extra_args: Option<Vec<String>>,
+    env: Option<HashMap<String, String>>,
     on_event: Channel<AcpEvent>,
 ) -> Result<SpawnResult> {
     // Blocks on the initialize round trip, so keep it off the runtime's workers.
     let inner = manager.shared();
     tauri::async_runtime::spawn_blocking(move || {
-        inner.spawn(provider, cwd, command, on_event)
+        inner.spawn(
+            provider,
+            cwd,
+            command,
+            extra_args.unwrap_or_default(),
+            env.unwrap_or_default(),
+            on_event,
+        )
     })
     .await
     .map_err(|e| crate::err!("ACP spawn join failed: {e}"))?
@@ -557,6 +644,7 @@ pub fn acp_prompt(
             "sessionId": session_id,
             "prompt": [{ "type": "text", "text": text }],
         });
+        let started = std::time::Instant::now();
         let event = match request_with(&handle, "session/prompt", params, TURN_TIMEOUT) {
             Ok(result) => AcpEvent::TurnEnded { session_id, result },
             Err(e) => AcpEvent::TurnFailed {
@@ -564,6 +652,9 @@ pub fn acp_prompt(
                 message: e.to_string(),
             },
         };
+        if timings_on() {
+            eprintln!("[timing] acp turn took={:.2}ms", ms(started.elapsed()));
+        }
         let _ = on_event.send(event);
     });
     Ok(())
