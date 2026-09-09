@@ -98,6 +98,8 @@ pub fn run() {
                 }
             }
             app.manage(ask::start(app.handle())?);
+            // The native preview surface, created on first attach (spike flag).
+            app.manage(preview::NativePreview::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -194,6 +196,7 @@ pub fn run() {
             git::git_unstage,
             git::git_discard,
             git::git_apply,
+            git::git_apply_hunk,
             git::git_file_log,
             git::git_show_file,
             git::git_log,
@@ -271,6 +274,9 @@ pub fn run() {
             skills::skills_copy,
             skills::skills_remove,
             preview::preview_ports,
+            preview::preview_webview_attach,
+            preview::preview_webview_bounds,
+            preview::preview_webview_hide,
             browser::preview_set_url,
         ])
         .build(tauri::generate_context!())

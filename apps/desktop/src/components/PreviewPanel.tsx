@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ExternalLink, Globe, RefreshCw } from "lucide-react";
+import { ChevronDown, ExternalLink, Globe, RefreshCw, Terminal } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { SidePanel } from "@/components/SidePanel";
 import { cn } from "@/lib/utils";
@@ -17,6 +18,14 @@ interface PreviewPanelProps {
 }
 
 const memoryKey = (project: string) => `emberyx.preview.${project}`;
+/** The native-preview spike flag: set `emberyx.preview.native` to 1 in
+ *  localStorage and reload. Off means the plain iframe, as always. */
+const NATIVE_FLAG = "emberyx.preview.native";
+
+interface ConsoleLine {
+  level: string;
+  text: string;
+}
 
 /**
  * An embedded browser for the dev server you are running.
@@ -40,6 +49,18 @@ export function PreviewPanel({
   // something the parent document is allowed to trigger any other way.
   const [generation, setGeneration] = useState(0);
   const loadedFor = useRef<string | null>(null);
+
+  const native = useMemo(
+    () => typeof window !== "undefined" && localStorage.getItem(NATIVE_FLAG) === "1",
+    []
+  );
+  // Any attach failure drops the pane back to the iframe for the session: the
+  // spike must never cost the preview itself.
+  const [nativeFailed, setNativeFailed] = useState(false);
+  const useNative = native && !nativeFailed;
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const [consoleLines, setConsoleLines] = useState<ConsoleLine[]>([]);
+  const [showConsole, setShowConsole] = useState(false);
 
   // Restore the project's last address when the panel opens on it.
   useEffect(() => {
@@ -66,6 +87,87 @@ export function PreviewPanel({
       .then((found) => setPorts(Array.isArray(found) ? found : []))
       .catch(() => setPorts([]));
   }, [open, generation]);
+
+  // Track the placeholder's rect into the native webview. The observer is
+  // what makes the surface follow the dock's resizes; the rAF coalesces the
+  // burst of observations a drag produces into one command per frame.
+  useEffect(() => {
+    if (!useNative || !url || !open) return;
+    const el = surfaceRef.current;
+    if (!el) return;
+    let raf: number | null = null;
+    const push = () => {
+      raf = null;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1) return;
+      void invoke("preview_webview_bounds", {
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+      }).catch(() => {});
+    };
+    const schedule = () => {
+      if (raf == null) raf = window.requestAnimationFrame(push);
+    };
+    schedule();
+    const observer = new ResizeObserver(schedule);
+    observer.observe(el);
+    return () => {
+      if (raf != null) window.cancelAnimationFrame(raf);
+      observer.disconnect();
+    };
+  }, [useNative, url, open, generation]);
+
+  // Create the surface once, then point it at the current address. Declared
+  // after the bounds effect so the placeholder is measurable at attach time.
+  useEffect(() => {
+    if (!useNative || !url || !open) return;
+    const el = surfaceRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    void invoke("preview_webview_attach", {
+      url,
+      x: rect.left,
+      y: rect.top,
+      width: Math.max(rect.width, 1),
+      height: Math.max(rect.height, 1),
+    }).catch((e) => {
+      console.error("native preview failed:", e);
+      setNativeFailed(true);
+    });
+  }, [useNative, url, open, generation]);
+
+  // The tab is gone or inactive. The webview keeps its page state, so
+  // reopening the preview lands where it was — the thing the iframe could
+  // never do.
+  useEffect(() => {
+    if (!useNative) return;
+    return () => {
+      void invoke("preview_webview_hide").catch(() => {});
+    };
+  }, [useNative]);
+
+  // The console the iframe could never show: the surface's own page, via the
+  // bridge the initialization script installed.
+  useEffect(() => {
+    if (!useNative || !url) return;
+    setConsoleLines([]);
+    let unlisten: (() => void) | undefined;
+    void listen<string>("preview-console", (e) => {
+      try {
+        const batch = JSON.parse(e.payload) as ConsoleLine[];
+        setConsoleLines((prev) => [...prev, ...batch].slice(-50));
+      } catch {
+        // A malformed batch is skipped; the next one is whole.
+      }
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {});
+    return () => unlisten?.();
+  }, [useNative, url, generation]);
 
   const go = (raw: string) => {
     const next = normalizePreviewUrl(raw);
@@ -154,12 +256,55 @@ export function PreviewPanel({
           )}
         </div>
         {url ? (
-          <iframe
-            key={`${url}#${generation}`}
-            src={url}
-            title="Preview"
-            className="min-h-0 flex-1 border-0 bg-white"
-          />
+          useNative ? (
+            <div className="flex min-h-0 flex-1 flex-col">
+              {/* The native surface covers this area; the div only measures it. */}
+              <div ref={surfaceRef} className="min-h-0 flex-1" />
+              <div className="shrink-0 border-t">
+                <button
+                  onClick={() => setShowConsole((s) => !s)}
+                  className="flex w-full items-center gap-1.5 px-2 py-1.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <Terminal className="size-3" />
+                  Console
+                  {consoleLines.length > 0 && (
+                    <span className="tabular-nums opacity-70">{consoleLines.length}</span>
+                  )}
+                  <ChevronDown
+                    className={cn("ml-auto size-3 transition-transform", showConsole && "rotate-180")}
+                  />
+                </button>
+                {showConsole && (
+                  <div className="max-h-40 overflow-y-auto border-t px-2 py-1 font-mono text-[10px] leading-relaxed">
+                    {consoleLines.length === 0 ? (
+                      <p className="text-muted-foreground">Nothing logged yet.</p>
+                    ) : (
+                      consoleLines.map((line, i) => (
+                        <div
+                          key={i}
+                          className={cn(
+                            "break-all whitespace-pre-wrap",
+                            line.level === "error" && "text-red-400",
+                            line.level === "warn" && "text-amber-400",
+                            line.level !== "error" && line.level !== "warn" && "text-muted-foreground"
+                          )}
+                        >
+                          {line.text}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <iframe
+              key={`${url}#${generation}`}
+              src={url}
+              title="Preview"
+              className="min-h-0 flex-1 border-0 bg-white"
+            />
+          )
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground">
             Enter the address of a running dev server, or pick one of the ports

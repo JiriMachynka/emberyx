@@ -262,9 +262,23 @@ export function ChangesPanel({
       "Couldn't unstage"
     );
 
-  const applyHunk = (patch: string, cached: boolean, reverse: boolean) =>
+  const applyHunk = (
+    patch: string,
+    file: string,
+    hunkIndex: number,
+    cached: boolean,
+    reverse: boolean
+  ) =>
     run(
-      () => invoke("git_apply", { path: projectPath, patch, cached, reverse }),
+      () =>
+        invoke("git_apply_hunk", {
+          path: projectPath,
+          patch,
+          file,
+          hunkIndex,
+          cached,
+          reverse,
+        }),
       "Couldn't apply hunk"
     );
 
@@ -287,12 +301,12 @@ export function ChangesPanel({
     );
   }
 
-  async function discardHunk(patch: string) {
+  async function discardHunk(patch: string, file: string, hunkIndex: number) {
     const ok = await ask("Discard this hunk? This can't be undone.", {
       title: "Discard hunk",
       kind: "warning",
     });
-    if (ok) await applyHunk(patch, false, true);
+    if (ok) await applyHunk(patch, file, hunkIndex, false, true);
   }
 
   const [historyFile, setHistoryFile] = useState<string | null>(null);
@@ -308,9 +322,14 @@ export function ChangesPanel({
     active && !turnPick
   );
 
-  const onHunk = (patch: string, action: "stage" | "unstage" | "discard") => {
-    if (action === "discard") return void discardHunk(patch);
-    void applyHunk(patch, true, action === "unstage");
+  const onHunk = (
+    patch: string,
+    file: string,
+    hunkIndex: number,
+    action: "stage" | "unstage" | "discard"
+  ) => {
+    if (action === "discard") return void discardHunk(patch, file, hunkIndex);
+    void applyHunk(patch, file, hunkIndex, true, action === "unstage");
   };
 
   const onFileAction = (

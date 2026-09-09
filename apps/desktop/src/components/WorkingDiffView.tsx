@@ -21,7 +21,6 @@ import {
   workersFailed,
 } from "@/lib/diffWorkers";
 import { buildTree, type TreeRow } from "@/lib/fileTree";
-import { fileHunkPatch } from "@/lib/patchFiles";
 import { cn } from "@/lib/utils";
 import type { GitFile } from "@/types";
 
@@ -43,8 +42,14 @@ interface WorkingDiffViewProps {
   /** False while the patch can't be applied back (a `-w` diff), so per-hunk
    *  buttons are hidden instead of failing on click. */
   hunkActions: boolean;
-  /** Stage, unstage or discard a hunk. `patch` is a slice of this scope. */
-  onHunk: (patch: string, action: "stage" | "unstage" | "discard") => void;
+  /** Stage, unstage or discard a hunk. `patch` is the text the rendered hunks
+   *  came from — the deferred one, whose indexes are what a click means. */
+  onHunk: (
+    patch: string,
+    file: string,
+    hunkIndex: number,
+    action: "stage" | "unstage" | "discard"
+  ) => void;
   onFileAction: (file: GitFile, action: "stage" | "unstage" | "discard") => void;
 }
 
@@ -125,17 +130,11 @@ export function WorkingDiffView({
     if (active && !items.some((item) => item.id === active)) setActive(null);
   }, [items, active]);
 
-  const runHunk = (
-    anchor: HunkAnchor,
-    action: "stage" | "unstage" | "discard"
-  ) => {
-    // Sliced out of the patch the rendered hunks came from, not the newest
-    // one: the index the user clicked only means anything in that text.
-    const slice = fileHunkPatch(parsed, anchor.file, anchor.hunkIndex);
-    // Null means the tree moved under the render — applying hunk N of a patch
-    // that no longer matches would edit the wrong lines.
-    if (!slice) return;
-    onHunk(slice, action);
+  const runHunk = (anchor: HunkAnchor, action: "stage" | "unstage" | "discard") => {
+    // Cut from the patch the rendered hunks came from — the deferred one, not
+    // the newest. The index the user clicked only means anything in that text,
+    // and the cut itself happens Rust-side, on the text git produced.
+    onHunk(parsed, anchor.file, anchor.hunkIndex, action);
   };
 
   return (

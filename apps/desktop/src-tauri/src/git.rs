@@ -312,6 +312,128 @@ pub fn git_apply(path: String, patch: String, cached: bool, reverse: bool) -> Re
     }
 }
 
+/// One file's slice of a multi-file patch, cut out of the text git produced —
+/// never re-rendered from a parsed model. Re-rendering is the difference
+/// between a patch that applies and one that only usually does.
+fn split_file_patches(patch: &str) -> Vec<(String, String)> {
+    let mut sections: Vec<(String, String)> = Vec::new();
+    let mut current: Option<Vec<&str>> = None;
+    for line in patch.split('\n') {
+        if line.starts_with("diff --git ") {
+            if let Some(lines) = current.take() {
+                sections.push((path_of(&lines), lines.join("\n")));
+            }
+            current = Some(vec![line]);
+        } else if let Some(lines) = current.as_mut() {
+            lines.push(line);
+        }
+    }
+    if let Some(lines) = current.take() {
+        sections.push((path_of(&lines), lines.join("\n")));
+    }
+    sections
+}
+
+/// The path a patch section names. The `---` line comes first in a section, so
+/// a diff whose pre- and post-image names differ reads as the pre-image — the
+/// behavior the panel's anchors were built against, kept byte-exact.
+fn path_of(lines: &[&str]) -> String {
+    for line in lines {
+        if let Some(rest) = line.strip_prefix("+++ ") {
+            let name = rest.trim();
+            if name != "/dev/null" {
+                return name.strip_prefix("b/").unwrap_or(name).to_string();
+            }
+        }
+        if let Some(rest) = line.strip_prefix("--- ") {
+            let name = rest.trim();
+            if name != "/dev/null" {
+                return name.strip_prefix("a/").unwrap_or(name).to_string();
+            }
+        }
+    }
+    // No `---`/`+++` lines: the `diff --git` line carries both names.
+    for line in lines {
+        if let Some(rest) = line.strip_prefix("diff --git a/") {
+            if let Some(pos) = rest.find(" b/") {
+                let (a, b) = (&rest[..pos], &rest[pos + 3..]);
+                return if b.is_empty() { a.to_string() } else { b.to_string() };
+            }
+            return rest.to_string();
+        }
+    }
+    String::new()
+}
+
+/// A standalone one-hunk patch for `git apply`, cut from `patch` — the file's
+/// own section with the requested hunk, headers included. `None` when the file
+/// or hunk isn't in the patch: a stale index after the tree moved under the
+/// render, which must not silently apply the wrong hunk.
+fn hunk_patch_for_file(patch: &str, file: &str, hunk_index: usize) -> Option<String> {
+    let (_, section) = split_file_patches(patch).into_iter().find(|(p, _)| p == file)?;
+
+    // The two `---`/`+++` lines are the whole header git apply needs; the
+    // `diff --git` line is dropped, matching what the panel fed it one file at
+    // a time before this moved here.
+    let mut file_header: Vec<&str> = Vec::new();
+    let mut hunks: Vec<(String, Vec<&str>)> = Vec::new();
+    for line in section.split('\n') {
+        if line.starts_with("@@") {
+            hunks.push((line.to_string(), Vec::new()));
+            continue;
+        }
+        match hunks.last_mut() {
+            Some((_, body)) => body.push(line),
+            None => {
+                if line.starts_with("--- ") || line.starts_with("+++ ") {
+                    file_header.push(line);
+                }
+            }
+        }
+    }
+    let (hunk_header, body) = hunks.into_iter().nth(hunk_index)?;
+    // Trailing blank lines come from the split's final newline; git rejects a
+    // patch with stray empty lines inside the hunk body.
+    let mut body = body;
+    while body.last().is_some_and(|l| l.is_empty()) {
+        body.pop();
+    }
+    let hunk_text = if body.is_empty() {
+        hunk_header.clone()
+    } else {
+        let mut text = hunk_header.clone();
+        for line in body {
+            text.push('\n');
+            text.push_str(line);
+        }
+        text
+    };
+    let header = if file_header.is_empty() {
+        format!("--- a/{file}\n+++ b/{file}")
+    } else {
+        file_header.join("\n")
+    };
+    Some(format!("{header}\n{hunk_text}\n"))
+}
+
+/// Apply — stage, unstage or discard — one hunk of one file, cut out of the
+/// whole-scope patch the panel renders. The frontend hands over the patch its
+/// rendered hunks came from (the deferred one, not the newest): the index the
+/// user clicked only means anything in that text.
+#[tauri::command]
+pub fn git_apply_hunk(
+    path: String,
+    patch: String,
+    file: String,
+    hunk_index: usize,
+    cached: bool,
+    reverse: bool,
+) -> Result<String> {
+    let slice = hunk_patch_for_file(&patch, &file, hunk_index)
+        .ok_or_else(|| Error::new("That hunk is no longer in the patch — refresh and try again."))?;
+    git_apply(path, slice, cached, reverse)
+}
+
 /// Commit whatever is staged in the index.
 #[tauri::command]
 pub fn git_commit(path: String, message: String) -> Result<String> {
@@ -2803,5 +2925,124 @@ prunable gitdir file points to non-existent location
         repo.commit("init");
 
         assert!(tauri::async_runtime::block_on(git_fetch(repo.path(), Some("nope".into()))).is_err());
+    }
+
+    /// The same shape the changes panel feeds `git_apply_hunk`: git's own
+    /// multi-file output for two files, two hunks in the first.
+    const TWO_FILES: &str = "diff --git a/a.txt b/a.txt\n\
+index 111..222 100644\n\
+--- a/a.txt\n\
++++ b/a.txt\n\
+@@ -1,3 +1,3 @@\n\
+ one\n\
+-two\n\
++TWO\n\
+ three\n\
+@@ -10,3 +10,3 @@\n\
+ ten\n\
+-eleven\n\
++ELEVEN\n\
+ twelve\n\
+diff --git a/dir/b.ts b/dir/b.ts\n\
+index 333..444 100644\n\
+--- a/dir/b.ts\n\
++++ b/dir/b.ts\n\
+@@ -1,2 +1,2 @@\n\
+-const a = 1\n\
++const a = 2\n\
+ export {}\n";
+
+    #[test]
+    fn splits_a_patch_by_file_and_names_the_post_image_path() {
+        let files = split_file_patches(TWO_FILES);
+        assert_eq!(
+            files.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(),
+            ["a.txt", "dir/b.ts"]
+        );
+        assert!(files[0].1.starts_with("diff --git a/a.txt"));
+
+        // A deletion names its pre-image: the post-image is /dev/null.
+        let deletion = "diff --git a/gone.txt b/gone.txt\ndeleted file mode 100644\n--- a/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n";
+        assert_eq!(split_file_patches(deletion)[0].0, "gone.txt");
+
+        // Anything before the first file header is not a file.
+        assert!(split_file_patches("warning: noise\n").is_empty());
+    }
+
+    #[test]
+    fn cuts_one_hunk_with_its_file_headers_and_nothing_else() {
+        let first = hunk_patch_for_file(TWO_FILES, "a.txt", 0).unwrap();
+        assert!(first.contains("--- a/a.txt"));
+        assert!(first.contains("+++ b/a.txt"));
+        assert!(first.contains("+TWO"));
+        assert!(!first.contains("+ELEVEN"));
+
+        let second = hunk_patch_for_file(TWO_FILES, "a.txt", 1).unwrap();
+        assert!(second.contains("+ELEVEN"));
+        assert!(!second.contains("+TWO"));
+
+        // The section boundary holds: one file's hunk never names another.
+        let last = hunk_patch_for_file(TWO_FILES, "dir/b.ts", 0).unwrap();
+        assert!(last.contains("const a = 2"));
+        assert!(!last.contains("a.txt"));
+        assert!(last.ends_with('\n'));
+    }
+
+    #[test]
+    fn a_stale_hunk_index_returns_none_not_the_wrong_hunk() {
+        assert!(hunk_patch_for_file(TWO_FILES, "a.txt", 5).is_none());
+        assert!(hunk_patch_for_file(TWO_FILES, "nope.txt", 0).is_none());
+    }
+
+    #[test]
+    fn applies_exactly_one_hunk_to_the_index() {
+        let repo = Repo::new("hunk_stage");
+        repo.write(
+            "a.txt",
+            "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve\n",
+        );
+        repo.commit("init");
+        repo.write(
+            "a.txt",
+            "one\nTWO\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\nELEVEN\ntwelve\n",
+        );
+        let patch = repo.run(&["diff", "--", "a.txt"]);
+
+        git_apply_hunk(repo.path(), patch, "a.txt".into(), 0, true, false).unwrap();
+
+        // The index carries the first hunk only; the second stays unstaged.
+        let staged = repo.run(&["diff", "--cached", "--", "a.txt"]);
+        assert!(staged.contains("+TWO"), "{staged}");
+        assert!(!staged.contains("+ELEVEN"), "{staged}");
+        let unstaged = repo.run(&["diff", "--", "a.txt"]);
+        assert!(unstaged.contains("+ELEVEN"), "{unstaged}");
+        assert!(!unstaged.contains("+TWO"), "{unstaged}");
+    }
+
+    #[test]
+    fn discards_a_hunk_from_the_working_tree() {
+        let repo = Repo::new("hunk_discard");
+        repo.write("a.txt", "one\ntwo\nthree\n");
+        repo.commit("init");
+        repo.write("a.txt", "one\nTWO\nthree\n");
+        let patch = repo.run(&["diff", "--", "a.txt"]);
+
+        git_apply_hunk(repo.path(), patch, "a.txt".into(), 0, false, true).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(repo.0.join("a.txt")).unwrap(),
+            "one\ntwo\nthree\n"
+        );
+    }
+
+    #[test]
+    fn a_hunk_no_longer_in_the_patch_is_refused_not_applied_blindly() {
+        let repo = Repo::new("hunk_stale");
+        repo.write("a.txt", "one\ntwo\nthree\n");
+        repo.commit("init");
+
+        let error = git_apply_hunk(repo.path(), TWO_FILES.into(), "a.txt".into(), 5, true, false)
+            .unwrap_err();
+        assert!(error.to_string().contains("no longer in the patch"), "{error}");
     }
 }

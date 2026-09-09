@@ -206,12 +206,17 @@ describes one side of the index.
 Hunk stage/discard survives that move, but the seam is worth knowing:
 `@pierre/diffs` gives hunk *metadata* and can resolve a hunk visually
 (`diffAcceptRejectHunk`), and never emits patch text. So the per-hunk buttons
-ride on a line annotation, and the patch fed to `git apply` is **cut out of the
-raw patch** by `lib/patchFiles.ts` (multi-file split) on top of `lib/hunks.ts`
-(per-file hunk parsing) — text git produced applies, text we re-rendered only
-usually does. Hunk actions are hidden while "Hide whitespace changes" is on: a
-`-w` patch has line counts that no longer match the file, and its hunk indexes
-don't correspond to the real ones, so there is nothing safe to apply.
+ride on a line annotation, and the cut is **Rust-side** (`git_apply_hunk`
+splits git's own multi-file output, cuts the requested hunk, and applies it).
+The frontend hands over the patch its rendered hunks came from — the
+*deferred* one, not the newest — because the index the user clicked only
+means anything in that text. Text git produced applies; text re-rendered from
+a parsed model only usually does. A stale file/hunk index is an error, never
+a best-effort apply of the wrong hunk. Hunk actions are hidden while "Hide
+whitespace changes" is on: a `-w` patch has line counts that no longer match
+the file, and its hunk indexes don't correspond to the real ones, so there is
+nothing safe to apply. `lib/hunks.ts` keeps only the render-side parsing
+(`parseDiff` for the single-file/MR views); it no longer builds patches.
 
 Highlighting runs in a worker pool (`lib/diffWorkers.ts`), or a large working
 tree tokenizes every line on the main thread and freezes the window. Two things
@@ -472,6 +477,14 @@ turbo / pnpm / npm workspaces).
 
 ### Frontend ↔ Rust
 
+- **What lives on which side.** The test when something is debating between TS
+  and Rust: does Rust already hold the raw input, and is the transform
+  provider-neutral data surgery? Move it (hunk cutting became `git_apply_hunk`
+  this way). Render-only parsing stays TS (`parseDiff` feeds two read-only
+  views; moving it would make them pay an IPC per render for a JS-shaped
+  result anyway). The documented exception stays an exception: Codex/ACP
+  normalizers live in TS because their decoders are generated from the
+  installed binaries, and porting them would mean hand-written mirrors.
 - **Commands**: every `#[tauri::command]` must be listed in the
   `generate_handler!` block in `lib.rs`. Forgetting this is the usual "command
   not found" cause.
@@ -531,6 +544,21 @@ fetcher. Its child is killed in `RunEvent::Exit` like every other spawner. The
 live path is covered by an `#[ignore]`d test (`cargo test -- --ignored
 browser_sees`); CI has no browser, and a test that passes without one is worse
 than none.
+
+**The native preview is a spike, not the default.** With
+`localStorage["emberyx.preview.native"] = "1"`, the preview tab becomes a
+Tauri child webview (`preview.rs`, `NativePreview`) whose bounds track the
+dock's placeholder, hidden (state-preserving) when the tab goes away, with a
+console bridge — an initialization script wrapping `console.*` and emitting
+`preview-console` events through the capability in
+`capabilities/preview.json` (loopback URLs only) — rendered in the tab. It
+exists to answer what a document can't: z-order over the main webview, resize
+sync during dock drags, focus fights with the terminal. This is why Cargo.toml
+carries tauri's `unstable` feature; it is the price of the multiwebview API,
+and the feature set should be revisited with the spike's verdict. If the
+spike wins, `preview_console` should read this console and `browser.rs` keeps
+only screenshots (a child webview cannot be photographed). Until the verdict,
+the iframe is the shipping surface.
 
 ### Process lifetime
 
