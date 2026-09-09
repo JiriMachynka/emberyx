@@ -15,6 +15,7 @@ import {
 import { ChevronDown, ChevronRight, Minus, Plus, Undo2 } from "lucide-react";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { workingDiffOptions } from "@/lib/diffView";
+import type { FileDiffContentsLoader } from "@pierre/diffs";
 import {
   diffHighlighterOptions,
   diffPoolOptions,
@@ -43,14 +44,25 @@ interface WorkingDiffViewProps {
    *  buttons are hidden instead of failing on click. */
   hunkActions: boolean;
   /** Stage, unstage or discard a hunk. `patch` is the text the rendered hunks
-   *  came from — the deferred one, whose indexes are what a click means. */
-  onHunk: (
+   *  came from — the deferred one, whose indexes are what a click means.
+   *  Absent in a read-only surface, where there is no index to move a hunk
+   *  into. */
+  onHunk?: (
     patch: string,
     file: string,
     hunkIndex: number,
     action: "stage" | "unstage" | "discard"
   ) => void;
-  onFileAction: (file: GitFile, action: "stage" | "unstage" | "discard") => void;
+  onFileAction?: (file: GitFile, action: "stage" | "unstage" | "discard") => void;
+  /** Render options, when the surface needs its own — the turn review adds
+   *  context expansion. Must be identity-stable, or the FileDiff restarts. */
+  options?: typeof workingDiffOptions & {
+    expandUnchanged?: boolean;
+    loadDiffFiles?: FileDiffContentsLoader;
+  };
+  /** Namespaces pierre's parse cache, so two surfaces holding patches of the
+   *  same length don't read each other's files. */
+  cacheKey?: string;
 }
 
 export function WorkingDiffView({
@@ -60,6 +72,8 @@ export function WorkingDiffView({
   hunkActions,
   onHunk,
   onFileAction,
+  options: optionsProp,
+  cacheKey = "working",
 }: WorkingDiffViewProps) {
   const view = useRef<CodeViewHandle<HunkAnchor, undefined>>(null);
   // A dead worker pool falls back to main-thread highlighting rather than
@@ -82,7 +96,17 @@ export function WorkingDiffView({
   const parsed = useDeferredValue(patch);
   const items = useMemo(() => {
     if (!parsed.trim()) return [];
-    return parsePatchFiles(parsed, `working:${parsed.length}`, true)
+    // Strict first, forgiving second: pierre throws on a hunk whose counts
+    // don't match its body, and a patch cut at a byte budget ends inside one.
+    // Throwing here happens during render, which takes the window down — a
+    // last file rendered short is the better failure.
+    let entries;
+    try {
+      entries = parsePatchFiles(parsed, `${cacheKey}:${parsed.length}`, true);
+    } catch {
+      entries = parsePatchFiles(parsed, `${cacheKey}:${parsed.length}:lax`, false);
+    }
+    return entries
       .flatMap((entry) => entry.files)
       .map((fileDiff) => ({
         id: fileDiff.name,
@@ -99,7 +123,7 @@ export function WorkingDiffView({
           metadata: { file: fileDiff.name, hunkIndex },
         })),
       }));
-  }, [parsed]);
+  }, [parsed, cacheKey]);
 
   const rows = useMemo(() => {
     const query = filter.trim().toLowerCase();
@@ -121,7 +145,7 @@ export function WorkingDiffView({
     );
   }, [rows, collapsed]);
 
-  const options = useMemo(() => workingDiffOptions, []);
+  const options = optionsProp ?? workingDiffOptions;
 
   // A file that scrolled out of the patch (staged, discarded) shouldn't leave
   // the tree pointing at nothing.
@@ -134,7 +158,7 @@ export function WorkingDiffView({
     // Cut from the patch the rendered hunks came from — the deferred one, not
     // the newest. The index the user clicked only means anything in that text,
     // and the cut itself happens Rust-side, on the text git produced.
-    onHunk(parsed, anchor.file, anchor.hunkIndex, action);
+    onHunk?.(parsed, anchor.file, anchor.hunkIndex, action);
   };
 
   return (
@@ -154,7 +178,7 @@ export function WorkingDiffView({
           ref={view}
           renderAnnotation={(annotation) => {
             const meta = annotation.metadata;
-            if (!meta || !hunkActions) return null;
+            if (!meta || !hunkActions || !onHunk) return null;
             return (
               <div className="flex items-center gap-1 px-2 py-0.5">
                 {staged ? (
@@ -222,10 +246,13 @@ export function WorkingDiffView({
                   behavior: "instant",
                 });
               }}
-              onAction={(action) => {
-                const file = files.find((f) => f.path === row.path);
-                if (file) onFileAction(file, action);
-              }}
+              onAction={
+                onFileAction &&
+                ((action) => {
+                  const file = files.find((f) => f.path === row.path);
+                  if (file) onFileAction(file, action);
+                })
+              }
               staged={staged}
             />
           ))}
@@ -256,7 +283,9 @@ function TreeRowView({
   staged: boolean;
   onToggleDir: () => void;
   onPick: () => void;
-  onAction: (action: "stage" | "unstage" | "discard") => void;
+  /** Absent in a read-only surface — a turn's delta is history, not a work
+   *  queue. */
+  onAction?: (action: "stage" | "unstage" | "discard") => void;
 }) {
   const indent = { paddingLeft: 8 + row.depth * 12 };
 
@@ -292,23 +321,30 @@ function TreeRowView({
         <FileTypeIcon path={row.path} />
         <span className="truncate">{row.name}</span>
       </button>
-      <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
-        {staged ? (
-          <RowButton title="Unstage" onClick={() => onAction("unstage")}>
-            <Minus className="size-3" />
-          </RowButton>
-        ) : (
-          <>
-            <RowButton title="Discard" onClick={() => onAction("discard")}>
-              <Undo2 className="size-3" />
+      {onAction && (
+        <div className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+          {staged ? (
+            <RowButton title="Unstage" onClick={() => onAction("unstage")}>
+              <Minus className="size-3" />
             </RowButton>
-            <RowButton title="Stage" onClick={() => onAction("stage")}>
-              <Plus className="size-3" />
-            </RowButton>
-          </>
+          ) : (
+            <>
+              <RowButton title="Discard" onClick={() => onAction("discard")}>
+                <Undo2 className="size-3" />
+              </RowButton>
+              <RowButton title="Stage" onClick={() => onAction("stage")}>
+                <Plus className="size-3" />
+              </RowButton>
+            </>
+          )}
+        </div>
+      )}
+      <span
+        className={cn(
+          "shrink-0 rounded bg-secondary px-1 text-[10px] text-muted-foreground",
+          onAction && "group-hover:hidden"
         )}
-      </div>
-      <span className="shrink-0 rounded bg-secondary px-1 text-[10px] text-muted-foreground group-hover:hidden">
+      >
         {row.badge}
       </span>
     </div>

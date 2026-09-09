@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   attachCheckpoint,
+  checkpointTurnContents,
+  checkpointTurnDiff,
+  checkpointTurnFiles,
+  checkpointTurnPatch,
   createCheckpoint,
   describeRestore,
   listCheckpoints,
@@ -10,6 +14,7 @@ import {
   type Checkpoint,
   type CheckpointChange,
 } from "@/lib/checkpoints";
+import { MOCKUP_SESSION_ID, mockupTurnFiles } from "@/lib/mockupChat";
 
 interface Turn {
   role: "user" | "assistant";
@@ -165,5 +170,50 @@ describe("sumRangeFiles", () => {
         { path: "d.ts", kind: "deleted", additions: 0, deletions: 7 },
       ])
     ).toEqual({ additions: 13, deletions: 8 });
+  });
+});
+
+describe("mockup checkpoint interception", () => {
+  // The dev-only Mockup pane has no checkpoint behind it; its Review data is
+  // answered here so the card, the diff tab and context expansion all render.
+  it("answers the mock thread locally, never through invoke", async () => {
+    await expect(
+      checkpointTurnFiles("/repo", MOCKUP_SESSION_ID, "mock-checkpoint-1")
+    ).resolves.toBe(mockupTurnFiles);
+    await expect(
+      checkpointTurnDiff("/repo", MOCKUP_SESSION_ID, "c", "apps/desktop/src/lib/agentStore.ts")
+    ).resolves.toContain("diff --git");
+    await expect(
+      checkpointTurnContents("/repo", MOCKUP_SESSION_ID, "c", "apps/desktop/src/lib/agentStore.ts")
+    ).resolves.toHaveProperty("newText");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("serves the whole canned turn as one multi-file patch", async () => {
+    const patch = await checkpointTurnPatch("/repo", MOCKUP_SESSION_ID, "c");
+    // Every file the mock turn lists is in the one patch, so the tree and the
+    // scroll can't disagree.
+    for (const file of mockupTurnFiles) {
+      expect(patch).toContain(`b/${file.path}`);
+    }
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("leaves real threads on the Tauri path", async () => {
+    invoke.mockResolvedValueOnce([]);
+    await checkpointTurnFiles("/repo", "t1", "c1");
+    expect(invoke).toHaveBeenCalledWith("checkpoint_turn_files", {
+      path: "/repo",
+      threadId: "t1",
+      fromId: "c1",
+    });
+
+    invoke.mockResolvedValueOnce("");
+    await checkpointTurnPatch("/repo", "t1", "c1");
+    expect(invoke).toHaveBeenCalledWith("checkpoint_turn_patch", {
+      path: "/repo",
+      threadId: "t1",
+      fromId: "c1",
+    });
   });
 });

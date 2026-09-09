@@ -104,7 +104,7 @@ export function RecentCommits({
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="flex items-center gap-2">
-                          <span className="truncate text-xs font-medium">
+                          <span className="truncate text-sm font-medium">
                             {c.subject}
                           </span>
                           {badge && (
@@ -113,13 +113,21 @@ export function RecentCommits({
                             </span>
                           )}
                         </span>
-                        <span className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+                        <span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
                           <span className="truncate">{c.author}</span>
                           <span className="shrink-0">{c.relativeDate}</span>
                         </span>
                       </span>
                     </button>
 
+                    {isOpen && c.files.length === 0 && (
+                      // An empty commit, or a merge on a git too old for
+                      // --diff-merges. Saying so beats a row that opens onto
+                      // nothing.
+                      <p className="py-0.5 pl-8 pr-2 text-xs text-muted-foreground">
+                        No file changes.
+                      </p>
+                    )}
                     {isOpen && (
                       <ul className="pb-1">
                         {c.files.map((f) => {
@@ -136,7 +144,7 @@ export function RecentCommits({
                               className="flex w-full items-center gap-1.5 py-0.5 pl-8 pr-2 text-left hover:bg-accent"
                             >
                               <FileTypeIcon path={f.path} />
-                              <span className="min-w-0 flex-1 truncate text-[11px]">
+                              <span className="min-w-0 flex-1 truncate text-sm">
                                 {basename(f.path)}
                                 {dir && (
                                   <span className="ml-1.5 text-muted-foreground">
@@ -146,7 +154,7 @@ export function RecentCommits({
                               </span>
                               <span
                                 className={cn(
-                                  "w-4 shrink-0 text-center font-mono text-[10px]",
+                                  "w-4 shrink-0 text-center font-mono text-xs",
                                   statusColor(f.status)
                                 )}
                               >

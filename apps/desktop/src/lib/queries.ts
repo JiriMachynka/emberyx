@@ -25,8 +25,8 @@ import { readAcpModels } from "@/lib/acp/transport";
 import { loadSettings } from "@/lib/settings";
 import {
   checkpointTurnContents,
-  checkpointTurnDiff,
   checkpointTurnFiles,
+  checkpointTurnPatch,
   listCheckpoints,
   type Checkpoint,
 } from "@/lib/checkpoints";
@@ -105,8 +105,8 @@ export const checkpointKeys = {
     ["checkpoints", path, "thread", threadId] as const,
   turnFiles: (path: string, threadId: string, fromId: string) =>
     ["checkpoints", path, "turnFiles", threadId, fromId] as const,
-  turnDiff: (path: string, threadId: string, fromId: string, file: string) =>
-    ["checkpoints", path, "turnDiff", threadId, fromId, file] as const,
+  turnPatch: (path: string, threadId: string, fromId: string) =>
+    ["checkpoints", path, "turnPatch", threadId, fromId] as const,
   turnContents: (path: string, threadId: string, fromId: string, file: string) =>
     ["checkpoints", path, "turnContents", threadId, fromId, file] as const,
 };
@@ -147,16 +147,16 @@ export const useTurnFiles = (
     meta: { openEnded },
   });
 
-export const useTurnDiff = (
+/** The whole turn as one patch — the review surface's source. */
+export const useTurnPatch = (
   path: string,
   threadId: string | null,
-  fromId: string | null,
-  file: string | null
+  fromId: string | null
 ) =>
   useQuery({
-    queryKey: checkpointKeys.turnDiff(path, threadId ?? "", fromId ?? "", file ?? ""),
-    queryFn: () => checkpointTurnDiff(path, threadId ?? "", fromId ?? "", file ?? ""),
-    enabled: !!fromId && !!threadId && !!file,
+    queryKey: checkpointKeys.turnPatch(path, threadId ?? "", fromId ?? ""),
+    queryFn: () => checkpointTurnPatch(path, threadId ?? "", fromId ?? ""),
+    enabled: !!fromId && !!threadId,
     staleTime: 0,
   });
 

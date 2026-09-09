@@ -38,6 +38,9 @@ const SETTLE_PREFIX: &str = "refs/emberyx/settles";
 /// Cap for a whole-range patch. Per-file patches are bounded by the file they
 /// describe; this only stops a diff of the entire range from flooding IPC.
 const RANGE_DIFF_LIMIT: usize = 250_000;
+/// A whole turn is many files in one patch, so it gets its own, wider budget —
+/// one file's limit applied to all of them would cut most reviews short.
+const TURN_PATCH_LIMIT: usize = 2_000_000;
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -491,6 +494,47 @@ pub fn checkpoint_turn_files(
     range_files_between(&path, &from, &to)
 }
 
+/// Cut a patch to a byte budget without ending mid-line: the frontend parses
+/// patches, and a cut line is a hunk git never wrote.
+fn truncate_patch(mut diff: String, limit: usize) -> String {
+    if diff.len() <= limit {
+        return diff;
+    }
+    diff.truncate(limit);
+    if let Some(at) = diff.rfind('\n') {
+        diff.truncate(at + 1);
+    }
+    diff.push_str("… patch truncated\n");
+    diff
+}
+
+/// Every file a turn changed as one multi-file patch — what the review surface
+/// renders in a single scroll, the same shape `git_working_diff` serves the
+/// working tree. The per-file command still exists for callers that want one
+/// file; this one exists so the review doesn't spawn a git per file.
+#[tauri::command]
+pub fn checkpoint_turn_patch(path: String, thread_id: String, from_id: String) -> Result<String> {
+    let from = sha_of(&path, &from_id)?;
+    let to = turn_range_end(&path, &thread_id, &from_id)?;
+    let out = git(
+        &path,
+        &[
+            "diff",
+            "--no-color",
+            "--no-renames",
+            from.as_str(),
+            to.as_str(),
+        ],
+    )?;
+    if !out.status.success() {
+        return Err(failure(&out));
+    }
+    Ok(truncate_patch(
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        TURN_PATCH_LIMIT,
+    ))
+}
+
 /// The unified patch for one file inside a turn's range, the way
 /// `git_commit_diff` serves the commit timeline.
 #[tauri::command]
@@ -517,17 +561,10 @@ pub fn checkpoint_turn_diff(
     if !out.status.success() {
         return Err(failure(&out));
     }
-    let mut diff = String::from_utf8_lossy(&out.stdout).to_string();
-    if diff.len() > RANGE_DIFF_LIMIT {
-        diff.truncate(RANGE_DIFF_LIMIT);
-        // Never end mid-line: the frontend parses patches, and a cut line is a
-        // hunk git never wrote.
-        if let Some(at) = diff.rfind('\n') {
-            diff.truncate(at + 1);
-        }
-        diff.push_str("… patch truncated\n");
-    }
-    Ok(diff)
+    Ok(truncate_patch(
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        RANGE_DIFF_LIMIT,
+    ))
 }
 
 /// Full old and new contents of one file across a turn's range, so the diff

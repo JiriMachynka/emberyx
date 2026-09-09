@@ -6,6 +6,7 @@ import {
   closeTabs,
   hideDock,
   isChooser,
+  isShowing,
   openTab,
   showDock,
   toggleTab,
@@ -76,6 +77,20 @@ describe("toggleTab", () => {
   it("reveals an open tab that isn't the active one", () => {
     const state = dock(["dev", "diff"], "diff");
     expect(toggleTab(state, "dev")).toEqual(dock(["dev", "diff"], "dev"));
+  });
+});
+
+describe("isShowing", () => {
+  it("is false for the active tab of a hidden dock", () => {
+    // The chrome X hides the panel and keeps the tabs. A toolbar button that
+    // read `active` alone stayed lit over a dock the user had just dismissed.
+    expect(isShowing(dock(["git"], "git", false), "git")).toBe(false);
+    expect(isShowing(dock(["git"], "git"), "git")).toBe(true);
+  });
+
+  it("makes the toolbar button reveal a hidden dock instead of closing it", () => {
+    const hidden = hideDock(dock(["git"], "git"));
+    expect(toggleTab(hidden, "git")).toEqual(dock(["git"], "git"));
   });
 });
 

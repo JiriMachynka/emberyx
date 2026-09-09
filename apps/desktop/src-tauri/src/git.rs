@@ -709,8 +709,28 @@ pub fn git_log(path: String, limit: u32) -> Result<Vec<GitLogEntry>> {
     let fmt = format!("{RECORD}%H{SEP}%h{SEP}%s{SEP}%an{SEP}%ar{SEP}%P{SEP}%D");
     let pretty = format!("--pretty=format:{fmt}");
     let n = format!("-n{limit}");
-    let args = ["log", &n, "--name-status", "-M", "-z", &pretty, "HEAD"];
-    let out = git(&path, &args)?;
+    // `git log --name-status` prints nothing for a merge, so a merge row in the
+    // history had no files to unfold. `--diff-merges=first-parent` gives it the
+    // changes the merge brought in — what a forge calls the merge's files.
+    // Retried without the flag for gits too old to know it (< 2.31): merges
+    // list nothing there, which is the old behaviour rather than no history.
+    let args = [
+        "log",
+        &n,
+        "--name-status",
+        "--diff-merges=first-parent",
+        "-M",
+        "-z",
+        &pretty,
+        "HEAD",
+    ];
+    let mut out = git(&path, &args)?;
+    if !out.status.success() {
+        out = git(
+            &path,
+            &["log", &n, "--name-status", "-M", "-z", &pretty, "HEAD"],
+        )?;
+    }
     if !out.status.success() {
         return Err(failure(&out));
     }
@@ -756,7 +776,24 @@ pub fn git_log(path: String, limit: u32) -> Result<Vec<GitLogEntry>> {
 /// The diff one commit introduced to one file (vs its first parent).
 #[tauri::command]
 pub fn git_commit_diff(path: String, sha: String, file: String) -> Result<String> {
-    let out = git(&path, &["show", "--no-color", "--format=", &sha, "--", &file])?;
+    // Same first-parent view the log lists a merge's files from, or picking one
+    // of those files would open an empty diff.
+    let out = git(
+        &path,
+        &[
+            "show",
+            "--no-color",
+            "--diff-merges=first-parent",
+            "--format=",
+            &sha,
+            "--",
+            &file,
+        ],
+    )?;
+    if !out.status.success() {
+        let plain = git(&path, &["show", "--no-color", "--format=", &sha, "--", &file])?;
+        return Ok(String::from_utf8_lossy(&plain.stdout).to_string());
+    }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
@@ -2029,6 +2066,30 @@ mod tests {
         assert_eq!(log[1].files.len(), 1);
         assert_eq!(log[1].files[0].status, "A");
         assert_eq!(log[1].files[0].path, "a.txt");
+    }
+
+    #[test]
+    fn lists_what_a_merge_brought_in() {
+        let repo = Repo::new("repo_log_merge");
+        repo.write("base.txt", "base\n");
+        repo.commit("first");
+        repo.run(&["checkout", "-b", "side"]);
+        repo.write("side.txt", "from the branch\n");
+        repo.commit("side work");
+        repo.run(&["checkout", "-"]);
+        repo.write("main.txt", "on main\n");
+        repo.commit("main work");
+        repo.run(&["merge", "--no-ff", "-m", "merge side", "side"]);
+
+        let log = git_log(repo.path(), 10).unwrap();
+        let merge = log.iter().find(|c| c.subject == "merge side").unwrap();
+        assert!(merge.parents.len() > 1, "the commit under test is a merge");
+        // Plain --name-status prints nothing for a merge, which left the row
+        // unfoldable. First-parent diff-merges is what gives it the file.
+        assert!(merge.files.iter().any(|f| f.path == "side.txt"));
+
+        let diff = git_commit_diff(repo.path(), merge.sha.clone(), "side.txt".into()).unwrap();
+        assert!(diff.contains("from the branch"), "merge file opens a real diff");
     }
 
     #[test]

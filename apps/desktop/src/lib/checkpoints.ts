@@ -12,6 +12,13 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import {
+  MOCKUP_SESSION_ID,
+  mockupTurnContents,
+  mockupTurnDiff,
+  mockupTurnFiles,
+  mockupTurnPatch,
+} from "@/lib/mockupChat";
 
 export interface Checkpoint {
   id: string;
@@ -131,6 +138,12 @@ export function checkpointTurnFiles(
   threadId: string,
   fromId: string
 ): Promise<CheckpointRangeFile[]> {
+  // Dev-only Mockup pane: no checkpoint exists behind it, so the canned turn
+  // answers instead. `import.meta.env.DEV` is a build-time literal, so the
+  // branch and the mock import are dropped from production builds.
+  if (import.meta.env.DEV && threadId === MOCKUP_SESSION_ID) {
+    return Promise.resolve(mockupTurnFiles);
+  }
   return invoke<CheckpointRangeFile[]>("checkpoint_turn_files", {
     path: projectPath,
     threadId,
@@ -144,11 +157,31 @@ export function checkpointTurnDiff(
   fromId: string,
   file: string
 ): Promise<string> {
+  if (import.meta.env.DEV && threadId === MOCKUP_SESSION_ID) {
+    return Promise.resolve(mockupTurnDiff(file));
+  }
   return invoke<string>("checkpoint_turn_diff", {
     path: projectPath,
     threadId,
     fromId,
     file,
+  });
+}
+
+/** Every file the turn changed as one multi-file patch — one git per review
+ *  rather than one per file, and the shape the review surface renders. */
+export function checkpointTurnPatch(
+  projectPath: string,
+  threadId: string,
+  fromId: string
+): Promise<string> {
+  if (import.meta.env.DEV && threadId === MOCKUP_SESSION_ID) {
+    return Promise.resolve(mockupTurnPatch());
+  }
+  return invoke<string>("checkpoint_turn_patch", {
+    path: projectPath,
+    threadId,
+    fromId,
   });
 }
 
@@ -158,6 +191,9 @@ export function checkpointTurnContents(
   fromId: string,
   file: string
 ): Promise<CheckpointRangeContents> {
+  if (import.meta.env.DEV && threadId === MOCKUP_SESSION_ID) {
+    return Promise.resolve(mockupTurnContents(file));
+  }
   return invoke<CheckpointRangeContents>("checkpoint_turn_contents", {
     path: projectPath,
     threadId,

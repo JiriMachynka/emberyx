@@ -1,9 +1,8 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useMemo, useState } from "react";
 import { isStaged, isUnstaged } from "@/lib/gitStatus";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
-import { PatchDiff } from "@pierre/diffs/react";
 import {
   FileDiff,
   RefreshCw,
@@ -17,7 +16,6 @@ import { cn } from "@/lib/utils";
 
 import { HunkBody } from "@/components/diff/HunkBody";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,7 +23,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { basename } from "@/lib/path";
 import { parseDiff, hunkPatch } from "@/lib/hunks";
 import { highlightCached, langFromPath } from "@/lib/highlight";
@@ -35,12 +32,16 @@ import {
   useGitWorkingDiff,
   useInvalidateGit,
   useThreadCheckpoints,
-  useTurnDiff,
   useTurnFiles,
+  useTurnPatch,
   fetchTurnContents,
 } from "@/lib/queries";
-import { turnRangesNewestFirst, type TurnRange } from "@/lib/checkpoints";
-import { buildTurnDiffOptions, contentsToLoader } from "@/lib/diffView";
+import {
+  sumRangeFiles,
+  turnRangesNewestFirst,
+  type TurnRange,
+} from "@/lib/checkpoints";
+import { buildTurnReviewOptions, contentsToLoader } from "@/lib/diffView";
 import { PANEL_REVIEW_WIDTH } from "@/lib/panels";
 import type { CommitReviewRequest, TurnReviewRequest } from "@/lib/agentStore";
 import type { GitFile } from "@/types";
@@ -313,7 +314,7 @@ export function ChangesPanel({
             </button>
           </div>
         ) : (
-          <span className="px-2 text-xs font-medium text-muted-foreground">Diff</span>
+          <span className="px-2 text-xs font-medium text-muted-foreground">Review</span>
         )
       }
       actions={
@@ -371,6 +372,10 @@ export function ChangesPanel({
                     // file, so git apply rejects every hunk cut from it. Hide
                     // the buttons rather than offer an action that always fails.
                     hunkActions={!ignoreWhitespace}
+                    // Staged and unstaged are two patches that can be the same
+                    // length; without the scope in the key, one renders the
+                    // other's parse.
+                    cacheKey={`working:${scope}`}
                     onHunk={onHunk}
                     onFileAction={onFileAction}
                   />
@@ -424,6 +429,14 @@ function ScopeButton({
   );
 }
 
+/** Porcelain status for a turn file's kind, so the tree's `statusBadge` reads
+ *  a turn delta and a working tree through the same path. */
+const STATUS_OF_KIND: Record<"modified" | "added" | "deleted", string> = {
+  modified: " M",
+  added: "A ",
+  deleted: " D",
+};
+
 /** One turn's file delta, the way the transcript's Review button opens it:
  *  the turn's file list with a filter, and the selected file's patch rendered
  *  by @pierre/diffs with expandable context. Read-only — staging lives in the
@@ -444,36 +457,31 @@ function TurnReview({
   );
   const current = ranges.find((range) => range.fromId === pick.fromId);
   const { data: files } = useTurnFiles(pick.projectPath, pick.threadId, pick.fromId);
-  const [sel, setSel] = useState<string | null>(null);
-  const [filter, setFilter] = useState("");
-  const visible = useMemo(() => {
-    if (!files) return null;
-    const query = filter.trim().toLowerCase();
-    return query
-      ? files.filter((file) => file.path.toLowerCase().includes(query))
-      : files;
-  }, [files, filter]);
-  // Follow the turn's file list: first visible file by default, and a
-  // selection that left the list (rewind, checkout, filter) moves with it.
-  useEffect(() => {
-    if (!visible) return;
-    if (!sel || !visible.some((file) => file.path === sel)) {
-      setSel(visible[0]?.path ?? null);
-    }
-  }, [visible, sel]);
-  const diff = useTurnDiff(pick.projectPath, pick.threadId, pick.fromId, sel);
+  const patch = useTurnPatch(pick.projectPath, pick.threadId, pick.fromId);
+  const totals = useMemo(() => sumRangeFiles(files ?? []), [files]);
+  // The tree speaks porcelain, and a turn's delta speaks kinds. One letter each,
+  // so the same `statusBadge` reads both.
+  const treeFiles = useMemo<GitFile[]>(
+    () =>
+      (files ?? []).map((file) => ({
+        path: file.path,
+        status: STATUS_OF_KIND[file.kind],
+        untracked: false,
+      })),
+    [files]
+  );
   // Per-turn options: the contents loader closes over this turn, and its
   // memo identity keeps the underlying FileDiff from restarting.
   const options = useMemo(
     () =>
-      buildTurnDiffOptions(
+      buildTurnReviewOptions(
         contentsToLoader((file) =>
           fetchTurnContents(pick.projectPath, pick.threadId, pick.fromId, file)
         )
       ),
     [pick.projectPath, pick.threadId, pick.fromId]
   );
-  const truncated = (diff.data ?? "").endsWith("… patch truncated\n");
+  const truncated = (patch.data ?? "").endsWith("… patch truncated\n");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -503,6 +511,12 @@ function TurnReview({
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+        {files && files.length > 0 && (
+          <span className="flex shrink-0 items-center gap-2 text-xs tabular-nums">
+            <span className="text-emerald-400">+{totals.additions}</span>
+            <span className="text-red-400">−{totals.deletions}</span>
+          </span>
+        )}
         {truncated && (
           <span className="truncate text-[11px] text-amber-400">
             Large diff · showing the start
@@ -522,52 +536,16 @@ function TurnReview({
       ) : files.length === 0 ? (
         <EmptyState>This turn changed no files.</EmptyState>
       ) : (
-        <>
-          <div className="shrink-0 border-b p-2">
-            <Input
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="Filter files…"
-              className="h-7 text-xs"
-            />
-          </div>
-          <ul className="max-h-40 shrink-0 overflow-auto border-b">
-            {(visible ?? []).map((file) => (
-              <li key={file.path}>
-                <button
-                  type="button"
-                  onClick={() => setSel(file.path)}
-                  className={cn(
-                    "flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent",
-                    sel === file.path && "bg-secondary"
-                  )}
-                >
-                  <FileTypeIcon path={file.path} />
-                  <span className="flex-1 truncate" title={file.path}>
-                    {file.path}
-                  </span>
-                  {file.additions != null && (
-                    <span className="shrink-0 tabular-nums text-emerald-400">
-                      +{file.additions}
-                    </span>
-                  )}
-                  {file.deletions != null && (
-                    <span className="shrink-0 tabular-nums text-red-400">
-                      −{file.deletions}
-                    </span>
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
-          <div className="min-h-0 flex-1 overflow-auto">
-            {sel && diff.data ? (
-              <PatchDiff patch={diff.data} options={options} className="pierre-diffs" />
-            ) : sel ? (
-              <EmptyState>No diff to show.</EmptyState>
-            ) : null}
-          </div>
-        </>
+        <WorkingDiffView
+          patch={patch.data ?? ""}
+          files={treeFiles}
+          staged={false}
+          // A turn's delta is history, not a work queue: no staging, no
+          // discarding, so the hunk and row actions stay out entirely.
+          hunkActions={false}
+          options={options}
+          cacheKey={`turn:${pick.fromId}`}
+        />
       )}
     </div>
   );

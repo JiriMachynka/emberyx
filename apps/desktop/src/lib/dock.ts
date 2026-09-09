@@ -33,7 +33,7 @@ export const DOCK_KINDS: readonly DockKind[] = [
 export const DOCK_LABEL: Record<DockKind, string> = {
   terminal: "Terminal",
   files: "Files",
-  diff: "Diff",
+  diff: "Review",
   git: "Git",
   preview: "Preview",
   mrs: "Reviews",
@@ -57,7 +57,6 @@ export const PICKER_OFFERS = [
   { kind: "preview", shortcut: "B", blurb: "Open a local app or URL." },
   { kind: "files", shortcut: "F", blurb: "Browse and read workspace files." },
   { kind: "diff", shortcut: "D", blurb: "Review uncommitted changes." },
-  { kind: "git", shortcut: "G", blurb: "Branch actions and commit history." },
   { kind: "mrs", shortcut: "P", blurb: "Review open requests on this branch." },
   { kind: "dev", shortcut: "O", blurb: "Running servers and command output." },
 ] as const satisfies readonly DockOffer[];
@@ -109,11 +108,18 @@ export function closeTab(state: DockState, kind: DockKind): DockState {
   return { tabs, active: tabs[at - 1] ?? tabs[at] ?? null, open: true };
 }
 
+/** Whether a surface is actually on screen. `active` alone is not that: the
+ *  dock's chrome X hides the panel and keeps its tabs, so an active tab in a
+ *  hidden dock is a surface nobody can see — a toolbar button reading `active`
+ *  stayed lit over a dock that was gone. */
+export const isShowing = (state: DockState, kind: DockKind): boolean =>
+  state.open && state.active === kind;
+
 /** What a toolbar button does: reveal the tab, or close it if it's already the
  *  one showing. An open-but-hidden tab is revealed rather than closed — the
  *  button reads as "show me this". */
 export function toggleTab(state: DockState, kind: DockKind): DockState {
-  return state.active === kind ? closeTab(state, kind) : openTab(state, kind);
+  return isShowing(state, kind) ? closeTab(state, kind) : openTab(state, kind);
 }
 
 /** Drop tabs that belonged to the project being left. */

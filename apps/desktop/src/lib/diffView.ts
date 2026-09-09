@@ -9,38 +9,9 @@
  */
 
 import { registerCustomTheme } from "@pierre/diffs";
-import type {
-  FileDiffContentsLoader,
-  FileDiffOptions,
-  FileDiffLoadedFiles,
-} from "@pierre/diffs";
+import type { FileDiffContentsLoader, FileDiffLoadedFiles } from "@pierre/diffs";
 
 registerCustomTheme("vesper", () => import("@shikijs/themes/vesper"));
-
-/** One shared base option object — identity-stable so a re-render never
- *  restarts the underlying FileDiff for want of an option comparison. */
-const baseTurnDiffOptions: FileDiffOptions<undefined, undefined> = {
-  theme: "vesper",
-  diffStyle: "unified",
-  diffIndicators: "bars",
-  hunkSeparators: "line-info",
-  lineDiffType: "word",
-  overflow: "wrap",
-  // The panel header already names the file; pierre's default header would
-  // say it a second time.
-  disableFileHeader: true,
-};
-
-/**
- * Options for one turn diff, with context expansion: the loader hands pierre
- * both sides' full contents (`checkpoint_turn_contents` through the query
- * cache), so a hunk separator grows past the patch's 3-line context.
- */
-export const buildTurnDiffOptions = (load: FileDiffContentsLoader) => ({
-  ...baseTurnDiffOptions,
-  expandUnchanged: true,
-  loadDiffFiles: load,
-});
 
 /**
  * Options for the working-tree surface: every changed file in one scroll, so
@@ -48,9 +19,9 @@ export const buildTurnDiffOptions = (load: FileDiffContentsLoader) => ({
  * them while a long file scrolls past. `line-info-basic` is the collapsed
  * "N unmodified lines" band between hunks.
  *
- * Written out rather than spread from `baseTurnDiffOptions`: that one is
- * annotated `FileDiffOptions`, and spreading it carries optional line-event
- * callbacks whose props are narrower than CodeView's own.
+ * Written out as a plain literal rather than typed `FileDiffOptions`: that
+ * annotation carries optional line-event callbacks whose props are narrower
+ * than CodeView's own.
  */
 export const workingDiffOptions = {
   theme: "vesper" as const,
@@ -63,6 +34,21 @@ export const workingDiffOptions = {
   // file header is at the top of the scroll.
   stickyHeaders: true,
 };
+
+/**
+ * The turn review renders like the working tree — every file the turn changed
+ * in one scroll, with pierre's own sticky file headers — plus the contents
+ * loader, so a "N unmodified lines" band can expand past the patch's context.
+ *
+ * Deliberately **not** `expandUnchanged`: that renders every line of every
+ * file, and on a multi-file patch it also pulls both sides of each file
+ * through the loader at once. One file's review could afford it; a whole
+ * turn's froze the app. The bands stay collapsed and expand on click.
+ */
+export const buildTurnReviewOptions = (load: FileDiffContentsLoader) => ({
+  ...workingDiffOptions,
+  loadDiffFiles: load,
+});
 
 /** Adapt the Rust contents pair to pierre's loader shape. An absent old side
  *  (file created in the range) reads as a pure rename to pierre, which skips
