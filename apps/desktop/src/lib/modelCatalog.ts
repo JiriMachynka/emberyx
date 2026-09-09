@@ -205,3 +205,29 @@ export function withModelPrefs(
   );
   return [...entries, ...customs].filter((e) => !hide.has(e.id));
 }
+
+/**
+ * Can a pinned model id run under this backend?
+ *
+ * The stored default model is provider-blind: a pick writes it globally, while
+ * the backend a new chat launches on is resolved separately (per-project pin
+ * first, then the global default) — the two can disagree, and a pane seeds both
+ * without the reconciliation a manual pick does. Claude is the one backend
+ * whose ids are fully known without spawning anything (hand-written catalog
+ * plus the user's custom slugs), so the check is exact in both directions it
+ * can be: a non-Claude id under Claude is foreign, and so is a Claude id under
+ * anyone else. Other providers' catalogs are only readable by opening a
+ * session, so an id they might own is kept — this is a guard, not an oracle.
+ */
+export const modelFitsBackend = (
+  model: string,
+  backend: AgentBackend,
+  custom: Partial<Record<AgentBackend, string[]>>
+): boolean => {
+  if (model === "") return true;
+  const claudeIds = new Set([
+    ...CLAUDE_MODELS.map((m) => m.id),
+    ...(custom.claude ?? []),
+  ]);
+  return backend === "claude" ? claudeIds.has(model) : !claudeIds.has(model);
+};

@@ -10,11 +10,9 @@ import { cn } from "@/lib/utils";
  *  worth reading, but not at the cost of pushing the answer off-screen. */
 const BODY_MAX = "max-h-64";
 
-/** Reasoning, as its own card: a header saying how long it ran and a body
- *  capped and faded at the top edge, so a long block reads as an excerpt you
- *  can scroll rather than a wall between you and the answer. Opens live while
- *  the model is thinking and closes once it moves on — until the user clicks,
- *  then their choice sticks. */
+/** One quiet line — "Thinking" or "Thought for 6s" — that discloses the
+ *  reasoning. Opens live while the model is thinking and closes once it
+ *  moves on, until the user clicks, then their choice sticks. */
 export function ThinkingBlock({
   text,
   active,
@@ -33,34 +31,40 @@ export function ThinkingBlock({
     : null;
   const ran =
     timing?.endedAt != null ? formatDuration(timing.endedAt - timing.startedAt) : null;
+  const label = active ? "Thinking" : ran ? `Thought for ${ran}` : "Thought";
+
   return (
-    <div className="overflow-hidden text-xs">
+    <div className="text-xs">
       <button
         type="button"
+        aria-expanded={open}
         onClick={() => setOverride(!open)}
-        className="flex w-full items-center gap-2 py-2 text-left text-muted-foreground"
+        // Square like the tool rows beside it — a rounded hover bg is cut at
+        // the panel's seams; the panel clips its own corners.
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-muted-foreground transition-colors hover:bg-secondary"
       >
-        <Sparkle className={cn("size-3.5 shrink-0", active && "animate-pulse")} />
+        <Sparkle
+          className={cn(
+            "size-3.5 shrink-0 text-muted-foreground",
+            active && "animate-pulse"
+          )}
+        />
         <span className="shrink-0 font-medium text-foreground">Think</span>
-        <span className="min-w-0 truncate">
-          {active ? "Thinking…" : ran ? `Thought for ${ran}` : "Thought for a moment"}
-        </span>
-        <DisclosureChevron open={open} className="ml-auto shrink-0" />
+        <span className="tabular-nums">{label}</span>
+        <DisclosureChevron
+          open={open}
+          className="ml-auto shrink-0 text-muted-foreground"
+        />
       </button>
       <Disclosure open={open}>
-          <div className="relative">
-            {/* The fade belongs to the scroll container, not the text: it marks
-                that there is more above rather than dimming the first line. */}
-            <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-gradient-to-b from-background to-transparent" />
-            <div
-              className={cn(
-                "overflow-y-auto whitespace-pre-wrap pb-2 pl-6 pr-1 text-muted-foreground",
-                BODY_MAX
-              )}
-            >
-              {text}
-            </div>
-          </div>
+        <div
+          className={cn(
+            "overflow-y-auto whitespace-pre-wrap pb-2 pl-9 pr-3 leading-5 text-muted-foreground/80",
+            BODY_MAX
+          )}
+        >
+          {text}
+        </div>
       </Disclosure>
     </div>
   );

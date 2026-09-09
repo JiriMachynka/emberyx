@@ -61,9 +61,9 @@ export function ActivityFileTree({ activities }: { activities: ActivityItem[] })
   };
 
   return (
-    <div className="rounded-lg border border-border/70 bg-card/40 py-1 text-xs">
+    <div className="py-1 text-xs">
       {shown.map((row) => {
-        const indent = { paddingLeft: 10 + row.depth * 12 };
+        const indent = { paddingLeft: 12 + row.depth * 12 };
         if (row.kind === "dir") {
           const closed = collapsed.has(row.path);
           return (
@@ -72,7 +72,7 @@ export function ActivityFileTree({ activities }: { activities: ActivityItem[] })
               type="button"
               style={indent}
               onClick={() => toggleDir(row.path)}
-              className="flex w-full items-center gap-1.5 py-0.5 pr-2.5 text-left text-muted-foreground transition-colors hover:text-foreground"
+              className="flex w-full items-center gap-1.5 py-0.5 pr-3 text-left text-muted-foreground transition-colors hover:text-foreground"
             >
               {closed ? (
                 <ChevronRight className="size-3 shrink-0 opacity-60" />
@@ -96,7 +96,7 @@ export function ActivityFileTree({ activities }: { activities: ActivityItem[] })
             style={indent}
             onClick={() => openFile(row.path)}
             className={cn(
-              "flex w-full items-center gap-1.5 py-0.5 pr-2.5 text-left transition-colors hover:text-foreground",
+              "flex w-full items-center gap-1.5 py-0.5 pr-3 text-left transition-colors hover:text-foreground",
               failed.has(row.path) && "text-red-400",
               live && "tool-running-label"
             )}

@@ -26,6 +26,43 @@ export interface TreeDir {
 
 export type TreeRow = TreeFile | TreeDir;
 
+/** What a directory row shows for its subtree. `counted` is false while every
+ *  file under it lacks line counts — an absent number stands for unknown, so
+ *  a row with nothing counted shows no counts at all rather than +0 −0. */
+export interface DirTotals {
+  additions: number;
+  deletions: number;
+  counted: boolean;
+}
+
+/**
+ * Aggregate line counts into every ancestor directory of each file, keyed by
+ * the full directory path — the same strings `buildTree` uses for dir rows,
+ * including joined single-child chains. Files that report no counts (binary)
+ * contribute nothing rather than a fabricated zero.
+ */
+export const dirTotals = (
+  files: { path: string; additions: number | null; deletions: number | null }[]
+): Map<string, DirTotals> => {
+  const totals = new Map<string, DirTotals>();
+  for (const file of files) {
+    const parts = file.path.split("/");
+    parts.pop();
+    let dir = "";
+    for (const part of parts) {
+      dir = dir ? `${dir}/${part}` : part;
+      const entry = totals.get(dir) ?? { additions: 0, deletions: 0, counted: false };
+      if (file.additions != null || file.deletions != null) {
+        entry.additions += file.additions ?? 0;
+        entry.deletions += file.deletions ?? 0;
+        entry.counted = true;
+      }
+      totals.set(dir, entry);
+    }
+  }
+  return totals;
+};
+
 /** Porcelain's two-char status collapsed to the single letter the row shows.
  *  Index status wins when both halves changed, because that is the side a
  *  staged-scope tree is describing. */

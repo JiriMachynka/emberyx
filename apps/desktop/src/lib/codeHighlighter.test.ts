@@ -3,6 +3,7 @@ import {
   highlightTokens,
   resolveLang,
   supportedLanguages,
+  themeForSurface,
 } from "@/lib/codeHighlighter";
 
 const loadTheme = () => import("@shikijs/themes/vesper");
@@ -71,5 +72,32 @@ describe("highlightTokens", () => {
   it("still renders an unknown language, as plain text", async () => {
     const result = await tokensFor("(* wolfram *)", "wolfram");
     expect(result!.tokens.flat().map((t) => t.content).join("")).toBe("(* wolfram *)");
+  });
+
+  it("renders on the box's surface: the theme hands its background over", async () => {
+    const result = await tokensFor("const x = 1;", "ts");
+    expect(result!.bg).toBe("transparent");
+  });
+});
+
+describe("themeForSurface", () => {
+  it("lifts the dim greys and hands the background to the box", async () => {
+    const mod = await loadTheme();
+    const patched = themeForSurface(mod.default);
+    expect(patched.colors?.["editor.background"]).toBe("transparent");
+    const greys = new Map(
+      patched.tokenColors?.map((rule) => [
+        rule.settings?.foreground?.toLowerCase(),
+        true,
+      ])
+    );
+    // The lifted values replace the originals; nothing else moves.
+    expect(greys.has("#8b8b8b94")).toBe(false);
+    expect(greys.has("#a0a0a0")).toBe(false);
+    expect(greys.has("#b0b0b0")).toBe(true);
+    expect(greys.has("#8f8f8f")).toBe(true);
+    // Hues survive untouched.
+    expect(greys.has("#ffc799")).toBe(true);
+    expect(greys.has("#99ffe4")).toBe(true);
   });
 });

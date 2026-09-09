@@ -5,6 +5,7 @@ import { useAgentStore } from "@/lib/agentStore";
 import { paneShouldMount, pushRecent } from "@/lib/paneMount";
 import { statusOf } from "@/lib/status";
 import { cn } from "@/lib/utils";
+import type { AgentBackend } from "@/lib/agentBackend";
 import type { Project, Session, SessionStatus } from "@/types";
 import type { AccessLevel, Settings } from "@/lib/settings";
 
@@ -14,6 +15,9 @@ interface SessionPanesProps {
   settings: Settings;
   /** Persist a new default `--model` when a chat pane switches models. */
   onModelChange: (model: string) => void;
+  /** Persist a new default backend when a chat pane's picker switches
+   *  provider, so the stored model/backend pair stays coherent. */
+  onBackendChange: (backend: AgentBackend) => void;
   /** Persist a new default reasoning effort when a chat pane switches it. */
   onEffortChange: (effort: string) => void;
   onAccessChange: (level: AccessLevel) => void;
@@ -40,6 +44,7 @@ export function SessionPanes({
   activeId,
   settings,
   onModelChange,
+  onBackendChange,
   onEffortChange,
   onAccessChange,
   projects,
@@ -77,9 +82,10 @@ export function SessionPanes({
             key={s.id}
             session={s}
             activeId={activeId}
-            settings={settings}
-            onModelChange={onModelChange}
-            onEffortChange={onEffortChange}
+             settings={settings}
+             onModelChange={onModelChange}
+             onBackendChange={onBackendChange}
+             onEffortChange={onEffortChange}
             onAccessChange={onAccessChange}
             projects={projects}
             recentProjects={recentProjects}
@@ -101,6 +107,7 @@ function SessionPaneRow({
   activeId,
   settings,
   onModelChange,
+  onBackendChange,
   onEffortChange,
   onAccessChange,
   projects,
@@ -114,6 +121,7 @@ function SessionPaneRow({
   activeId: string | null;
   settings: Settings;
   onModelChange: (model: string) => void;
+  onBackendChange: (backend: AgentBackend) => void;
   onEffortChange: (effort: string) => void;
   onAccessChange: (level: AccessLevel) => void;
   projects: Project[];
@@ -155,9 +163,10 @@ function SessionPaneRow({
           skipPermissions={settings.dangerouslySkipPermissions}
           persistent={settings.persistentAgents}
           permissionMode={settings.permissionMode}
-          model={settings.model}
-          onModelChange={onModelChange}
-          effort={settings.effort}
+           model={settings.model}
+           onModelChange={onModelChange}
+           onBackendChange={onBackendChange}
+           effort={settings.effort}
           onEffortChange={onEffortChange}
           onAccessChange={onAccessChange}
           providerLaunch={settings.providerLaunch}

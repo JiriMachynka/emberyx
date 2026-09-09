@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTree, statusBadge } from "@/lib/fileTree";
+import { buildTree, dirTotals, statusBadge } from "@/lib/fileTree";
 
 const files = (...paths: string[]) =>
   paths.map((path) => ({ path, status: " M" }));
@@ -14,6 +14,73 @@ describe("statusBadge", () => {
     expect(statusBadge(" M")).toBe("M");
     expect(statusBadge("D ")).toBe("D");
     expect(statusBadge("R ")).toBe("R");
+  });
+});
+
+describe("dirTotals", () => {
+  it("rolls counts into every ancestor directory", () => {
+    const totals = dirTotals([
+      { path: "apps/desktop/src/a.ts", additions: 3, deletions: 1 },
+      { path: "apps/desktop/src/lib/b.ts", additions: 2, deletions: 4 },
+      { path: "README.md", additions: 1, deletions: 0 },
+    ]);
+    expect(totals.get("apps/desktop/src/lib")).toEqual({
+      additions: 2,
+      deletions: 4,
+      counted: true,
+    });
+    // A directory sums its own files and everything nested below it.
+    expect(totals.get("apps/desktop/src")).toEqual({
+      additions: 5,
+      deletions: 5,
+      counted: true,
+    });
+    expect(totals.get("apps/desktop")).toEqual({
+      additions: 5,
+      deletions: 5,
+      counted: true,
+    });
+    expect(totals.get("apps")).toEqual({
+      additions: 5,
+      deletions: 5,
+      counted: true,
+    });
+    // Root files land in no directory.
+    expect(totals.has("README.md")).toBe(false);
+  });
+
+  it("keys joined single-child chains by their full path", () => {
+    const totals = dirTotals([
+      { path: "apps/desktop/src/lib/x.ts", additions: 7, deletions: 2 },
+    ]);
+    expect(totals.get("apps/desktop/src/lib")).toEqual({
+      additions: 7,
+      deletions: 2,
+      counted: true,
+    });
+  });
+
+  it("stays uncounted while every file lacks counts", () => {
+    const totals = dirTotals([
+      { path: "bin/asset.png", additions: null, deletions: null },
+    ]);
+    expect(totals.get("bin")).toEqual({
+      additions: 0,
+      deletions: 0,
+      counted: false,
+    });
+  });
+
+  it("counts a directory the moment one file reports numbers", () => {
+    const totals = dirTotals([
+      { path: "bin/a.png", additions: null, deletions: null },
+      { path: "bin/b.ts", additions: 4, deletions: 0 },
+    ]);
+    expect(totals.get("bin")).toEqual({
+      additions: 4,
+      deletions: 0,
+      counted: true,
+    });
   });
 });
 

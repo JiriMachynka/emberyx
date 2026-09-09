@@ -7,6 +7,12 @@ import { GlobalRegistrator } from "@happy-dom/global-registrator";
  */
 GlobalRegistrator.register();
 
+// Vite replaces `import.meta.env.DEV` with a build-time literal (true in
+// vitest, false in production); Bun's runner has no such define and mirrors
+// env vars instead, where DEV is undefined. Dev-gated code must be reachable
+// under test the same way vitest sees it.
+(import.meta.env as { DEV?: boolean }).DEV = true;
+
 // Stream publish stays rAF-only in tests so `await frame()` still sees every
 // token the way it did before the 8 Hz cap.
 (globalThis as { __EMBERYX_TEST__?: boolean }).__EMBERYX_TEST__ = true;

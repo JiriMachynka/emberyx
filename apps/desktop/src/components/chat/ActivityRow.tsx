@@ -85,7 +85,7 @@ export const ActivityRow = memo(function ActivityRow({
   );
 
   return (
-    <div className="rounded-lg border border-border/70 bg-card/40 px-2.5 text-xs">
+    <div className="text-xs">
       <button
         type="button"
         onClick={() =>
@@ -95,7 +95,11 @@ export const ActivityRow = memo(function ActivityRow({
         }
         disabled={!clickable}
         className={cn(
-          "flex w-full items-center gap-2 py-2 text-left",
+          // Square, on purpose: these are rows in a divided panel, and a
+          // rounded hover bg leaves notches at every seam. The panel's own
+          // rounded corners clip the outermost rows.
+          "flex w-full items-center gap-2 px-3 py-2 text-left transition-colors",
+          clickable && "hover:bg-secondary",
           selected && "bg-primary/10"
         )}
       >
@@ -108,18 +112,16 @@ export const ActivityRow = memo(function ActivityRow({
           <span
             className={cn(
               "min-w-0 truncate text-muted-foreground",
-              isMonoActivity(activity) && "font-mono text-[0.7rem]"
+              isMonoActivity(activity) && "font-mono"
             )}
           >
             {title}
           </span>
         )}
-        {meta && (
-          <span className="shrink-0 text-[0.65rem] text-muted-foreground">{meta}</span>
-        )}
+        {meta && <span className="shrink-0 text-muted-foreground">{meta}</span>}
         {activity.autoApproved && (
           <span
-            className="shrink-0 text-[0.65rem] text-muted-foreground/70"
+            className="shrink-0 text-muted-foreground/70"
             title="Approved by Emberyx because this session runs at full access"
           >
             auto-approved
@@ -127,7 +129,7 @@ export const ActivityRow = memo(function ActivityRow({
         )}
         <div className="ml-auto flex shrink-0 items-center gap-2 pl-2">
           {!running && activity.failed && (
-            <span className="text-[0.7rem] text-red-400">error</span>
+            <span className="text-red-400">error</span>
           )}
           {expandable && !isAgent && (
             <DisclosureChevron
@@ -139,7 +141,7 @@ export const ActivityRow = memo(function ActivityRow({
       </button>
       <Disclosure open={open} onClosed={() => setBodyMounted(false)}>
           {bodyMounted && (
-            <div className="flex flex-col gap-2 pb-2 pl-6">
+            <div className="flex flex-col gap-2 pb-2 pl-9 pr-3">
               {bodyParts.map((part, idx) => (
                 <ToolBody key={idx} part={part} streaming={running} />
               ))}
@@ -161,7 +163,8 @@ export const ActivityRow = memo(function ActivityRow({
 });
 
 /**
- * A turn's work, in the order it happened.
+ * A turn's work, in the order it happened, on one panel: hairline rows, not a
+ * stack of boxes.
  *
  * Reasoning is a row like any other, so a turn that thought, ran something,
  * then thought again renders that way — the thing the flat `thinking` string
@@ -171,6 +174,7 @@ export function ActivityList({
   activities,
   renderAgent,
   live,
+  framed = true,
 }: {
   activities: ActivityItem[];
   /** A subagent run has a whole inline log of its own; the pane supplies it
@@ -179,11 +183,20 @@ export function ActivityList({
   renderAgent?: (activity: ActivityItem) => ReactNode;
   /** Live turns hide settled tools; the finished-turn accordion keeps the log. */
   live?: boolean;
+  /** The panel is this list's own surface, unless the caller already provides
+   *  one around it (the pane's replay fallback wraps a thinking block and this
+   *  list in the same panel). */
+  framed?: boolean;
 }) {
   const rows = visibleActivities(activities, live === true);
   if (rows.length === 0) return null;
   return (
-    <div className="flex flex-col gap-2">
+    <div
+      className={cn(
+        "flex flex-col divide-y divide-border/50",
+        framed && "chat-work-panel overflow-hidden rounded-xl border"
+      )}
+    >
       {groupActivities(rows).map((group) => {
         if (group.type === "files") {
           return (

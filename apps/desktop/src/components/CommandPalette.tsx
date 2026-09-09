@@ -6,6 +6,7 @@ import {
   CloudUpload,
   FileCode,
   FileDiff,
+  FlaskConical,
   FolderOpen,
   History,
   Link,
@@ -30,6 +31,8 @@ interface CommandPaletteProps {
   onSelectSession: (projectId: string, sessionId: string) => void;
   onResumeThread: (projectId: string, path: string, thread: Thread) => void;
   onNewAgent: () => void;
+  /** Dev-only showcase conversation. */
+  onOpenMockup?: () => void;
   onPickProject: () => void;
   onCloneGithub: () => void;
   onCloneGitlab: () => void;
@@ -56,6 +59,7 @@ export function CommandPalette({
   onSelectSession,
   onResumeThread,
   onNewAgent,
+  onOpenMockup,
   onPickProject,
   onCloneGithub,
   onCloneGitlab,
@@ -121,6 +125,15 @@ export function CommandPalette({
                   <Plus className="size-4 text-muted-foreground" />
                   New chat
                 </Item>
+                {import.meta.env.DEV && onOpenMockup && (
+                  <Item
+                    value="action mockup conversation"
+                    onSelect={() => run(onOpenMockup)}
+                  >
+                    <FlaskConical className="size-4 text-muted-foreground" />
+                    Open mockup conversation
+                  </Item>
+                )}
                 <Item value="action open project" onSelect={() => run(onPickProject)}>
                   <FolderOpen className="size-4 text-muted-foreground" />
                   Open project…

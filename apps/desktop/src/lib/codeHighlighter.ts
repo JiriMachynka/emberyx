@@ -62,6 +62,37 @@ const ALIASES: Record<string, string> = {
 /** Shiki always knows this one; it is also where an unknown fence lands. */
 const PLAIN = "text";
 
+/**
+ * Vesper is tuned for its own #101010 canvas; the transcript renders it on the
+ * app's grey surface instead. Registered as-is it painted a darker slab inside
+ * the code box and left its dim greys under-contrasted. The patch keeps every
+ * hue — it lifts the two neutral greys so the quiet hierarchy (comment <
+ * keyword < plain) survives the lighter background, and hands the background
+ * to the box itself.
+ */
+export const themeForSurface = (theme: ThemeRegistrationAny): ThemeRegistrationAny => {
+  const lift: Record<string, string> = {
+    // Comments arrived #8b8b8b at 58% alpha — mud on anything lighter.
+    "#8b8b8b94": "#8f8f8f",
+    // Keywords, punctuation, variables — Vesper's quiet mass.
+    "#a0a0a0": "#b0b0b0",
+  };
+  const lifted = (foreground: string | undefined): string | undefined => {
+    if (!foreground) return undefined;
+    const replacement = lift[foreground.toLowerCase()];
+    return replacement ?? foreground;
+  };
+  return {
+    ...theme,
+    colors: { ...theme.colors, "editor.background": "transparent" },
+    tokenColors: (theme.tokenColors ?? []).map((rule) =>
+      typeof rule === "object" && rule.settings
+        ? { ...rule, settings: { ...rule.settings, foreground: lifted(rule.settings.foreground) } }
+        : rule
+    ),
+  };
+};
+
 export const resolveLang = (language: string): string => {
   const id = language.trim().toLowerCase();
   const canonical = ALIASES[id] ?? id;
@@ -85,7 +116,7 @@ const core = (theme: () => Promise<{ default: ThemeRegistrationAny }>) => {
     theme(),
   ]).then(([{ createHighlighterCore }, { createJavaScriptRegexEngine }, loadedTheme]) =>
     createHighlighterCore({
-      themes: [loadedTheme.default],
+      themes: [themeForSurface(loadedTheme.default)],
       langs: [],
       engine: createJavaScriptRegexEngine({ forgiving: true }),
     })

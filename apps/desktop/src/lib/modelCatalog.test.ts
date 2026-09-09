@@ -5,6 +5,7 @@ import {
   codexGeneration,
   codexModelEntries,
   labelForModel,
+  modelFitsBackend,
   modelRowLabels,
   opencodeOwnModels,
   orderByFavorites,
@@ -236,5 +237,50 @@ describe("opencodeOwnModels", () => {
     expect(
       opencodeOwnModels([{ value: "some-model", label: "Some Model" }])
     ).toHaveLength(1);
+  });
+});
+
+describe("modelFitsBackend", () => {
+  // The launch guard: a stored default model is provider-blind, so a pane must
+  // not hand a foreign id to the CLI it spawns.
+  it("lets an unpinned model through — the CLI decides", () => {
+    expect(modelFitsBackend("", "claude", {})).toBe(true);
+    expect(modelFitsBackend("", "codex", {})).toBe(true);
+  });
+
+  it("accepts a catalog id under its own backend", () => {
+    expect(modelFitsBackend("claude-sonnet-5", "claude", {})).toBe(true);
+  });
+
+  it("accepts a custom claude slug under claude — customs are claude's too", () => {
+    expect(
+      modelFitsBackend("my-private-claude", "claude", {
+        claude: ["my-private-claude"],
+      })
+    ).toBe(true);
+  });
+
+  it("drops another provider's model under claude — the launch bug", () => {
+    expect(modelFitsBackend("grok-4.6", "claude", {})).toBe(false);
+  });
+
+  it("drops a claude id under another backend", () => {
+    expect(modelFitsBackend("claude-sonnet-5", "codex", {})).toBe(false);
+    expect(
+      modelFitsBackend("my-private-claude", "codex", {
+        claude: ["my-private-claude"],
+      })
+    ).toBe(false);
+  });
+
+  it("keeps an id only a live catalog could vouch for", () => {
+    expect(modelFitsBackend("gpt-5.6-luna", "codex", {})).toBe(true);
+    expect(modelFitsBackend("grok-4.6", "grok", {})).toBe(true);
+  });
+
+  it("knows every claude catalog id by construction", () => {
+    for (const m of CLAUDE_MODELS) {
+      expect(modelFitsBackend(m.id, "codex", {})).toBe(false);
+    }
   });
 });
