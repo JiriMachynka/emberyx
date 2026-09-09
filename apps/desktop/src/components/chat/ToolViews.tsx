@@ -18,7 +18,7 @@ import {
 } from "@/lib/toolDisplay";
 import { TOOL_ICONS, TOOL_TINT } from "@/lib/toolIcons";
 import { useAgentStore } from "@/lib/agentStore";
-import { highlightCached } from "@/lib/highlight";
+import { highlightCached, useHighlightVersion } from "@/lib/highlight";
 import { DIFF_PREVIEW_LINES, diffPreview, type DiffRow } from "@/lib/toolDiff";
 import { cn } from "@/lib/utils";
 import type { ToolCall } from "@/hooks/useAgentChat";
@@ -47,6 +47,9 @@ const DiffLine = memo(function DiffLine({
   lang: string | null;
   persist: boolean;
 }) {
+  // memo() would hold the plain text this painted before the engine loaded;
+  // the version is what lets the row through again.
+  useHighlightVersion();
   return (
     <div className={cn("flex gap-2 border-l-2 px-1", TINT[row.sign])}>
       <span className="select-none text-muted-foreground">{row.sign}</span>
@@ -330,9 +333,12 @@ export const ToolCode = memo(function ToolCode({
   className?: string;
   streaming?: boolean;
 }) {
+  // The engine loads in the background; until it lands this is escaped plain
+  // text, and the version bump is what repaints it colored.
+  const engine = useHighlightVersion();
   const html = useMemo(
     () => highlightCached(code, lang, !streaming),
-    [code, lang, streaming]
+    [code, lang, streaming, engine]
   );
   return (
     <pre

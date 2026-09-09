@@ -44,6 +44,68 @@ enum EnvState {
     Done(Option<Vec<(String, String)>>),
 }
 
+const APP_IDENTIFIER: &str = "com.jiri.emberyx";
+
+/// Where the last capture is remembered between launches.
+///
+/// `zsh -lic env` costs 1.5–2.5s on a real developer's rc (nvm, plugins,
+/// completions), and the first `agent_spawn` blocks on it — which is most of
+/// the wait before a window can take input. The answer barely ever changes, so
+/// a launch starts from the cached copy and re-captures behind it: this run
+/// spawns with what the last run measured, and the next run gets today's.
+fn env_cache_path() -> Option<std::path::PathBuf> {
+    // Matches `identifier` in tauri.conf.json — this module has no app handle
+    // to resolve BaseDirectory::AppData through, and a cache in the wrong
+    // directory is only a slower launch, never a wrong one.
+    Some(
+        crate::paths::home_dir()?
+            .join("Library/Application Support")
+            .join(APP_IDENTIFIER)
+            .join("shell-env.json"),
+    )
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedEnv {
+    /// The shell it was captured from — a changed $SHELL invalidates it.
+    shell: String,
+    vars: Vec<(String, String)>,
+}
+
+fn read_env_cache_at(path: &std::path::Path, shell: &str) -> Option<Vec<(String, String)>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let cached: CachedEnv = serde_json::from_str(&text).ok()?;
+    // A different login shell captured a different environment; and an empty
+    // capture is the shape a failed one takes, which must never be served as
+    // an answer.
+    if cached.shell != shell || cached.vars.is_empty() {
+        return None;
+    }
+    Some(cached.vars)
+}
+
+fn write_env_cache_at(path: &std::path::Path, shell: &str, vars: &[(String, String)]) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let payload = CachedEnv {
+        shell: shell.to_string(),
+        vars: vars.to_vec(),
+    };
+    if let Ok(text) = serde_json::to_string(&payload) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+fn read_env_cache() -> Option<Vec<(String, String)>> {
+    read_env_cache_at(&env_cache_path()?, &PtyManager::user_shell())
+}
+
+fn write_env_cache(vars: &[(String, String)]) {
+    let Some(path) = env_cache_path() else { return };
+    write_env_cache_at(&path, &PtyManager::user_shell(), vars);
+}
+
 /// Captured once per process, shared by every manager that spawns children.
 static SHELL_ENV: OnceLock<(Mutex<EnvState>, Condvar)> = OnceLock::new();
 
@@ -51,12 +113,30 @@ fn env_cell() -> &'static (Mutex<EnvState>, Condvar) {
     SHELL_ENV.get_or_init(|| (Mutex::new(EnvState::Warming), Condvar::new()))
 }
 
-/// Kick off the capture off-thread, once. Cheap and idempotent to call.
+/// Kick off the capture off-thread, once. Cheap and idempotent to call — and
+/// worth calling at startup rather than at the first spawn, so the shell runs
+/// while the window is still painting.
+///
+/// A cached capture from a previous launch is published immediately, so a
+/// waiter gets an answer without waiting for the shell at all; the fresh
+/// capture replaces it when it lands.
 pub(crate) fn warm_shell_env() {
     static STARTED: Once = Once::new();
     STARTED.call_once(|| {
+        if let Some(cached) = read_env_cache() {
+            let (lock, cv) = env_cell();
+            *lock.lock().unwrap() = EnvState::Done(Some(cached));
+            cv.notify_all();
+        }
         std::thread::spawn(|| {
             let env = capture_shell_env();
+            // A failed capture must not overwrite a good cached answer with
+            // nothing — the fallback for "no env" is Finder's stub PATH.
+            if let Some(vars) = &env {
+                write_env_cache(vars);
+            } else if matches!(&*env_cell().0.lock().unwrap(), EnvState::Done(Some(_))) {
+                return;
+            }
             let (lock, cv) = env_cell();
             *lock.lock().unwrap() = EnvState::Done(env);
             cv.notify_all();
@@ -419,6 +499,37 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         false
+    }
+
+    #[test]
+    fn serves_a_cached_env_only_for_the_shell_that_captured_it() {
+        let dir = std::env::temp_dir().join(format!("emberyx-env-{}", std::process::id()));
+        let path = dir.join("shell-env.json");
+        let _ = fs::remove_dir_all(&dir);
+
+        let vars = vec![("PATH".to_string(), "/usr/local/bin".to_string())];
+        write_env_cache_at(&path, "/bin/zsh", &vars);
+
+        assert_eq!(read_env_cache_at(&path, "/bin/zsh"), Some(vars));
+        // Switching shells changes the answer, so the old capture is not it.
+        assert_eq!(read_env_cache_at(&path, "/bin/bash"), None);
+
+        // An empty capture is what a failed one looks like; serving it would
+        // spawn agents with Finder's stub PATH.
+        write_env_cache_at(&path, "/bin/zsh", &[]);
+        assert_eq!(read_env_cache_at(&path, "/bin/zsh"), None);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ignores_a_corrupt_env_cache() {
+        let dir = std::env::temp_dir().join(format!("emberyx-env-bad-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shell-env.json");
+        fs::write(&path, "{not json").unwrap();
+        assert_eq!(read_env_cache_at(&path, "/bin/zsh"), None);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// A dev server is a grandchild of the shell we spawned, so killing the

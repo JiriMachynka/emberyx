@@ -99,6 +99,11 @@ pub fn run() {
                     eprintln!("[emberyx] registry restore failed: {e}");
                 }
             }
+            // The login-shell env capture is the longest single thing between
+            // launching and being able to type: `zsh -lic env` on a real rc is
+            // 1.5–2.5s, and the first `agent_spawn` blocks on it. Start it here
+            // and it runs while the webview loads instead of after it.
+            pty::warm_shell_env();
             app.manage(ask::start(app.handle())?);
             // The native preview surface, created on first attach (spike flag).
             app.manage(preview::NativePreview::new());
@@ -220,6 +225,7 @@ pub fn run() {
             checkpoints::checkpoint_settle,
             checkpoints::checkpoint_turn_files,
             checkpoints::checkpoint_turn_diff,
+            checkpoints::checkpoint_turn_patch,
             checkpoints::checkpoint_turn_contents,
             git::git_checkout,
             git::git_branch_delete,

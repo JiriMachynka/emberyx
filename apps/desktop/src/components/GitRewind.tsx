@@ -3,7 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { GitCompare, History, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { basename } from "@/lib/path";
-import { highlightCode, langFromPath } from "@/lib/highlight";
+import { highlightCode, langFromPath, useHighlightVersion } from "@/lib/highlight";
 import {
   changeAnchors,
   commitType,
@@ -322,6 +322,9 @@ function Timeline({
 
 /** The commit's diff, syntax-highlighted, with word-level tinting. */
 function DiffView({ lines, lang }: { lines: DiffLine[]; lang: string | null }) {
+  // Subscribed where `highlightCode` is actually called: plain text until the
+  // engine's chunk lands, then a repaint.
+  useHighlightVersion();
   if (!lines.length) {
     return (
       <p className="p-4 text-center text-xs text-muted-foreground">

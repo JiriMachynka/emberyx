@@ -195,13 +195,24 @@ interface LiteLlmEntry {
   max_input_tokens?: number;
 }
 
-/** Fetch the LiteLLM pricing catalog and cache Claude rates locally. Skips
- *  the network call if the cache is still fresh; safe to call repeatedly
- *  (e.g. once per app launch). Failures are silent — the fallback table
- *  keeps working either way. */
-export async function refreshPricing(): Promise<void> {
+/** The refresh in flight, so two callers — or StrictMode's double effect in
+ *  dev — fetch the catalog once rather than racing two downloads at launch. */
+let inFlight: Promise<void> | null = null;
+
+/** Fetch the LiteLLM pricing catalog and cache Claude rates locally. Skips the
+ *  network call if the cache is still fresh; safe to call repeatedly (e.g. once
+ *  per app launch). Failures are silent — the fallback table keeps working
+ *  either way. */
+export function refreshPricing(): Promise<void> {
   const cached = readCache();
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return;
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return Promise.resolve();
+  inFlight ??= fetchPricing().finally(() => {
+    inFlight = null;
+  });
+  return inFlight;
+}
+
+async function fetchPricing(): Promise<void> {
   try {
     const res = await fetch(LITELLM_PRICING_URL);
     if (!res.ok) return;

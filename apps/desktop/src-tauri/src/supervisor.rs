@@ -1812,6 +1812,46 @@ pub fn agent_delegation_cancel(
 mod tests {
     use super::*;
 
+    /// What `setup()` pays before the window paints: opening the store, reading
+    /// back the state snapshot, and rebuilding the registry from it. Timed in
+    /// the debug profile `tauri dev` runs, against the developer's own AppData.
+    /// `#[ignore]`d — it reads real machine state.
+    /// `cargo test -- --ignored --nocapture times_a_real_restore`.
+    #[test]
+    #[ignore]
+    fn times_a_real_restore() {
+        let dir = std::env::var("EMBERYX_APPDATA").unwrap_or_else(|_| {
+            format!(
+                "{}/Library/Application Support/com.jiri.emberyx",
+                std::env::var("HOME").unwrap_or_default()
+            )
+        });
+        let db = std::path::Path::new(&dir).join("emberyx.db");
+        if !db.exists() {
+            println!("no store at {db:?} — skipping");
+            return;
+        }
+        let t0 = std::time::Instant::now();
+        let store = std::sync::Arc::new(crate::store::Store::open(&db).unwrap());
+        let open_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        let supervisor = Supervisor::new();
+        let t1 = std::time::Instant::now();
+        supervisor.attach_store(store).unwrap();
+        let attach_ms = t1.elapsed().as_secs_f64() * 1000.0;
+
+        let t2 = std::time::Instant::now();
+        supervisor
+            .restore(&std::path::Path::new(&dir).join("registry.json"))
+            .unwrap();
+        let restore_ms = t2.elapsed().as_secs_f64() * 1000.0;
+
+        println!(
+            "store open {open_ms:.1}ms, attach_store {attach_ms:.1}ms, restore {restore_ms:.1}ms"
+        );
+    }
+
+
     fn supervisor_at(db_path: &std::path::Path) -> Supervisor {
         let s = Supervisor::new();
         s.attach_store(std::sync::Arc::new(Store::open(db_path).unwrap()))

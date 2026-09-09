@@ -1,31 +1,55 @@
-import hljs from "highlight.js/lib/core";
-import typescript from "highlight.js/lib/languages/typescript";
-import javascript from "highlight.js/lib/languages/javascript";
-import rust from "highlight.js/lib/languages/rust";
-import python from "highlight.js/lib/languages/python";
-import json from "highlight.js/lib/languages/json";
-import css from "highlight.js/lib/languages/css";
-import xml from "highlight.js/lib/languages/xml";
-import bash from "highlight.js/lib/languages/bash";
-import markdown from "highlight.js/lib/languages/markdown";
-import yaml from "highlight.js/lib/languages/yaml";
-import go from "highlight.js/lib/languages/go";
-import sql from "highlight.js/lib/languages/sql";
-import ini from "highlight.js/lib/languages/ini";
+/**
+ * Syntax highlighting for chat tool cards, diffs and editor hovers.
+ *
+ * The engine itself lives in `highlightEngine.ts` and arrives asynchronously:
+ * callers highlight during render, so this module answers with escaped plain
+ * text until the chunk lands and then tells subscribers to repaint. Nothing on
+ * the first screen is worth 190 KB of parse before the chat shows up.
+ */
 
-hljs.registerLanguage("typescript", typescript);
-hljs.registerLanguage("javascript", javascript);
-hljs.registerLanguage("rust", rust);
-hljs.registerLanguage("python", python);
-hljs.registerLanguage("json", json);
-hljs.registerLanguage("css", css);
-hljs.registerLanguage("xml", xml);
-hljs.registerLanguage("bash", bash);
-hljs.registerLanguage("markdown", markdown);
-hljs.registerLanguage("yaml", yaml);
-hljs.registerLanguage("go", go);
-hljs.registerLanguage("sql", sql);
-hljs.registerLanguage("ini", ini);
+import { useSyncExternalStore } from "react";
+import type hljsType from "highlight.js/lib/core";
+
+type Engine = typeof hljsType;
+
+let engine: Engine | null = null;
+
+/** Bumped once the engine lands, so a view that painted plain text repaints
+ *  colored. Same shape as `diffWorkers`' failure store. */
+const listeners = new Set<() => void>();
+let version = 0;
+
+export const highlightReady = {
+  subscribe(fn: () => void) {
+    listeners.add(fn);
+    return () => listeners.delete(fn);
+  },
+  get: () => version,
+};
+
+let pending: Promise<void> | null = null;
+
+const loadEngine = (): Promise<void> => {
+  if (engine) return Promise.resolve();
+  if (!pending) {
+    pending = import("@/lib/highlightEngine")
+      .then((m) => {
+        engine = m.default;
+        version++;
+        for (const fn of listeners) fn();
+      })
+      .catch(() => {
+        // Highlighting is decoration; plain text is a fine permanent answer.
+      });
+  }
+  return pending;
+};
+
+/** Start loading the engine before anything asks to highlight — for a surface
+ *  whose first highlight is a one-shot into state (the editor's symbol hover),
+ *  where a repaint would come too late to matter. Returns the load, which is
+ *  what makes highlighting testable without a fake timer. */
+export const warmHighlighter = (): Promise<void> => loadEngine();
 
 const EXT_LANG: Record<string, string> = {
   ts: "typescript",
@@ -126,7 +150,9 @@ export const highlightCached = (
     return hit.html;
   }
   const html = highlightCode(code, lang);
-  if (!persist) return html;
+  // Plain text from before the engine landed must not be cached, or the
+  // repaint would read it straight back out of the LRU.
+  if (!persist || !engine) return html;
   const size = html.length * 2;
   if (size > HIGHLIGHT_CACHE_MAX_BYTES) return html;
   evictHighlightCache(size);
@@ -141,10 +167,19 @@ export const highlightCached = (
  * per line loses multi-line token context, which is acceptable for diffs.
  */
 export function highlightCode(code: string, lang: string | null): string {
-  if (!lang || !hljs.getLanguage(lang)) return escapeHtml(code);
+  if (!engine) {
+    void loadEngine();
+    return escapeHtml(code);
+  }
+  if (!lang || !engine.getLanguage(lang)) return escapeHtml(code);
   try {
-    return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+    return engine.highlight(code, { language: lang, ignoreIllegals: true }).value;
   } catch {
     return escapeHtml(code);
   }
 }
+
+/** Subscribe a component to the engine's arrival. Returns a version that
+ *  changes once, which is enough to re-run a `useMemo` over highlighted HTML. */
+export const useHighlightVersion = (): number =>
+  useSyncExternalStore(highlightReady.subscribe, highlightReady.get, highlightReady.get);

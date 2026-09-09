@@ -600,6 +600,25 @@ fn list_threads_impl(cwd: &str) -> Result<Vec<Thread>> {
 mod tests {
     use super::*;
 
+    /// What the first screen actually waits on, timed against the developer's
+    /// own `~/.claude/projects` in a debug build — the profile `tauri dev`
+    /// runs. `#[ignore]`d: it reads real machine state, so CI has nothing to
+    /// measure. Run it with
+    /// `cargo test -- --ignored --nocapture times_the_real_thread_scan`.
+    #[test]
+    #[ignore]
+    fn times_the_real_thread_scan() {
+        let cwd = std::env::var("EMBERYX_SCAN_CWD")
+            .unwrap_or_else(|_| "/Users/jiri/Desktop/Personal/emberyx".to_string());
+        let started = Instant::now();
+        let threads = list_threads_impl(&cwd).unwrap();
+        println!(
+            "list_threads({cwd}) -> {} threads in {:.1}ms",
+            threads.len(),
+            ms(started.elapsed())
+        );
+    }
+
     #[test]
     fn spots_a_title_prompt_another_tool_injected() {
         assert!(is_machine_prompt(

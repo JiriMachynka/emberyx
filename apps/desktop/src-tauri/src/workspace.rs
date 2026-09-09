@@ -342,6 +342,23 @@ pub fn scan_workspace(path: String) -> Result<WorkspaceInfo> {
 mod tests {
     use super::*;
 
+    /// Boot cost of the workspace scan against a real repo, in the debug
+    /// profile `tauri dev` uses. `#[ignore]`d — it reads the developer's own
+    /// checkout. `cargo test -- --ignored --nocapture times_a_real_scan`.
+    #[test]
+    #[ignore]
+    fn times_a_real_scan() {
+        let path = std::env::var("EMBERYX_SCAN_CWD")
+            .unwrap_or_else(|_| "/Users/jiri/Desktop/Personal/emberyx".to_string());
+        let started = std::time::Instant::now();
+        let info = scan(&path).unwrap();
+        println!(
+            "scan_workspace({path}) -> {} package(s) in {:.1}ms",
+            info.packages.len(),
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+
     fn write(path: &Path, contents: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, contents).unwrap();

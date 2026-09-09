@@ -554,6 +554,18 @@ export function useWorkspace(settings: Settings) {
     startChat(id, path, undefined, undefined, backendFor(path));
   }
 
+  /** Dev-only showcase thread: a canned conversation in the real pane, with no
+   *  agent behind it. Same project targeting as `newAgent`. */
+  function openMockup() {
+    if (!import.meta.env.DEV) return;
+    if (!activeProject) {
+      void pickProject({ fresh: true });
+      return;
+    }
+    const { id, path } = activeProject;
+    sessionApi.startMockup(id, path);
+  }
+
   /** Returns false when the user declines to close a project with a live agent. */
   async function closeProjectById(id: string) {
     const statuses = useAgentStore.getState().statuses;
@@ -684,6 +696,7 @@ export function useWorkspace(settings: Settings) {
     removeWorktree,
     pickProject,
     newAgent,
+    openMockup,
     activateSession,
     resumeThread,
     resumeThreadIn,

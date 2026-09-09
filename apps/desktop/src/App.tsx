@@ -6,11 +6,7 @@ import { onOpenFileRequest } from "@/lib/openFileRequest";
 import { SessionPanes } from "@/components/SessionPanes";
 import { RightDock } from "@/components/RightDock";
 import { ProjectSettingsPane } from "@/components/ProjectSettingsPane";
-import { ChangesPanel } from "@/components/ChangesPanel";
-import { GitPanel } from "@/components/GitPanel";
 import { NotificationPanel } from "@/components/NotificationPanel";
-import { DevPanel } from "@/components/DevPanel";
-import { TerminalPane } from "@/components/TerminalPane";
 import { ContextBar } from "@/components/ContextBar";
 import { TimedRegion } from "@/lib/commitTiming";
 import { Sidebar } from "@/components/Sidebar";
@@ -32,6 +28,7 @@ import {
   EMPTY_DOCK,
   closeTab,
   closeTabs,
+  isShowing,
   hideDock,
   openTab,
   showDock,
@@ -51,11 +48,10 @@ import { useWorkspace } from "@/hooks/useWorkspace";
 import type { Session } from "@/types";
 import { FORGE_NOUN, isRemoteHost, type RemoteHost } from "@/lib/forge";
 import type { CloneSource } from "@/lib/clone";
-import { PreviewPanel } from "@/components/PreviewPanel";
 import { useGitRemoteHost } from "@/lib/queries";
 import { useDevServers } from "@/hooks/useDevServers";
 import { useAgentBackend } from "@/hooks/useAgentBackend";
-import { resolveLoginCommand } from "@/lib/agentBackend";
+import { resolveLoginCommand, type AgentBackend } from "@/lib/agentBackend";
 import { useProjectActions } from "@/hooks/useProjectActions";
 import { ActionDialog } from "@/components/ActionDialog";
 import { getStoredActions, type ProjectAction } from "@/lib/actions";
@@ -88,6 +84,27 @@ const MergeRequestsPanel = lazy(() =>
   }))
 );
 
+// The dock's own surfaces. None is on screen at boot — the dock opens on its
+// chooser — and between them they carry the heaviest dependencies in the app:
+// @pierre/diffs and its Shiki grammars (~1.1 MB of source) behind the diff, the
+// terminal emulator behind the shell. Eager, they were parsed in front of the
+// chat that *is* on screen.
+const ChangesPanel = lazy(() =>
+  import("@/components/ChangesPanel").then((m) => ({ default: m.ChangesPanel }))
+);
+const GitPanel = lazy(() =>
+  import("@/components/GitPanel").then((m) => ({ default: m.GitPanel }))
+);
+const DevPanel = lazy(() =>
+  import("@/components/DevPanel").then((m) => ({ default: m.DevPanel }))
+);
+const TerminalPane = lazy(() =>
+  import("@/components/TerminalPane").then((m) => ({ default: m.TerminalPane }))
+);
+const PreviewPanel = lazy(() =>
+  import("@/components/PreviewPanel").then((m) => ({ default: m.PreviewPanel }))
+);
+
 /** Fetch and parse the settings chunk while the app is idle. Lazy keeps it out
  *  of the startup parse; warming it keeps the first open from showing the
  *  Suspense blank instead of a page. */
@@ -113,7 +130,9 @@ function App() {
   // rather than in an effect so the first open mounts in the same commit.
   // Stable, so the memoized page above doesn't re-render on every App state
   // change just because its Back handler is a new closure.
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false);
+  }, []);
   const settingsMountedRef = useRef(false);
   if (settingsOpen) settingsMountedRef.current = true;
   const settingsMounted = settingsMountedRef.current;
@@ -192,6 +211,12 @@ function App() {
   modelChangeRef.current = updateSettings;
   const onModelChange = useCallback(
     (model: string) => modelChangeRef.current({ model }),
+    []
+  );
+  // The picker persists the backend with the model it picks — one without the
+  // other is how a new chat launched as Claude told to run grok-4.6.
+  const onBackendChange = useCallback(
+    (agentBackend: AgentBackend) => modelChangeRef.current({ agentBackend }),
     []
   );
   const onEffortChange = useCallback(
@@ -399,6 +424,7 @@ function App() {
   // child process stays mounted once opened, the rest come and go with the tab.
   const dockPanes: Partial<Record<DockKind, React.ReactNode>> = {
     terminal: activeProject && (
+      <Suspense fallback={null}>
       <TerminalPane
         cwd={activeProject.path}
         fontFamily={settings.fontFamily}
@@ -406,6 +432,7 @@ function App() {
         scrollback={settings.scrollback}
         active={dockActive === "terminal"}
       />
+      </Suspense>
     ),
     files: activeProject && (
       <Suspense fallback={null}>
@@ -420,6 +447,7 @@ function App() {
       </Suspense>
     ),
     diff: activeProject && (
+      <Suspense fallback={null}>
       <ChangesPanel
         embedded
         active={dockActive === "diff"}
@@ -432,8 +460,10 @@ function App() {
         onPickTurn={setTurnPick}
         onClose={() => hideTab("diff")}
       />
+      </Suspense>
     ),
     git: activeProject && (
+      <Suspense fallback={null}>
       <GitPanel
         embedded
         projectPath={activeProject.path}
@@ -441,14 +471,17 @@ function App() {
         onRemoveWorktree={ws.removeWorktree}
         onClose={() => hideTab("git")}
       />
+      </Suspense>
     ),
     preview: activeProject && (
+      <Suspense fallback={null}>
       <PreviewPanel
         embedded
         open={dockActive === "preview"}
         projectPath={activeProject.path}
         onClose={() => hideTab("preview")}
       />
+      </Suspense>
     ),
     mrs: activeProject && (
       <Suspense fallback={null}>
@@ -463,6 +496,7 @@ function App() {
       </Suspense>
     ),
     dev: (
+      <Suspense fallback={null}>
       <DevPanel
         embedded
         sessions={devSessions}
@@ -473,6 +507,7 @@ function App() {
         onStop={ws.closeSession}
         onClose={() => hideTab("dev")}
       />
+      </Suspense>
     ),
     projectSettings: activeProject && (
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -560,9 +595,9 @@ function App() {
               activeProject={activeProject}
               agent={agent}
               devRunning={projectSessions.some((s) => s.kind === "dev")}
-              gitOpen={dockActive === "git"}
+              gitOpen={isShowing(dock, "git")}
               onToggleGit={() => flipTab("git")}
-              devOpen={dockActive === "dev"}
+              devOpen={isShowing(dock, "dev")}
               devCount={devCount}
               onToggleDev={() => flipTab("dev")}
               onOpenProjectSettings={openProjectSettings}
@@ -609,9 +644,10 @@ function App() {
             <SessionPanes
               sessions={sessions}
               activeId={activeId}
-              settings={settings}
-              onModelChange={onModelChange}
-             onEffortChange={onEffortChange}
+               settings={settings}
+               onModelChange={onModelChange}
+               onBackendChange={onBackendChange}
+              onEffortChange={onEffortChange}
              onAccessChange={onAccessChange}
              projects={projects}
              recentProjects={recents}
@@ -748,6 +784,11 @@ function App() {
           setSettingsOpen(false);
           setUsageOpen(false);
           ws.newAgent();
+        }}
+        onOpenMockup={() => {
+          setSettingsOpen(false);
+          setUsageOpen(false);
+          ws.openMockup();
         }}
         onPickProject={ws.pickProject}
         onCloneGithub={() => setCloneSource("github")}

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { useAgentStore } from "@/lib/agentStore";
 import type { Change } from "@/lib/changes";
 import type { Usage } from "@/lib/pricing";
@@ -50,16 +50,18 @@ describe("useAgentStore", () => {
   });
 
   it("restarts the run clock when a new run leaves idle", () => {
-    vi.useFakeTimers();
+    // `Date.now` rather than `vi.setSystemTime`: this suite runs under Bun's
+    // runner too, and fake timers are Vitest-only there.
+    const now = Date.now;
     try {
-      vi.setSystemTime(1_000);
+      Date.now = () => 1_000;
       store().setStatus("s1", "working");
       store().setStatus("s1", "idle");
-      vi.setSystemTime(9_000);
+      Date.now = () => 9_000;
       store().setStatus("s1", "working");
       expect(store().statusSince.s1).toBe(9_000);
     } finally {
-      vi.useRealTimers();
+      Date.now = now;
     }
   });
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isLookupWorthy, wordAt } from "@/lib/clickTarget";
-import { highlightCached, langFromPath } from "@/lib/highlight";
+import { highlightCached, langFromPath, warmHighlighter } from "@/lib/highlight";
 import type { HoverInfo } from "@/types";
 
 /** A resolved hover, with its snippet already rendered to hljs token spans. */
@@ -38,6 +38,12 @@ export function useSymbolHover({
   // Definition lookups are project-wide walks; remember what each symbol
   // resolved to so re-hovering the same name is instant.
   const cache = useRef(new Map<string, HoverInfo | null>());
+
+  // The hover renders its snippet once, into state — a repaint after the engine
+  // lands would arrive after the card is gone. Warm it with the editor instead.
+  useEffect(() => {
+    void warmHighlighter();
+  }, []);
 
   function cancel() {
     if (timer.current) window.clearTimeout(timer.current);

@@ -2,13 +2,17 @@
  * Picks the chat transport a session's backend needs and hands the pane one
  * shape whichever it is. Every hook is called on every render — rules of hooks
  * — but only the one matching the backend is `enabled`, so exactly one process
- * is ever spawned.
+ * is ever spawned. The dev-only Mockup session routes to `useMockChat`
+ * instead, and the real transports are held `enabled: false` so a provider
+ * switch inside that pane can never spawn one either.
  */
 
 import { transportOf, type AgentBackend } from "@/lib/agentBackend";
+import { MOCKUP_SESSION_ID } from "@/lib/mockupChat";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import { useCodexChat } from "@/hooks/useCodexChat";
 import { useAcpChat } from "@/hooks/useAcpChat";
+import { useMockChat } from "@/hooks/useMockChat";
 import type { CodexSandbox, PermissionMode } from "@/lib/settings";
 
 interface Options {
@@ -43,16 +47,22 @@ interface Options {
 }
 
 export function useChatSession(options: Options) {
+  const mock = options.emberyxSessionId === MOCKUP_SESSION_ID;
   const transport = transportOf(options.backend);
   const acp = transport === "acp";
   const codex = transport === "codex";
-  const claude = useAgentChat({ ...options, enabled: !codex && !acp });
-  const codexChat = useCodexChat({ ...options, enabled: codex });
+  const claude = useAgentChat({ ...options, enabled: !codex && !acp && !mock });
+  const codexChat = useCodexChat({ ...options, enabled: codex && !mock });
   const acpChat = useAcpChat({
     ...options,
     provider: options.backend,
-    enabled: acp,
+    enabled: acp && !mock,
   });
+  // `import.meta.env.DEV` is a build-time literal, so this branch — and with it
+  // the whole canned-conversation module — is dropped from a production build,
+  // and the hook order can't change at runtime the way a real condition would.
+  const mockChat = import.meta.env.DEV ? useMockChat() : null;
+  if (mock && mockChat) return mockChat;
   if (acp) return acpChat;
   return codex ? codexChat : claude;
 }

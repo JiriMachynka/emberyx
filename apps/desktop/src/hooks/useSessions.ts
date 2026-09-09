@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type { AgentBackend } from "@/lib/agentBackend";
+import { MOCKUP_LABEL, MOCKUP_SESSION_ID } from "@/lib/mockupChat";
 import type { Session } from "@/types";
 
 /**
@@ -64,6 +65,29 @@ export function useSessions() {
       { id, projectId, label, cwd, command, kind: "dev" },
     ]);
     return id;
+  }
+
+  /** Dev-only showcase thread: a canned conversation rendered by the real
+   *  pane, with no agent behind it. The id is fixed so `useChatSession` can
+   *  route the pane to the mock transport; reopening moves it to the asking
+   *  project rather than keeping a second one alive. */
+  /** Dev only — a production build never reaches this, and the canned data it
+   *  names is tree-shaken out with the branch that called it. */
+  function startMockup(projectId: string, cwd: string): string {
+    if (!import.meta.env.DEV) return "";
+    commit((s) => [
+      ...s.filter((x) => x.id !== MOCKUP_SESSION_ID),
+      {
+        id: MOCKUP_SESSION_ID,
+        projectId,
+        label: MOCKUP_LABEL,
+        cwd,
+        kind: "chat",
+        backend: "claude",
+      },
+    ]);
+    setActive(projectId, MOCKUP_SESSION_ID);
+    return MOCKUP_SESSION_ID;
   }
 
   /** Record which thread a live session ended up on, so resuming that thread
@@ -165,6 +189,7 @@ export function useSessions() {
     activeByProject,
     setActive,
     startChat,
+    startMockup,
     renameSession,
     setSessionThread,
     addDev,
