@@ -35,8 +35,12 @@ export function GitPanel({
       flushHeader
       embedded={embedded}
       onClose={onClose}
+      // In the dock the tab strip already says Git; only the standalone aside
+      // needs a title of its own.
       header={
-        <span className="px-2 text-xs font-medium text-muted-foreground">Git</span>
+        embedded ? null : (
+          <span className="px-2 text-xs font-medium text-muted-foreground">Git</span>
+        )
       }
     >
       <div className="flex min-h-0 flex-1 flex-col">

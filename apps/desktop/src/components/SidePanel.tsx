@@ -6,8 +6,10 @@ import { getPanelWidth, setPanelWidth, PANEL_MIN_WIDTH } from "@/lib/panels";
 interface SidePanelProps {
   /** Distinct key per panel — its width is remembered under this name. */
   storageKey: string;
-  /** Header's left slot: a title, or tab buttons. */
-  header: React.ReactNode;
+  /** Header's left slot: a title, or tab buttons. Embedded panels may leave it
+   *  out entirely — the dock tab already names the surface, and an empty header
+   *  row is a band of nothing above the content. */
+  header?: React.ReactNode;
   /** Header's right slot, rendered before the close button. */
   actions?: React.ReactNode;
   onClose: () => void;
@@ -71,6 +73,7 @@ export function SidePanel({
   if (embedded) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
+        {(header || actions) && (
         <header
           className={cn(
             "flex h-11 shrink-0 items-center justify-between gap-2 border-b pr-2",
@@ -80,6 +83,7 @@ export function SidePanel({
           {header}
           {actions && <div className="flex items-center gap-1">{actions}</div>}
         </header>
+        )}
         {children}
       </div>
     );

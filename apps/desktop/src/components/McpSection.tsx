@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, Globe, Plug, Plus, Terminal } from "lucide-react";
+import { Globe, Plug, Plus, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,7 +25,7 @@ import {
   type McpServerInfo,
 } from "@/lib/mcp";
 import { McpAddDialog } from "@/components/McpAddDialog";
-import { Group } from "@/components/SettingsFields";
+import { Group, StatusDot, Tile } from "@/components/SettingsFields";
 
 /** Settings → MCP: every MCP server across the harness configs, merged by
  *  name. The harness files stay the source of truth — this surface reads them
@@ -80,54 +80,41 @@ export function McpSection() {
                 const transport = server.harnesses[0]?.transport;
                 if (!transport) return null;
                 return (
-                  <div
+                  <Tile
                     key={server.name}
-                    className="surface-raised rounded-lg border bg-card/40 transition-colors hover:border-foreground/15"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setExpanded(open ? null : server.name)}
-                      className="flex w-full items-center justify-between gap-4 rounded-lg px-3 py-2.5 text-left"
-                    >
-                      <span className="grid min-w-0 gap-1">
-                        <span className="flex items-center gap-2 text-sm font-medium">
-                          {server.name}
-                          {server.differs && (
-                            <span className="flex items-center gap-1.5 text-xs font-normal text-amber-600 dark:text-amber-500">
-                              <span className="size-1.5 rounded-full bg-amber-500/80" />
-                              differs across harnesses
-                            </span>
-                          )}
-                        </span>
-                        <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-                          {transport.kind === "stdio" ? (
-                            <Terminal className="size-3 shrink-0" />
-                          ) : (
-                            <Globe className="size-3 shrink-0" />
-                          )}
-                          <code className="truncate">{transportSummary(transport)}</code>
-                        </span>
-                      </span>
-                      <span className="flex shrink-0 items-center gap-1.5">
-                        {MCP_HARNESS_ORDER.map((harness) => (
-                          <HarnessChip
-                            key={harness}
-                            harness={harness}
-                            entry={entryFor(server, harness)}
-                            hasClaudeSource={hasClaudeSource}
-                          />
-                        ))}
-                        <ChevronDown
-                          className={cn(
-                            "size-4 text-muted-foreground transition-transform duration-200",
-                            open && "rotate-180"
-                          )}
-                        />
-                      </span>
-                    </button>
-
-                    {open && (
-                      <div className="grid gap-1.5 rounded-b-lg border-t bg-canvas/50 px-3 py-3 animate-in fade-in-0 slide-in-from-top-1 duration-150">
+                    expanded={open}
+                    onToggle={() => setExpanded(open ? null : server.name)}
+                    title={
+                      <>
+                        {server.name}
+                        {server.differs && (
+                          <span className="flex items-center gap-1.5 text-xs font-normal text-amber-600 dark:text-amber-500">
+                            <StatusDot tone="warn" />
+                            differs across harnesses
+                          </span>
+                        )}
+                      </>
+                    }
+                    meta={
+                      <>
+                        {transport.kind === "stdio" ? (
+                          <Terminal className="size-3 shrink-0" />
+                        ) : (
+                          <Globe className="size-3 shrink-0" />
+                        )}
+                        <code className="truncate">{transportSummary(transport)}</code>
+                      </>
+                    }
+                    aside={MCP_HARNESS_ORDER.map((harness) => (
+                      <HarnessChip
+                        key={harness}
+                        harness={harness}
+                        entry={entryFor(server, harness)}
+                        hasClaudeSource={hasClaudeSource}
+                      />
+                    ))}
+                    details={
+                      <>
                         {server.harnesses.map((entry) => (
                           <div
                             key={entry.harness}
@@ -197,9 +184,9 @@ export function McpSection() {
                             </span>
                           </div>
                         )}
-                      </div>
-                    )}
-                  </div>
+                      </>
+                    }
+                  />
                 );
               })}
             </div>

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, Plus, Sparkles } from "lucide-react";
+import { Plus, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -28,7 +28,7 @@ import {
   type McpHarness,
 } from "@/lib/mcp";
 import { SkillsAddDialog } from "@/components/SkillsAddDialog";
-import { Group } from "@/components/SettingsFields";
+import { Group, StatusDot, Tile } from "@/components/SettingsFields";
 
 /** Settings → Skills: every skill folder across the harness skill homes,
  *  merged by name. Folders are shared surfaces — `~/.claude/skills` is read
@@ -92,48 +92,35 @@ export function SkillsSection() {
                 const skillDir = skill.sources[0]?.skillDir;
                 if (!skillDir) return null;
                 return (
-                  <div
+                  <Tile
                     key={skill.name}
-                    className="surface-raised rounded-lg border bg-card/40 transition-colors hover:border-foreground/15"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setExpanded(open ? null : skill.name)}
-                      className="flex w-full items-center justify-between gap-4 rounded-lg px-3 py-2.5 text-left"
-                    >
-                      <span className="grid min-w-0 gap-1">
-                        <span className="flex items-center gap-2 text-sm font-medium">
-                          {skill.name}
-                          {skill.differs && (
-                            <span className="flex items-center gap-1.5 text-xs font-normal text-amber-600 dark:text-amber-500">
-                              <span className="size-1.5 rounded-full bg-amber-500/80" />
-                              copies differ
-                            </span>
-                          )}
-                        </span>
-                        <span className="truncate text-xs text-muted-foreground">
-                          {skill.description || "No description"}
-                        </span>
+                    expanded={open}
+                    onToggle={() => setExpanded(open ? null : skill.name)}
+                    title={
+                      <>
+                        {skill.name}
+                        {skill.differs && (
+                          <span className="flex items-center gap-1.5 text-xs font-normal text-amber-600 dark:text-amber-500">
+                            <StatusDot tone="warn" />
+                            copies differ
+                          </span>
+                        )}
+                      </>
+                    }
+                    meta={
+                      <span className="truncate">
+                        {skill.description || "No description"}
                       </span>
-                      <span className="flex shrink-0 items-center gap-1.5">
-                        {MCP_HARNESS_ORDER.map((harness) => (
-                          <HarnessChip
-                            key={harness}
-                            harness={harness}
-                            connected={readers.includes(harness)}
-                          />
-                        ))}
-                        <ChevronDown
-                          className={cn(
-                            "size-4 text-muted-foreground transition-transform duration-200",
-                            open && "rotate-180"
-                          )}
-                        />
-                      </span>
-                    </button>
-
-                    {open && (
-                      <div className="grid gap-1.5 rounded-b-lg border-t bg-canvas/50 px-3 py-3 animate-in fade-in-0 slide-in-from-top-1 duration-150">
+                    }
+                    aside={MCP_HARNESS_ORDER.map((harness) => (
+                      <HarnessChip
+                        key={harness}
+                        harness={harness}
+                        connected={readers.includes(harness)}
+                      />
+                    ))}
+                    details={
+                      <>
                         {skill.sources.map((source) => (
                           <div
                             key={source.skillDir}
@@ -202,9 +189,9 @@ export function SkillsSection() {
                             </span>
                           </div>
                         )}
-                      </div>
-                    )}
-                  </div>
+                      </>
+                    }
+                  />
                 );
               })}
             </div>

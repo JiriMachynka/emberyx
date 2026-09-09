@@ -57,7 +57,7 @@ import {
   setCustomModels,
   setHiddenModels,
 } from "@/lib/modelFavorites";
-import { Field, Group, Row, SwitchRow } from "@/components/SettingsFields";
+import { Field, Group, Row, SwitchRow, Tile } from "@/components/SettingsFields";
 import { McpSection } from "@/components/McpSection";
 import { SkillsSection } from "@/components/SkillsSection";
 import { COMMANDS, type CommandId } from "@/lib/commands";
@@ -389,11 +389,18 @@ export const SettingsPage = memo(function SettingsPage({
               className={cn(
                 "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors",
                 tab === t.id
-                  ? "bg-secondary font-medium text-foreground"
+                  ? "surface-raised bg-primary/15 font-medium text-foreground ring-1 ring-inset ring-primary/25"
                   : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
               )}
             >
-              <t.icon className="size-4 shrink-0" />
+              {/* One of the three places the ember shows up on this page: the
+                  surface you are on, the focus ring, and a switch that is on. */}
+              <t.icon
+                className={cn(
+                  "size-4 shrink-0",
+                  tab === t.id ? "text-primary" : "opacity-80"
+                )}
+              />
               {t.label}
             </button>
           ))}
@@ -413,7 +420,7 @@ export const SettingsPage = memo(function SettingsPage({
           <div className="flex items-center gap-2 text-sm">
             <span className="text-muted-foreground">Settings</span>
             <span className="text-muted-foreground/40">/</span>
-            <span className="text-foreground">{meta.label}</span>
+            <span className="font-medium text-foreground">{meta.label}</span>
           </div>
           {meta.keys.length > 0 && (
             <button
@@ -428,7 +435,9 @@ export const SettingsPage = memo(function SettingsPage({
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto grid w-full max-w-4xl content-start gap-8 px-6 pb-16 pt-4">
+          {/* max-w-3xl, not 4xl: past this the label and its value stop reading
+              as one row and the page turns into a table. */}
+          <div className="mx-auto grid w-full max-w-3xl content-start gap-7 px-6 pb-16 pt-4">
             <h1 className="text-xl font-semibold tracking-tight">{meta.label}</h1>
 
             {tab === "general" && (
@@ -632,35 +641,22 @@ export const SettingsPage = memo(function SettingsPage({
                 >
                   <div className="grid gap-1.5">
                     {providers.map((p) => (
-                      <div
+                      <Tile
                         key={p.id}
-                        className="flex items-center justify-between rounded-lg border px-3 py-2.5 text-sm"
-                      >
-                        <span className="flex min-w-0 items-center gap-2">
+                        icon={
                           <img
                             src={`/provider-icons/${p.id}.svg`}
                             alt=""
                             className="size-5 shrink-0 object-contain"
                           />
-                          <span
-                            className={cn(
-                              "size-1.5 shrink-0 rounded-full",
-                              p.installed
-                                ? "bg-emerald-500"
-                                : "bg-muted-foreground/40"
-                            )}
-                          />
-                          <span className="truncate">
-                            {PROVIDER_LABEL[p.id] ?? p.label}
-                          </span>
-                          <code className="shrink-0 text-xs text-muted-foreground">
-                            {p.binary}
-                          </code>
-                        </span>
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          {p.installed ? p.version ?? "installed" : "not installed"}
-                        </span>
-                      </div>
+                        }
+                        status={p.installed ? "on" : "off"}
+                        title={PROVIDER_LABEL[p.id] ?? p.label}
+                        meta={<code className="truncate">{p.binary}</code>}
+                        aside={
+                          p.installed ? p.version ?? "installed" : "not installed"
+                        }
+                      />
                     ))}
                   </div>
                 </Group>
@@ -1050,31 +1046,29 @@ export const SettingsPage = memo(function SettingsPage({
                   title="Persistent agents"
                   hint="With emberyxd running, chat agents live in the daemon and survive closing the window. Without it, they stop when the window does."
                 >
-                  <div className="flex items-center justify-between rounded-lg border px-3 py-2.5 text-sm">
-                    <span className="flex items-center gap-2">
-                      <span
-                        className={cn(
-                          "size-1.5 rounded-full",
-                          daemon ? "bg-emerald-500" : "bg-muted-foreground/40"
-                        )}
-                      />
-                      {daemon
-                        ? `Running · v${daemon.version} · ${daemon.liveCount} agent${daemon.liveCount === 1 ? "" : "s"}${
-                            daemon.outdated ? " · older than this app" : ""
-                          }`
-                        : "Not running"}
-                    </span>
-                    {!daemon && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={onStartDaemon}
-                        disabled={startingDaemon}
-                      >
-                        {startingDaemon ? "Starting…" : "Start"}
-                      </Button>
-                    )}
-                  </div>
+                  <Tile
+                    status={daemon ? "on" : "off"}
+                    title={daemon ? "Running" : "Not running"}
+                    meta={
+                      daemon
+                        ? `v${daemon.version} · ${daemon.liveCount} live of ${daemon.agentCount} agent${
+                            daemon.agentCount === 1 ? "" : "s"
+                          }${daemon.outdated ? " · older than this app" : ""}`
+                        : "emberyxd isn't answering on its socket."
+                    }
+                    aside={
+                      !daemon && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={onStartDaemon}
+                          disabled={startingDaemon}
+                        >
+                          {startingDaemon ? "Starting…" : "Start"}
+                        </Button>
+                      )
+                    }
+                  />
                   <SwitchRow
                     label="Keep agents running in the background"
                     hint="New chats run inside the daemon. A resumed thread renders from the daemon's own replay, so reopening an older conversation starts empty and fills from the next turn."
@@ -1162,35 +1156,26 @@ export const SettingsPage = memo(function SettingsPage({
                           ? (p.version ?? "logged in")
                           : "not logged in";
                       return (
-                        <div
+                        <Tile
                           key={p.id}
-                          className="flex items-center justify-between rounded-lg border px-3 py-2.5 text-sm"
-                        >
-                          <span className="flex min-w-0 items-center gap-2">
+                          icon={
                             <img
                               src={`/source-control-icons/${p.id}.svg`}
                               alt=""
                               className="size-5 shrink-0 object-contain"
                             />
-                            <span
-                              className={cn(
-                                "size-1.5 shrink-0 rounded-full",
-                                p.authenticated
-                                  ? "bg-emerald-500"
-                                  : p.installed
-                                    ? "bg-amber-500"
-                                    : "bg-muted-foreground/40"
-                              )}
-                            />
-                            <span className="truncate">{p.label}</span>
-                            <code className="shrink-0 text-xs text-muted-foreground">
-                              {p.binary}
-                            </code>
-                          </span>
-                          <span className="shrink-0 text-xs text-muted-foreground">
-                            {status}
-                          </span>
-                        </div>
+                          }
+                          status={
+                            p.authenticated
+                              ? "on"
+                              : p.installed
+                                ? "warn"
+                                : "off"
+                          }
+                          title={p.label}
+                          meta={<code className="truncate">{p.binary}</code>}
+                          aside={status}
+                        />
                       );
                     })}
                   </div>
@@ -1450,8 +1435,12 @@ function ThemeCard({
       onClick={onSelect}
       aria-pressed={selected}
       className={cn(
-        "group rounded-lg border p-2 text-left transition-colors",
-        selected ? "border-primary" : "hover:border-foreground/20"
+        // Same shell as every other settings tile; only the selected ring is
+        // its own, because a theme card is a choice and the rest are state.
+        "group rounded-lg border bg-card p-2 text-left transition-colors",
+        selected
+          ? "border-primary/40 ring-1 ring-inset ring-primary/25"
+          : "hover:border-foreground/15"
       )}
     >
       <div
