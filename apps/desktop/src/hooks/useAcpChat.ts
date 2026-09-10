@@ -405,7 +405,7 @@ export function useAcpChat({
         threadId,
         projectPath: cwd,
         source: "acp",
-      }).catch(() => {});
+      }).catch((e) => console.error("[emberyx] thread_adopt failed", e));
     },
     [cwd]
   );

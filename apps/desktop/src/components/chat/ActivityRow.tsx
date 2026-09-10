@@ -166,9 +166,8 @@ export const ActivityRow = memo(function ActivityRow({
  * A turn's work, in the order it happened, on one panel: hairline rows, not a
  * stack of boxes.
  *
- * Reasoning is a row like any other, so a turn that thought, ran something,
- * then thought again renders that way — the thing the flat `thinking` string
- * above a list of tool cards could not say.
+ * Consecutive thoughts share one Think row; a turn that thought, ran
+ * something, then thought again still renders two, around the work.
  */
 export function ActivityList({
   activities,
@@ -206,17 +205,21 @@ export function ActivityList({
             />
           );
         }
-        const activity = group.activity;
-        if (activity.kind === "reasoning") {
+        if (group.type === "reasoning") {
+          const thoughts = group.activities;
           return (
             <ThinkingBlock
-              key={activity.id}
-              text={activity.output ?? ""}
-              active={!activity.complete}
-              timingKey={activity.id}
+              key={thoughts[0].id}
+              text={thoughts
+                .map((thought) => thought.output ?? "")
+                .filter((chunk) => chunk.length > 0)
+                .join("\n\n")}
+              active={thoughts.some((thought) => !thought.complete)}
+              timingKey={thoughts[0].id}
             />
           );
         }
+        const activity = group.activity;
         const agent = isAgentActivity(activity) ? renderAgent?.(activity) : undefined;
         return agent ? (
           <Fragment key={activity.id}>{agent}</Fragment>

@@ -22,6 +22,7 @@ import { basename } from "@/lib/path";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { Button } from "@/components/ui/button";
 import { FileRefProject, TextWithFileRefs } from "@/components/FileRef";
+import { splitFencedBlocks } from "@/lib/fileRef";
 import { BACKEND_LABEL, capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
 import {
   currentTodo,
@@ -78,7 +79,7 @@ import { toast } from "sonner";
 import { FileDiff, Undo2 } from "lucide-react";
 import { quotaAlert, quotaMessage, type QuotaAlert } from "@/lib/quota";
 import { recordTodoTimings, todoTimings } from "@/lib/todoTimings";
-import { summarizeWork } from "@/lib/workSummary";
+import { liveWorkLabel, summarizeWork } from "@/lib/workSummary";
 import { useInvalidateGit } from "@/lib/queries";
 import {
   checkpointChanges,
@@ -1417,9 +1418,8 @@ const ChangedFilesCard = memo(function ChangedFilesCard({
   );
 });
 
-/** One turn: the user bubble, then either the live work (streaming) or, once
- *  finished, a "Worked for Ns" accordion over the work with the final answer
- *  left visible below it. */
+/** One turn: the user bubble, then the work accordion (live header while the
+ *  turn is running, a count once it settles) with the final answer below it. */
 const TurnRow = memo(
   function TurnRow({
     turn,
@@ -1439,7 +1439,12 @@ const TurnRow = memo(
   }) {
     const { user, assistants } = turn;
     const last = assistants[assistants.length - 1];
-    const hasWork = assistants.some((a) => a.thinking || a.tools.length > 0);
+    const hasWork = assistants.some(
+      (a) =>
+        Boolean(a.thinking) ||
+        a.tools.length > 0 ||
+        (a.activities?.some((row) => !isTodoTool(row.title)) ?? false)
+    );
     const turnTodos = lastTodos(assistants.flatMap((a) => a.tools));
     // Background subagents outlive the turn that spawned them, so the work
     // accordion must not collapse over them while they're still running.
@@ -1468,11 +1473,7 @@ const TurnRow = memo(
           />
         )}
         {assistants.length > 0 &&
-          (live || !hasWork ? (
-            /* The turn's siblings sit in the scroll column's `gap-8`, which is
-               the spacing between turns — applied to a run of tool cards it
-               puts 32px between every Bash call. One assistant message per
-               tool is the norm, so the live work is its own tight column. */
+          (!hasWork ? (
             <div className="flex flex-col gap-2">
               {assistants.map((a) => (
                 <MessageRow
@@ -1481,17 +1482,24 @@ const TurnRow = memo(
                   fontSize={fontSize}
                   chat={chat}
                   onPreview={onPreview}
-                  live
                 />
               ))}
             </div>
           ) : (
             <div className="flex flex-col gap-2">
-              {turnTodos && <TasksCard items={turnTodos} planKey={turn.key} />}
-              <TurnWork label={turnWorkLabel(assistants)} agentsRunning={agentsRunning}>
+              {!live && turnTodos && <TasksCard items={turnTodos} planKey={turn.key} />}
+              <TurnWork
+                label={turnWorkLabel(assistants, live)}
+                live={live}
+                agentsRunning={agentsRunning}
+              >
                 {assistants.map((a, i) => (
                   <Fragment key={a.id}>
-                    <MessageWork message={a} active={false} />
+                    <MessageWork
+                      message={a}
+                      active={live && a.streaming && !a.text && a.tools.length === 0}
+                      live={live}
+                    />
                     {/* Only interstitial narration stays inside; the final
                         answer is shown below the accordion. */}
                     {i < assistants.length - 1 && a.text && (
@@ -1502,8 +1510,14 @@ const TurnRow = memo(
               </TurnWork>
               {last?.text && (
                 <div className="group relative flex flex-col gap-2">
-                  <Markdown text={last.text} fontSize={fontSize} />
-                  <MessageActions text={last.text} chat={chat} />
+                  <Markdown
+                    text={last.text}
+                    fontSize={fontSize}
+                    streaming={live && last.streaming}
+                  />
+                  {!(live && last.streaming) && (
+                    <MessageActions text={last.text} chat={chat} />
+                  )}
                 </div>
               )}
             </div>
@@ -1529,12 +1543,24 @@ const TurnRow = memo(
     a.turn.assistants.every((m, i) => m === b.turn.assistants[i])
 );
 
-/** What one turn's work amounts to, in words. Falls back to a tool count for
- *  a replayed transcript that never carried an activity stream. */
-function turnWorkLabel(assistants: ChatMessage[]): string | null {
+/** What one turn's work amounts to, in words. Live turns name the latest
+ *  row ("Thinking") so the accordion header is the current state; settled
+ *  turns fall back to a count, or a tool count for a replayed transcript
+ *  that never carried an activity stream. */
+function turnWorkLabel(assistants: ChatMessage[], live: boolean): string | null {
   const rows = assistants.flatMap(
     (m) => m.activities?.filter((a) => !isTodoTool(a.title)) ?? []
   );
+  if (live) {
+    const liveLabel = liveWorkLabel(rows);
+    if (liveLabel) return liveLabel;
+    const running = assistants
+      .flatMap((m) => m.tools)
+      .filter((t) => t.result == null && !isTodoTool(t.name))
+      .pop();
+    if (running) return running.name;
+    if (assistants.some((m) => m.thinking)) return "Thinking";
+  }
   if (rows.length) return summarizeWork(rows);
   const tools = assistants.flatMap((m) => m.tools.filter((t) => !isTodoTool(t.name)));
   if (tools.length)
@@ -1542,21 +1568,22 @@ function turnWorkLabel(assistants: ChatMessage[]): string | null {
   return assistants.some((m) => m.thinking) ? "Ran 1 thought" : null;
 }
 
-/** A settled turn's work: one summary line — "Ran 1 thought · 5 commands" —
- *  over the turn's rows, one work panel per message. Collapsed by default, but
- *  stays open while the turn's subagents are still running: `null` means the
- *  user hasn't decided, so the running count does. */
+/** A turn's work: one line over the rows. Live turns name the latest row
+ *  and stay open; settled turns collapse to a count. `null` means the user
+ *  hasn't decided, so live / running subagents do. */
 function TurnWork({
   label,
+  live,
   agentsRunning,
   children,
 }: {
   label: string | null;
+  live?: boolean;
   agentsRunning: number;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState<boolean | null>(null);
-  const expanded = open ?? agentsRunning > 0;
+  const expanded = open ?? (live === true || agentsRunning > 0);
   return (
     <div className="flex flex-col gap-2">
       <button
@@ -1773,13 +1800,11 @@ const MessageRow = memo(function MessageRow({
   fontSize,
   chat,
   onPreview,
-  live,
 }: {
   message: ChatMessage;
   fontSize: number;
   chat: ChatContext;
   onPreview: (dataUrl: string) => void;
-  live?: boolean;
 }) {
   if (message.role === "user") {
     return (
@@ -1803,8 +1828,18 @@ const MessageRow = memo(function MessageRow({
           </div>
         )}
         {message.text && (
-          <div className="chat-bubble max-w-prose whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-foreground/90">
-            <TextWithFileRefs text={message.text} />
+          <div className="chat-bubble max-w-prose rounded-2xl px-4 py-2.5 text-foreground/90">
+            {splitFencedBlocks(message.text).map((part, i) =>
+              part.kind === "fence" ? (
+                <div key={i} className="min-w-0 overflow-x-auto">
+                  <Markdown text={part.text} fontSize={fontSize} />
+                </div>
+              ) : (
+                <span key={i} className="whitespace-pre-wrap">
+                  <TextWithFileRefs text={part.text} />
+                </span>
+              )
+            )}
           </div>
         )}
         {message.checkpointId && (
@@ -1824,7 +1859,6 @@ const MessageRow = memo(function MessageRow({
       <MessageWork
         message={message}
         active={message.streaming && !message.text && message.tools.length === 0}
-        live={live}
       />
       {message.text && (
         <Markdown text={message.text} fontSize={fontSize} streaming={message.streaming} />

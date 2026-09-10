@@ -651,8 +651,8 @@ function App() {
              onAccessChange={onAccessChange}
              projects={projects}
              recentProjects={recents}
-             onSelectProject={ws.setActiveProjectId}
-             onOpenProject={ws.openProjectAt}
+             onSelectProject={ws.newAgentIn}
+             onOpenProject={(path) => void ws.openProjectAt(path, { fresh: true })}
              onTitled={onTitled}
              onThreadStarted={onThreadStarted}
             />

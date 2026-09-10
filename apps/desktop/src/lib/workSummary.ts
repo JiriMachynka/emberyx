@@ -1,11 +1,12 @@
 /**
- * A turn's work as one sentence: "Ran 4 commands · 2 thoughts".
+ * Accordion titles for a turn's work.
  *
- * A collapsed work log used to say only how long it took, which tells you
- * nothing about whether it is worth opening. The counts do — they are the same
- * information the rows carry, read at a glance.
+ * Settled: "Ran 4 commands · 2 thoughts" — a count, so you know whether
+ * to open the log. Live: the latest row's state ("Thinking") so the
+ * header is the current work, not a tally of unfinished rows.
  */
 
+import { titleForActivity } from "@/lib/activityDisplay";
 import type { ActivityItem, ActivityKind } from "@/types";
 
 /** Singular / plural noun per kind, in the order a summary lists them. Reads
@@ -41,4 +42,21 @@ export function summarizeWork(activities: readonly ActivityItem[]): string | nul
   }
   if (!parts.length || verb === null) return null;
   return `${verb} ${parts.join(" · ")}`;
+}
+
+/**
+ * The live accordion header: whatever the latest row is doing right now.
+ * A count would go stale the moment the next thought or command starts.
+ */
+export function liveWorkLabel(activities: readonly ActivityItem[]): string | null {
+  const latest = activities[activities.length - 1];
+  if (!latest) return null;
+  if (latest.kind === "reasoning") return latest.complete ? "Thought" : "Thinking";
+  if (!latest.complete && latest.kind === "command") {
+    const description = latest.displayDescription?.trim();
+    if (description) return `Running command: ${description}`;
+    const target = latest.displayTarget?.trim();
+    return target ? `Running ${target}` : "Running command";
+  }
+  return titleForActivity(latest) ?? latest.title;
 }

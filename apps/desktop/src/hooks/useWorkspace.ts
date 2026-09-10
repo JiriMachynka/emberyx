@@ -183,6 +183,13 @@ export function useWorkspace(settings: Settings) {
 
   const uiActiveProjectId = revealed ? activeProjectId : null;
   const activeProject = projects.find((p) => p.id === uiActiveProjectId) ?? null;
+  // fetchThreads is async; these refs keep the merge off a stale render's
+  // project/session lists, which is how a scan used to drop a thread the pane
+  // had just registered.
+  const projectsRef = useRef(projects);
+  projectsRef.current = projects;
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const projectSessions = useMemo(
     () => (uiActiveProjectId ? sessionsFor(uiActiveProjectId) : []),
     // sessionsFor derives from `sessions`; recompute only when those change.
@@ -231,7 +238,19 @@ export function useWorkspace(settings: Settings) {
     const scan = listThreads(backend, path)
       .then((t) => {
         cacheThreads(path, t);
-        setThreads(projectId, t);
+        // A fresh thread is listed by the pane before any store or transcript
+        // scan can see it. Replacing the list wholesale dropped that row —
+        // the conversation you were already in vanished from the sidebar.
+        const liveIds = new Set(
+          sessionsRef.current.flatMap((s) =>
+            s.projectId === projectId && s.threadId ? [s.threadId] : []
+          )
+        );
+        const incoming = new Set(t.map((thread) => thread.id));
+        const pending = (
+          projectsRef.current.find((p) => p.id === projectId)?.threads ?? []
+        ).filter((thread) => liveIds.has(thread.id) && !incoming.has(thread.id));
+        setThreads(projectId, [...pending, ...t]);
         return t;
       })
       .finally(() => {
@@ -543,6 +562,17 @@ export function useWorkspace(settings: Settings) {
       void openProjectAt(selected, { fresh: opts?.fresh });
   }
 
+  /** Spawn a fresh chat tab in a project. The empty-thread heading's project
+   *  switcher uses this so picking another repo starts a blank thread there,
+   *  instead of revealing that project's latest conversation. */
+  function newAgentIn(projectId: string) {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return;
+    setRevealed(true);
+    setActiveProjectId(projectId);
+    startChat(projectId, project.path, undefined, undefined, backendFor(project.path));
+  }
+
   /** Spawn a fresh chat tab in the active project. With nothing open yet, pick
    *  a project first and start it on a blank thread. */
   function newAgent() {
@@ -550,8 +580,7 @@ export function useWorkspace(settings: Settings) {
       void pickProject({ fresh: true });
       return;
     }
-    const { id, path } = activeProject;
-    startChat(id, path, undefined, undefined, backendFor(path));
+    newAgentIn(activeProject.id);
   }
 
   /** Dev-only showcase thread: a canned conversation in the real pane, with no
@@ -696,6 +725,7 @@ export function useWorkspace(settings: Settings) {
     removeWorktree,
     pickProject,
     newAgent,
+    newAgentIn,
     openMockup,
     activateSession,
     resumeThread,

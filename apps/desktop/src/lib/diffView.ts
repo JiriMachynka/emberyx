@@ -10,8 +10,20 @@
 
 import { registerCustomTheme } from "@pierre/diffs";
 import type { FileDiffContentsLoader, FileDiffLoadedFiles } from "@pierre/diffs";
+import { themeForSurface } from "@/lib/codeHighlighter";
 
-registerCustomTheme("vesper", () => import("@shikijs/themes/vesper"));
+registerCustomTheme("vesper", async () => {
+  const { default: theme } = await import("@shikijs/themes/vesper");
+  return { default: themeForSurface(theme) };
+});
+
+/**
+ * Pierre paints tokens with `light-dark(--token-light, --token-dark)`. A
+ * single `"vesper"` string only fills the dark slot, so a Mac in light
+ * appearance (dark app, light OS) inherits one color and the highlighter
+ * looks like it never ran. Both slots are Vesper: the app is dark either way.
+ */
+export const DIFF_THEME = { dark: "vesper", light: "vesper" } as const;
 
 /**
  * Options for the working-tree surface: every changed file in one scroll, so
@@ -24,7 +36,7 @@ registerCustomTheme("vesper", () => import("@shikijs/themes/vesper"));
  * than CodeView's own.
  */
 export const workingDiffOptions = {
-  theme: "vesper" as const,
+  theme: DIFF_THEME,
   diffStyle: "unified" as const,
   diffIndicators: "bars" as const,
   overflow: "wrap" as const,

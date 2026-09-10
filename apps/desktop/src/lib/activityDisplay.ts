@@ -104,15 +104,21 @@ export const pathsForActivity = (activity: ActivityItem): string[] => {
 
 export type ActivityGroup =
   | { type: "single"; activity: ActivityItem }
-  | { type: "files"; activities: ActivityItem[] };
+  | { type: "files"; activities: ActivityItem[] }
+  | { type: "reasoning"; activities: ActivityItem[] };
 
-/** Consecutive file rows collapse into one tree. Bash, search, and reasoning
- *  break the run so the tree stays the files that happened together. */
+/** Consecutive file rows collapse into one tree; consecutive thoughts into
+ *  one Think row. Bash and search break both runs. A turn that thought, ran
+ *  something, then thought again still renders as two thoughts around the
+ *  work — only a stack of thoughts with nothing between them is one block. */
 export const groupActivities = (activities: ActivityItem[]): ActivityGroup[] => {
   const groups: ActivityGroup[] = [];
   for (const activity of activities) {
-    if (isFileActivity(activity) && pathsForActivity(activity).length > 0) {
-      const last = groups[groups.length - 1];
+    const last = groups[groups.length - 1];
+    if (activity.kind === "reasoning") {
+      if (last?.type === "reasoning") last.activities.push(activity);
+      else groups.push({ type: "reasoning", activities: [activity] });
+    } else if (isFileActivity(activity) && pathsForActivity(activity).length > 0) {
       if (last?.type === "files") last.activities.push(activity);
       else groups.push({ type: "files", activities: [activity] });
     } else {

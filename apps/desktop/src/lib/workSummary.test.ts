@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { summarizeWork } from "./workSummary";
+import { liveWorkLabel, summarizeWork } from "./workSummary";
 import type { ActivityItem, ActivityKind } from "@/types";
 
-const row = (kind: ActivityKind, id: string = kind): ActivityItem => ({
+const row = (
+  kind: ActivityKind,
+  id: string = kind,
+  complete = true
+): ActivityItem => ({
   id,
   kind,
   title: kind,
   failed: false,
-  complete: true,
+  complete,
 });
 
 describe("summarizeWork", () => {
@@ -43,5 +47,40 @@ describe("summarizeWork", () => {
 
   it("has nothing to say about no work", () => {
     expect(summarizeWork([])).toBeNull();
+  });
+});
+
+describe("liveWorkLabel", () => {
+  it("has nothing to say about no work", () => {
+    expect(liveWorkLabel([])).toBeNull();
+  });
+
+  it("names the live thought, then the settled one", () => {
+    expect(liveWorkLabel([row("reasoning")])).toBe("Thought");
+    expect(liveWorkLabel([row("reasoning", "r", false)])).toBe("Thinking");
+  });
+
+  it("follows the latest row, not the counts", () => {
+    const thinking = row("reasoning", "r", false);
+    const command = {
+      ...row("command", "c", false),
+      displayTarget: "git log --oneline -15",
+    };
+    expect(liveWorkLabel([thinking, command])).toBe("Running git log --oneline -15");
+    expect(liveWorkLabel([thinking, { ...command, complete: true }])).toBe(
+      "git log --oneline -15"
+    );
+  });
+
+  it("prefers a provider sentence on a running command", () => {
+    expect(
+      liveWorkLabel([
+        {
+          ...row("command", "c", false),
+          displayTarget: "cargo test",
+          displayDescription: "Run the tests",
+        },
+      ])
+    ).toBe("Running command: Run the tests");
   });
 });

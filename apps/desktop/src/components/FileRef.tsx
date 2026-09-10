@@ -119,7 +119,8 @@ function LinkedFileRef({
 
 /**
  * Plain (non-markdown) message text with its file references picked out. Used
- * for the user's own messages, which render verbatim rather than as markdown.
+ * for the prose in a user's own message; fenced code is split off and
+ * highlighted separately so a paste doesn't stay a wall of backticks.
  */
 export function TextWithFileRefs({ text }: { text: string }) {
   return (

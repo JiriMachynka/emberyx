@@ -168,4 +168,15 @@ describe("groupActivities", () => {
     expect(groups[1].type === "single" && groups[1].activity).toBe(bash);
     expect(groups[2].type === "files" && groups[2].activities).toEqual([c]);
   });
+
+  it("collapses consecutive thoughts and keeps ones split by work", () => {
+    const t1 = row({ id: "t1", kind: "reasoning" });
+    const t2 = row({ id: "t2", kind: "reasoning" });
+    const bash = row({ id: "bash", kind: "command" });
+    const t3 = row({ id: "t3", kind: "reasoning" });
+    const groups = groupActivities([t1, t2, bash, t3]);
+    expect(groups.map((g) => g.type)).toEqual(["reasoning", "single", "reasoning"]);
+    expect(groups[0].type === "reasoning" && groups[0].activities).toEqual([t1, t2]);
+    expect(groups[2].type === "reasoning" && groups[2].activities).toEqual([t3]);
+  });
 });

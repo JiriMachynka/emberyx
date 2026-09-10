@@ -43,6 +43,14 @@ export function recordThinkTiming(
     store.set(key, started);
     return started;
   }
+  if (running && prev.endedAt != null) {
+    // Consecutive thoughts share the first row's clock. The gap between
+    // one block closing and the next opening would otherwise freeze the
+    // duration at the first block.
+    const reopened = { startedAt: prev.startedAt };
+    store.set(key, reopened);
+    return reopened;
+  }
   if (!running && prev.endedAt == null) {
     const ended = { startedAt: prev.startedAt, endedAt: now };
     store.set(key, ended);

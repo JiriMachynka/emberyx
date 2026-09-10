@@ -59,6 +59,48 @@ export type TextSegment =
   | { kind: "text"; text: string }
   | { kind: "file"; text: string; path: string };
 
+/** A run of a user message: verbatim prose, or a markdown fence to highlight. */
+export type MessagePart =
+  | { kind: "prose"; text: string }
+  | { kind: "fence"; text: string };
+
+/**
+ * Pull fenced code out of a user message so the bubble can highlight it.
+ * The composer already wraps a pasted snippet in fences; rendering the
+ * whole bubble as markdown would also restyle the prose around them.
+ */
+export function splitFencedBlocks(text: string): MessagePart[] {
+  const lines = text.split("\n");
+  const parts: MessagePart[] = [];
+  let prose: string[] = [];
+  const flushProse = () => {
+    if (prose.length === 0) return;
+    const block = prose.join("\n");
+    prose = [];
+    if (block.length === 0) return;
+    parts.push({ kind: "prose", text: block });
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // A fence opener is a line of backticks, not three ticks mid-sentence.
+    if (!/^```[^`]*$/.test(line)) {
+      prose.push(line);
+      continue;
+    }
+    flushProse();
+    const fence = [line];
+    i++;
+    while (i < lines.length && !lines[i].startsWith("```")) {
+      fence.push(lines[i]);
+      i++;
+    }
+    if (i < lines.length) fence.push(lines[i]);
+    parts.push({ kind: "fence", text: fence.join("\n") });
+  }
+  flushProse();
+  return parts.length > 0 ? parts : [{ kind: "prose", text }];
+}
+
 /**
  * Split plain message text into prose and file references. Used for text that
  * is *not* markdown — a user's own message — where an `@src/lib/a.ts` mention

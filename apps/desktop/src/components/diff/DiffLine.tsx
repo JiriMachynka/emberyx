@@ -1,5 +1,6 @@
 import { memo } from "react";
 import { cn } from "@/lib/utils";
+import { useHighlightVersion } from "@/lib/highlight";
 
 /** Renders one line of code to hljs token spans. Injected rather than fixed:
  *  the working-tree views highlight through the LRU, the merge-request views
@@ -23,6 +24,10 @@ export const DiffLine = memo(function DiffLine({
   tint: string;
   highlight: Highlighter;
 }) {
+  // Must subscribe here, not only in the parent: this row is memoized, so a
+  // parent re-render when the engine lands would otherwise keep the escaped
+  // plain text from the first paint.
+  useHighlightVersion();
   return (
     <div className={cn("border-l-2 border-transparent pr-2", tint)}>
       <span className="inline-block w-5 shrink-0 select-none text-center opacity-40">

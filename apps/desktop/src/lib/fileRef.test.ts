@@ -6,6 +6,7 @@ import {
   pasteLanguage,
   relativeToProject,
   resolveFileRef,
+  splitFencedBlocks,
   splitFileRefs,
 } from "@/lib/fileRef";
 
@@ -165,6 +166,9 @@ describe("pasteInsertion", () => {
     expect(result?.text).toBe(
       "look at this\n```typescript\ninterface A {\n  b: string;\n}\n```\n"
     );
+    expect(splitFencedBlocks(result!.text).some((part) => part.kind === "fence")).toBe(
+      true
+    );
   });
 
   it("doesn't add a leading newline when the caret already owns a line", () => {
@@ -194,5 +198,37 @@ describe("pasteInsertion", () => {
     expect(pasteInsertion({ ...base, pasted: "just some words here" })).toBe(null);
     expect(pasteInsertion({ ...base, pasted: "const a = 1" })).toBe(null);
     expect(pasteInsertion({ ...base, pasted: "   " })).toBe(null);
+  });
+});
+
+describe("splitFencedBlocks", () => {
+  it("leaves a message with no fence as one prose part", () => {
+    expect(splitFencedBlocks("look at @src/a.ts")).toEqual([
+      { kind: "prose", text: "look at @src/a.ts" },
+    ]);
+  });
+
+  it("pulls a language fence out of surrounding prose", () => {
+    expect(
+      splitFencedBlocks("look at this\n```typescript\ninterface A {\n  b: string;\n}\n```\n")
+    ).toEqual([
+      { kind: "prose", text: "look at this" },
+      {
+        kind: "fence",
+        text: "```typescript\ninterface A {\n  b: string;\n}\n```",
+      },
+    ]);
+  });
+
+  it("keeps three ticks mid-sentence as prose", () => {
+    expect(splitFencedBlocks("use ``` for fences")).toEqual([
+      { kind: "prose", text: "use ``` for fences" },
+    ]);
+  });
+
+  it("treats an unclosed fence as a fence, not leftover prose", () => {
+    expect(splitFencedBlocks("```ts\nconst x = 1")).toEqual([
+      { kind: "fence", text: "```ts\nconst x = 1" },
+    ]);
   });
 });

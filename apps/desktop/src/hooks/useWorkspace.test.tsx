@@ -20,6 +20,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     invoked.push(cmd);
     calls.push([cmd, args ?? {}]);
     if (cmd === "list_threads") return Promise.resolve([]);
+    if (cmd === "list_store_threads") return Promise.resolve([]);
     if (cmd === "codex_spawn") return Promise.resolve({ id: 1, initialize: {}, version: null });
     if (cmd === "codex_thread_list") return Promise.resolve({ data: [] });
     if (cmd === "git_changes")
@@ -463,5 +464,50 @@ describe("useWorkspace registerThread", () => {
 
     expect(result.current.sessionsFor(projectId)).toHaveLength(1);
     expect(result.current.activeId).toBe(session.id);
+  });
+
+  // Auto-title (and every other refresh) re-scans. The scan cannot see a
+  // thread until the CLI or the event log has written it, so replacing the
+  // list wholesale dropped the row the pane had just registered.
+  it("keeps a pane-registered thread across a scan that has not seen it yet", async () => {
+    const { result, projectId } = await openProject();
+    await waitFor(() =>
+      expect(calls.some(([cmd]) => cmd === "list_threads")).toBe(true)
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const session = result.current.sessionsFor(projectId)[0];
+    act(() => result.current.registerThread(session.id, projectId, "t9", "first"));
+
+    const scans = calls.filter(([cmd]) => cmd === "list_threads").length;
+    act(() => result.current.refreshThreads(projectId, "/p", true));
+    await waitFor(() =>
+      expect(calls.filter(([cmd]) => cmd === "list_threads").length).toBeGreaterThan(
+        scans
+      )
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(
+      result.current.projects.find((p) => p.id === projectId)?.threads.map((t) => t.id)
+    ).toContain("t9");
+  });
+
+  it("starts a blank chat in an already-open project that has threads", async () => {
+    const { result, projectId } = await openProject();
+    const existing = result.current.sessionsFor(projectId)[0];
+    act(() => result.current.registerThread(existing.id, projectId, "t9", "first"));
+
+    act(() => result.current.newAgentIn(projectId));
+
+    const chats = result.current.sessionsFor(projectId);
+    const newest = chats[chats.length - 1];
+    expect(newest.id).not.toBe(existing.id);
+    expect(newest.resume).toBeUndefined();
+    expect(result.current.activeId).toBe(newest.id);
   });
 });

@@ -14,6 +14,7 @@
 
 import DiffWorkerUrl from "@pierre/diffs/worker/worker.js?worker&url";
 import type { SupportedLanguages } from "@pierre/diffs";
+import { DIFF_THEME } from "@/lib/diffView";
 
 /** Languages the workers preload. Anything else resolves on demand — this is
  *  the set a diff in this repo actually hits most turns. */
@@ -68,5 +69,5 @@ export const diffPoolOptions = {
 export const diffHighlighterOptions = {
   langs: DIFF_LANGUAGES,
   lineDiffType: "word-alt" as const,
-  theme: "vesper" as const,
+  theme: DIFF_THEME,
 };
