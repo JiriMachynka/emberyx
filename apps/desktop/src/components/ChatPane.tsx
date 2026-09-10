@@ -31,6 +31,7 @@ import {
   type TodoItem,
 } from "@/lib/toolDisplay";
 import { TOOL_ICONS } from "@/lib/toolIcons";
+import { isEmptyThought } from "@/lib/activityDisplay";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   anchorCorrection,
@@ -110,7 +111,8 @@ import { cn } from "@/lib/utils";
 import { buildActivityRow, kindForToolName } from "@/lib/activities";
 import { modelFitsBackend } from "@/lib/modelCatalog";
 import { getCustomModels } from "@/lib/modelFavorites";
-import { formatDuration, groupTurns, isAgentTool, type Turn } from "@/components/chat/turns";
+import { groupTurns, isAgentTool, type Turn } from "@/components/chat/turns";
+import { formatDuration } from "@/lib/duration";
 import { ActivityList } from "@/components/chat/ActivityRow";
 import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { ToolCard } from "@/components/chat/ToolViews";
@@ -454,6 +456,14 @@ export const ChatPane = memo(function ChatPane({
     return () => unregisterSender(sessionId);
   }, [sessionId, send, registerSender, unregisterSender]);
 
+  // The sidebar names the session's backend, which an in-place switch leaves
+  // alone; publish the one this pane actually runs while they differ.
+  const setSwitchedBackend = useAgentStore((s) => s.setSwitchedBackend);
+  useEffect(() => {
+    setSwitchedBackend(sessionId, activeBackend === backend ? null : activeBackend);
+    return () => setSwitchedBackend(sessionId, null);
+  }, [sessionId, activeBackend, backend, setSwitchedBackend]);
+
   const registerTranscript = useAgentStore((s) => s.registerTranscript);
   const unregisterTranscript = useAgentStore((s) => s.unregisterTranscript);
   useEffect(() => {
@@ -607,7 +617,7 @@ export const ChatPane = memo(function ChatPane({
   );
 
   // Group the flat message list into turns so a finished turn's work (thinking,
-  // tools, subagents) can collapse under one "Worked for Ns" header.
+  // tools, subagents) renders as one unit and the live clock has a turn to own.
   const turns = useMemo(() => groupTurns(thread), [thread]);
 
   // The scroll stream as virtual slots: optional load-earlier bookend and one
@@ -1443,7 +1453,8 @@ const TurnRow = memo(
       (a) =>
         Boolean(a.thinking) ||
         a.tools.length > 0 ||
-        (a.activities?.some((row) => !isTodoTool(row.title)) ?? false)
+        (a.activities?.some((row) => !isTodoTool(row.title) && !isEmptyThought(row)) ??
+          false)
     );
     const turnTodos = lastTodos(assistants.flatMap((a) => a.tools));
     // Background subagents outlive the turn that spawned them, so the work
@@ -1549,7 +1560,7 @@ const TurnRow = memo(
  *  that never carried an activity stream. */
 function turnWorkLabel(assistants: ChatMessage[], live: boolean): string | null {
   const rows = assistants.flatMap(
-    (m) => m.activities?.filter((a) => !isTodoTool(a.title)) ?? []
+    (m) => m.activities?.filter((a) => !isTodoTool(a.title) && !isEmptyThought(a)) ?? []
   );
   if (live) {
     const liveLabel = liveWorkLabel(rows);
@@ -1677,7 +1688,7 @@ function MessageWork({
   const stream = message.activities;
   if (stream?.length) {
     // TodoWrite is lifted into TasksCard, so it is not a row here either.
-    const rows = stream.filter((a) => !isTodoTool(a.title));
+    const rows = stream.filter((a) => !isTodoTool(a.title) && !isEmptyThought(a));
     if (rows.length === 0) return null;
     return (
       <ActivityList

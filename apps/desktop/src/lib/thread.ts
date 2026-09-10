@@ -12,7 +12,22 @@
  */
 
 import type { ChatMessage } from "@/hooks/useAgentChat";
-import type { Provider } from "@/lib/providers";
+import type { AgentBackend } from "@/lib/agentBackend";
+import { PROVIDERS, type Provider } from "@/lib/providers";
+
+/**
+ * The provider a thread's sidebar row names. A pane that switched in place is
+ * the freshest truth; then what the event log attributed — an imported thread
+ * renders in a Claude pane whatever produced it, so the session's backend is
+ * the borrowed one; then the session's own backend. A thread nothing knows
+ * about came from scanning Claude's transcripts, so it is Claude's.
+ */
+export const threadRowProvider = (
+  switched: AgentBackend | undefined,
+  recorded: string | null | undefined,
+  session: AgentBackend | undefined
+): Provider =>
+  switched ?? PROVIDERS.find((p) => p === recorded) ?? session ?? "claude";
 
 /** A marker in the transcript where the thread changed hands. */
 export interface ProviderSwitchMark {

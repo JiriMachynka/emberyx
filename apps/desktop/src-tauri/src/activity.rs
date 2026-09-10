@@ -634,10 +634,12 @@ impl ActivityStream {
 
     fn close_block(&mut self, index: u64) -> Vec<ActivityItem> {
         match self.open.remove(&index) {
+            // Still reported when empty: the row was announced incomplete at
+            // `content_block_start`, and newer models often send a signature
+            // with no readable text — skipping the close left that row reading
+            // "Thinking" for the rest of the session. The complete line skips
+            // empty thinking, so nothing reopens it.
             Some(OpenBlock::Reasoning { id, text }) => {
-                if text.trim().is_empty() {
-                    return Vec::new();
-                }
                 vec![self.store(from_reasoning(id, &text))]
             }
             Some(OpenBlock::Tool { id, name, json }) => {
@@ -862,6 +864,39 @@ mod tests {
         assert!(closed[0].complete);
         // Every delta reported the same row, not a new one.
         assert_eq!(stream_state.items.len(), 1);
+    }
+
+    #[test]
+    fn an_empty_reasoning_block_still_closes() {
+        let mut stream_state = ActivityStream::new();
+        stream_state.push_line(&stream(json!({
+            "type": "message_start", "message": { "id": "msg_1" }
+        })));
+        stream_state.push_line(&stream(json!({
+            "type": "content_block_start", "index": 0,
+            "content_block": { "type": "thinking" }
+        })));
+        // Signature only — no thinking_delta ever carries text.
+        let closed = stream_state.push_line(&stream(json!({
+            "type": "content_block_stop", "index": 0
+        })));
+        assert_eq!(closed.len(), 1);
+        assert!(closed[0].complete);
+        assert_eq!(closed[0].output.as_deref(), Some(""));
+
+        // The complete line restating it adds no row of its own.
+        let restated = stream_state.push_line(
+            &json!({
+                "type": "assistant",
+                "message": {
+                    "id": "msg_1",
+                    "content": [{ "type": "thinking", "thinking": "", "signature": "sig" }]
+                }
+            })
+            .to_string(),
+        );
+        assert!(restated.is_empty());
+        assert!(stream_state.items[0].complete);
     }
 
     #[test]

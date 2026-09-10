@@ -47,7 +47,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { Project, Session, Thread } from "@/types";
 import type { ThreadGrouping, ThreadView } from "@/lib/settings";
-import type { AgentBackend } from "@/lib/agentBackend";
+import type { Provider } from "@/lib/providers";
+import { threadRowProvider } from "@/lib/thread";
 
 interface SidebarProps {
   projects: Project[];
@@ -688,7 +689,10 @@ const ThreadRow = memo(function ThreadRow({
   const settled = state === "settled";
   const now = Date.now();
   const glyph = glyphFor(project.worktree?.repoRoot ?? project.path);
-  const backend = session?.backend ?? "claude";
+  const switched = useAgentStore((s) =>
+    session ? s.switchedBackends[session.id] : undefined
+  );
+  const backend = threadRowProvider(switched, thread.provider, session?.backend);
   const [detail, setDetail] = useState(false);
   // A card that popped its detail the instant the pointer crossed it would
   // flicker on the way down the list.
@@ -962,7 +966,7 @@ const ThreadModelRow = memo(function ThreadModelRow({
   backend,
 }: {
   session: Session | undefined;
-  backend: AgentBackend;
+  backend: Provider;
 }) {
   const model = useAgentStore((s) => (session ? s.usages[session.id]?.model : undefined));
   if (!model) return null;

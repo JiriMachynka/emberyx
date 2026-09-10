@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDuration, groupTurns, isAgentTool } from "@/components/chat/turns";
+import { groupTurns, isAgentTool } from "@/components/chat/turns";
 import type { ChatMessage } from "@/hooks/useAgentChat";
 
 const msg = (id: string, role: ChatMessage["role"]): ChatMessage => ({
@@ -40,21 +40,6 @@ describe("groupTurns", () => {
 
   it("has no turns for an empty thread", () => {
     expect(groupTurns([])).toEqual([]);
-  });
-});
-
-describe("formatDuration", () => {
-  it("stays in seconds under a minute", () => {
-    expect(formatDuration(1_400)).toBe("1s");
-    expect(formatDuration(59_000)).toBe("59s");
-  });
-
-  it("splits into minutes and seconds past one", () => {
-    expect(formatDuration(155_000)).toBe("2m 35s");
-  });
-
-  it("never reads negative", () => {
-    expect(formatDuration(-5_000)).toBe("0s");
   });
 });
 

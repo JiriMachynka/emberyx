@@ -2,15 +2,15 @@ import { useEffect, useReducer } from "react";
 
 import { usePaneVisible } from "@/components/chat/PaneVisible";
 import { recordThinkTiming, thinkTimings } from "@/lib/thinkTimings";
-import { formatRunningDuration } from "@/lib/runningTimer";
+import { formatDuration } from "@/lib/duration";
 
-/** `formatRunningDuration` renders tenths, so this is the format's own
- *  resolution — slowing it further makes the digit visibly skip values. The
- *  cost that mattered was hidden panes ticking, which the gate below removes. */
-const TICK_MS = 100;
+/** The label shows whole seconds, but the interval isn't phase-locked to the
+ *  start, so a full-second tick would lag up to a second and occasionally skip
+ *  a value. A quarter second keeps the digit within 250ms of true. */
+const TICK_MS = 250;
 
 /**
- * "Working for 3.2s" — the observed run time of one unit of work, ticking
+ * "Working for 3s" — the observed run time of one unit of work, ticking
  * while it runs.
  *
  * Nothing in the payload carries a clock (the same gap `thinkTimings` fills
@@ -44,5 +44,5 @@ export const useRunningTimer = (
   }, [running, visible]);
 
   if (!running || timing?.startedAt == null) return null;
-  return `Working for ${formatRunningDuration(Date.now() - timing.startedAt)}`;
+  return `Working for ${formatDuration(Date.now() - timing.startedAt)}`;
 };

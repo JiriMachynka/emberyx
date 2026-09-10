@@ -8,6 +8,7 @@
 import { Fragment, memo, useMemo, useState } from "react";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { Disclosure, DisclosureChevron } from "@/components/chat/Disclosure";
+import { useTailScroll } from "@/hooks/useTailScroll";
 import { isFileReference } from "@/lib/fileRef";
 import {
   describeResult,
@@ -78,9 +79,14 @@ export const ToolDiff = memo(function ToolDiff({
     () => diffPreview(before, after, showAll ? Infinity : DIFF_PREVIEW_LINES),
     [before, after, showAll]
   );
+  const tail = useTailScroll<HTMLPreElement>(streaming, after);
   return (
     <div>
-      <pre className="max-h-64 overflow-auto whitespace-pre font-mono text-[0.7rem] leading-relaxed">
+      <pre
+        ref={tail.ref}
+        onScroll={tail.onScroll}
+        className="max-h-64 overflow-auto whitespace-pre font-mono text-[0.7rem] leading-relaxed"
+      >
         <div className="w-max min-w-full">
           {rows.map((row) =>
             row.kind === "gap" ? (
@@ -108,6 +114,19 @@ export const ToolDiff = memo(function ToolDiff({
     </div>
   );
 });
+
+const ToolText = ({ text, streaming }: { text: string; streaming: boolean }) => {
+  const tail = useTailScroll<HTMLDivElement>(streaming, text);
+  return (
+    <div
+      ref={tail.ref}
+      onScroll={tail.onScroll}
+      className="max-h-64 overflow-auto whitespace-pre-wrap text-[0.7rem] leading-relaxed text-muted-foreground"
+    >
+      {text}
+    </div>
+  );
+};
 
 /** One chunk of a tool's expanded input, rendered per part kind. */
 export function ToolBody({
@@ -172,9 +191,7 @@ export function ToolBody({
     return (
       <div>
         {label}
-        <div className="max-h-64 overflow-auto whitespace-pre-wrap text-[0.7rem] leading-relaxed text-muted-foreground">
-          {part.text}
-        </div>
+        <ToolText text={part.text} streaming={streaming} />
       </div>
     );
   }
@@ -340,8 +357,11 @@ export const ToolCode = memo(function ToolCode({
     () => highlightCached(code, lang, !streaming),
     [code, lang, streaming, engine]
   );
+  const tail = useTailScroll<HTMLPreElement>(streaming, code);
   return (
     <pre
+      ref={tail.ref}
+      onScroll={tail.onScroll}
       className={cn(
         "overflow-x-auto whitespace-pre-wrap font-mono text-[0.7rem]",
         className

@@ -8,6 +8,7 @@ import {
   labelForActivity,
   metaForActivity,
   pathsForActivity,
+  isEmptyThought,
   titleForActivity,
   visibleActivities,
 } from "./activityDisplay";
@@ -83,13 +84,28 @@ describe("metaForActivity", () => {
 
 describe("visibleActivities", () => {
   it("hides settled tools on a live turn and keeps reasoning", () => {
-    const thinking = row({ id: "t", kind: "reasoning", complete: true });
+    const thinking = row({ id: "t", kind: "reasoning", complete: true, output: "plan" });
     const done = row({ id: "d", kind: "command", complete: true });
     const running = row({ id: "r", kind: "command", complete: false });
     expect(visibleActivities([thinking, done, running], true)).toEqual([
       thinking,
       running,
     ]);
+  });
+
+  // Signature-only reasoning: nothing to disclose once it has finished.
+  it("hides a finished thought with no text, live or settled", () => {
+    const empty = row({ id: "e", kind: "reasoning", complete: true, output: "" });
+    const blank = row({ id: "b", kind: "reasoning", complete: true, output: "  \n" });
+    const tool = row({ id: "d", kind: "command", complete: true });
+    expect(visibleActivities([empty, blank, tool], false)).toEqual([tool]);
+    expect(visibleActivities([empty, blank], true)).toEqual([]);
+  });
+
+  it("keeps a thought that is still running, even before any text", () => {
+    const running = row({ id: "t", kind: "reasoning", complete: false, output: "" });
+    expect(isEmptyThought(running)).toBe(false);
+    expect(visibleActivities([running], true)).toEqual([running]);
   });
 
   it("keeps settled file rows on a live turn so the tree can accumulate", () => {

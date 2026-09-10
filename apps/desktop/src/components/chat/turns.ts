@@ -32,10 +32,5 @@ export function groupTurns(messages: ChatMessage[]): Turn[] {
   return turns;
 }
 
-export const formatDuration = (ms: number): string => {
-  const s = Math.max(0, Math.round(ms / 1000));
-  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
-};
-
 export const isAgentTool = (name: string): boolean => name === "Task" || name === "Agent";
 

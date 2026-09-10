@@ -5,6 +5,7 @@ import {
   mergeThread,
   stampTurns,
   switchMarks,
+  threadRowProvider,
 } from "@/lib/thread";
 import type { ChatMessage } from "@/hooks/useAgentChat";
 
@@ -112,5 +113,26 @@ describe("stampTurns identity", () => {
     const live = [message("a")];
     const first = stampTurns(live, "claude", "opus-5");
     expect(stampTurns(live, "claude", "sonnet-5")[0]).not.toBe(first[0]);
+  });
+});
+
+describe("threadRowProvider", () => {
+  it("names the provider a pane switched to in place", () => {
+    expect(threadRowProvider("codex", null, "claude")).toBe("codex");
+  });
+
+  // An imported Grok thread opens in a Claude pane; the pane is borrowed.
+  it("prefers the recorded provider over the session's borrowed backend", () => {
+    expect(threadRowProvider(undefined, "grok", "claude")).toBe("grok");
+    expect(threadRowProvider(undefined, "kilo", undefined)).toBe("kilo");
+  });
+
+  it("falls back to the session, then to Claude", () => {
+    expect(threadRowProvider(undefined, null, "codex")).toBe("codex");
+    expect(threadRowProvider(undefined, undefined, undefined)).toBe("claude");
+  });
+
+  it("ignores a recorded provider this build has no name for", () => {
+    expect(threadRowProvider(undefined, "gemini", "codex")).toBe("codex");
   });
 });

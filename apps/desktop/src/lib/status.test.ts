@@ -94,12 +94,13 @@ describe("formatElapsed", () => {
     expect(formatElapsed(start, start + 59_000)).toBe("59s");
   });
 
-  it("switches to minutes with padded seconds", () => {
+  it("switches to minutes, spelled like the chat clock", () => {
     expect(formatElapsed(start, start + 80_000)).toBe("1m 20s");
+    expect(formatElapsed(start, start + 65_000)).toBe("1m 5s");
   });
 
   it("drops seconds once the run is hours long", () => {
-    expect(formatElapsed(start, start + 3_900_000)).toBe("1h 05m");
+    expect(formatElapsed(start, start + 3_900_000)).toBe("1h 5m");
   });
 
   // A session with no recorded start says nothing rather than "NaN".

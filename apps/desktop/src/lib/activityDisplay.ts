@@ -128,6 +128,13 @@ export const groupActivities = (activities: ActivityItem[]): ActivityGroup[] => 
   return groups;
 };
 
+/** A finished thought with nothing to read — newer models often return only a
+ *  signature. Replayed history never produces one (the normalizer skips empty
+ *  thinking), so hiding it live keeps the two views describing the same turn.
+ *  A thought still running stays: "Thinking" is true even with no text yet. */
+export const isEmptyThought = (activity: ActivityItem): boolean =>
+  activity.kind === "reasoning" && activity.complete && !activity.output?.trim();
+
 /** Live turns keep running tools, reasoning, and file rows. File rows stay so
  *  the tree can accumulate the way T3's does; settled bash belongs in the
  *  finished-turn accordion. */
@@ -135,8 +142,8 @@ export const visibleActivities = (
   activities: ActivityItem[],
   live: boolean
 ): ActivityItem[] =>
-  live
-    ? activities.filter(
-        (a) => a.kind === "reasoning" || isFileActivity(a) || !a.complete
-      )
-    : activities;
+  activities.filter(
+    (a) =>
+      !isEmptyThought(a) &&
+      (!live || a.kind === "reasoning" || isFileActivity(a) || !a.complete)
+  );

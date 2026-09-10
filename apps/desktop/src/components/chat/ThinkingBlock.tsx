@@ -2,7 +2,8 @@ import { Sparkle } from "lucide-react";
 import { useState } from "react";
 
 import { Disclosure, DisclosureChevron } from "@/components/chat/Disclosure";
-import { formatDuration } from "@/components/chat/turns";
+import { useTailScroll } from "@/hooks/useTailScroll";
+import { formatDuration } from "@/lib/duration";
 import { recordThinkTiming, thinkTimings } from "@/lib/thinkTimings";
 import { cn } from "@/lib/utils";
 
@@ -25,23 +26,32 @@ export function ThinkingBlock({
   timingKey?: string;
 }) {
   const [override, setOverride] = useState<boolean | null>(null);
-  const open = override ?? active;
+  // Newer models often think without sending readable text. An open, empty
+  // body is a box that promises reasoning and shows none — so no text means
+  // nothing to disclose, just the line saying the model is thinking.
+  const expandable = text.trim().length > 0;
+  const open = expandable && (override ?? active);
   const timing = timingKey
     ? recordThinkTiming(thinkTimings, timingKey, active, Date.now())
     : null;
   const ran =
     timing?.endedAt != null ? formatDuration(timing.endedAt - timing.startedAt) : null;
   const label = active ? "Thinking" : ran ? `Thought for ${ran}` : "Thought";
+  const tail = useTailScroll<HTMLDivElement>(active && open, text);
 
   return (
     <div className="text-xs">
       <button
         type="button"
-        aria-expanded={open}
+        aria-expanded={expandable ? open : undefined}
+        disabled={!expandable}
         onClick={() => setOverride(!open)}
         // Square like the tool rows beside it — a rounded hover bg is cut at
         // the panel's seams; the panel clips its own corners.
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-muted-foreground transition-colors hover:bg-secondary"
+        className={cn(
+          "flex w-full items-center gap-2 px-3 py-2 text-left text-muted-foreground transition-colors",
+          expandable && "hover:bg-secondary"
+        )}
       >
         <Sparkle
           className={cn(
@@ -51,13 +61,17 @@ export function ThinkingBlock({
         />
         <span className="shrink-0 font-medium text-foreground">Think</span>
         <span className="tabular-nums">{label}</span>
-        <DisclosureChevron
-          open={open}
-          className="ml-auto shrink-0 text-muted-foreground"
-        />
+        {expandable && (
+          <DisclosureChevron
+            open={open}
+            className="ml-auto shrink-0 text-muted-foreground"
+          />
+        )}
       </button>
       <Disclosure open={open}>
         <div
+          ref={tail.ref}
+          onScroll={tail.onScroll}
           className={cn(
             "overflow-y-auto whitespace-pre-wrap pb-2 pl-9 pr-3 leading-5 text-muted-foreground/80",
             BODY_MAX

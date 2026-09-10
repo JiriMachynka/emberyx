@@ -202,3 +202,24 @@ describe("statusSince", () => {
     expect(useAgentStore.getState().statusSince.s2).toBeUndefined();
   });
 });
+
+describe("switchedBackends", () => {
+  it("records a switch, clears it on null, and drops it with the session", () => {
+    store().setSwitchedBackend("s1", "codex");
+    expect(store().switchedBackends.s1).toBe("codex");
+    store().setSwitchedBackend("s1", null);
+    expect(store().switchedBackends).not.toHaveProperty("s1");
+
+    store().setSwitchedBackend("s2", "grok");
+    store().clearSessions(["s2"]);
+    expect(store().switchedBackends).not.toHaveProperty("s2");
+  });
+
+  it("leaves the map alone when nothing changed", () => {
+    store().setSwitchedBackend("s3", "codex");
+    const before = store().switchedBackends;
+    store().setSwitchedBackend("s3", "codex");
+    store().setSwitchedBackend("s4", null);
+    expect(store().switchedBackends).toBe(before);
+  });
+});

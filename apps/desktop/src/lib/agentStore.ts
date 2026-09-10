@@ -6,6 +6,7 @@ import type { ChatImage } from "@/hooks/useAgentChat";
 import type { SessionStatus } from "@/types";
 import type { AccountIssue } from "@/lib/accountState";
 import type { HandoffTurn } from "@/lib/handoff";
+import type { AgentBackend } from "@/lib/agentBackend";
 import {
   MAX_NOTIFICATIONS,
   loadNotifications,
@@ -128,6 +129,11 @@ interface AgentState {
    *  than pushed at a `send`, because a handoff can target a chat that hasn't
    *  mounted yet — it picks its draft up when it does. */
   drafts: Record<string, string>;
+  /** The provider a chat pane moved to in place, while it differs from the
+   *  session's own backend — which a switch leaves alone, since it names the
+   *  transport the session was spawned with. Read by the sidebar row. */
+  switchedBackends: Record<string, AgentBackend>;
+  setSwitchedBackend: (id: string, backend: AgentBackend | null) => void;
   setDraft: (id: string, text: string) => void;
   clearDraft: (id: string) => void;
   /** Hand a chat message to the other backend's chat in the same project.
@@ -193,8 +199,15 @@ export const useAgentStore = create<AgentState>()((set) => ({
   senders: {},
   transcripts: {},
   drafts: {},
+  switchedBackends: {},
   handoff: null,
   notifications: loadNotifications(),
+  setSwitchedBackend: (id, backend) =>
+    set((s) => {
+      if ((s.switchedBackends[id] ?? null) === backend) return s;
+      const { [id]: _, ...rest } = s.switchedBackends;
+      return { switchedBackends: backend ? { ...rest, [id]: backend } : rest };
+    }),
   setDraft: (id, text) => set((s) => ({ drafts: { ...s.drafts, [id]: text } })),
   clearDraft: (id) =>
     set((s) => {
@@ -354,6 +367,9 @@ export const useAgentStore = create<AgentState>()((set) => ({
         ),
         drafts: Object.fromEntries(
           Object.entries(s.drafts).filter(([id]) => !drop.has(id))
+        ),
+        switchedBackends: Object.fromEntries(
+          Object.entries(s.switchedBackends).filter(([id]) => !drop.has(id))
         ),
         selectedAgent:
           s.selectedAgent && subagents[s.selectedAgent]
