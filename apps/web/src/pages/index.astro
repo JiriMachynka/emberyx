@@ -2,6 +2,7 @@
 import Layout from "../layouts/Layout.astro";
 import Nav from "../components/Nav.astro";
 import Footer from "../components/Footer.astro";
+import AppMockup from "../components/AppMockup.astro";
 
 const repo = "https://github.com/JiriMachynka/emberyx";
 const releases = `${repo}/releases/latest`;
@@ -12,9 +13,9 @@ const releases = `${repo}/releases/latest`;
 
   <main>
     <!-- HERO -->
-    <section class="relative overflow-hidden border-b border-line-soft">
+    <section class="relative overflow-hidden">
       <div class="grid-bg pointer-events-none absolute inset-0"></div>
-      <div class="relative mx-auto max-w-6xl px-5 pb-28 pt-28 lg:pb-40 lg:pt-40">
+      <div class="relative mx-auto max-w-6xl px-5 pb-12 pt-28 lg:pb-16 lg:pt-40">
         <div class="mx-auto max-w-3xl text-center">
           <h1 class="display t-hero text-fg">
             One window for<br class="hidden sm:block" />
@@ -39,9 +40,15 @@ const releases = `${repo}/releases/latest`;
       </div>
     </section>
 
+    <!-- DEMO -->
+    <section class="demo-stage relative overflow-hidden">
+      <div class="demo-tilt relative mx-auto max-w-7xl px-5 py-10">
+        <AppMockup />
+      </div>
+    </section>
+
     <!-- FEATURES -->
-    <section id="features" class="reveal mx-auto max-w-6xl px-5 py-28 md:py-36">
-      <div class="max-w-2xl">
+    <section id="features" class="reveal mx-auto max-w-6xl px-5 py-28 md:py-36">      <div class="max-w-2xl">
         <h2 class="display t-h2 text-fg">
           Everything the agent needs, one surface.
         </h2>

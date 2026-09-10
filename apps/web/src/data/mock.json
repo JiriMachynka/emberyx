@@ -1,68 +1,85 @@
 {
-  "search": "Search",
-  "projects": [
+  "topbar": {
+    "project": "haulmark",
+    "title": "Why does invoice #4827 total $61.3000000001?",
+    "editor": "Open in Zed",
+    "commitBadge": "15"
+  },
+  "threads": [
     {
-      "name": "novacart",
-      "initial": "N",
-      "tint": "#ff6a2b",
-      "badge": "turbo",
-      "active": true,
-      "showAgent": true,
-      "sessions": [
-        { "label": "Checkout double-charge", "state": "running", "active": true },
-        { "label": "Stripe webhook retries", "state": "idle" },
-        { "label": "Cart totals refactor", "state": "idle" }
-      ]
+      "project": "haulmark",
+      "time": "12m",
+      "title": "Rate card rounding",
+      "branch": "fix/rate-rounding",
+      "imported": true,
+      "active": true
     },
     {
-      "name": "api-service",
-      "initial": "A",
-      "tint": "#3b82f6",
-      "sessions": [{ "label": "Rate-limit tuning", "state": "idle" }]
+      "project": "haulmark",
+      "time": "3h",
+      "title": "Webhook retry storm",
+      "branch": "main",
+      "imported": true
     },
     {
-      "name": "landing",
-      "initial": "L",
-      "tint": "#30a46c",
-      "sessions": [{ "label": "Hero copy pass", "state": "idle" }]
+      "project": "driverapp",
+      "avatar": "D",
+      "time": "4h",
+      "title": "Show the trip payout breakdown in the driver's shift summary",
+      "spark": true
     }
   ],
-  "topbar": {
-    "project": "novacart",
-    "branch": "main"
-  },
+  "settled": 87,
   "transcript": [
     {
-      "kind": "assistant",
-      "text": "Traced the double-charge to a missing idempotency key. Two customers hit `/confirm` twice inside 400ms and both requests created a payment intent."
+      "kind": "changed",
+      "files": 2,
+      "adds": "+58",
+      "dels": "-19",
+      "folder": "src/modules/rates",
+      "partial": true
+    },
+    {
+      "kind": "user",
+      "text": "Why does invoice #4827 total $61.3000000001?"
+    },
+    {
+      "kind": "summary",
+      "text": "Ran 3 commands \u00b7 12 thoughts \u00b7 4 tools"
+    },
+    {
+      "kind": "message",
+      "text": "The rate card sums each operator's cut in floating point, so the fractions compound. Rounding now happens once, at the invoice boundary:"
     },
     {
       "kind": "bullets",
       "items": [
-        "`confirm.post.ts` — dedupes on cart id, so a replay returns the first intent",
-        "`Pay.vue` — the button locks while a charge is in flight"
+        "`rateCard.ts` \u2014 totals are accumulated in integer cents, fractions only at read time",
+        "`invoicePdf.ts` \u2014 the grand total passes through `roundToCurrency` before it prints",
+        "`ledger.test.ts` \u2014 replays 2,411 seeded invoices and pins every total to two decimals"
       ]
     },
-    { "kind": "user", "text": "Good. Commit it and open the PR" },
-    { "kind": "tool", "name": "Bash", "desc": "git commit -m \"fix: idempotent checkout confirm\"" },
-    { "kind": "tool", "name": "Bash", "desc": "gh pr create --fill" },
     {
-      "kind": "assistant",
-      "text": "PR #214 is open against `main` — 2 files, +48 / −12. Tests green, Dokploy preview is building."
+      "kind": "message",
+      "text": "Invoice #4827 now totals `61.30`, and the ledger replay matches it for the whole back catalog."
+    },
+    {
+      "kind": "actions",
+      "copy": "Copy",
+      "handoff": "Hand off to Claude"
+    },
+    {
+      "kind": "changed",
+      "files": 3,
+      "adds": "+58",
+      "dels": "-19",
+      "folder": "src/modules/rates"
     }
   ],
   "composer": {
-    "placeholder": "Message Claude…",
-    "model": "Opus 5",
+    "placeholder": "Ask for changes, send follow-ups, or attach images",
+    "model": "OpenCode Go/GLM-5.3-Flash",
     "access": "Full access",
-    "mode": "Build",
-    "tokensIn": "2,226",
-    "tokensOut": "6",
-    "cost": "$4.39"
-  },
-  "surfaces": [
-    { "key": "terminal", "name": "Terminal", "desc": "Start a shell in this workspace." },
-    { "key": "files", "name": "Files", "desc": "Browse and read workspace files." },
-    { "key": "diff", "name": "Diff", "desc": "Review, stage and commit changes." }
-  ]
+    "branch": "fix/rate-rounding"
+  }
 }

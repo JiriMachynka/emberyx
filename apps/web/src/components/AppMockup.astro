@@ -1,32 +1,29 @@
 ---
-// Data-driven replica of the Emberyx cockpit. Edit src/data/mock.json to change
-// the content — no markup changes needed. Pass a `data` prop to override.
+// Data-driven replica of the Emberyx cockpit, 1:1 with the real app.
+// Edit src/data/mock.json to change the content — no markup changes needed.
 import defaultData from "../data/mock.json";
 
-interface Session { label: string; state: "idle" | "running"; active?: boolean }
-interface Project {
-  name: string; initial: string; tint: string;
-  badge?: string; active?: boolean; showAgent?: boolean; sessions: Session[];
+interface Topbar { project: string; title: string; editor: string; commitBadge: string }
+interface ThreadGroup { project: string; time: string; title: string; branch?: string; imported?: boolean; avatar?: string; spark?: boolean; active?: boolean }
+interface TranscriptBlock {
+  kind: "user" | "summary" | "message" | "bullets" | "actions" | "changed";
+  text?: string;
+  items?: string[];
+  copy?: string;
+  handoff?: string;
+  files?: number;
+  adds?: string;
+  dels?: string;
+  folder?: string;
+  partial?: boolean;
 }
-
-interface Assistant { kind: "assistant"; text: string }
-interface Bullets { kind: "bullets"; items: string[] }
-interface UserMsg { kind: "user"; text: string }
-interface ToolCall { kind: "tool"; name: string; desc: string }
-type Block = Assistant | Bullets | UserMsg | ToolCall;
-
-interface Surface { key: string; name: string; desc: string }
-
+interface Composer { placeholder: string; model: string; access: string; branch: string }
 interface MockData {
-  search: string;
-  projects: Project[];
-  topbar: { project: string; branch: string };
-  transcript: Block[];
-  composer: {
-    placeholder: string; model: string; access: string; mode: string;
-    tokensIn: string; tokensOut: string; cost: string;
-  };
-  surfaces: Surface[];
+  topbar: Topbar;
+  threads: ThreadGroup[];
+  settled: number;
+  transcript: TranscriptBlock[];
+  composer: Composer;
 }
 
 const { data = defaultData as MockData } = Astro.props;
@@ -38,217 +35,224 @@ const svg = (paths: string, opts = "") =>
   `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" ${opts}>${paths}</svg>`;
 
 const icons = {
-  collapse: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>'),
+  pencil: svg('<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>'),
+  library: svg('<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>'),
   search: svg('<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>'),
-  plus: svg('<path d="M12 5v14M5 12h14"/>'),
-  menu: svg('<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>'),
-  threads: svg('<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 8v4.5l3 1.5"/>'),
-  chevron: svg('<path d="m6 9 6 6 6-6"/>', 'stroke-width="2"'),
-  branch: svg('<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 2.5-6 7.5"/>'),
-  dollar: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v10M14.5 9.5a2.5 2.5 0 0 0-2.5-1.5c-1.4 0-2.5.8-2.5 2s1.1 1.8 2.5 2 2.5.8 2.5 2-1.1 2-2.5 2a2.6 2.6 0 0 1-2.5-1.5"/>'),
-  play: svg('<path d="M7 4.5 19 12 7 19.5z"/>', 'fill="currentColor" stroke="none"'),
   gear: svg('<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>'),
   bell: svg('<path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/>'),
-  lock: svg('<rect x="4" y="10.5" width="16" height="9.5" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/>'),
-  hammer: svg('<path d="M15 12 6.5 20.5a2.1 2.1 0 0 1-3-3L12 9"/><path d="M17.5 2 12 7.5l4.5 4.5L22 6.5z"/>'),
+  chart: svg('<path d="M3 3v18h18"/><path d="M8 17v-5M13 17V7M18 17v-9"/>'),
+  menu: svg('<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>'),
+  panel: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>'),
+  chevron: svg('<path d="m6 9 6 6 6-6"/>', 'stroke-width="2"'),
+  branch: svg('<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 2.5-6 7.5"/>'),
+  git: svg('<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v6a3 3 0 0 0 3 3h6M18 15.5v-6a3 3 0 0 0-3-3H9"/>'),
+  imported: svg('<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5V20"/>'),
   sparkle: svg('<path d="m12 3 2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2z"/>'),
+  play: svg('<path d="M7 4.5 19 12 7 19.5z"/>', 'fill="currentColor" stroke="none"'),
+  external: svg('<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>'),
+  commit: svg('<path d="M12 19V5"/><path d="m8 11 4-4 4 4"/>', 'stroke-width="1.8"'),
+  image: svg('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/>'),
+  plus: svg('<path d="M12 5v14M5 12h14"/>'),
   send: svg('<path d="M12 19V5M5 12l7-7 7 7"/>', 'stroke-width="2.2"'),
+  terminal: svg('<path d="m5 8 4 4-4 4"/><path d="M13 16h6"/>'),
+  lock: svg('<rect x="4" y="10.5" width="16" height="9.5" rx="2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/>'),
+  file: svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>'),
+  braces: svg('<path d="M8 3H7a2 2 0 0 0-2 2v4a2 2 0 0 1-2 2 2 2 0 0 1 2 2v4a2 2 0 0 0 2 2h1"/><path d="M16 3h1a2 2 0 0 1 2 2v4a2 2 0 0 0 2 2 2 2 0 0 0-2 2v4a2 2 0 0 1-2 2h-1"/>'),
+  folder: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
+  chevronRight: svg('<path d="m9 6 6 6-6 6"/>', 'stroke-width="1.8"'),
+  globe: svg('<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14.5 14.5 0 0 1 0 18 14.5 14.5 0 0 1 0-18"/>'),
+  pullRequest: svg('<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v7"/><path d="M13 6h3.5a1.5 1.5 0 0 1 1.5 1.5V15"/><path d="m15 12 2 2 2-2"/>'),
+  output: svg('<path d="M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" fill="none" opacity="0"/><path d="M12 15v4"/><path d="m9 16 3 3 3-3"/><rect x="4" y="3" width="16" height="10" rx="2"/>'),
   close: svg('<path d="M18 6 6 18M6 6l12 12"/>', 'stroke-width="1.8"'),
-  agent: svg('<path d="M12 5v14M5 12h14"/>', 'stroke-width="1.8"'),
-  toolArrow: svg('<path d="m4 7 5 5-5 5M12 17h8"/>'),
-  check: svg('<path d="m20 6-11 11-5-5"/>', 'stroke-width="2"'),
-  terminal: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M13 15h4"/>'),
-  files: svg('<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>'),
-  diff: svg('<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v6a3 3 0 0 0 3 3h6M18 15.5v-6a3 3 0 0 0-3-3H9"/>'),
+  review: svg('<path d="M3 13a2 2 0 0 1 2-2h2l2 2h4a2 2 0 0 0 2-2l1-1h3a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" opacity="0"/><path d="m10 8 -4 4 4 4"/><path d="M6 12h9a4 4 0 0 0 4-4"/>'),
+  copy: svg('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
+  handoff: svg('<path d="M3 7h13"/><path d="m13 3 4 4-4 4"/><path d="M21 17H8"/><path d="m11 21-4-4 4-4"/>'),
 };
-const surfaceIcon = (key: string) => (icons as Record<string, string>)[key] ?? icons.files;
 ---
 
 <div class="mockup overflow-hidden rounded-xl border border-line bg-ink">
-  <div class="grid sm:grid-cols-[210px_1fr] xl:grid-cols-[210px_1fr_288px]">
+  <div class="grid sm:grid-cols-[240px_1fr] sm:grid-rows-[auto_1fr] xl:grid-cols-[240px_1fr_384px]">
     <!-- Sidebar -->
-    <aside class="hidden flex-col border-r border-line-soft bg-ink-card sm:flex">
-      <div class="flex items-center justify-between px-3 py-2.5">
-        <span class="flex items-center gap-2">
-          <img src={`${import.meta.env.BASE_URL}emberyx.png`} alt="" width="15" height="15" class="rounded-sm" />
-          <span class="font-display text-[13px] font-semibold text-fg">Emberyx</span>
-        </span>
-        <span class="text-ash-dim" set:html={icons.collapse} />
-      </div>
-
-      <!-- Search -->
-      <div class="px-2.5 pb-2">
-        <div class="flex items-center gap-2 rounded-md border border-line-soft bg-ink px-2.5 py-1.5 text-[12px] text-ash-dim">
+    <aside class="row-span-2 hidden flex-col border-r border-line-soft bg-ink-soft sm:flex sm:col-start-1 sm:row-start-1">
+      <div class="flex items-center gap-2 px-3 py-2.5">
+        <div class="flex flex-1 items-center gap-2 text-[12px] text-ash-dim">
           <Fragment set:html={icons.search} />
-          <span class="flex-1">{data.search}</span>
-          <span class="rounded border border-line-soft px-1 py-px font-mono text-[10px]">⌘K</span>
+          <span>Search</span>
         </div>
+        <span class="flex h-7 w-7 items-center justify-center rounded-md text-ash-dim" set:html={icons.pencil} />
+        <span class="flex h-7 w-7 items-center justify-center rounded-md text-ash-dim" set:html={icons.library} />
       </div>
 
-      <!-- Projects -->
-      <div class="flex items-center justify-between px-3 pb-1 pt-1.5">
-        <span class="font-mono text-[10px] uppercase tracking-[0.14em] text-ash-dim">Projects</span>
-        <span class="text-ash-dim" set:html={icons.plus} />
+      <!-- Threads -->
+      <div class="px-3.5 pb-1.5 pt-4">
+        <span class="font-mono text-[10px] uppercase tracking-[0.14em] text-ash-dim">Threads</span>
       </div>
 
-      <div class="flex-1 space-y-1.5 overflow-hidden px-2 py-1 text-[12px]">
-        {data.projects.map((p) => (
-          <div class="space-y-0.5">
-            <div class:list={["flex items-center gap-2 rounded-md px-2 py-1.5", p.active && "border border-line bg-ink"]}>
-              <span class="grid h-5 w-5 shrink-0 place-items-center rounded-md text-[10px] font-semibold text-white" style={`background-color:${p.tint}`}>{p.initial}</span>
-              <span class:list={["truncate font-medium", p.active ? "text-fg" : "text-ash"]}>{p.name}</span>
-              {p.badge && <span class="ml-auto rounded border border-line px-1 py-px text-[10px] text-ash-dim">{p.badge}</span>}
+      <div class="flex flex-1 flex-col gap-1 overflow-hidden px-2 pt-1">
+        {data.threads.map((t) => (
+          <div class:list={["rounded-lg border px-2.5 py-2", t.active ? "border-line bg-ink-card" : "border-line-soft bg-ink-card/40"]}>
+            <div class="flex items-center gap-2">
+              <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-ember"></span>
+              <span class="truncate text-[12px] font-medium text-fg">{t.project}</span>
+              <span class="ml-auto shrink-0 text-[11px] text-ash-dim">{t.time}</span>
             </div>
-
-            {p.sessions.map((s) => (
-              <div class:list={["ml-3.5 flex items-center gap-2 rounded-md px-2 py-1.5", s.active ? "border border-line bg-ink text-fg" : "text-ash"]}>
-                <span class:list={["h-1.5 w-1.5 shrink-0 rounded-full", s.state === "running" ? "bg-signal" : "bg-ash-dim"]}></span>
-                <span class="truncate">{s.label}</span>
+            <div class="mt-1.5 flex items-start gap-2">
+              {t.avatar ? (
+                <span class="grid h-4 w-4 shrink-0 place-items-center rounded bg-ash-dim text-[9px] font-semibold text-ink">{t.avatar}</span>
+              ) : (
+                <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-ash-dim"></span>
+              )}
+              <span class="line-clamp-2 min-w-0 flex-1 text-[12px] font-medium leading-snug text-fg">{t.title}</span>
+              <div class="mt-0.5 flex shrink-0 flex-col items-center gap-2">
+                {t.imported && <span class="text-ash-dim" set:html={icons.imported} />}
+                {t.spark && <span class="text-ember" set:html={icons.sparkle} />}
               </div>
-            ))}
-
-            {p.showAgent && (
-              <div class="ml-3.5 flex items-center gap-2 px-2 py-1.5 text-ash-dim">
-                <Fragment set:html={icons.agent} />
-                Agent
+            </div>
+            {t.branch && (
+              <div class="mt-1 flex items-center gap-1.5 pl-6 text-[11px] text-ash-dim">
+                <span class="text-[9px]" set:html={icons.branch} />
+                <span>{t.branch}</span>
               </div>
             )}
           </div>
         ))}
 
-        <div class="flex items-center gap-2 px-2 py-1.5 text-ash-dim">
-          <Fragment set:html={icons.plus} />
-          Open project
-        </div>
+        <button class="flex w-full items-center justify-between px-2.5 py-2 text-[12px] text-ash">
+          <span>Settled ({data.settled})</span>
+          <span class="text-ash-dim" set:html={icons.chevron} />
+        </button>
       </div>
 
-      <div class="flex items-center justify-between border-t border-line-soft px-3 py-2.5 text-[12px] text-ash-dim">
-        <span class="flex items-center gap-2">
-          <Fragment set:html={icons.gear} />
-          Settings
-        </span>
-        <Fragment set:html={icons.bell} />
+      <div class="flex items-center gap-3 border-t border-line-soft px-3.5 py-3 text-ash-dim">
+        <span class="flex h-7 w-7 items-center justify-center rounded-md" set:html={icons.gear} />
+        <span class="flex h-7 w-7 items-center justify-center rounded-md" set:html={icons.chart} />
+        <span class="ml-auto flex h-7 w-7 items-center justify-center rounded-md" set:html={icons.bell} />
       </div>
     </aside>
 
-    <!-- Main column -->
-    <div class="flex min-w-0 flex-col">
-      <!-- Top bar -->
-      <div class="flex items-center justify-between gap-3 border-b border-line-soft px-3 py-2 text-[12px]">
-        <div class="flex min-w-0 items-center gap-2 text-ash">
-          <span class="text-ash-dim" set:html={icons.menu} />
-          <span class="flex items-center gap-1.5 rounded-md px-2 py-1">
-            <Fragment set:html={icons.threads} />
-            Threads
-            <span class="text-ash-dim" set:html={icons.chevron} />
-          </span>
-          <span class="flex min-w-0 items-center gap-1.5 text-ash-dim">
-            <span class="truncate text-ash">{data.topbar.project}</span>
-            <Fragment set:html={icons.branch} />
-            <span class="truncate">{data.topbar.branch}</span>
-          </span>
-        </div>
-
-        <div class="flex shrink-0 items-center gap-1 text-ash">
-          <span class="hidden h-6 w-6 items-center justify-center rounded-md text-ash-dim lg:flex" set:html={icons.dollar} />
-          <span class="flex items-center rounded-md border border-line bg-ink-card text-fg">
-            <span class="flex items-center gap-1.5 py-1 pl-2 pr-2.5 text-ember" set:html={icons.play + "<span class='text-fg'>Run</span>"} />
-            <span class="border-l border-line px-1.5 py-1 text-ash-dim" set:html={icons.chevron} />
-          </span>
-          <span class="hidden h-6 w-6 items-center justify-center rounded-md text-ash-dim lg:flex" set:html={icons.collapse} />
-        </div>
+    <!-- Window top bar -->
+    <div class="hidden items-center gap-2 border-b border-line-soft px-3 py-2 text-[12px] sm:flex sm:col-start-2 sm:row-start-1 xl:col-span-2">
+      <div class="flex min-w-0 items-center gap-2">
+        <span class="hidden h-7 w-7 shrink-0 items-center justify-center rounded-md text-ash-dim sm:flex" set:html={icons.menu} />
+        <span class="ml-1 flex min-w-0 items-center gap-1.5">
+          <span class="h-2 w-2 shrink-0 rounded-full bg-ember"></span>
+          <span class="shrink-0 font-medium text-fg">{data.topbar.project}</span>
+          <span class="shrink-0 text-ash-dim">/</span>
+          <span class="truncate text-ash">{data.topbar.title}</span>
+        </span>
       </div>
 
+      <div class="ml-auto flex shrink-0 items-center gap-1.5">
+        <span class="hidden items-center gap-1.5 rounded-md border border-line bg-ink-card px-2 py-1 text-fg md:flex" set:html={icons.external + `<span>${data.topbar.editor}</span>`} />
+        <span class="flex items-center rounded-md border border-line bg-ink-card">
+          <span class="flex items-center gap-1.5 py-1 pl-2 pr-2" set:html={icons.play + "<span class='text-fg'>Run</span>"} />
+          <span class="border-l border-line px-1 text-ash-dim" set:html={icons.chevron} />
+        </span>
+        <span class="hidden items-center gap-1.5 rounded-md border border-line bg-ink-card px-2 py-1 text-fg md:flex" set:html={icons.git + "<span>Git</span>"} />
+        <span class="hidden items-center gap-1.5 rounded-md border border-line bg-ink-card px-2 py-1 text-fg md:flex" set:html={icons.commit + `<span>Commit &amp; push</span><span class="rounded bg-ember px-1 py-px font-mono text-[9px] text-ink">${data.topbar.commitBadge}</span><span class="text-ash-dim">${icons.chevron}</span>`} />
+        <span class="hidden h-7 w-7 items-center justify-center rounded-md border border-ember bg-ink-card text-fg lg:flex" set:html={icons.panel} />
+      </div>
+    </div>
+    <!-- Main column -->
+    <div class="flex min-w-0 flex-col">
       <!-- Transcript -->
-      <div class="relative h-[340px] space-y-4 overflow-hidden px-5 py-5">
+      <div class="relative flex-1 space-y-5 overflow-hidden px-6 py-5 lg:h-[520px]">
         {data.transcript.map((b) => (
-          b.kind === "assistant" ? (
-            <p class="max-w-prose text-[13px] leading-relaxed text-fg">
-              {segments(b.text).map((s) => (
-                s.startsWith("`")
-                  ? <code class="rounded border border-line bg-ink-soft px-1 py-0.5 font-mono text-[11px] text-ash">{s.slice(1, -1)}</code>
-                  : <Fragment>{s}</Fragment>
-              ))}
-            </p>
-          ) : b.kind === "bullets" ? (
-            <ul class="max-w-prose list-disc space-y-1 pl-5 text-[13px] leading-relaxed text-ash marker:text-ash-dim">
-              {b.items.map((it) => (
-                <li>
-                  {segments(it).map((s) => (
-                    s.startsWith("`")
-                      ? <code class="rounded border border-line bg-ink-soft px-1 py-0.5 font-mono text-[11px] text-ash">{s.slice(1, -1)}</code>
-                      : <Fragment>{s}</Fragment>
-                  ))}
-                </li>
-              ))}
-            </ul>
-          ) : b.kind === "user" ? (
-            <div class="flex justify-end">
-              <span class="rounded-lg border border-line bg-ink-card px-3.5 py-2 font-mono text-[12px] text-fg">{b.text}</span>
-            </div>
-          ) : (
-            <div class="flex items-center gap-2 rounded-lg border border-line bg-ink-card px-3 py-2 text-[12px]">
-              <span class="shrink-0 text-ash-dim" set:html={icons.toolArrow} />
-              <span class="font-mono font-medium">{b.name}</span>
-              <span class="truncate font-mono text-ash-dim">{b.desc}</span>
-              <span class="ml-auto shrink-0 text-signal" set:html={icons.check} />
-            </div>
-          )
+          <div class:list={[b.partial && "-mt-14"]}>
+            {b.kind === "user" ? (
+              <div class="flex justify-end">
+                <span class="rounded-lg bg-ink-card px-3.5 py-2 text-[12px] font-medium text-fg">{b.text}</span>
+              </div>
+            ) : b.kind === "actions" ? (
+              <div class="flex items-center gap-4 text-[12px] text-ash-dim" set:html={icons.copy + `<span>${b.copy}</span><span class="ml-1">${icons.handoff}</span><span>${b.handoff}</span>`} />
+            ) : b.kind === "summary" ? (
+              <p class="flex items-center gap-1 text-[12px] text-ash">
+                {b.text}
+                <span class="text-ash-dim" set:html={icons.chevronRight} />
+              </p>
+            ) : b.kind === "bullets" ? (
+              <ul class="max-w-prose list-disc space-y-1.5 pl-5 text-[13px] leading-relaxed text-fg marker:text-ash-dim">
+                {(b.items ?? []).map((it) => (
+                  <li>
+                    {segments(it).map((s) => (
+                      s.startsWith("`") ? (
+                        <code class="inline-flex translate-y-px items-center gap-1 rounded border border-line bg-ink-soft px-1.5 py-0.5 font-mono text-[11px] text-fg">
+                          {s.startsWith("`@") && <span class="text-ash-dim" set:html={icons.file} />}
+                          {s.startsWith("`{") && <span class="text-ash-dim" set:html={icons.braces} />}
+                          {s.slice(1, -1).replace(/^@/, "")}
+                        </code>
+                      ) : <Fragment>{s}</Fragment>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+            ) : b.kind === "changed" ? (
+              <div class="max-w-prose rounded-lg border border-line-soft bg-ink-soft">
+                <div class="flex items-center gap-2 border-b border-line-soft px-3 py-2.5 text-[12px]">
+                  <span class="shrink-0 text-ash-dim" set:html={icons.file} />
+                  <span class="font-medium text-fg">Changed {b.files} files</span>
+                  <span class="font-mono tabular-nums"><span class="text-signal">{b.adds}</span> <span class="text-danger">{b.dels}</span></span>
+                  <span class="ml-auto flex items-center gap-1.5 rounded-md border border-line bg-ink-card px-2 py-1 font-medium text-fg" set:html={icons.file + "<span>Review</span>"} />
+                </div>
+                <div class="flex items-center gap-2 px-3 py-2 text-[12px]">
+                  <span class="shrink-0 text-ash-dim" set:html={icons.chevronRight} />
+                  <span class="shrink-0 text-ash-dim" set:html={icons.folder} />
+                  <span class="text-fg">{b.folder}</span>
+                  <span class="ml-auto font-mono tabular-nums"><span class="text-signal">{b.adds}</span> <span class="text-danger">{b.dels}</span></span>
+                </div>
+              </div>
+            ) : (
+              <p class="max-w-prose text-[13px] leading-relaxed text-fg">
+                {segments(b.text ?? "").map((s) => (
+                  s.startsWith("`") ? (
+                    <code class:list={["inline-flex translate-y-px items-center gap-1 rounded border border-line bg-ink-soft px-1.5 py-0.5 font-mono text-[11px] text-fg", s.startsWith("`{") && "ml-1"]}>
+                      {s.startsWith("`{") && <span class="text-ash-dim" set:html={icons.braces} />}
+                      {s.slice(1, -1).replace(/^\{/, "")}
+                    </code>
+                  ) : <Fragment>{s}</Fragment>
+                ))}
+              </p>
+            )}
+          </div>
         ))}
       </div>
 
       <!-- Composer -->
-      <div class="p-3">
-        <div class="rounded-lg border border-ember/60 bg-ink-soft px-3.5 py-3">
+      <div class="px-5 pb-3">
+        <div class="rounded-xl border border-line bg-ink-soft px-4 py-3">
           <p class="text-[13px] text-ash-dim">{data.composer.placeholder}</p>
-          <div class="mt-4 flex items-center gap-2.5 text-[11px] text-ash">
-            <span class="flex items-center gap-1.5">
-              <span class="text-ember" set:html={icons.sparkle} />
-              <span class="font-medium text-fg">{data.composer.model}</span>
-              <span class="text-ash-dim" set:html={icons.chevron} />
-            </span>
-            <span class="hidden items-center gap-1.5 text-ash-dim sm:flex">
-              <Fragment set:html={icons.lock} />
-              {data.composer.access}
-              <Fragment set:html={icons.chevron} />
-            </span>
-            <span class="hidden items-center gap-1.5 text-ash-dim sm:flex">
-              <Fragment set:html={icons.hammer} />
-              {data.composer.mode}
-              <Fragment set:html={icons.chevron} />
-            </span>
-            <span class="ml-auto flex items-center gap-2.5 tabular-nums">
-              <span class="font-mono text-ash-dim">↓ {data.composer.tokensOut}</span>
-              <span class="font-mono text-ash-dim">↑ {data.composer.tokensIn}</span>
-              <span class="font-mono text-ember">{data.composer.cost}</span>
+          <div class="mt-5 flex items-center gap-3 text-[12px]">
+            <span class="flex min-w-0 items-center gap-2" set:html={icons.terminal + `<span class="truncate font-medium text-fg">${data.composer.model}</span><span class="text-ash-dim">${icons.chevron}</span>`} />
+            <span class="hidden shrink-0 items-center gap-1.5 text-ash sm:flex" set:html={icons.lock + `<span>${data.composer.access}</span><span class="text-ash-dim">${icons.chevron}</span>`} />
+            <span class="ml-auto flex shrink-0 items-center gap-3">
+              <span class="text-ash-dim" set:html={icons.image} />
               <span class="flex h-7 w-7 items-center justify-center rounded-full bg-ember text-ink" set:html={icons.send} />
             </span>
           </div>
         </div>
+        <div class="mt-2.5 flex justify-center">
+          <span class="flex items-center gap-1.5 rounded-lg border border-line-soft bg-ink-soft px-2 py-1 text-[11px] text-ash-dim" set:html={icons.branch + `<span>${data.composer.branch}</span>${icons.chevron}`} />
+        </div>
       </div>
     </div>
 
-    <!-- Surfaces panel -->
-    <aside class="hidden flex-col border-l border-line-soft bg-ink-card xl:flex">
-      <div class="flex items-center justify-between border-b border-line-soft px-3.5 py-2.5 text-[13px]">
-        <span class="font-medium text-fg">Surfaces</span>
-        <span class="text-ash-dim" set:html={icons.close} />
+    <!-- Right dock, Output surface open -->
+    <aside class="hidden flex-col border-l border-line-soft bg-ink xl:flex">
+      <div class="flex items-center gap-3 border-b border-line-soft px-3 py-2.5 text-[12px]">
+        <span class="flex items-center rounded-md bg-ink-card px-2.5 py-1 font-medium text-fg">Output</span>
+        <span class="text-ash-dim" set:html={icons.plus} />
+        <span class="ml-auto text-ash-dim" set:html={icons.close} />
       </div>
-      <div class="flex flex-1 flex-col justify-center gap-5 px-3.5 py-6">
-        <div class="text-center">
-          <p class="text-[13px] font-medium text-fg">Open a surface</p>
-          <p class="mt-1 text-[11px] text-ash-dim">Choose what to show in the right panel.</p>
-        </div>
-        <div class="grid grid-cols-2 gap-2">
-          {data.surfaces.map((s) => (
-            <div class="card p-3">
-              <span class="text-ember" set:html={surfaceIcon(s.key)} />
-              <p class="mt-2 text-[12px] font-medium text-fg">{s.name}</p>
-              <p class="mt-0.5 text-[10px] leading-snug text-ash-dim">{s.desc}</p>
-            </div>
-          ))}
-        </div>
+      <div class="border-b border-line-soft px-4 py-2 text-[11px] text-ash-dim">
+        Dev servers
       </div>
+      <div class="flex-1"></div>
     </aside>
   </div>
 </div>
+
+<style>
+  .mockup :global(svg) {
+    display: inline-flex;
+  }
+</style>

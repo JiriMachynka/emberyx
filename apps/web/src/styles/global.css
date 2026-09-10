@@ -189,13 +189,6 @@ p {
     box-shadow 200ms var(--ease-out-quint),
     transform 200ms var(--ease-out-quint);
 }
-.card:hover {
-  border-color: rgba(179, 164, 154, 0.28);
-  box-shadow:
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.06),
-    0 14px 30px -16px rgba(0, 0, 0, 0.95);
-  transform: translateY(-2px);
-}
 
 /* ---- Scroll reveal ---------------------------------------------------- */
 .reveal {
@@ -214,5 +207,30 @@ p {
     opacity: 1;
     transform: none;
     transition: none;
+  }
+}
+
+/* ---- Demo stage: 3D tilt driven by scroll ----------------------------- */
+
+/* The mockup leans back as it enters and settles flat while the viewport
+   crosses it. Perspective lives on the stage; the tilt carries the mockup's
+   material (top-lit edge, deep shadow) so it reads as a slab, not a sticker. */
+.demo-stage {
+  perspective: 1800px;
+  perspective-origin: 50% 0%;
+}
+.demo-tilt {
+  transform-origin: 50% 0%;
+  transform: rotateX(var(--demo-tilt, 0deg)) translateZ(calc(var(--demo-lift, 0) * 1px));
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.05),
+    0 2px 6px -2px rgba(0, 0, 0, 0.5),
+    0 40px 80px -32px rgba(0, 0, 0, 0.9);
+  border-radius: 0.875rem;
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .demo-tilt {
+    transform: none;
   }
 }

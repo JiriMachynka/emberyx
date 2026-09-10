@@ -44,6 +44,39 @@ const {
         { rootMargin: "0px 0px -10% 0px" }
       );
       els.forEach((el) => io.observe(el));
+
+      // The hero demo leans back and settles flat while the viewport crosses
+      // it. Interpolated from scroll progress, never from a scroll handler
+      // per frame — one rAF callback, :custom props as the only output.
+      const stage = document.querySelector<HTMLElement>(".demo-stage");
+      const tilt = stage?.querySelector<HTMLElement>(".demo-tilt");
+      if (stage && tilt) {
+        const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (!reduced) {
+          let queued = false;
+          const drive = () => {
+            queued = false;
+            // 0 while the stage's top is at the viewport's top, 1 once its
+            // middle has cleared a third of the viewport — then clamped.
+            const rect = stage.getBoundingClientRect();
+            const progress = Math.min(
+              1,
+              Math.max(0, (innerHeight / 3 - rect.top) / (innerHeight / 2.5))
+            );
+            tilt.style.setProperty("--demo-tilt", `${(1 - progress) * 14}deg`);
+            tilt.style.setProperty("--demo-lift", `${(1 - progress) * 50}`);
+          };
+          const request = () => {
+            if (!queued) {
+              queued = true;
+              requestAnimationFrame(drive);
+            }
+          };
+          drive();
+          addEventListener("scroll", request, { passive: true });
+          addEventListener("resize", request, { passive: true });
+        }
+      }
     </script>
   </body>
 </html>
