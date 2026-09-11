@@ -27,16 +27,34 @@ use tungstenite::{Message, WebSocket};
 
 use crate::error::Result;
 
-/// Where Chrome is looked for, in order. `CHROME_PATH` wins so a Chromium or a
-/// Brave can be pointed at without a code change.
-const CHROME_PATHS: &[&str] = &[
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+/// Chromium browsers known to run headless with a DevTools port, in preference
+/// order. Each is looked for in `/Applications`, then `~/Applications` (where a
+/// non-admin install lands). `CHROME_PATH` wins over all of them, so any other
+/// Chromium can be pointed at without a code change.
+const MAC_BROWSERS: &[&str] = &[
+    "Google Chrome.app/Contents/MacOS/Google Chrome",
+    "Chromium.app/Contents/MacOS/Chromium",
+    "Brave Browser.app/Contents/MacOS/Brave Browser",
+    "Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "Vivaldi.app/Contents/MacOS/Vivaldi",
+];
+
+const LINUX_PATHS: &[&str] = &[
     "/usr/bin/google-chrome",
     "/usr/bin/chromium",
     "/usr/bin/chromium-browser",
 ];
+
+fn browser_candidates(home: Option<&Path>) -> Vec<PathBuf> {
+    let roots: Vec<PathBuf> = std::iter::once(PathBuf::from("/Applications"))
+        .chain(home.map(|home| home.join("Applications")))
+        .collect();
+    MAC_BROWSERS
+        .iter()
+        .flat_map(|app| roots.iter().map(move |root| root.join(app)))
+        .chain(LINUX_PATHS.iter().map(PathBuf::from))
+        .collect()
+}
 
 /// The viewport the agent sees. A desktop-ish size, fixed so two screenshots of
 /// the same page are comparable, and small enough that the PNG does not eat the
@@ -114,11 +132,10 @@ pub fn chrome_path() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    CHROME_PATHS
-        .iter()
-        .map(Path::new)
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    browser_candidates(home.as_deref())
+        .into_iter()
         .find(|p| p.exists())
-        .map(PathBuf::from)
 }
 
 /// Chrome reports the port it actually bound by writing it into the profile
@@ -155,8 +172,8 @@ impl BrowserManager {
 
         let exe = chrome_path().ok_or_else(|| {
             format!(
-                "browser: no Chrome found. Looked in {}. Set CHROME_PATH to point at one.",
-                CHROME_PATHS.join(", ")
+                "browser: no Chromium browser found (Chrome, Chromium, Brave, Edge or \
+                 Vivaldi, in /Applications or ~/Applications). Set CHROME_PATH to point at one."
             )
         })?;
 
@@ -512,6 +529,34 @@ pub fn default_url(app: &tauri::AppHandle) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chrome_is_preferred_and_each_browser_is_tried_system_wide_first() {
+        let found = browser_candidates(Some(Path::new("/Users/someone")));
+        assert_eq!(
+            found[0],
+            PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        );
+        assert_eq!(
+            found[1],
+            PathBuf::from(
+                "/Users/someone/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            )
+        );
+        assert!(found.contains(&PathBuf::from(
+            "/Users/someone/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+        )));
+        assert_eq!(
+            found.last(),
+            Some(&PathBuf::from("/usr/bin/chromium-browser"))
+        );
+    }
+
+    #[test]
+    fn without_a_home_only_system_locations_are_tried() {
+        let found = browser_candidates(None);
+        assert_eq!(found.len(), MAC_BROWSERS.len() + LINUX_PATHS.len());
+    }
 
     #[test]
     fn loopback_addresses_are_local() {

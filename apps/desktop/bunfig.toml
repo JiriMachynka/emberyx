@@ -2,3 +2,6 @@
 # `bun test` uses Bun's own runner and ignores vitest.config.ts, so the DOM
 # globals the suite needs are registered here instead.
 preload = ["./bun-test-setup.ts"]
+# The unit suite lives in src/. e2e/ holds WebdriverIO specs (`*.spec.ts`),
+# which only run under wdio against the built app.
+root = "src"

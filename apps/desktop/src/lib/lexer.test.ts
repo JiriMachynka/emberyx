@@ -76,6 +76,29 @@ describe("highlightToHtml", () => {
     expect(textOf(html)).toBe('# setup\necho "hi"');
   });
 
+  it("paints a fence streamed delta by delta the same as the whole fence", () => {
+    // Each delta extends the last, so all but the first reparse incrementally.
+    const streamed = (code: string, lang: string) => {
+      for (let n = 1; n < code.length; n += 3) highlightToHtml(code.slice(0, n), lang);
+      return highlightToHtml(code, lang);
+    };
+    // A leading newline paints as one empty line and misses both the cache
+    // and every streamed prefix, so this is a parse from scratch.
+    const whole = (code: string, lang: string) => highlightToHtml(`\n${code}`, lang).slice(1);
+
+    const ts = [
+      "const greet = (name: string) => {",
+      "  // a comment that spans a delta boundary",
+      '  return `hi ${name}` + "</b>";',
+      "};",
+    ].join("\n");
+    expect(streamed(ts, "ts")).toBe(whole(ts, "ts"));
+
+    // Stream-parser state (an open quote) has to survive the tail reparse.
+    const shell = 'echo "one\ntwo" # done\nls';
+    expect(streamed(shell, "bash")).toBe(whole(shell, "bash"));
+  });
+
   it("tints added and removed diff lines", () => {
     const html = highlightToHtml("+added\n-removed\n context", "diff");
     expect(html).toContain("#99ffe4");

@@ -41,10 +41,12 @@ const UNPRICED_RATE: Rate = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
  * - `anthropic` — the rate tables below, live from LiteLLM when it has been
  *   fetched; an unknown Anthropic model falls back to Opus (the priciest, so
  *   the estimate errs high rather than reading as cheap).
- * - `openai` — `CODEX_RATES`, kept by hand.
- * - `reported` — the agent records its own USD on the row; nothing is derived.
- * - `unpriced` — no rate table exists. The cost is 0 and the panel's footer
- *   names who is counted, so an absent provider doesn't read as "spent nothing".
+ * - `openai` — `CODEX_RATES`, kept by hand; a model not in it has no cost.
+ * - `reported` — the agent records its own USD per turn (OpenCode and Kilo
+ *   from their model catalog, Grok from the API's `cost_in_usd_ticks`);
+ *   nothing is derived. Still an estimate: on a subscription nobody is billed
+ *   that amount.
+ * - `unpriced` — no rate table exists, so the cost is unknown, never 0.
  */
 const COST_MODEL: Record<
   Provider,
@@ -54,11 +56,15 @@ const COST_MODEL: Record<
   codex: "openai",
   opencode: "reported",
   kilo: "reported",
-  // Neither publishes a per-token rate Emberyx can read, and neither reports
-  // usage yet (`capabilitiesOf(…).usage` is false for both).
-  grok: "unpriced",
+  grok: "reported",
+  // Keeps no token counts on disk, so nothing reaches the usage panel.
   cursor: "unpriced",
 };
+
+/** Whether the provider's dashboard cost is the agent's own recorded figure
+ *  rather than one derived from Emberyx's rate tables. */
+export const reportsOwnCost = (provider: Provider): boolean =>
+  COST_MODEL[provider] === "reported";
 
 // Per-million-token USD rates for the OpenAI models `codex` runs, from
 // developers.openai.com/api/docs/pricing (checked 2026-08-07). The LiteLLM
@@ -265,23 +271,26 @@ export function costOf(u: Usage, provider: Provider): number {
   );
 }
 
-/** Cost for a usage dashboard row, by the provider's cost model. */
-export function rowCost(row: Usage & { provider: Provider; cost?: number }): number {
+/** Cost for a usage dashboard row, by the provider's cost model. Undefined
+ *  when there is no rate and the agent recorded none — an unknown price is
+ *  not a $0 one. */
+export function rowCost(
+  row: Usage & { provider: Provider; cost?: number },
+): number | undefined {
   switch (COST_MODEL[row.provider]) {
     case "reported":
-      return row.cost ?? 0;
+      return row.cost;
     case "openai":
-      return (
-        codexCost(row.model, {
-          inputTokens: row.input + row.cacheRead,
-          cachedInputTokens: row.cacheRead,
-          outputTokens: row.output,
-        }) ?? 0
-      );
+      // Row input is uncached only; OpenAI bills cache writes at the input rate.
+      return codexCost(row.model, {
+        inputTokens: row.input + row.cacheRead + row.cacheCreation,
+        cachedInputTokens: row.cacheRead,
+        outputTokens: row.output,
+      });
     case "anthropic":
       return costOf(row, row.provider);
     case "unpriced":
-      return 0;
+      return undefined;
   }
 }
 

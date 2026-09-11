@@ -24,119 +24,77 @@ import { yamlLanguage } from "@codemirror/lang-yaml";
 import { goLanguage } from "@codemirror/lang-go";
 import { StandardSQL } from "@codemirror/lang-sql";
 import { StreamLanguage, type StringStream } from "@codemirror/language";
-import type { Parser } from "@lezer/common";
-import { classHighlighter, highlightCode } from "@lezer/highlight";
+import { TreeFragment, type Parser, type Tree } from "@lezer/common";
+import { highlightCode, tagHighlighter, tags as t } from "@lezer/highlight";
 import type { TokensResult } from "shiki/core";
 import { record } from "@/lib/perf";
 
 const PLAIN = "text";
 
+const COMMENT = "#8f8f8f";
+const MUTED = "#b0b0b0";
+const STRING = "#99ffe4";
+const WARM = "#ffc799";
+const INK = "#fff";
+const RED = "#ff8080";
+
 /** Vesper, with comments and keywords lifted off the dim values that mudded
- *  on the chat surface. */
-const COLOR: Record<string, string> = {
-  "tok-comment": "#8f8f8f",
-  "tok-keyword": "#b0b0b0",
-  "tok-operator": "#b0b0b0",
-  "tok-punctuation": "#b0b0b0",
-  "tok-meta": "#b0b0b0",
-  "tok-string": "#99ffe4",
-  "tok-string2": "#99ffe4",
-  "tok-number": "#ffc799",
-  "tok-literal": "#ffc799",
-  "tok-bool": "#ffc799",
-  "tok-atom": "#ffc799",
-  "tok-typeName": "#ffc799",
-  "tok-className": "#ffc799",
-  "tok-namespace": "#ffc799",
-  "tok-macroName": "#ffc799",
-  "tok-labelName": "#ffc799",
-  "tok-propertyName": "#ffc799",
-  "tok-variableName2": "#ffc799",
-  "tok-name": "#ffc799",
-  "tok-heading": "#ffc799",
-  "tok-strong": "#ffc799",
-  "tok-link": "#ffc799",
-  "tok-url": "#ffc799",
-  "tok-inserted": "#99ffe4",
-  "tok-variableName": "#fff",
-  "tok-emphasis": "#fff",
-  "tok-deleted": "#ff8080",
-  "tok-invalid": "#ff8080",
-};
+ *  on the chat surface. The "class" a rule emits is the colour itself, so a
+ *  span needs no second lookup. The tag set mirrors Lezer's `classHighlighter`
+ *  rule for rule — including the modified variableName/propertyName rules,
+ *  which decide which colour wins on a tag carrying two modifiers. */
+const vesper = tagHighlighter([
+  { tag: t.comment, class: COMMENT },
+  { tag: [t.keyword, t.operator, t.punctuation, t.meta], class: MUTED },
+  { tag: [t.string, t.regexp, t.escape, t.special(t.string), t.inserted], class: STRING },
+  {
+    tag: [
+      t.number,
+      t.literal,
+      t.bool,
+      t.atom,
+      t.typeName,
+      t.className,
+      t.namespace,
+      t.macroName,
+      t.labelName,
+      t.propertyName,
+      t.definition(t.propertyName),
+      t.special(t.variableName),
+      t.heading,
+      t.strong,
+      t.link,
+      t.url,
+    ],
+    class: WARM,
+  },
+  {
+    tag: [t.variableName, t.local(t.variableName), t.definition(t.variableName), t.emphasis],
+    class: INK,
+  },
+  { tag: [t.deleted, t.invalid], class: RED },
+]);
 
-const FG = "#fff";
-const BG = "transparent";
-const THEME_NAME = "vesper";
-
-const colorFor = (classes: string): string | undefined => {
+/** An inherited style arrives ahead of the node's own ("outer inner"); the
+ *  outer one wins, as it did with class names. */
+const colorOf = (classes: string): string | undefined => {
   if (!classes) return undefined;
-  for (const cls of classes.split(" ")) {
-    const color = COLOR[cls];
-    if (color) return color;
-  }
-  return undefined;
+  const space = classes.indexOf(" ");
+  return space < 0 ? classes : classes.slice(0, space);
 };
 
-const SHELL_KEYWORDS = new Set([
-  "if",
-  "then",
-  "else",
-  "elif",
-  "fi",
-  "for",
-  "while",
-  "until",
-  "do",
-  "done",
-  "case",
-  "esac",
-  "in",
-  "function",
-  "select",
-  "time",
-  "coproc",
-  "return",
-  "exit",
-  "export",
-  "local",
-  "declare",
-  "typeset",
-  "readonly",
-  "unset",
-  "alias",
-  "source",
-  "shift",
-  "break",
-  "continue",
-  "trap",
-  "eval",
-  "exec",
-  "set",
-]);
+const words = (list: string) => new Set(list.split(" "));
 
-const SHELL_BUILTINS = new Set([
-  "echo",
-  "printf",
-  "cd",
-  "pwd",
-  "test",
-  "true",
-  "false",
-  "read",
-  "wait",
-  "kill",
-  "jobs",
-  "type",
-  "command",
-  "builtin",
-  "let",
-  "hash",
-  "umask",
-  "ulimit",
-  "pushd",
-  "popd",
-  "dirs",
-]);
+const SHELL_KEYWORDS = words(
+  "if then else elif fi for while until do done case esac in function select time coproc " +
+    "return exit export local declare typeset readonly unset alias source shift break continue " +
+    "trap eval exec set"
+);
+
+const SHELL_BUILTINS = words(
+  "echo printf cd pwd test true false read wait kill jobs type command builtin let hash umask " +
+    "ulimit pushd popd dirs"
+);
 
 type QuoteState = { quote: string | null };
 
@@ -171,16 +129,16 @@ const shellLanguage = StreamLanguage.define<QuoteState>({
   token(stream, state) {
     if (state.quote) return eatQuoted(stream, state, state.quote !== "'");
     if (stream.eatSpace()) return null;
-    if (stream.peek() === "#") {
+    const ch = stream.peek();
+    if (ch === "#") {
       stream.skipToEnd();
       return "comment";
     }
-    const quote = stream.peek();
-    if (quote === "'" || quote === '"' || quote === "`") {
+    if (ch === "'" || ch === '"' || ch === "`") {
       state.quote = stream.next() ?? null;
-      return eatQuoted(stream, state, quote !== "'");
+      return eatQuoted(stream, state, ch !== "'");
     }
-    if (stream.peek() === "$") {
+    if (ch === "$") {
       stream.next();
       if (stream.eat("{")) {
         stream.eatWhile(/[^}]/);
@@ -241,101 +199,98 @@ const tomlLanguage = StreamLanguage.define<QuoteState>({
   },
 });
 
+const DIFF_META = /^(?:\+\+\+|---|diff |index |@@|\\ )/;
+
 const diffLanguage = StreamLanguage.define<null>({
   name: "diff",
   startState: () => null,
   token(stream) {
+    let style: string | null = null;
     if (stream.sol()) {
-      if (
-        stream.match("+++") ||
-        stream.match("---") ||
-        stream.match("diff ") ||
-        stream.match("index ") ||
-        stream.match("@@") ||
-        stream.match("\\ ")
-      ) {
-        stream.skipToEnd();
-        return "meta";
-      }
-      if (stream.peek() === "+") {
-        stream.skipToEnd();
-        return "inserted";
-      }
-      if (stream.peek() === "-") {
-        stream.skipToEnd();
-        return "deleted";
-      }
+      if (stream.match(DIFF_META, false)) style = "meta";
+      else if (stream.peek() === "+") style = "inserted";
+      else if (stream.peek() === "-") style = "deleted";
     }
     stream.skipToEnd();
-    return null;
+    return style;
   },
 });
 
-const PARSERS: Record<string, Parser> = {
-  tsx: tsxLanguage.parser,
-  typescript: typescriptLanguage.parser,
-  jsx: jsxLanguage.parser,
-  javascript: javascriptLanguage.parser,
-  json: jsonLanguage.parser,
-  python: pythonLanguage.parser,
-  rust: rustLanguage.parser,
-  go: goLanguage.parser,
-  sql: StandardSQL.language.parser,
-  css: cssLanguage.parser,
-  html: htmlLanguage.parser,
-  markdown: markdownLanguage.parser,
-  yaml: yamlLanguage.parser,
-  shellscript: shellLanguage.parser,
-  toml: tomlLanguage.parser,
-  diff: diffLanguage.parser,
-};
+const PARSERS = new Map<string, Parser>([
+  ["tsx", tsxLanguage.parser],
+  ["typescript", typescriptLanguage.parser],
+  ["jsx", jsxLanguage.parser],
+  ["javascript", javascriptLanguage.parser],
+  ["json", jsonLanguage.parser],
+  ["python", pythonLanguage.parser],
+  ["rust", rustLanguage.parser],
+  ["go", goLanguage.parser],
+  ["sql", StandardSQL.language.parser],
+  ["css", cssLanguage.parser],
+  ["html", htmlLanguage.parser],
+  ["markdown", markdownLanguage.parser],
+  ["yaml", yamlLanguage.parser],
+  ["shellscript", shellLanguage.parser],
+  ["toml", tomlLanguage.parser],
+  ["diff", diffLanguage.parser],
+]);
 
-const ALIASES: Record<string, string> = {
-  ts: "typescript",
-  mts: "typescript",
-  cts: "typescript",
-  js: "javascript",
-  mjs: "javascript",
-  cjs: "javascript",
-  py: "python",
-  rs: "rust",
-  golang: "go",
-  sh: "shellscript",
-  bash: "shellscript",
-  zsh: "shellscript",
-  shell: "shellscript",
-  console: "shellscript",
-  md: "markdown",
-  mdx: "markdown",
-  yml: "yaml",
-  xml: "html",
-  vue: "html",
-  svelte: "html",
-  jsonc: "json",
-  json5: "json",
-  patch: "diff",
-  ini: "toml",
-};
+const ALIASES = new Map<string, string>([
+  ["ts", "typescript"],
+  ["mts", "typescript"],
+  ["cts", "typescript"],
+  ["js", "javascript"],
+  ["mjs", "javascript"],
+  ["cjs", "javascript"],
+  ["py", "python"],
+  ["rs", "rust"],
+  ["golang", "go"],
+  ["sh", "shellscript"],
+  ["bash", "shellscript"],
+  ["zsh", "shellscript"],
+  ["shell", "shellscript"],
+  ["console", "shellscript"],
+  ["md", "markdown"],
+  ["mdx", "markdown"],
+  ["yml", "yaml"],
+  ["xml", "html"],
+  ["vue", "html"],
+  ["svelte", "html"],
+  ["jsonc", "json"],
+  ["json5", "json"],
+  ["patch", "diff"],
+  ["ini", "toml"],
+]);
 
 export const resolveLang = (language: string): string => {
   const id = language.trim().toLowerCase();
-  const canonical = ALIASES[id] ?? id;
-  return canonical in PARSERS ? canonical : PLAIN;
+  const canonical = ALIASES.get(id) ?? id;
+  return PARSERS.has(canonical) ? canonical : PLAIN;
 };
 
-export const supportedLanguages = (): string[] => [...Object.keys(PARSERS), ...Object.keys(ALIASES)];
+const SUPPORTED = [...PARSERS.keys(), ...ALIASES.keys()];
+
+export const supportedLanguages = (): string[] => [...SUPPORTED];
 
 interface Span {
   text: string;
   color?: string;
 }
 
-const cache = new Map<string, Span[][]>();
+/** One highlighted fence, plus the two output shapes derived from it on
+ *  first request — a re-render of a cached fence builds nothing. */
+interface Painted {
+  lines: Span[][];
+  html?: string;
+  tokens?: TokensResult;
+}
+
+const cache = new Map<string, Painted>();
 const CACHE_LIMIT = 500;
 
 const cacheKey = (code: string, lang: string): string => `${lang}:${code}`;
 
-const remember = (key: string, painted: Span[][]) => {
+const remember = (key: string, painted: Painted) => {
   cache.delete(key);
   cache.set(key, painted);
   if (cache.size > CACHE_LIMIT) {
@@ -344,10 +299,69 @@ const remember = (key: string, painted: Span[][]) => {
   }
 };
 
+/** The last few parses, so a fence that grows by appending — every streamed
+ *  delta — reparses only its tail instead of the whole text again. More than
+ *  one, because two panes can stream at once. */
+interface Growth {
+  lang: string;
+  code: string;
+  fragments: readonly TreeFragment[];
+}
+
+const growing: Growth[] = [];
+const GROWING_LIMIT = 4;
+
+const parse = (parser: Parser, lang: string, code: string): Tree => {
+  let fragments: readonly TreeFragment[] = [];
+  const at = growing.findIndex((g) => g.lang === lang && code.startsWith(g.code));
+  if (at >= 0) {
+    const [prev] = growing.splice(at, 1);
+    const end = prev.code.length;
+    fragments = TreeFragment.applyChanges(prev.fragments, [
+      { fromA: end, toA: end, fromB: end, toB: code.length },
+    ]);
+    // The shorter snapshot is superseded; kept, one streamed fence would fill
+    // the LRU with every prefix of itself.
+    cache.delete(cacheKey(prev.code, lang));
+  }
+  const tree = parser.parse(code, fragments);
+  growing.unshift({ lang, code, fragments: TreeFragment.addTree(tree, fragments) });
+  if (growing.length > GROWING_LIMIT) growing.pop();
+  return tree;
+};
+
 const paintPlain = (code: string): Span[][] =>
   code.split("\n").map((text) => (text ? [{ text }] : []));
 
-const paint = (code: string, language: string): Span[][] => {
+const paintTree = (code: string, tree: Tree): Span[][] => {
+  const lines: Span[][] = [];
+  let line: Span[] = [];
+  let last: Span | undefined;
+  highlightCode(
+    code,
+    tree,
+    vesper,
+    (text, classes) => {
+      if (!text) return;
+      const color = colorOf(classes);
+      if (last && last.color === color) {
+        last.text += text;
+        return;
+      }
+      last = color ? { text, color } : { text };
+      line.push(last);
+    },
+    () => {
+      lines.push(line);
+      line = [];
+      last = undefined;
+    }
+  );
+  lines.push(line);
+  return lines;
+};
+
+const paint = (code: string, language: string): Painted => {
   const lang = resolveLang(language);
   const key = cacheKey(code, lang);
   const hit = cache.get(key);
@@ -357,59 +371,50 @@ const paint = (code: string, language: string): Span[][] => {
   }
 
   const started = performance.now();
-  let painted: Span[][];
-  const parser = PARSERS[lang];
+  const parser = PARSERS.get(lang);
+  let lines: Span[][];
   if (!parser) {
-    painted = paintPlain(code);
+    lines = paintPlain(code);
   } else {
     try {
-      const tree = parser.parse(code);
-      const lines: Span[][] = [[]];
-      highlightCode(
-        code,
-        tree,
-        classHighlighter,
-        (text, classes) => {
-          if (!text) return;
-          const color = colorFor(classes);
-          const line = lines[lines.length - 1];
-          const last = line[line.length - 1];
-          if (last && last.color === color) last.text += text;
-          else line.push(color ? { text, color } : { text });
-        },
-        () => {
-          lines.push([]);
-        }
-      );
-      painted = lines;
+      lines = paintTree(code, parse(parser, lang, code));
     } catch {
-      painted = paintPlain(code);
+      lines = paintPlain(code);
     }
   }
   record("Lezer highlight", performance.now() - started);
+  const painted: Painted = { lines };
   remember(key, painted);
   return painted;
 };
 
+const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
+const NEEDS_ESCAPE = /[&<>]/;
+
 export const escapeHtml = (s: string): string =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  NEEDS_ESCAPE.test(s) ? s.replace(/[&<>]/g, (ch) => ESCAPES[ch]) : s;
 
-export const highlightToHtml = (code: string, language: string): string =>
-  paint(code, language)
-    .map((line) =>
-      line
-        .map((span) => {
-          const escaped = escapeHtml(span.text);
-          return span.color ? `<span style="color:${span.color}">${escaped}</span>` : escaped;
-        })
-        .join("")
-    )
-    .join("\n");
+export const highlightToHtml = (code: string, language: string): string => {
+  const painted = paint(code, language);
+  if (painted.html !== undefined) return painted.html;
+  let html = "";
+  painted.lines.forEach((line, i) => {
+    if (i > 0) html += "\n";
+    for (const span of line) {
+      const escaped = escapeHtml(span.text);
+      html += span.color ? `<span style="color:${span.color}">${escaped}</span>` : escaped;
+    }
+  });
+  painted.html = html;
+  return html;
+};
 
+/** Returns the cached result on a hit — callers must not mutate it. */
 export const highlightToTokens = (code: string, language: string): TokensResult => {
-  const lines = paint(code, language);
+  const painted = paint(code, language);
+  if (painted.tokens) return painted.tokens;
   let offset = 0;
-  const tokens = lines.map((line, i) => {
+  const tokens = painted.lines.map((line, i) => {
     if (i > 0) offset += 1;
     return line.map((span) => {
       const token = span.color
@@ -419,5 +424,6 @@ export const highlightToTokens = (code: string, language: string): TokensResult 
       return token;
     });
   });
-  return { tokens, fg: FG, bg: BG, themeName: THEME_NAME };
+  painted.tokens = { tokens, fg: INK, bg: "transparent", themeName: "vesper" };
+  return painted.tokens;
 };

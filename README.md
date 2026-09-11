@@ -1,7 +1,8 @@
 # Emberyx
 
 Desktop command center for conversations with AI coding agents. Open your
-projects and drive Claude or Codex from chat threads, structured tool cards,
+projects and drive Claude Code, Codex, OpenCode, Grok or Cursor from chat
+threads, structured tool cards,
 approvals, agent status, delegation, git diffs, and project views. Integrated
 terminals remain an optional advanced surface for process execution and
 debugging.
@@ -20,13 +21,17 @@ Built with Tauri v2 + React. A lighter, purpose-built alternative to cmux.
   (xterm, Geist Mono) instead; scrollback persists across restarts.
 - **Interactive option picker** — when the agent asks a multiple-choice question,
   it renders as a real picker in the chat rather than raw text.
-- **Thread resume** — browse and resume a project's past Claude Code
-  conversations without leaving the app.
-- **Agent-aware UI** — Claude Code hooks drive live status (working / needs-you /
+- **One model picker across providers** — picking another provider's model
+  switches the thread in place and prefills a handoff of the recent turns.
+- **Thread resume** — browse and resume a project's past conversations; Claude
+  and Codex threads resume natively, ACP threads reopen as history.
+- **Agent-aware UI** — each transport drives live status (working / needs-you /
   idle), a "needs input" banner, and desktop notifications.
 - **Chat-first orchestration** — a Rust supervisor keeps an authoritative,
-  stable-ID registry for Claude and Codex sessions, bounded event transcripts,
+  stable-ID registry for every agent session, bounded event transcripts,
   lifecycle state, and chat-native delegation between agents.
+- **Per-turn checkpoints** — every turn is snapshotted outside your branches;
+  review what a turn changed, or revert it.
 - **Session tabs** — agent + dev tabs per project; drag to reorder, close
   individually.
 
@@ -46,8 +51,8 @@ Built with Tauri v2 + React. A lighter, purpose-built alternative to cmux.
 
 - **Monorepo dev launcher** — detects turbo / pnpm / npm workspaces; start one
   package or all, in background tabs, with start/stop.
-- **Usage dashboard** — running token usage and estimated cost, per session and
-  over time.
+- **Usage dashboard** — token usage and estimated cost over time, read from
+  each agent's own history (Claude, Codex, Grok, OpenCode, Kilo).
 - **MCP servers** — connect harness MCP configs, including Dokploy as an agent
   tool.
 - **Auto-updates** — checks GitHub releases on launch and installs signed
@@ -56,13 +61,13 @@ Built with Tauri v2 + React. A lighter, purpose-built alternative to cmux.
 ### Orchestration architecture
 
 The React chat hooks remain the rendering and backend-protocol layer. Above
-them, `src-tauri/src/supervisor.rs` owns agent identity, project/workspace
+them, `src-tauri/src/supervisor/` owns agent identity, project/workspace
 ownership, lifecycle snapshots, bounded recent events, and delegation
 correlation. Tauri IPC provides `agent.list`, `agent.get`, `agent.read`,
 `agent.wait`, `agent.interrupt`, `agent.subscribe`, `agent.prompt`, and
 `agent.delegate`; the `agent-event` stream lets chat surfaces update without
-polling raw terminal output. The existing Claude stream-json and Codex
-app-server managers are intentionally retained beneath this seam.
+polling raw terminal output. The Claude stream-json, Codex app-server and ACP
+managers are intentionally retained beneath this seam.
 
 Known limitations: the registry is still runtime-owned, but its metadata,
 bounded orchestration events, and provider thread IDs are atomically restored
@@ -91,10 +96,10 @@ Live process migration is the next daemon increment.
 
 ### Shortcuts
 
-⌘K command palette · ⌘O open project · ⌘T new agent tab · ⌘B toggle sidebar ·
-⇧⌘F project search. Settings (chat vs terminal surface, agent command, fonts,
-scrollback, skip-permissions, thread resume) persist
-locally.
+⌘K command palette · ⌘O open project · ⌘N new agent tab · ⌘B toggle sidebar ·
+⇧⌘F project search · ⌃Tab / ⌃⇧Tab next / previous tab · ⌘W close tab ·
+⌘, settings. Rebind them in Settings → Keyboard Shortcuts — all but ⌘W and
+⌘,, which are menu shortcuts macOS handles before the app sees them.
 
 ## Stack
 
@@ -150,17 +155,19 @@ apps/desktop/
   src-tauri/src/       Rust core
     pty.rs             terminal PTY manager + scrollback
     agent.rs           headless `claude` stream-json driver
-    ask.rs             local MCP server for interactive questions
-    hooks.rs           local hook listener + settings injection
+    ask.rs             local MCP server: ask_user + preview tools
     workspace.rs       monorepo / dev-script detection
-    git.rs             changes, staging, branches, stash, history
+    codex.rs acp.rs    Codex app-server and ACP drivers
+    supervisor/        agent registry, timeline, approvals, delegation
+    git/               changes, staging, branches, worktrees, stash, history
+    checkpoints.rs     per-turn working-tree snapshots
     search.rs          project-wide text search
     files.rs defs.rs   file IO, go-to-definition, hover
-    usage.rs           incremental token-usage parsing
-    threads.rs         Claude Code thread listing
+    usage/             token usage from each agent's own history
+    threads.rs         thread listing
+    bin/emberyxd.rs    the daemon that keeps agents alive across windows
 apps/web/            Astro marketing site
-docs/design-log.md   why each decision was made
-CLAUDE.md            orientation for coding agents
+CLAUDE.md            orientation for coding agents (symlink to AGENTS.md)
 ```
 
-See [docs/design-log.md](docs/design-log.md) for the full design rationale.
+`CLAUDE.md` holds the design rationale behind each part.

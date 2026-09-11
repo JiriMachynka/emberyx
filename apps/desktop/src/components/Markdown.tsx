@@ -1,7 +1,8 @@
-import { memo, type ComponentProps } from "react";
+import { memo, useState, type ComponentProps } from "react";
 import { Streamdown } from "streamdown";
 import type { CodeHighlighterPlugin, HighlightOptions, ThemeInput } from "streamdown";
 import { highlightTokens, supportedLanguages } from "@/lib/codeHighlighter";
+import { createStreamingSplitter } from "@/lib/streamBlocks";
 
 /** Streamdown types the result inline rather than exporting it. */
 type HighlightResult = NonNullable<ReturnType<CodeHighlighterPlugin["highlight"]>>;
@@ -83,7 +84,9 @@ const streamAnimate = {
 
 /** Renders assistant markdown with GFM. `streaming` uses Streamdown's
  *  block-memoized mode so settled paragraphs don't reparse as tokens
- *  arrive; incomplete markers are closed by remend until the real ones land. */
+ *  arrive; incomplete markers are closed by remend until the real ones land.
+ *  Both passes run in `streamBlocks` over the unsettled tail only, which is
+ *  why Streamdown's own whole-text remend is off. */
 export const Markdown = memo(function Markdown({
   text,
   fontSize,
@@ -93,6 +96,7 @@ export const Markdown = memo(function Markdown({
   fontSize: number;
   streaming?: boolean;
 }) {
+  const [splitStreaming] = useState(createStreamingSplitter);
   return (
     <div style={{ fontSize: `${fontSize}px` }}>
       <Streamdown
@@ -100,7 +104,8 @@ export const Markdown = memo(function Markdown({
         mode={streaming ? "streaming" : "static"}
         animated={streaming ? streamAnimate : false}
         isAnimating={streaming}
-        parseIncompleteMarkdown
+        parseIncompleteMarkdown={false}
+        parseMarkdownIntoBlocksFn={streaming ? splitStreaming : undefined}
         skipHtml
         lineNumbers={false}
         codeBlockMaxHeight={0}

@@ -6,6 +6,7 @@ import {
   costOf,
   formatTokens,
   refreshPricing,
+  reportsOwnCost,
   rowCost,
   totalTokens,
   type Usage,
@@ -281,6 +282,36 @@ describe("rowCost", () => {
         cost: 0,
       }),
     ).toBe(0);
+  });
+
+  it("uses Grok's recorded cost rather than deriving one", () => {
+    expect(
+      rowCost({ ...usage({ model: "grok-4.6-build", input: 1_000 }), provider: "grok", cost: 0.4 }),
+    ).toBe(0.4);
+  });
+
+  it("is unknown, not $0, when no rate or recorded cost exists", () => {
+    const tokens = usage({ input: 1_000_000, output: 1_000 });
+    expect(rowCost({ ...tokens, model: "gpt-9-unreleased", provider: "codex" })).toBeUndefined();
+    expect(rowCost({ ...tokens, model: "some-model", provider: "opencode" })).toBeUndefined();
+    expect(rowCost({ ...tokens, model: "composer", provider: "cursor" })).toBeUndefined();
+  });
+
+  it("bills Codex cache writes at the input rate, since row input is uncached only", () => {
+    const row = {
+      ...usage({ model: "gpt-5.6-luna", input: 0, cacheCreation: 1_000_000 }),
+      provider: "codex" as const,
+    };
+    expect(rowCost(row)).toBeCloseTo(0.2, 10);
+  });
+});
+
+describe("reportsOwnCost", () => {
+  it("separates agent-recorded costs from rate-table estimates", () => {
+    expect(reportsOwnCost("opencode")).toBe(true);
+    expect(reportsOwnCost("grok")).toBe(true);
+    expect(reportsOwnCost("claude")).toBe(false);
+    expect(reportsOwnCost("codex")).toBe(false);
   });
 });
 

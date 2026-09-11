@@ -195,7 +195,8 @@ export interface UsageRow {
   cacheRead: number;
   cacheCreation: number;
   messages: number;
-  /** USD the agent recorded (OpenCode, Kilo). Absent for Claude/Codex. */
+  /** USD the agent recorded (OpenCode, Kilo, Grok), present only when every
+   *  turn in the row recorded one. Absent for Claude/Codex. */
   cost?: number;
 }
 
@@ -208,6 +209,8 @@ export interface ProviderSessions {
 export interface UsageSummary {
   rows: UsageRow[];
   sessions: ProviderSessions[];
+  /** Providers whose on-disk history was read; the rest are not counted. */
+  counted: Provider[];
 }
 
 /** What `git_commit_and_push` did — the two halves are reported separately so a

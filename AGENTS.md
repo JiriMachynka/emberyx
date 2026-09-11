@@ -1,8 +1,9 @@
 # Emberyx — agent guide
 
 Tauri v2 desktop app: a chat-first command center for coding agents across
-several projects. Two backends are supported — Claude Code (`claude`) and
-OpenAI Codex (`codex`). Rust core + React 19 frontend, in a bun/turbo monorepo.
+several projects. Five backends over three transports: Claude Code (`claude`,
+stream-json), OpenAI Codex (`codex`, app-server JSON-RPC), and OpenCode, Grok
+and Cursor over ACP. Rust core + React 19 frontend, in a bun/turbo monorepo.
 
 **The global Nuxt/Vue stack defaults do not apply here.** This is React 19 +
 Vite + Tailwind 4 + shadcn/ui (new-york, lucide icons). No tRPC, no Drizzle, no
@@ -14,11 +15,16 @@ Nuxt — the "backend" is Rust running in-process.
 apps/desktop/          the app
   src/                 React frontend
     components/        panes, panels, menus, dialogs; ui/ = shadcn, editor/ = CodeMirror
+      chat/            transcript pieces ChatPane renders (turns, messages, cards)
+      composer/        ChatComposer's chips, meters and footer
+      settings/        one file per Settings section + `tabs.ts` (TABS)
+      sidebar/         thread list, project tree, rail, header/footer
     hooks/             useAgentChat, useCodexChat, useChatSession, useSessions, …
     lib/               settings, pricing, queries, diff/hunk helpers, fuzzy, slash
       agentBackend.ts  backend + capability flags
       agentStore.ts    selector store for local chat telemetry
       codex/           Codex protocol types, decoders, normalizing adapter
+      acp/             ACP transport + adapter (OpenCode, Grok, Cursor)
       handoff.ts       context package for an in-place provider switch
       timeline.ts      durable thread timeline + reconnect backfill
       ide.ts           external editor argv, per editor
@@ -27,7 +33,13 @@ apps/desktop/          the app
       checkpoints.ts   per-turn working-tree snapshots
       preview.ts       dev-server URL normalising
       dock.ts          right-hand dock tab model (pure state)
-  src-tauri/src/       Rust core, one module per capability
+      streamBlocks.ts  Streamdown block split for a streaming turn, tail-only
+      lexer.ts         sync Lezer highlighter for fences, tool output, hovers
+  src-tauri/src/       Rust core, one module per capability; the big two are
+                       directories: git/ (changes, commit, log, branch,
+                       worktree, stash, merge, remote) and supervisor/
+                       (registry, persistence, timeline, approvals, queues,
+                       delegation, commands)
 apps/web/              Astro marketing site (separate, rarely touched)
 ```
 
@@ -74,7 +86,7 @@ is not available.
 
 ## Architecture
 
-### Three separate ways an agent runs
+### Separate ways an agent runs
 
 Easy to conflate — they share almost nothing.
 
@@ -89,8 +101,10 @@ Easy to conflate — they share almost nothing.
    process per session, JSON-RPC 2.0 over newline-delimited stdio. Frames are
    normalized by `lib/codex/adapter.ts` into the same message model, driven by
    `useCodexChat`. `useChatSession` picks the transport by session backend.
+   **ACP chat sessions** (`acp.rs`) — OpenCode, Grok and Cursor speak the Agent
+   Client Protocol over stdio; `lib/acp/` adapts it and `useAcpChat` drives it.
 
-4. **Supervisor registry** (`supervisor.rs`) — the chat-first orchestration
+4. **Supervisor registry** (`supervisor/`) — the chat-first orchestration
    seam above all agent transports. It owns stable agent IDs, project/workspace
    ownership, lifecycle snapshots, bounded recent events, reconnection reads,
    and delegation correlation. Tauri IPC (`agent.list/get/read/wait/interrupt/
@@ -264,9 +278,11 @@ drops the frame and keeps the header row.
 
 ### Settings
 
-`SettingsPage.tsx` is ten sections: General, Appearance, Keyboard Shortcuts,
-Providers, MCP, Skills, Connections, Source Control, Notifications, About — plus
-`TABS`, which is the declaration each one is driven from: a tab names the
+`SettingsPage.tsx` holds the tab, search and restore state and renders ten
+sections, one file each in `components/settings/` (MCP and Skills are
+`McpSection` / `SkillsSection`): General, Appearance, Keyboard Shortcuts,
+Providers, MCP, Skills, Connections, Source Control, Notifications, About. They
+are driven from `TABS` (`settings/tabs.ts`), the one declaration: a tab names the
 settings keys it owns (what "Restore defaults" resets) and the words that find it
 from the search box, so a control rendered in a tab whose `keys` omit it is a
 Restore that silently skips it. Two sections are worth knowing about:
@@ -307,11 +323,19 @@ executed directly, never through a shell, so a path with spaces stays one
 argument. Custom commands are tokenized here, quotes included. Note the project
 targets ES2020: no `String.replaceAll`.
 
-Usage is provider-dimensioned (`UsageRow.provider`) and the panel filters and
-groups by it — but only providers that keep a readable history on disk can
-appear, which today is Claude alone. The footer names who is counted, so an
-absent provider never reads as "spent nothing". Cost is always derived from the
-local rate table and labelled as estimated, never as billed.
+Usage is provider-dimensioned (`UsageRow.provider`) and read from each agent's
+own history (`usage/`): Claude and Codex JSONL (incremental, cached per file;
+files gone from disk are dropped so an archived Codex session counts once),
+Grok's per-session `usage.json` (rewritten whole each turn, so re-read on
+change), and OpenCode/Kilo SQLite. Codex's `total_token_usage` restarts on
+resume and its token-count events are sometimes written twice, so each request
+is counted once from `last_token_usage`, skipping a repeated running total;
+Codex and Grok count reasoning inside output and cache inside input, while
+OpenCode counts both separately. Cursor keeps no token counts;
+`UsageSummary.counted` drives the footer that names who is and isn't counted.
+Cost is always an estimate, never billed: Claude/Codex from the local rate
+table, Grok/OpenCode/Kilo as the agent recorded it (`reportsOwnCost`). A row
+with no rate and no recorded cost is unknown, never $0.
 
 ### Provider switching
 
@@ -414,7 +438,7 @@ belongs to), and `kindForToolName` / `targetForInput`, the same vocabulary as
 rows are already classified before they cross.
 
 Rendering is one component for all of them — `components/chat/ActivityRow.tsx`,
-via `MessageWork` in `ChatPane`. The header reads only precomputed fields, so a
+via `MessageWork` (`components/chat/MessageWork.tsx`). The header reads only precomputed fields, so a
 collapsed row never parses a tool input; `describeTool` is called for the
 disclosure body and only once it is mounted. `running` is `!complete` rather
 than "no result yet", which is what left a tool returning nothing spinning
@@ -430,8 +454,9 @@ accumulates for the turn instead of vanishing as each read settles.
 
 ### Backends and capabilities
 
-`lib/agentBackend.ts` owns `AgentBackend` (`"claude" | "codex"`) and a
-ten-flag `AgentCapabilities` record. Resolution: per-project pin →
+`lib/agentBackend.ts` owns `AgentBackend` (`"claude" | "codex" | "opencode" |
+"grok" | "cursor"`), `BACKEND_TRANSPORT` (five backends, three transports) and
+one `AgentCapabilities` row per backend — the only capability table. Resolution: per-project pin →
 global default → `"claude"`. **Never reintroduce a `startsWith("claude")`
 test** — gate on a capability instead, or Claude-shaped data (pricing,
 slash commands, hook status, account-error regexes) leaks into Codex
@@ -470,7 +495,11 @@ JS side queues that event forever and the pane stays on "Responding…". Grok
 
 `codex app-server` is flagged experimental and has renamed its core methods
 once already. Generate types from the installed binary
-(`codex app-server generate-ts --out DIR`) — never hand-write them.
+(`codex app-server generate-ts --out DIR`) — never hand-write them. After
+upgrading codex, run `bun run codex:check`: it regenerates the types from the
+installed binary and fails if a method Emberyx sends or listens for is no
+longer declared, or if a new server→client request has appeared that nothing
+handles — the two ways a rename shows up as a turn that never settles.
 
 The same PTY manager also runs monorepo dev servers (`workspace.rs` detects
 turbo / pnpm / npm workspaces).
@@ -528,18 +557,20 @@ turbo / pnpm / npm workspaces).
   falling back to the line's index — imported history synthesizes messages that
   never had an id, so a constant fallback would collapse them all into one
   bucket. A message with no bucket keeps the `thinking` + `tools` fallback.
-- **Global events**: `hook-event` and `ask-user`. Both are `app.emit` from a
-  background thread.
+- **Global events**: `ask-user`, `agent-event` and `timeline-event` (the
+  supervisor), `preview-console`, and the menu's `close-tab`. All are
+  `app.emit`, most from a background thread.
+- **Live status comes from the transports.** Each chat hook maps its own turn
+  state onto the session (`SESSION_STATUS` → `agentStore.setStatus`); Codex
+  also maps its in-band hook events through `lib/status.ts`. There is no hook
+  server any more — `hooks.rs` was removed in v0.2.7.
 
-### The two local servers
+### The local server
 
-- `hooks.rs` — a `tiny_http` listener. Claude Code hook settings are injected to
-  POST here; requests carry `x-emberyx-session` / `x-emberyx-event` /
-  `x-emberyx-token` headers and are **rejected unless the token matches**. Drives
-  live status, the changes feed, and notifications.
-- `ask.rs` — a local MCP server exposing `ask_user`, `preview_screenshot` and
-  `preview_console`, wired in via `--mcp-config` plus a pre-allowed
-  `--allowedTools` list. `ask_user` renders the interactive option picker in the
+- `ask.rs` — a `tiny_http` listener, **rejecting any request without the
+  matching `x-emberyx-token`**. It is a local MCP server exposing `ask_user`,
+  `preview_screenshot` and `preview_console`, wired in via `--mcp-config` plus
+  a pre-allowed `--allowedTools` list. `ask_user` renders the interactive option picker in the
   chat pane; answers resolve a pending channel keyed by request id, with a
   timeout. The two browser tools are read-only and go through `browser.rs`.
 
@@ -585,6 +616,12 @@ too**, or orphaned agent processes and shells survive the app.
 - Frontend state lives in hooks; `lib/agentStore.ts` is a selector store so live
   agent updates re-render only subscribing components. Keep it that way — the
   chat pane re-renders on every token otherwise.
+- The React Compiler is on (Vite and Vitest both run it). It memoizes by
+  props, so anything read during render that isn't a prop or state — a
+  `localStorage` getter, a module-level store without a hook — is cached for
+  good. Components that do that carry `"use no memo"` with the reason. Watch
+  it when extracting a component: a parent the compiler bails on (try/finally)
+  ran uncompiled, the extracted child won't (`ProvidersSection`).
 - Tailwind: standard scale only, no arbitrary `[...]` values. shadcn components
   go in `components/ui/`.
 - Comments are sparse and explain *why*. Match that.
@@ -595,6 +632,8 @@ too**, or orphaned agent processes and shells survive the app.
   `package.json`, `src-tauri/Cargo.toml`. All three must match the tag.
 - **Release builds are `aarch64-apple-darwin` only** and are **not
   Apple-notarized**; first manual install needs right-click → Open.
+  Deliberate (2026-09-11): no Intel, Linux or Windows builds and no
+  notarization for now — don't propose ports unprompted.
 - **CI cache**: `release.yml` and `warm-cache.yml` must keep the same
   `shared-key: release`, the same runner (`macos-14`), and the same cargo
   invocation (`tauri build`, not bare `cargo build --release`). Tag runs can

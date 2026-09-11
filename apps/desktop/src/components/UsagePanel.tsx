@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import {
   cacheSavingsOf,
   formatTokens,
+  reportsOwnCost,
   rowCost,
   totalTokens,
 } from "@/lib/pricing";
@@ -66,14 +67,41 @@ const formatRange = (from: string, to: string): string => {
 
 const todayUtc = (): string => new Date().toISOString().slice(0, 10);
 
+/** Known cost, plus the tokens no rate covers — kept apart so a model with
+ *  no known price never reads as $0. */
+type Spend = { cost: number; tokens: number; unpriced: number };
+
+const emptySpend = (): Spend => ({ cost: 0, tokens: 0, unpriced: 0 });
+
+const addRow = (spend: Spend, row: UsageRow): void => {
+  const cost = rowCost(row);
+  const tokens = totalTokens(row);
+  spend.tokens += tokens;
+  if (cost === undefined) spend.unpriced += tokens;
+  else spend.cost += cost;
+};
+
+const costLabel = ({ cost, unpriced }: Spend): string => {
+  if (unpriced === 0) return formatUsd(cost);
+  return cost === 0 ? "Unknown" : `${formatUsd(cost)} + unknown`;
+};
+
+const shareLabel = (spend: Spend, total: number): string => {
+  if (spend.tokens > 0 && spend.unpriced === spend.tokens) return "—";
+  return total ? `${((spend.cost / total) * 100).toFixed(1)}%` : "0%";
+};
+
+const listLabels = (providers: Provider[]): string =>
+  providers.map((p) => PROVIDER_LABEL[p]).join(", ");
+
 interface UsagePanelProps {
   onBack: () => void;
 }
 
 /**
  * Cross-project spend across every provider that keeps a readable history
- * on disk (Claude and Codex JSONL, OpenCode and Kilo sqlite). Costs are
- * estimates — never billed. Grok and Cursor do not log per-turn tokens.
+ * on disk (Claude and Codex JSONL, Grok `usage.json`, OpenCode and Kilo
+ * sqlite). Costs are estimates — never billed. Cursor logs no tokens.
  */
 export function UsagePanel({ onBack }: UsagePanelProps) {
   const [days, setDays] = useState(30);
@@ -82,6 +110,7 @@ export function UsagePanel({ onBack }: UsagePanelProps) {
   const query = useUsageSummary(days, true);
   const rows = query.data?.rows ?? [];
   const sessionCounts = query.data?.sessions ?? [];
+  const counted = query.data?.counted ?? [];
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -95,37 +124,28 @@ export function UsagePanel({ onBack }: UsagePanelProps) {
   const from = addUtcDays(to, -(days - 1));
 
   const byDay = useMemo(() => {
-    const map = new Map<string, { cost: number; tokens: number }>();
+    const map = new Map<string, Spend>();
     for (let d = from; d <= to; d = addUtcDays(d, 1)) {
-      map.set(d, { cost: 0, tokens: 0 });
+      map.set(d, emptySpend());
     }
     for (const row of rows) {
       const bucket = map.get(row.date);
-      if (!bucket) continue;
-      bucket.cost += rowCost(row);
-      bucket.tokens += totalTokens(row);
+      if (bucket) addRow(bucket, row);
     }
     return [...map.entries()].map(([date, v]) => ({ date, ...v }));
   }, [rows, from, to]);
 
   const byProvider = useMemo(() => {
-    const map = new Map<
-      Provider,
-      { cost: number; tokens: number; messages: number }
-    >();
-    for (const provider of PROVIDERS) {
-      map.set(provider, { cost: 0, tokens: 0, messages: 0 });
-    }
+    const map = new Map<Provider, Spend>();
+    for (const provider of PROVIDERS) map.set(provider, emptySpend());
     for (const row of rows) {
-      const bucket = map.get(row.provider) ?? { cost: 0, tokens: 0, messages: 0 };
-      bucket.cost += rowCost(row);
-      bucket.tokens += totalTokens(row);
-      bucket.messages += row.messages;
+      const bucket = map.get(row.provider) ?? emptySpend();
+      addRow(bucket, row);
       map.set(row.provider, bucket);
     }
     return PROVIDERS.map((provider) => ({
       provider,
-      ...(map.get(provider) ?? { cost: 0, tokens: 0, messages: 0 }),
+      ...(map.get(provider) ?? emptySpend()),
       sessions: sessionCounts.find((s) => s.provider === provider)?.count ?? 0,
     })).sort((a, b) => b.cost - a.cost || b.tokens - a.tokens);
   }, [rows, sessionCounts]);
@@ -136,18 +156,10 @@ export function UsagePanel({ onBack }: UsagePanelProps) {
   );
 
   const byModel = useMemo(() => {
-    const map = new Map<
-      string,
-      { cost: number; tokens: number; provider: Provider }
-    >();
+    const map = new Map<string, Spend & { provider: Provider }>();
     for (const row of rows) {
-      const bucket = map.get(row.model) ?? {
-        cost: 0,
-        tokens: 0,
-        provider: row.provider,
-      };
-      bucket.cost += rowCost(row);
-      bucket.tokens += totalTokens(row);
+      const bucket = map.get(row.model) ?? { ...emptySpend(), provider: row.provider };
+      addRow(bucket, row);
       map.set(row.model, bucket);
     }
     return [...map.entries()]
@@ -174,15 +186,19 @@ export function UsagePanel({ onBack }: UsagePanelProps) {
   }, [rows]);
   const { cachedInput, uncachedInput, output, processed, savings } = totals;
 
-  const { totalCost, totalTokensAll } = useMemo(() => {
+  const { totalCost, totalTokensAll, totalUnpriced } = useMemo(() => {
     let cost = 0;
     let tokens = 0;
+    let unpriced = 0;
     for (const p of byProvider) {
       cost += p.cost;
       tokens += p.tokens;
+      unpriced += p.unpriced;
     }
-    return { totalCost: cost, totalTokensAll: tokens };
+    return { totalCost: cost, totalTokensAll: tokens, totalUnpriced: unpriced };
   }, [byProvider]);
+
+  const notCounted = PROVIDERS.filter((p) => !counted.includes(p));
 
   const totalSessions = useMemo(
     () => sessionCounts.reduce((s, p) => s + p.count, 0),
@@ -242,6 +258,8 @@ export function UsagePanel({ onBack }: UsagePanelProps) {
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
                 {formatCount(totalSessions)} sessions · API estimate
+                {totalUnpriced > 0 &&
+                  ` · excludes ${formatTokens(totalUnpriced)} tokens with no known price`}
               </p>
               <ul className="mt-6 flex flex-col gap-4">
                 {query.isPending && rows.length === 0 ? (
@@ -250,8 +268,8 @@ export function UsagePanel({ onBack }: UsagePanelProps) {
                   </li>
                 ) : (
                   byProvider.map((p) => {
-                    const share = totalCost ? (p.cost / totalCost) * 100 : 0;
                     const empty = p.tokens === 0 && p.sessions === 0;
+                    const isCounted = counted.includes(p.provider);
                     return (
                       <li key={p.provider} className="flex items-start gap-2">
                         <span
@@ -274,13 +292,15 @@ export function UsagePanel({ onBack }: UsagePanelProps) {
                               </span>
                             </span>
                             <span className="shrink-0 text-sm tabular-nums">
-                              {empty ? "—" : formatUsd(p.cost)}
+                              {empty ? "—" : costLabel(p)}
                             </span>
                           </div>
                           <p className="text-xs text-muted-foreground">
-                            {empty
-                              ? "No local token history"
-                              : `${share.toFixed(1)}% of cost · ${formatTokens(p.tokens)} tokens`}
+                            {!isCounted
+                              ? "Not counted"
+                              : empty
+                                ? "Nothing in this range"
+                                : `${p.unpriced === p.tokens ? "No known price" : `${shareLabel(p, totalCost)} of cost`} · ${formatTokens(p.tokens)} tokens`}
                           </p>
                         </div>
                       </li>
@@ -354,10 +374,10 @@ export function UsagePanel({ onBack }: UsagePanelProps) {
                           </span>
                         </td>
                         <td className="py-2.5 text-right tabular-nums">
-                          {formatUsd(row.cost)}
+                          {costLabel(row)}
                         </td>
                         <td className="py-2.5 text-right tabular-nums text-muted-foreground">
-                          {totalCost ? `${((row.cost / totalCost) * 100).toFixed(1)}%` : "0%"}
+                          {shareLabel(row, totalCost)}
                         </td>
                         <td className="py-2.5 text-right tabular-nums">
                           {formatTokens(row.tokens)}
@@ -370,12 +390,10 @@ export function UsagePanel({ onBack }: UsagePanelProps) {
                         <tr key={row.date} className="border-b border-border/60">
                           <td className="py-2.5 tabular-nums">{row.date}</td>
                           <td className="py-2.5 text-right tabular-nums">
-                            {formatUsd(row.cost)}
+                            {costLabel(row)}
                           </td>
                           <td className="py-2.5 text-right tabular-nums text-muted-foreground">
-                            {totalCost
-                              ? `${((row.cost / totalCost) * 100).toFixed(1)}%`
-                              : "0%"}
+                            {shareLabel(row, totalCost)}
                           </td>
                           <td className="py-2.5 text-right tabular-nums">
                             {formatTokens(row.tokens)}
@@ -385,6 +403,22 @@ export function UsagePanel({ onBack }: UsagePanelProps) {
               </tbody>
             </table>
           </section>
+
+          {counted.length > 0 && (
+            <footer className="flex flex-col gap-1 border-t pt-4 text-xs text-muted-foreground">
+              <p>
+                Counted from local history: {listLabels(counted)}.
+                {notCounted.length > 0 &&
+                  ` Not counted: ${listLabels(notCounted)} — no token history on disk.`}
+              </p>
+              <p>
+                Costs are estimates, never billed amounts.{" "}
+                {listLabels(counted.filter((p) => !reportsOwnCost(p)))} use Emberyx's rate
+                table; {listLabels(counted.filter(reportsOwnCost))} show the cost each agent
+                recorded.
+              </p>
+            </footer>
+          )}
         </div>
       </div>
     </div>
@@ -539,7 +573,9 @@ function DailyChart({
     for (const row of rows) {
       const day = byDay.get(row.date);
       if (!day) continue;
-      const value = metric === "cost" ? rowCost(row) : totalTokens(row);
+      // The chart can only plot a known price; unpriced tokens are named in
+      // the headline instead.
+      const value = metric === "cost" ? (rowCost(row) ?? 0) : totalTokens(row);
       day.set(row.provider, (day.get(row.provider) ?? 0) + value);
     }
 

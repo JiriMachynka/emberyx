@@ -63,6 +63,12 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
 
+    // The E2E suite's WebDriver server. Test builds only — see Cargo.toml.
+    #[cfg(feature = "e2e")]
+    {
+        builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+    }
+
     let app = builder
         .menu(menu::build)
         .on_menu_event(menu::on_event)
