@@ -24,7 +24,7 @@ import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { Button } from "@/components/ui/button";
 import { FileRefProject, TextWithFileRefs } from "@/components/FileRef";
 import { splitFencedBlocks } from "@/lib/fileRef";
-import { BACKEND_LABEL, capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
+import { capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
 import {
   currentTodo,
   isTodoTool,
@@ -61,13 +61,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { MarkdownAsync as Markdown } from "@/components/MarkdownAsync";
 import { ChatComposer } from "@/components/ChatComposer";
-import {
-  handoffLabel,
-  handoffTurnsFrom,
-  otherBackend,
-  renderHandoffContext,
-  withFocusedTurn,
-} from "@/lib/handoff";
+import { draftForSwitch, handoffTurnsFrom } from "@/lib/handoff";
 import {
   EMPTY_THREAD,
   carryOver,
@@ -104,7 +98,7 @@ import { PaneVisibleProvider, usePaneVisible } from "@/components/chat/PaneVisib
 import type { Project } from "@/types";
 import { projectLabel } from "@/lib/worktree";
 import { PROVIDER_LABEL } from "@/lib/providers";
-import { useGitChanges, useTurnFiles } from "@/lib/queries";
+import { useTurnFiles } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
 import { rememberRowSizes, rowSize } from "@/lib/rowSizes";
 import { buildTree, dirTotals } from "@/lib/fileTree";
@@ -174,9 +168,7 @@ interface ChatPaneProps {
   onModelChange: (model: string) => void;
   /** Persist a new default backend when the picker moves a chat to another
    *  provider — the stored model/backend pair must stay coherent or the next
-   *  new chat launches as one provider told to run another's model. A thread
-   *  handoff does not go through this: moving one conversation is not a
-   *  statement about the next one. */
+   *  new chat launches as one provider told to run another's model. */
   onBackendChange: (backend: AgentBackend) => void;
   /** Default reasoning effort for new chats; "" = let the CLI decide. */
   effort: string;
@@ -360,19 +352,20 @@ export const ChatPane = memo(function ChatPane({
   // 500-message thread would scan it several times a second otherwise.
   const lastActivity = useMemo(() => lastActivityAt(messages), [messages]);
 
-  // The transcript is read at switch/handoff time, not published per token —
+  // The transcript is read at switch time, not published per token —
   // publishing it on every token would re-render the world.
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
   /**
-   * Move this thread to the other provider without leaving the pane. The turns
+   * Move this thread to another provider without leaving the pane. The turns
    * so far are carried and stamped, the transport is swapped, and the context
    * package lands in the composer — prefilled, never sent, so the user still
-   * decides what the next provider is actually asked.
+   * decides what the next provider is actually asked. An empty thread skips
+   * the draft: there is nothing to hand over.
    */
   const switchProvider = useCallback(
-    (to: AgentBackend, prefill: boolean) => {
+    (to: AgentBackend) => {
     if (to === activeBackend) return;
     setCarried((prev) =>
       carryOver(
@@ -385,23 +378,20 @@ export const ChatPane = memo(function ChatPane({
         Date.now()
       )
     );
-    if (prefill) {
-      const context = renderHandoffContext({
-        from: activeBackend,
-        to,
-        cwd,
-        turns: handoffTurnsFrom(messagesRef.current, activeBackend, activeModel || null),
-      });
-      useAgentStore.getState().setDraft(sessionId, context);
-    }
+    const draft = draftForSwitch({
+      from: activeBackend,
+      to,
+      cwd,
+      turns: handoffTurnsFrom(messagesRef.current, activeBackend, activeModel || null),
+    });
+    if (draft) useAgentStore.getState().setDraft(sessionId, draft);
     setActiveBackend(to);
     // A carried thread keeps its pinned model only when the new provider can
     // run it. The picker's switch re-pins the model right after this runs, so
-    // this is the handoff path's guard.
+    // this is the switch path's guard.
     if (!modelFitsBackend(activeModel, to, getCustomModels())) {
       setActiveModel("");
     }
-    // Both halves of the switch are one durable fact on this thread.
     void invoke("thread_timeline_append", {
       threadId: sessionId,
       kind: "providerSwitch",
@@ -439,11 +429,9 @@ export const ChatPane = memo(function ChatPane({
       sessionId,
       cwd,
       backend: activeBackend,
-      model: activeModel || null,
-      onSwitchProvider: () => switchProvider(otherBackend(activeBackend), true),
       revertTurn,
     }),
-    [sessionId, cwd, activeBackend, activeModel, switchProvider, revertTurn]
+    [sessionId, cwd, activeBackend, revertTurn]
   );
   const draft = useAgentStore((s) => s.drafts[sessionId]);
   const clearDraft = useAgentStore((s) => s.clearDraft);
@@ -468,15 +456,6 @@ export const ChatPane = memo(function ChatPane({
     setSwitchedBackend(sessionId, activeBackend === backend ? null : activeBackend);
     return () => setSwitchedBackend(sessionId, null);
   }, [sessionId, activeBackend, backend, setSwitchedBackend]);
-
-  const registerTranscript = useAgentStore((s) => s.registerTranscript);
-  const unregisterTranscript = useAgentStore((s) => s.unregisterTranscript);
-  useEffect(() => {
-    registerTranscript(sessionId, () =>
-      handoffTurnsFrom(messagesRef.current, backend, activeModel || null)
-    );
-    return () => unregisterTranscript(sessionId);
-  }, [sessionId, backend, activeModel, registerTranscript, unregisterTranscript]);
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -598,7 +577,7 @@ export const ChatPane = memo(function ChatPane({
   const switchBackend = useCallback(
     (to: AgentBackend) => {
       onBackendChange(to);
-      switchProvider(to, false);
+      switchProvider(to);
     },
     [switchProvider, onBackendChange]
   );
@@ -1541,7 +1520,7 @@ const TurnRow = memo(
                     streaming={live && last.streaming}
                   />
                   {!(live && last.streaming) && (
-                    <MessageActions text={last.text} chat={chat} />
+                    <MessageActions text={last.text} />
                   )}
                 </div>
               )}
@@ -1889,7 +1868,7 @@ const MessageRow = memo(function MessageRow({
         <Markdown text={message.text} fontSize={fontSize} streaming={message.streaming} />
       )}
       {message.text && !message.streaming && (
-        <MessageActions text={message.text} chat={chat} />
+        <MessageActions text={message.text} />
       )}
     </div>
   );
@@ -1900,10 +1879,6 @@ interface ChatContext {
   sessionId: string;
   cwd: string;
   backend: AgentBackend;
-  /** The model this pane is running, for turn attribution in a handoff. */
-  model: string | null;
-  /** Continue this same thread on the other provider, in this pane. */
-  onSwitchProvider: () => void;
   revertTurn: (checkpointId: string) => Promise<void>;
 }
 
@@ -1922,13 +1897,11 @@ function ProviderSwitchDivider({ mark }: { mark: ProviderSwitchMark }) {
   );
 }
 
-/** The hover strip under an assistant message. Stays visible while the handoff
- *  menu is open — the pointer has left the message by then. */
-function MessageActions({ text, chat }: { text: string; chat: ChatContext }) {
+/** The hover strip under an assistant message. */
+function MessageActions({ text }: { text: string }) {
   return (
-    <div className="absolute left-0 top-full flex w-fit items-center gap-1 text-xs opacity-0 transition-opacity group-hover:opacity-100 has-data-[state=open]:opacity-100">
+    <div className="absolute left-0 top-full flex w-fit items-center gap-1 text-xs opacity-0 transition-opacity group-hover:opacity-100">
       <CopyButton text={text} />
-      {chat.backend !== "claude" && <HandoffButton text={text} chat={chat} />}
     </div>
   );
 }
@@ -1949,53 +1922,6 @@ function CopyButton({ text }: { text: string }) {
       {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
       {copied ? "Copied" : "Copy"}
     </button>
-  );
-}
-
-/** Send this message to the other backend's chat. The working tree is only
- *  inspected once the menu is open, so a transcript of these costs nothing. */
-function HandoffButton({ text, chat }: { text: string; chat: ChatContext }) {
-  const [open, setOpen] = useState(false);
-  const changes = useGitChanges(chat.cwd, open);
-  const dirty = (changes.data ?? []).length > 0;
-  const label = handoffLabel(chat.backend);
-  const hand = (withDiff: boolean) => {
-    const store = useAgentStore.getState();
-    const turns = store.transcripts[chat.sessionId]?.() ?? [];
-    store.handoff?.({
-      sourceSessionId: chat.sessionId,
-      // The clicked message is the point of the handoff, so it travels even
-      // when it sits further back than the turn limit.
-      turns: withFocusedTurn(turns, {
-        role: "assistant",
-        provider: chat.backend,
-        model: chat.model,
-        text,
-      }),
-      withDiff,
-    });
-  };
-  return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger className={actionClass}>
-        <ArrowRightLeft className="size-3.5" />
-        {label}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        {/* Same thread, other provider: the turns so far stay in this
-            transcript, attributed to whoever produced them. */}
-        <DropdownMenuItem onSelect={chat.onSwitchProvider}>
-          {`Continue here with ${BACKEND_LABEL[otherBackend(chat.backend)]}`}
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={() => hand(false)}>{label}</DropdownMenuItem>
-        {dirty && (
-          <DropdownMenuItem onSelect={() => hand(true)}>
-            {`${label} with changes`}
-          </DropdownMenuItem>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 

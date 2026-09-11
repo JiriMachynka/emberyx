@@ -94,4 +94,11 @@ describe("Markdown GFM", () => {
     expect(el.querySelector("pre")).not.toBeNull();
     expect(el.querySelector("pre")?.textContent).toContain("const x = 1");
   });
+
+  it("veils new words while streaming and drops the spans once settled", async () => {
+    const live = await md("hello world", true);
+    expect(live.querySelector("[data-sd-animate]")).not.toBeNull();
+    const done = await md("hello world", false);
+    expect(done.querySelector("[data-sd-animate]")).toBeNull();
+  });
 });

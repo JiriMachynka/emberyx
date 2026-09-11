@@ -10,7 +10,6 @@ interface TranscriptBlock {
   text?: string;
   items?: string[];
   copy?: string;
-  handoff?: string;
   files?: number;
   adds?: string;
   dels?: string;
@@ -66,7 +65,6 @@ const icons = {
   close: svg('<path d="M18 6 6 18M6 6l12 12"/>', 'stroke-width="1.8"'),
   review: svg('<path d="M3 13a2 2 0 0 1 2-2h2l2 2h4a2 2 0 0 0 2-2l1-1h3a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" opacity="0"/><path d="m10 8 -4 4 4 4"/><path d="M6 12h9a4 4 0 0 0 4-4"/>'),
   copy: svg('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
-  handoff: svg('<path d="M3 7h13"/><path d="m13 3 4 4-4 4"/><path d="M21 17H8"/><path d="m11 21-4-4 4-4"/>'),
 };
 ---
 
@@ -164,7 +162,7 @@ const icons = {
                 <span class="rounded-lg bg-ink-card px-3.5 py-2 text-[12px] font-medium text-fg">{b.text}</span>
               </div>
             ) : b.kind === "actions" ? (
-              <div class="flex items-center gap-4 text-[12px] text-ash-dim" set:html={icons.copy + `<span>${b.copy}</span><span class="ml-1">${icons.handoff}</span><span>${b.handoff}</span>`} />
+              <div class="flex items-center gap-4 text-[12px] text-ash-dim" set:html={icons.copy + `<span>${b.copy}</span>`} />
             ) : b.kind === "summary" ? (
               <p class="flex items-center gap-1 text-[12px] text-ash">
                 {b.text}

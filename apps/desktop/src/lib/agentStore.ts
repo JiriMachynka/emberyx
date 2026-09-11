@@ -5,7 +5,6 @@ import type { ToolIcon } from "@/lib/toolDisplay";
 import type { ChatImage } from "@/hooks/useAgentChat";
 import type { SessionStatus } from "@/types";
 import type { AccountIssue } from "@/lib/accountState";
-import type { HandoffTurn } from "@/lib/handoff";
 import type { AgentBackend } from "@/lib/agentBackend";
 import {
   MAX_NOTIFICATIONS,
@@ -62,18 +61,6 @@ export interface SubagentRun {
   turnEndedAt?: number;
 }
 
-/** What a chat pane hands over: its recent turns, plus whether the user asked
- *  for the working tree along with them. */
-export interface HandoffRequest {
-  sourceSessionId: string;
-  /** Recent turns, oldest first, already trimmed by the pane. */
-  turns: HandoffTurn[];
-  withDiff: boolean;
-}
-
-/** Move a conversation to another provider's chat in the same project. */
-export type HandoffFn = (request: HandoffRequest) => void;
-
 /** A request from a transcript card to review one turn's file changes in the
  *  dock's diff tab. The pane publishes it; App opens the tab and hands the
  *  payload to the changes panel. The Rust side resolves the turn's range end
@@ -121,13 +108,8 @@ interface AgentState {
   /** Each live chat session's `send`, so panels outside the pane can dispatch a
    *  turn (e.g. running a slash command) into the active session. */
   senders: Record<string, (text: string, images?: ChatImage[]) => void>;
-  /** Each live chat session's recent turns, as a getter. A handoff needs the
-   *  conversation, but publishing it per token would re-render the world — so
-   *  the pane registers a reader and it is called only at handoff time. */
-  transcripts: Record<string, () => HandoffTurn[]>;
-  /** Text waiting to be dropped into a session's composer. Held here rather
-   *  than pushed at a `send`, because a handoff can target a chat that hasn't
-   *  mounted yet — it picks its draft up when it does. */
+  /** Text waiting to be dropped into a session's composer — an in-place
+   *  provider switch prefills here so the user can edit before sending. */
   drafts: Record<string, string>;
   /** The provider a chat pane moved to in place, while it differs from the
    *  session's own backend — which a switch leaves alone, since it names the
@@ -136,10 +118,6 @@ interface AgentState {
   setSwitchedBackend: (id: string, backend: AgentBackend | null) => void;
   setDraft: (id: string, text: string) => void;
   clearDraft: (id: string) => void;
-  /** Hand a chat message to the other backend's chat in the same project.
-   *  Installed by the workspace, which owns the session list. */
-  handoff: HandoffFn | null;
-  setHandoff: (fn: HandoffFn) => void;
   /** Latest "review this turn" request from a transcript card. Replaced on
    *  every click; App consumes it into the diff tab's state. */
   turnReview: TurnReviewRequest | null;
@@ -153,8 +131,6 @@ interface AgentState {
     fn: (text: string, images?: ChatImage[]) => void
   ) => void;
   unregisterSender: (id: string) => void;
-  registerTranscript: (id: string, read: () => HandoffTurn[]) => void;
-  unregisterTranscript: (id: string) => void;
   setStatus: (id: string, status: SessionStatus) => void;
   setUsage: (id: string, usage: Usage) => void;
   addChange: (change: Change) => void;
@@ -199,10 +175,8 @@ export const useAgentStore = create<AgentState>()((set) => ({
   subagents: {},
   selectedAgent: null,
   senders: {},
-  transcripts: {},
   drafts: {},
   switchedBackends: {},
-  handoff: null,
   notifications: loadNotifications(),
   setSwitchedBackend: (id, backend) =>
     set((s) => {
@@ -217,7 +191,6 @@ export const useAgentStore = create<AgentState>()((set) => ({
       const { [id]: _, ...rest } = s.drafts;
       return { drafts: rest };
     }),
-  setHandoff: (fn) => set({ handoff: fn }),
   turnReview: null,
   // A fresh object identity per click, so a repeat click on the same turn
   // still reads as a new request downstream.
@@ -231,13 +204,6 @@ export const useAgentStore = create<AgentState>()((set) => ({
     set((s) => {
       const { [id]: _, ...rest } = s.senders;
       return { senders: rest };
-    }),
-  registerTranscript: (id, read) =>
-    set((s) => ({ transcripts: { ...s.transcripts, [id]: read } })),
-  unregisterTranscript: (id) =>
-    set((s) => {
-      const { [id]: _, ...rest } = s.transcripts;
-      return { transcripts: rest };
     }),
   setStatus: (id, status) =>
     set((s) => {
@@ -363,9 +329,6 @@ export const useAgentStore = create<AgentState>()((set) => ({
         subagents,
         senders: Object.fromEntries(
           Object.entries(s.senders).filter(([id]) => !drop.has(id))
-        ),
-        transcripts: Object.fromEntries(
-          Object.entries(s.transcripts).filter(([id]) => !drop.has(id))
         ),
         drafts: Object.fromEntries(
           Object.entries(s.drafts).filter(([id]) => !drop.has(id))

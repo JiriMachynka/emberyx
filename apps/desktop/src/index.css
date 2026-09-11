@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "streamdown/styles.css";
 
 /* Streamdown ships utilities inside its JS. */
 @source "../node_modules/streamdown/dist/*.js";
@@ -237,6 +238,15 @@
       color-mix(in oklch, var(--primary) 6%, transparent),
       transparent 60%
     );
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    [data-sd-animate] {
+      animation: none;
+    }
+    [data-sd-animate-marker]::marker {
+      animation: none;
+    }
   }
 
   /* Chat markdown: restore block spacing that Tailwind's reset strips. */

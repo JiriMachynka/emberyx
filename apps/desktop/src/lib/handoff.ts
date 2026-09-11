@@ -1,67 +1,14 @@
 /**
- * Provider-neutral context handoff.
+ * Context package for an in-place provider switch.
  *
- * A handoff moves a conversation to another provider without pretending the two
- * share a native session: it packages what the next provider needs to continue —
- * the recent turns with their attribution, the tools that ran, the working tree,
- * the branch/worktree it sits on, and which instruction files govern the repo —
- * and lands that package in the target composer. It is prefilled, never sent, so
- * the composer *is* the inspect-and-edit step: the user always gets the last
- * word on what the second provider is asked.
- *
- * The package is provider-neutral (`Provider`, not `AgentBackend`) because the
- * shape has to survive providers that can't yet run a live chat. Only opening
- * the target session is backend-bound.
+ * Providers don't share a native session, so the next CLI starts cold. This
+ * packages the recent turns — with who produced them — and lands that in the
+ * composer. Prefill, never send: the user still decides what the next provider
+ * is asked. An empty thread produces no draft.
  */
 
-import {
-  AGENT_BACKENDS,
-  BACKEND_LABEL,
-  type AgentBackend,
-} from "@/lib/agentBackend";
 import type { ChatMessage } from "@/hooks/useAgentChat";
 import { PROVIDER_LABEL, type Provider } from "@/lib/providers";
-import type { Session } from "@/types";
-
-/**
- * Who a conversation can be handed to: every other backend, in table order.
- *
- * There is no "the other one" — five backends means four candidates, and the
- * two-way flip this replaced sent a Grok thread to Claude without asking. The
- * caller offers this list; nothing here picks for the user.
- */
-export const handoffTargets = (from: AgentBackend): AgentBackend[] =>
-  AGENT_BACKENDS.filter((backend) => backend !== from);
-
-/**
- * The target for a caller that hasn't got a chooser yet. Claude is the landing
- * spot because it is the only backend with every surface wired, so the package
- * always arrives somewhere that can act on it; from Claude the same reasoning
- * picks Codex, the next most complete. A default, not an answer — anything
- * that can show a menu should offer `handoffTargets` instead.
- */
-export const defaultHandoffTarget = (from: AgentBackend): AgentBackend =>
-  from === "claude" ? "codex" : "claude";
-
-/** @deprecated The name only makes sense with two backends. Kept while
- *  `ChatPane` still assumes a single target; use `handoffTargets`. */
-export const otherBackend = defaultHandoffTarget;
-
-export const handoffLabel = (
-  from: AgentBackend,
-  to: AgentBackend = defaultHandoffTarget(from)
-): string => `Hand off to ${BACKEND_LABEL[to]}`;
-
-/** The project's live chat on the target backend. Reused rather than opened
- *  again, or every handed-off message would stack another tab. */
-export const findHandoffTarget = (
-  sessions: Session[],
-  projectId: string,
-  backend: AgentBackend
-): Session | undefined =>
-  sessions.find(
-    (s) => s.projectId === projectId && s.kind === "chat" && s.backend === backend
-  );
 
 /** One exchange carried across, attributed to whoever produced it. `model` is
  *  null when the provider never named one. */
@@ -142,14 +89,6 @@ export const handoffTurnsFrom = (
     limit
   );
 
-/** Keep the message the user actually clicked in the package, even when it is
- *  older than the turn limit. */
-export const withFocusedTurn = (
-  turns: HandoffTurn[],
-  focused: HandoffTurn
-): HandoffTurn[] =>
-  turns.some((turn) => turn.text === focused.text) ? turns : [...turns, focused];
-
 const speakerOf = (turn: HandoffTurn): string => {
   if (turn.role === "user") return "User";
   const label = PROVIDER_LABEL[turn.provider];
@@ -195,4 +134,12 @@ export const renderHandoffContext = (ctx: HandoffContext): string => {
     lines.push("", "## Uncommitted changes", "", "```diff", truncateDiff(diff), "```");
   }
   return lines.join("\n").trimEnd();
+};
+
+/** Composer draft for a picker switch, or null when there is nothing to hand
+ *  over — an empty thread should not get a header-only dump. */
+export const draftForSwitch = (ctx: HandoffContext): string | null => {
+  const turns = ctx.turns.filter((turn) => turn.text.trim() || turn.tools?.length);
+  if (!turns.length && !ctx.diff?.trim()) return null;
+  return renderHandoffContext(ctx);
 };

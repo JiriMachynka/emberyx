@@ -65,8 +65,7 @@
     },
     {
       "kind": "actions",
-      "copy": "Copy",
-      "handoff": "Hand off to Claude"
+      "copy": "Copy"
     },
     {
       "kind": "changed",

@@ -71,6 +71,16 @@ const controls = {
   image: false,
 };
 
+/** Paint-only dissolve on newly mounted words. Stagger is off so a batch of
+ *  tokens fades as one veil, not a cascade; duration sits in the 150–250ms
+ *  enter range. Settled turns pass `false` so the spans never ship. */
+const streamAnimate = {
+  animation: "fadeIn" as const,
+  duration: 200,
+  easing: "cubic-bezier(0.2, 0, 0, 1)",
+  stagger: 0,
+};
+
 /** Renders assistant markdown with GFM. `streaming` uses Streamdown's
  *  block-memoized mode so settled paragraphs don't reparse as tokens
  *  arrive; incomplete markers are closed by remend until the real ones land. */
@@ -88,6 +98,8 @@ export const Markdown = memo(function Markdown({
       <Streamdown
         className="chat-md leading-relaxed"
         mode={streaming ? "streaming" : "static"}
+        animated={streaming ? streamAnimate : false}
+        isAnimating={streaming}
         parseIncompleteMarkdown
         skipHtml
         lineNumbers={false}

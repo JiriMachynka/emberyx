@@ -62,7 +62,7 @@ beforeEach(() => {
   localStorage.clear();
   queryClient.clear();
   calls.length = 0;
-  useAgentStore.setState({ drafts: {}, senders: {}, transcripts: {} });
+  useAgentStore.setState({ drafts: {}, senders: {} });
 });
 
 describe("useWorkspace launch restore", () => {
@@ -219,138 +219,6 @@ describe("useWorkspace project shell", () => {
     await act(() => result.current.closeProjectById(result.current.projects[0].id));
 
     expect(kills()).toEqual([["pty_kill", { id: 7 }]]);
-  });
-});
-
-describe("useWorkspace handoff", () => {
-  const openChat = async () => {
-    const { result } = renderHook(() => useWorkspace(DEFAULT_SETTINGS));
-    await act(() => result.current.openProjectAt("/p"));
-    const projectId = result.current.projects[0].id;
-    await waitFor(() =>
-      expect(result.current.sessionsFor(projectId)).toHaveLength(1)
-    );
-    return { result, projectId, source: result.current.sessionsFor(projectId)[0] };
-  };
-
-  const hand = async (sourceId: string, withDiff = false) =>
-    act(async () => {
-      useAgentStore.getState().handoff?.({
-        sourceSessionId: sourceId,
-        turns: [
-          {
-            role: "assistant",
-            provider: "claude",
-            model: null,
-            text: "look at this",
-          },
-        ],
-        withDiff,
-      });
-    });
-
-  it("opens the target backend's chat when the project has none", async () => {
-    const { result, projectId, source } = await openChat();
-    expect(source.backend).toBe("claude");
-
-    await hand(source.id);
-
-    const sessions = result.current.sessionsFor(projectId);
-    expect(sessions).toHaveLength(2);
-    const target = sessions.find((s) => s.backend === "codex");
-    expect(target?.kind).toBe("chat");
-    expect(target?.cwd).toBe("/p");
-    // Focused, so the prefilled composer is what the user is looking at.
-    expect(result.current.activeId).toBe(target?.id);
-    await waitFor(() =>
-      expect(useAgentStore.getState().drafts[target!.id]).toContain("look at this")
-    );
-  });
-
-  // A handoff per message would otherwise stack a tab per message.
-  it("reuses the project's existing chat on the target backend", async () => {
-    const { result, projectId, source } = await openChat();
-    let existing = "";
-    act(() => {
-      existing = result.current.startChat(projectId, "/p", undefined, "codex", "codex");
-    });
-
-    await hand(source.id);
-
-    expect(result.current.sessionsFor(projectId)).toHaveLength(2);
-    expect(result.current.activeId).toBe(existing);
-    await waitFor(() =>
-      expect(useAgentStore.getState().drafts[existing]).toContain("look at this")
-    );
-  });
-
-  it("carries the branch, the instruction files, and the turn's attribution", async () => {
-    const { result, projectId, source } = await openChat();
-
-    await hand(source.id);
-
-    const target = result.current
-      .sessionsFor(projectId)
-      .find((s) => s.backend === "codex");
-    await waitFor(() => {
-      const draft = useAgentStore.getState().drafts[target!.id];
-      expect(draft).toContain("Context handed over from Claude to Codex.");
-      expect(draft).toContain("Branch: main");
-      expect(draft).toContain("Project instructions: AGENTS.md");
-      expect(draft).toContain("### Claude");
-    });
-  });
-
-  // The switch is a durable fact on both sides: one thread records that the
-  // conversation left, the other that it arrived.
-  it("records the provider switch on both threads' timelines", async () => {
-    const { result, projectId, source } = await openChat();
-
-    await hand(source.id);
-
-    const target = result.current
-      .sessionsFor(projectId)
-      .find((s) => s.backend === "codex");
-    await waitFor(() => {
-      const switches = calls.filter(([cmd]) => cmd === "thread_timeline_append");
-      expect(switches).toHaveLength(2);
-      expect(switches.map(([, args]) => args.threadId).sort()).toEqual(
-        [source.id, target!.id].sort()
-      );
-      expect(switches.every(([, args]) => args.kind === "providerSwitch")).toBe(true);
-    });
-  });
-
-  // Prefill, not send: an auto-sent turn is the one thing the user can't undo.
-  it("prefills rather than sending", async () => {
-    const { result, projectId, source } = await openChat();
-    const sent: string[] = [];
-    act(() => {
-      const sessions = result.current.sessionsFor(projectId);
-      for (const s of sessions) {
-        useAgentStore.getState().registerSender(s.id, (t) => sent.push(t));
-      }
-    });
-
-    await hand(source.id);
-
-    expect(sent).toEqual([]);
-  });
-
-  it("attaches the working tree's diff when asked", async () => {
-    const { result, projectId, source } = await openChat();
-
-    await hand(source.id, true);
-
-    const target = result.current
-      .sessionsFor(projectId)
-      .find((s) => s.backend === "codex");
-    await waitFor(() =>
-      expect(useAgentStore.getState().drafts[target!.id]).toContain(
-        "Uncommitted changes"
-      )
-    );
-    expect(invoked).toContain("git_working_diff");
   });
 });
 

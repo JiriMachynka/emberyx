@@ -19,7 +19,7 @@ apps/desktop/          the app
       agentBackend.ts  backend + capability flags
       agentStore.ts    selector store for local chat telemetry
       codex/           Codex protocol types, decoders, normalizing adapter
-      handoff.ts       provider-neutral context package for a switch
+      handoff.ts       context package for an in-place provider switch
       timeline.ts      durable thread timeline + reconnect backfill
       ide.ts           external editor argv, per editor
       forge.ts         GitHub/GitLab command + wording routing
@@ -315,31 +315,19 @@ local rate table and labelled as estimated, never as billed.
 
 ### Provider switching
 
-`lib/handoff.ts` builds a provider-neutral `HandoffContext` — recent turns with
-per-turn attribution, tool names, branch/worktree, the instruction files the
-repo actually has, and the working diff on request — and renders it into the
-target composer. **Prefilled, never sent**: the composer *is* the inspect-and-
-edit step. Instruction files are named, not inlined; a diff past
-`HANDOFF_DIFF_LIMIT` is truncated, because a package that fills the target's
-window before it starts is worse than one that says where to look.
+The model picker is the only way to move a thread to another provider. It
+switches **in place**: `ChatPane` holds `activeBackend` (seeded from the
+session) and a `CarriedThread` of everything earlier providers produced.
+`lib/thread.ts` stamps those turns with who made them **at carry-over time** —
+reading attribution from the pane's current provider would relabel history on
+the next switch — and `mergeThread` renders carried turns ahead of the live
+transport's. A `ProviderSwitchDivider` marks where the thread changed hands.
 
-The pane publishes its transcript as a *getter* in `agentStore` (`transcripts`),
-read only at handoff time — publishing messages per token would re-render the
-world. Each switch appends a `providerSwitch` timeline event to **both** threads.
-
-There are two ways to move a thread, and they are different actions:
-
-- **Continue here with X** switches provider *in place*. `ChatPane` holds
-  `activeBackend` (seeded from the session) and a `CarriedThread` of everything
-  earlier providers produced. `lib/thread.ts` stamps those turns with who made
-  them **at carry-over time** — reading attribution from the pane's current
-  provider would relabel history on the next switch — and `mergeThread` renders
-  carried turns ahead of the live transport's. A `ProviderSwitchDivider` marks
-  where the thread changed hands.
-- **Hand off to X** still opens the project's other chat session, for when the
-  two conversations should stay apart.
-
-Both prefill and never send, and both append a `providerSwitch` timeline event.
+Providers don't share a native session, so the next CLI starts cold.
+`lib/handoff.ts` builds a `HandoffContext` of the recent turns (with
+attribution) and lands it in the composer. **Prefilled, never sent**: the
+composer *is* the inspect-and-edit step. An empty thread produces no draft.
+Each switch appends a `providerSwitch` timeline event to this thread.
 
 5. **`emberyxd` (`src/bin/emberyxd.rs`)** — a standalone Unix socket daemon,
    newline-delimited JSON. Two halves: `daemon_protocol.rs` is durable metadata
@@ -459,11 +447,11 @@ executes. Prefer a missing control over a control that lies.
 The composer's model picker is one list across providers, not a menu per
 backend (`components/ModelPicker.tsx`, catalog in `lib/modelCatalog.ts`): each
 entry knows whose it is, so picking a Codex model inside a Claude chat switches
-the transport in place first and then sets the model. That switch is silent —
-`ChatPane.switchProvider(to, prefill)` only fills the composer with the handoff
-package for the explicit "Continue here with X" action. Providers that can't be
-enumerated are listed disabled rather than hidden: an absent icon reads as
-unsupported, a disabled one as not wired yet, and the second is the truth.
+the transport in place first and then sets the model. If the thread has turns,
+that switch also prefills the composer with the context package — never sends
+it. Providers that can't be enumerated are listed disabled rather than hidden:
+an absent icon reads as unsupported, a disabled one as not wired yet, and the
+second is the truth.
 
 The ACP backends do switch mid-session — their catalog arrives with
 `session/new` and the switch is a `session/set_model` round trip. A refusal is

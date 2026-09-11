@@ -100,10 +100,8 @@ describe("useAgentStore", () => {
     expect(store().changes.map((c) => c.session)).toEqual(["s2"]);
   });
 
-  it("drops transcript getters and a selected run that belonged to the session", () => {
-    useAgentStore.setState({ transcripts: {}, subagents: {}, selectedAgent: null });
-    store().registerTranscript("s1", () => []);
-    store().registerTranscript("s2", () => []);
+  it("drops a selected run that belonged to the session", () => {
+    useAgentStore.setState({ subagents: {}, selectedAgent: null });
     store().startSubagent({
       id: "run1",
       session: "s1",
@@ -116,7 +114,6 @@ describe("useAgentStore", () => {
 
     store().clearSessions(["s1"]);
 
-    expect(Object.keys(store().transcripts)).toEqual(["s2"]);
     expect(store().selectedAgent).toBeNull();
     expect(store().subagents.run1).toBeUndefined();
   });
