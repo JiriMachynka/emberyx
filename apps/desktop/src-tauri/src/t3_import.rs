@@ -28,8 +28,8 @@ use serde_json::json;
 
 use crate::error::Result;
 use crate::models::{Provider, TimelineEvent, TimelineEventKind, TurnAttribution};
-use crate::store::Store;
 use crate::paths::home_dir;
+use crate::store::Store;
 
 /// Where T3 Code keeps its store, relative to `$HOME`.
 const SOURCE_REL: &str = ".t3/userdata/state.sqlite";
@@ -85,7 +85,6 @@ pub fn default_source() -> Option<PathBuf> {
 /// Whether a T3 store is present to import from. The UI asks before offering
 /// the action, so a machine that never ran T3 is told that, not shown a button
 /// that always fails.
-#[tauri::command]
 pub fn t3_import_available() -> bool {
     default_source().is_some_and(|p| p.exists())
 }
@@ -382,8 +381,14 @@ struct ToolCall {
 /// tool.
 fn tool_call(summary: &str, payload_json: &str) -> Option<ToolCall> {
     let value: serde_json::Value = serde_json::from_str(payload_json).ok()?;
-    let item_type = value.get("itemType").and_then(|v| v.as_str()).unwrap_or("tool");
-    let detail = value.get("detail").and_then(|v| v.as_str()).unwrap_or_default();
+    let item_type = value
+        .get("itemType")
+        .and_then(|v| v.as_str())
+        .unwrap_or("tool");
+    let detail = value
+        .get("detail")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     let id = value
         .get("toolCallId")
         .and_then(|v| v.as_str())
@@ -392,14 +397,20 @@ fn tool_call(summary: &str, payload_json: &str) -> Option<ToolCall> {
         // parser, so it gets a synthetic one derived from where it sat.
         .unwrap_or_else(|| format!("t3-{item_type}-{}", stable_hash(payload_json)));
     let (name, input) = match detail.split_once(": ") {
-        Some((name, rest)) if !name.is_empty() && !name.contains(' ') => (name.to_string(), rest.to_string()),
+        Some((name, rest)) if !name.is_empty() && !name.contains(' ') => {
+            (name.to_string(), rest.to_string())
+        }
         _ => (item_type.replace('_', " "), detail.to_string()),
     };
     Some(ToolCall {
         id,
         name,
         detail: input,
-        summary: if summary.trim().is_empty() { detail.to_string() } else { summary.to_string() },
+        summary: if summary.trim().is_empty() {
+            detail.to_string()
+        } else {
+            summary.to_string()
+        },
     })
 }
 
@@ -517,6 +528,12 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
+pub mod cmd {
+    crate::offload! {
+        t3_import_available() => bool;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -569,7 +586,8 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("emberyx-t3-test-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("emberyx-t3-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
         dir
@@ -578,9 +596,15 @@ mod tests {
     #[test]
     fn parses_iso_timestamps() {
         assert_eq!(parse_iso_ms("1970-01-01T00:00:00.000Z"), Some(0));
-        assert_eq!(parse_iso_ms("2026-08-28T09:56:11.931Z"), Some(1_787_910_971_931));
+        assert_eq!(
+            parse_iso_ms("2026-08-28T09:56:11.931Z"),
+            Some(1_787_910_971_931)
+        );
         // No fractional part is still a valid instant.
-        assert_eq!(parse_iso_ms("2026-08-28T09:56:11Z"), Some(1_787_910_971_000));
+        assert_eq!(
+            parse_iso_ms("2026-08-28T09:56:11Z"),
+            Some(1_787_910_971_000)
+        );
         assert_eq!(parse_iso_ms("nonsense"), None);
     }
 
@@ -630,7 +654,10 @@ mod tests {
         assert_eq!(summary.threads_skipped, 0);
         assert_eq!(summary.messages, 2);
         assert_eq!(summary.tool_calls, 1);
-        assert_eq!(summary.projects, vec![project.to_string_lossy().to_string()]);
+        assert_eq!(
+            summary.projects,
+            vec![project.to_string_lossy().to_string()]
+        );
 
         let timeline = store.read_timeline("th-1", None).expect("timeline");
         let kinds: Vec<_> = timeline.iter().map(|e| e.kind.clone()).collect();
@@ -675,7 +702,10 @@ mod tests {
         assert_eq!(second.threads_imported, 0);
         assert_eq!(second.threads_skipped, 1);
         assert_eq!(second.events_written, 0);
-        assert_eq!(store.read_timeline("th-1", None).expect("timeline").len(), 5);
+        assert_eq!(
+            store.read_timeline("th-1", None).expect("timeline").len(),
+            5
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

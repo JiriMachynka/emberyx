@@ -117,7 +117,10 @@ fn read_result(warm: &mut Warm) -> Result<String> {
     let mut line = String::new();
     loop {
         line.clear();
-        let read = warm.stdout.read_line(&mut line).map_err(|e| e.to_string())?;
+        let read = warm
+            .stdout
+            .read_line(&mut line)
+            .map_err(|e| e.to_string())?;
         if read == 0 {
             return Err(Error::new("the draft agent exited before answering"));
         }

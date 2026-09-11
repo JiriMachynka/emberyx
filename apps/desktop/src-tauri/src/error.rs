@@ -24,7 +24,10 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 impl serde::Serialize for Error {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.0)
     }
 }
@@ -79,6 +82,43 @@ pub async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T> + Send + 'static,
 ) -> Result<T> {
     tauri::async_runtime::spawn_blocking(f).await?
+}
+
+/// Async twins for synchronous commands, generated into a module's `cmd`
+/// submodule and registered in `generate_handler!` as `module::cmd::name`, so
+/// the frontend still invokes the same name.
+///
+/// A plain `fn` command runs on the main thread in Tauri v2 and freezes the
+/// window for as long as it takes — a `git push`, a `git add -A` over the whole
+/// tree. Each twin forwards to the synchronous function, which tests and other
+/// modules keep calling directly, on the blocking pool.
+///
+/// - `name(args) -> T;` forwards a function returning `Result<T>`.
+/// - `name(args) => T;` forwards an infallible one.
+/// - `[LOCK] name(args) -> T;` holds `LOCK` for the call. Off the main thread,
+///   commands no longer queue behind each other, so writes that would collide
+///   on the same git lock file name the mutex that orders them.
+#[macro_export]
+macro_rules! offload {
+    () => {};
+    ($([$lock:path])? $name:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty; $($rest:tt)*) => {
+        #[tauri::command]
+        pub async fn $name($($arg: $ty),*) -> $crate::error::Result<$ret> {
+            $crate::error::blocking(move || {
+                $(let _serial = $lock.lock().unwrap_or_else(|e| e.into_inner());)?
+                super::$name($($arg),*)
+            })
+            .await
+        }
+        $crate::offload!($($rest)*);
+    };
+    ($name:ident($($arg:ident: $ty:ty),* $(,)?) => $ret:ty; $($rest:tt)*) => {
+        #[tauri::command]
+        pub async fn $name($($arg: $ty),*) -> $crate::error::Result<$ret> {
+            $crate::error::blocking(move || Ok(super::$name($($arg),*))).await
+        }
+        $crate::offload!($($rest)*);
+    };
 }
 
 /// `format!`-style bail: `err!("not a directory: {}", path)`.

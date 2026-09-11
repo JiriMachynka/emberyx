@@ -181,7 +181,6 @@ pub enum TimelineEventKind {
     Completion,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -179,7 +179,11 @@ fn package_from_dir(root: &Path, dir: &Path, pm: &str) -> Option<PackageInfo> {
         .to_string();
     Some(PackageInfo {
         name,
-        rel_path: if rel_path.is_empty() { ".".into() } else { rel_path },
+        rel_path: if rel_path.is_empty() {
+            ".".into()
+        } else {
+            rel_path
+        },
         path: dir.to_string_lossy().to_string(),
         dev_command: run_command(pm, &script),
         build_command: pick_script(&pkg, &BUILD_SCRIPTS).map(|s| run_command(pm, &s)),
@@ -205,7 +209,11 @@ fn publishable_from_dir(root: &Path, dir: &Path) -> Option<PublishablePackage> {
     Some(PublishablePackage {
         name,
         version,
-        rel_path: if rel_path.is_empty() { ".".into() } else { rel_path },
+        rel_path: if rel_path.is_empty() {
+            ".".into()
+        } else {
+            rel_path
+        },
         path: dir.to_string_lossy().to_string(),
     })
 }
@@ -333,9 +341,16 @@ pub fn scan(root_str: &str) -> Result<WorkspaceInfo> {
     })
 }
 
-#[tauri::command]
 pub fn scan_workspace(path: String) -> Result<WorkspaceInfo> {
     scan(&path)
+}
+
+pub mod cmd {
+    use super::*;
+
+    crate::offload! {
+        scan_workspace(path: String) -> WorkspaceInfo;
+    }
 }
 
 #[cfg(test)]
@@ -396,7 +411,11 @@ mod tests {
         let web = info.packages.iter().find(|p| p.name == "web").unwrap();
         assert_eq!(web.dev_command, "bun run dev");
         assert_eq!(web.rel_path, "apps/web");
-        let api = info.packages.iter().find(|p| p.name == "@repo/api").unwrap();
+        let api = info
+            .packages
+            .iter()
+            .find(|p| p.name == "@repo/api")
+            .unwrap();
         assert_eq!(api.dev_command, "bun run start");
         assert_eq!(info.all_command.as_deref(), Some("bun run dev"));
 
@@ -466,8 +485,14 @@ mod tests {
         let info = scan(root.to_str().unwrap()).unwrap();
         assert_eq!(info.build_command.as_deref(), Some("bun run build"));
         assert_eq!(info.start_command.as_deref(), Some("bun run preview"));
-        assert_eq!(info.packages[0].build_command.as_deref(), Some("bun run build"));
-        assert_eq!(info.packages[0].start_command.as_deref(), Some("bun run preview"));
+        assert_eq!(
+            info.packages[0].build_command.as_deref(),
+            Some("bun run build")
+        );
+        assert_eq!(
+            info.packages[0].start_command.as_deref(),
+            Some("bun run preview")
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

@@ -7,7 +7,7 @@ import { HunkBody } from "@/components/diff/HunkBody";
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 /** Identity highlighter: the tint and marker decisions are what's under test,
- *  not highlight.js. */
+ *  not the lexer. */
 const plain = (code: string) => code;
 
 const render = (text: string) => {

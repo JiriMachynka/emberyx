@@ -175,6 +175,17 @@ describe("useAcpChat thread durability", () => {
     expect(later[later.length - 1]?.kind).toBe("userPrompt");
   });
 
+  it("does not title a thread from a markdown fence", async () => {
+    const view = await mount();
+    await act(async () =>
+      view.result.current.send("```javascript\n# Continue: Emberyx performance work\nconst x = 1;")
+    );
+    expect(appended()[0]).toMatchObject({
+      kind: "threadTitle",
+      payload: "Continue: Emberyx performance work",
+    });
+  });
+
   it("records the tools, the reply and the completion when a turn settles", async () => {
     const view = await mount();
     await act(async () => view.result.current.send("fix it"));

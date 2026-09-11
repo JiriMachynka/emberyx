@@ -12,9 +12,12 @@
  * which lands long before the first assistant token.
  */
 
+import { onRender } from "@/lib/perf";
 import {
+  Profiler,
   Suspense,
   lazy,
+  startTransition,
   useEffect,
   useState,
   type ComponentProps,
@@ -36,22 +39,59 @@ if (typeof window !== "undefined") {
 
 type Props = ComponentProps<typeof Markdown>;
 
+// Texts that have already rendered as markdown. The transcript is virtualized,
+// so a row unmounts when it scrolls away and remounts on the way back; deferring
+// it again swapped plain text for markdown under the reader, and the height
+// change jolted the scroll position. Bounded: it is a hint, not a cache.
+const rendered = new Set<string>();
+const RENDERED_LIMIT = 500;
+
+const remember = (text: string) => {
+  rendered.delete(text);
+  rendered.add(text);
+  if (rendered.size > RENDERED_LIMIT) {
+    const oldest = rendered.values().next();
+    if (!oldest.done) rendered.delete(oldest.value);
+  }
+};
+
+// Remembered rows skip the plain pass, but only a few per frame: a scroll
+// remounts one or two, while switching back to a thread remounts a screenful
+// that would otherwise all parse on the click frame — those still defer.
+const EAGER_PER_FRAME = 3;
+let eagerThisFrame = 0;
+
+const takeEagerSlot = () => {
+  if (eagerThisFrame === 0) {
+    requestAnimationFrame(() => {
+      eagerThisFrame = 0;
+    });
+  }
+  if (eagerThisFrame >= EAGER_PER_FRAME) return false;
+  eagerThisFrame += 1;
+  return true;
+};
+
 export function MarkdownAsync({ text, fontSize, streaming }: Props) {
-  // Markdown is never parsed on the frame this block first appears. Switching
-  // to a thread mounts a screenful of settled turns at once, and running every
-  // one of them through Streamdown and Shiki inline is what made the switch
-  // lag; the plain text below is the same string, so the row is laid out and
-  // painted first and coloured on the next frame. Rows are overscanned, so
-  // during a scroll the plain pass is off-screen.
-  const [deferred, setDeferred] = useState(true);
+  // Markdown is never parsed on the frame a *settled* block first appears.
+  // Switching to a thread mounts a screenful of turns at once; the plain text
+  // below is the same string, so the row is laid out first and Streamdown
+  // follows in a transition. A live turn skips that pass — Streamdown's
+  // streaming mode only reparses the open block, so tokens can paint as they
+  // arrive without a height jump at settle.
+  const [deferred, setDeferred] = useState(
+    () => !streaming && !(rendered.has(text) && takeEagerSlot())
+  );
   useEffect(() => {
     if (!deferred) return;
-    const id = requestAnimationFrame(() => setDeferred(false));
+    const id = requestAnimationFrame(() => startTransition(() => setDeferred(false)));
     return () => cancelAnimationFrame(id);
   }, [deferred]);
-  // Live tokens stay as pre-wrap text so Streamdown isn't in the tree at all
-  // until the turn settles — the fallback already looked like this.
-  if (streaming || deferred) {
+  const settled = !streaming && !deferred;
+  useEffect(() => {
+    if (settled) remember(text);
+  }, [settled, text]);
+  if (deferred) {
     return (
       <div
         className="chat-md whitespace-pre-wrap leading-relaxed"
@@ -72,7 +112,9 @@ export function MarkdownAsync({ text, fontSize, streaming }: Props) {
         </div>
       }
     >
-      <Markdown text={text} fontSize={fontSize} />
+      <Profiler id="Markdown (Streamdown)" onRender={onRender}>
+        <Markdown text={text} fontSize={fontSize} streaming={streaming} />
+      </Profiler>
     </Suspense>
   );
 }

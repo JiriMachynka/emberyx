@@ -1,6 +1,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::Mutex;
 
 use serde::Serialize;
 
@@ -105,25 +106,29 @@ pub(crate) fn is_repo(path: &str) -> bool {
 
 /// Run a git command in a repo, returning trimmed stdout on success or git's
 /// own error message on failure.
+///
+/// The repo check runs only once the command has failed: checking up front
+/// cost a second process on every call, and every command routed through here
+/// fails outside a repo anyway — the check only picks the friendlier message.
 pub(crate) fn run_git(path: &str, args: &[&str]) -> Result<String> {
-    if !is_repo(path) {
-        return Err(Error::new("Not a git repository."));
-    }
     let out = git(path, args)?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else if !is_repo(path) {
+        Err(Error::new("Not a git repository."))
     } else {
         Err(failure(&out))
     }
 }
 
 /// List working-tree changes (staged, unstaged, untracked).
-#[tauri::command]
 pub fn git_changes(path: String) -> Result<Vec<GitFile>> {
-    if !is_repo(&path) {
+    // Outside a repo `status` fails, and that is the "no changes" answer — no
+    // separate repo check (a second process) needed.
+    let out = git(&path, &["status", "--porcelain=v1"])?;
+    if !out.status.success() {
         return Ok(vec![]);
     }
-    let out = git(&path, &["status", "--porcelain=v1"])?;
     let text = String::from_utf8_lossy(&out.stdout);
 
     let mut files = vec![];
@@ -154,7 +159,6 @@ pub fn git_changes(path: String) -> Result<Vec<GitFile>> {
 /// what the working tree has on top of the index. Untracked files have no diff,
 /// so their contents are rendered as one big addition. `ignore_whitespace`
 /// passes `-w`, the diff viewer's "hide whitespace changes" toggle.
-#[tauri::command]
 pub fn git_file_diff(
     path: String,
     file: String,
@@ -163,8 +167,7 @@ pub fn git_file_diff(
     ignore_whitespace: Option<bool>,
 ) -> Result<String> {
     if untracked {
-        let content =
-            std::fs::read_to_string(Path::new(&path).join(&file)).unwrap_or_default();
+        let content = std::fs::read_to_string(Path::new(&path).join(&file)).unwrap_or_default();
         return Ok(content
             .lines()
             .map(|l| format!("+{}", l))
@@ -193,16 +196,11 @@ pub fn git_file_diff(
 /// `ignore_whitespace` passes `-w`. Note that a `-w` patch has line counts that
 /// no longer match the file, so it renders but cannot be fed back to
 /// `git apply`; staging a hunk re-reads the file's patch without it.
-#[tauri::command]
 pub fn git_working_diff(
     path: String,
     staged: bool,
     ignore_whitespace: Option<bool>,
 ) -> Result<String> {
-    if !is_repo(&path) {
-        return Ok(String::new());
-    }
-
     let mut args = vec!["diff", "--no-color"];
     if ignore_whitespace.unwrap_or(false) {
         args.push("-w");
@@ -212,7 +210,11 @@ pub fn git_working_diff(
     }
     let out = git(&path, &args)?;
     if !out.status.success() {
-        return Err(failure(&out));
+        return if is_repo(&path) {
+            Err(failure(&out))
+        } else {
+            Ok(String::new())
+        };
     }
     let mut patch = String::from_utf8_lossy(&out.stdout).to_string();
 
@@ -243,7 +245,6 @@ fn untracked_patch(path: &str, file: &str) -> String {
 }
 
 /// Add paths to the index (picks up untracked files too).
-#[tauri::command]
 pub fn git_stage(path: String, files: Vec<String>) -> Result<String> {
     if files.is_empty() {
         return Err(Error::new("No files selected."));
@@ -254,7 +255,6 @@ pub fn git_stage(path: String, files: Vec<String>) -> Result<String> {
 }
 
 /// Drop paths from the index, leaving the working tree untouched.
-#[tauri::command]
 pub fn git_unstage(path: String, files: Vec<String>) -> Result<String> {
     if files.is_empty() {
         return Err(Error::new("No files selected."));
@@ -271,7 +271,6 @@ pub fn git_unstage(path: String, files: Vec<String>) -> Result<String> {
 
 /// Throw away a file's changes: delete it when untracked, else restore it from
 /// the index and HEAD. Irreversible — the caller confirms first.
-#[tauri::command]
 pub fn git_discard(path: String, files: Vec<String>, untracked: bool) -> Result<String> {
     if files.is_empty() {
         return Err(Error::new("No files selected."));
@@ -290,7 +289,6 @@ pub fn git_discard(path: String, files: Vec<String>, untracked: bool) -> Result<
 /// Apply a unified-diff patch built by the frontend from one hunk of a file's
 /// diff. `cached` targets the index (stage / unstage a hunk); `reverse` undoes
 /// the hunk instead of applying it (unstage, or discard from the working tree).
-#[tauri::command]
 pub fn git_apply(path: String, patch: String, cached: bool, reverse: bool) -> Result<String> {
     if !is_repo(&path) {
         return Err(Error::new("Not a git repository."));
@@ -357,7 +355,11 @@ fn path_of(lines: &[&str]) -> String {
         if let Some(rest) = line.strip_prefix("diff --git a/") {
             if let Some(pos) = rest.find(" b/") {
                 let (a, b) = (&rest[..pos], &rest[pos + 3..]);
-                return if b.is_empty() { a.to_string() } else { b.to_string() };
+                return if b.is_empty() {
+                    a.to_string()
+                } else {
+                    b.to_string()
+                };
             }
             return rest.to_string();
         }
@@ -370,7 +372,9 @@ fn path_of(lines: &[&str]) -> String {
 /// or hunk isn't in the patch: a stale index after the tree moved under the
 /// render, which must not silently apply the wrong hunk.
 fn hunk_patch_for_file(patch: &str, file: &str, hunk_index: usize) -> Option<String> {
-    let (_, section) = split_file_patches(patch).into_iter().find(|(p, _)| p == file)?;
+    let (_, section) = split_file_patches(patch)
+        .into_iter()
+        .find(|(p, _)| p == file)?;
 
     // The two `---`/`+++` lines are the whole header git apply needs; the
     // `diff --git` line is dropped, matching what the panel fed it one file at
@@ -420,7 +424,6 @@ fn hunk_patch_for_file(patch: &str, file: &str, hunk_index: usize) -> Option<Str
 /// whole-scope patch the panel renders. The frontend hands over the patch its
 /// rendered hunks came from (the deferred one, not the newest): the index the
 /// user clicked only means anything in that text.
-#[tauri::command]
 pub fn git_apply_hunk(
     path: String,
     patch: String,
@@ -429,13 +432,13 @@ pub fn git_apply_hunk(
     cached: bool,
     reverse: bool,
 ) -> Result<String> {
-    let slice = hunk_patch_for_file(&patch, &file, hunk_index)
-        .ok_or_else(|| Error::new("That hunk is no longer in the patch — refresh and try again."))?;
+    let slice = hunk_patch_for_file(&patch, &file, hunk_index).ok_or_else(|| {
+        Error::new("That hunk is no longer in the patch — refresh and try again.")
+    })?;
     git_apply(path, slice, cached, reverse)
 }
 
 /// Commit whatever is staged in the index.
-#[tauri::command]
 pub fn git_commit(path: String, message: String) -> Result<String> {
     if !is_repo(&path) {
         return Err(Error::new("Not a git repository."));
@@ -571,11 +574,8 @@ const SEP: char = '\x1f';
 const RECORD: char = '\x1e';
 
 /// A file's history, newest first, following it across renames.
-#[tauri::command]
 pub fn git_file_log(path: String, file: String) -> Result<Vec<GitCommit>> {
-    let fmt = format!(
-        "{RECORD}%H{SEP}%h{SEP}%an{SEP}%aI{SEP}%ar{SEP}%s"
-    );
+    let fmt = format!("{RECORD}%H{SEP}%h{SEP}%an{SEP}%aI{SEP}%ar{SEP}%s");
     let out = run_git(
         &path,
         &[
@@ -632,7 +632,6 @@ pub fn git_file_log(path: String, file: String) -> Result<Vec<GitCommit>> {
 }
 
 /// A file's contents at one commit. Empty when the file didn't exist there.
-#[tauri::command]
 pub fn git_show_file(path: String, sha: String, file: String) -> Result<String> {
     let out = git(&path, &["show", &format!("{sha}:{file}")])?;
     if out.status.success() {
@@ -701,7 +700,6 @@ fn parse_name_status(rest: &str) -> Vec<GitCommitFile> {
 
 /// Repo-wide history, newest first, one page of `limit` commits, each with the
 /// files it changed. Pagination grows `limit` from the frontend — no cursor.
-#[tauri::command]
 pub fn git_log(path: String, limit: u32) -> Result<Vec<GitLogEntry>> {
     if !is_repo(&path) {
         return Err(Error::new("Not a git repository."));
@@ -774,7 +772,6 @@ pub fn git_log(path: String, limit: u32) -> Result<Vec<GitLogEntry>> {
 }
 
 /// The diff one commit introduced to one file (vs its first parent).
-#[tauri::command]
 pub fn git_commit_diff(path: String, sha: String, file: String) -> Result<String> {
     // Same first-parent view the log lists a merge's files from, or picking one
     // of those files would open an empty diff.
@@ -791,7 +788,10 @@ pub fn git_commit_diff(path: String, sha: String, file: String) -> Result<String
         ],
     )?;
     if !out.status.success() {
-        let plain = git(&path, &["show", "--no-color", "--format=", &sha, "--", &file])?;
+        let plain = git(
+            &path,
+            &["show", "--no-color", "--format=", &sha, "--", &file],
+        )?;
         return Ok(String::from_utf8_lossy(&plain.stdout).to_string());
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
@@ -799,7 +799,6 @@ pub fn git_commit_diff(path: String, sha: String, file: String) -> Result<String
 
 /// Pickaxe search (`git log -S`): the shas of commits that added or removed
 /// `term` in this file.
-#[tauri::command]
 pub fn git_pickaxe(path: String, file: String, term: String) -> Result<Vec<String>> {
     if term.trim().is_empty() {
         return Ok(vec![]);
@@ -836,7 +835,6 @@ pub struct GitBranch {
 }
 
 /// Current branch plus upstream tracking / ahead-behind counts.
-#[tauri::command]
 pub fn git_branch(path: String) -> Result<GitBranch> {
     let branch = run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
 
@@ -872,10 +870,13 @@ pub fn git_branch(path: String) -> Result<GitBranch> {
 }
 
 /// Local branch names.
-#[tauri::command]
 pub fn git_branches(path: String) -> Result<Vec<String>> {
     let out = run_git(&path, &["branch", "--format=%(refname:short)"])?;
-    Ok(out.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+    Ok(out
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
 }
 
 /// The branch a repo's work merges back into: the remote's own default when it
@@ -885,7 +886,12 @@ pub fn git_branches(path: String) -> Result<Vec<String>> {
 fn merge_base_ref(path: &str) -> Option<String> {
     if let Ok(head) = run_git(
         path,
-        &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
     ) {
         if !head.is_empty() {
             return Some(head);
@@ -900,7 +906,6 @@ fn merge_base_ref(path: &str) -> Option<String> {
 /// The branch this repo's work merges into, short name (no remote prefix).
 /// None when it can't be told — a caller must not guess, since "are we on the
 /// default branch?" gates a push confirmation.
-#[tauri::command]
 pub fn git_default_branch(path: String) -> Result<Option<String>> {
     Ok(merge_base_ref(&path).map(|base| base.rsplit('/').next().unwrap_or(&base).to_string()))
 }
@@ -909,7 +914,6 @@ pub fn git_default_branch(path: String) -> Result<Option<String>> {
 /// sidebar reads as "this thread's work is done". One call per repo root, not
 /// one per thread. The base itself is always reachable from itself, so it is
 /// dropped — a repo sitting on `main` is not a pile of finished work.
-#[tauri::command]
 pub fn git_merged_branches(path: String) -> Result<Vec<String>> {
     let Some(base) = merge_base_ref(&path) else {
         return Ok(vec![]);
@@ -927,19 +931,16 @@ pub fn git_merged_branches(path: String) -> Result<Vec<String>> {
 }
 
 /// Fetch and merge from the tracked remote.
-#[tauri::command]
 pub fn git_pull(path: String) -> Result<String> {
     run_git(&path, &["pull"])
 }
 
 /// Push the current branch to its configured upstream.
-#[tauri::command]
 pub fn git_push(path: String) -> Result<String> {
     run_git(&path, &["push"])
 }
 
 /// Push `branch` to `remote` and set it as the upstream.
-#[tauri::command]
 pub fn git_push_to(path: String, remote: String, branch: String) -> Result<String> {
     run_git(&path, &["push", "-u", &remote, &branch])
 }
@@ -970,7 +971,9 @@ pub(crate) fn prepare_clone_destination(dest: &Path) -> Result<()> {
 fn clone_into(url: String, destination: String) -> Result<String> {
     let dest = PathBuf::from(destination.trim());
     prepare_clone_destination(&dest)?;
-    let parent = dest.parent().ok_or_else(|| Error::new("Destination has no parent directory."))?;
+    let parent = dest
+        .parent()
+        .ok_or_else(|| Error::new("Destination has no parent directory."))?;
     let name = dest
         .file_name()
         .ok_or_else(|| Error::new("Destination has no directory name."))?
@@ -1019,8 +1022,11 @@ pub struct CommitPush {
 ///   anyway, and force-pushing is never something this does for you);
 /// - a branch with no upstream is only published when `set_upstream` says so,
 ///   because creating a remote branch is not implied by "commit".
-#[tauri::command]
-pub fn git_commit_and_push(path: String, message: String, set_upstream: bool) -> Result<CommitPush> {
+pub fn git_commit_and_push(
+    path: String,
+    message: String,
+    set_upstream: bool,
+) -> Result<CommitPush> {
     if !is_repo(&path) {
         return Err(Error::new("Not a git repository."));
     }
@@ -1080,7 +1086,6 @@ pub fn git_commit_and_push(path: String, message: String, set_upstream: bool) ->
 }
 
 /// Switch to `branch`, creating it (`-b`) when `create` is set.
-#[tauri::command]
 pub fn git_checkout(path: String, branch: String, create: bool) -> Result<String> {
     if branch.trim().is_empty() {
         return Err(Error::new("Branch name is empty."));
@@ -1095,7 +1100,6 @@ pub fn git_checkout(path: String, branch: String, create: bool) -> Result<String
 /// Delete a local branch. Uses `-d`, so git refuses to discard a branch whose
 /// commits aren't merged — the error is surfaced to the caller rather than
 /// forced away.
-#[tauri::command]
 pub fn git_branch_delete(path: String, branch: String) -> Result<String> {
     if branch.trim().is_empty() {
         return Err(Error::new("Branch name is empty."));
@@ -1177,7 +1181,10 @@ fn parse_worktree_list(text: &str) -> Vec<GitWorktree> {
             // `detached` and `bare` records carry no branch, so "" stands in.
             "branch" => {
                 if let Some(wt) = cur.as_mut() {
-                    wt.branch = value.strip_prefix("refs/heads/").unwrap_or(value).to_string();
+                    wt.branch = value
+                        .strip_prefix("refs/heads/")
+                        .unwrap_or(value)
+                        .to_string();
                 }
             }
             "locked" => {
@@ -1254,7 +1261,6 @@ pub struct GitRepoRoot {
 }
 
 /// Every worktree registered on the repo, main one first.
-#[tauri::command]
 pub fn git_worktrees(path: String) -> Result<Vec<GitWorktree>> {
     if !is_repo(&path) {
         return Ok(vec![]);
@@ -1264,7 +1270,6 @@ pub fn git_worktrees(path: String) -> Result<Vec<GitWorktree>> {
 }
 
 /// Which repo (and which of its worktrees) a path belongs to.
-#[tauri::command]
 pub fn git_repo_root(path: String) -> Result<GitRepoRoot> {
     let root = run_git(&path, &["rev-parse", "--show-toplevel"])?;
     let main_root = main_worktree_root(&path)?;
@@ -1365,7 +1370,6 @@ fn worktree_add(
 
 /// Unregister a worktree and delete its directory. `force` also throws away
 /// uncommitted changes in it.
-#[tauri::command]
 pub fn git_worktree_remove(path: String, worktree: String, force: bool) -> Result<String> {
     let main_root = canonical(&main_worktree_root(&path)?);
     if canonical(Path::new(&worktree)) == main_root {
@@ -1380,7 +1384,6 @@ pub fn git_worktree_remove(path: String, worktree: String, force: bool) -> Resul
 }
 
 /// Drop registrations whose directories are gone.
-#[tauri::command]
 pub fn git_worktree_prune(path: String) -> Result<String> {
     run_git(&path, &["worktree", "prune"])
 }
@@ -1395,7 +1398,6 @@ pub struct GitStash {
 }
 
 /// Stash all working-tree changes, with an optional message.
-#[tauri::command]
 pub fn git_stash_push(path: String, message: String) -> Result<String> {
     if message.trim().is_empty() {
         run_git(&path, &["stash", "push"])
@@ -1405,7 +1407,6 @@ pub fn git_stash_push(path: String, message: String) -> Result<String> {
 }
 
 /// List saved stashes, newest first.
-#[tauri::command]
 pub fn git_stash_list(path: String) -> Result<Vec<GitStash>> {
     let out = run_git(&path, &["stash", "list"])?;
     Ok(out
@@ -1419,7 +1420,6 @@ pub fn git_stash_list(path: String) -> Result<Vec<GitStash>> {
 }
 
 /// Apply the stash at `index`, dropping it too when `pop` is set.
-#[tauri::command]
 pub fn git_stash_apply(path: String, index: u32, pop: bool) -> Result<String> {
     let stash = format!("stash@{{{}}}", index);
     let action = if pop { "pop" } else { "apply" };
@@ -1427,7 +1427,6 @@ pub fn git_stash_apply(path: String, index: u32, pop: bool) -> Result<String> {
 }
 
 /// Discard the stash at `index` without applying it.
-#[tauri::command]
 pub fn git_stash_drop(path: String, index: u32) -> Result<String> {
     let stash = format!("stash@{{{}}}", index);
     run_git(&path, &["stash", "drop", &stash])
@@ -1487,10 +1486,12 @@ fn repo_file_path(root: &str, file: &str) -> Result<PathBuf> {
     if file.trim().is_empty() {
         return Err(Error::new("Path is empty."));
     }
-    if !rel
-        .components()
-        .all(|c| matches!(c, std::path::Component::Normal(_) | std::path::Component::CurDir))
-    {
+    if !rel.components().all(|c| {
+        matches!(
+            c,
+            std::path::Component::Normal(_) | std::path::Component::CurDir
+        )
+    }) {
         return Err(outside());
     }
 
@@ -1646,7 +1647,9 @@ fn merge_continue(path: String, message: Option<String>) -> Result<()> {
     if !conflicted_files(&path)?.is_empty() {
         return Err(Error::new("Resolve the remaining conflicts first."));
     }
-    let message = message.map(|m| m.trim().to_string()).filter(|m| !m.is_empty());
+    let message = message
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty());
     let out = match &message {
         // `--no-edit` keeps git's generated merge message without an editor.
         None => git(&path, &["commit", "--no-edit"])?,
@@ -1702,7 +1705,6 @@ fn parse_remote_host(raw: &str) -> Option<String> {
 /// Classify the origin remote's host as `"github" | "gitlab" | "other"`.
 /// Returns `"other"` when there is no remote or the host is neither. A
 /// self-hosted GitLab on a custom domain reads as `"other"` — known limitation.
-#[tauri::command]
 pub fn git_remote_host(path: String) -> Result<String> {
     let host = match remote_url(&path).as_deref().and_then(parse_remote_host) {
         Some(h) => h,
@@ -1716,6 +1718,52 @@ pub fn git_remote_host(path: String) -> Result<String> {
         "other"
     };
     Ok(kind.into())
+}
+
+/// Orders the commands that write the index, refs or working tree. They used
+/// to queue on the main thread; off it, two fast clicks would race for
+/// `index.lock` and one would fail.
+pub(crate) static WRITES: Mutex<()> = Mutex::new(());
+
+pub mod cmd {
+    use super::*;
+
+    crate::offload! {
+        git_changes(path: String) -> Vec<GitFile>;
+        git_file_diff(path: String, file: String, untracked: bool, staged: bool, ignore_whitespace: Option<bool>) -> String;
+        git_working_diff(path: String, staged: bool, ignore_whitespace: Option<bool>) -> String;
+        git_file_log(path: String, file: String) -> Vec<GitCommit>;
+        git_show_file(path: String, sha: String, file: String) -> String;
+        git_log(path: String, limit: u32) -> Vec<GitLogEntry>;
+        git_commit_diff(path: String, sha: String, file: String) -> String;
+        git_pickaxe(path: String, file: String, term: String) -> Vec<String>;
+        git_branch(path: String) -> GitBranch;
+        git_branches(path: String) -> Vec<String>;
+        git_default_branch(path: String) -> Option<String>;
+        git_merged_branches(path: String) -> Vec<String>;
+        git_worktrees(path: String) -> Vec<GitWorktree>;
+        git_repo_root(path: String) -> GitRepoRoot;
+        git_stash_list(path: String) -> Vec<GitStash>;
+        git_remote_host(path: String) -> String;
+
+        [WRITES] git_stage(path: String, files: Vec<String>) -> String;
+        [WRITES] git_unstage(path: String, files: Vec<String>) -> String;
+        [WRITES] git_discard(path: String, files: Vec<String>, untracked: bool) -> String;
+        [WRITES] git_apply(path: String, patch: String, cached: bool, reverse: bool) -> String;
+        [WRITES] git_apply_hunk(path: String, patch: String, file: String, hunk_index: usize, cached: bool, reverse: bool) -> String;
+        [WRITES] git_commit(path: String, message: String) -> String;
+        [WRITES] git_pull(path: String) -> String;
+        [WRITES] git_push(path: String) -> String;
+        [WRITES] git_push_to(path: String, remote: String, branch: String) -> String;
+        [WRITES] git_commit_and_push(path: String, message: String, set_upstream: bool) -> CommitPush;
+        [WRITES] git_checkout(path: String, branch: String, create: bool) -> String;
+        [WRITES] git_branch_delete(path: String, branch: String) -> String;
+        [WRITES] git_worktree_remove(path: String, worktree: String, force: bool) -> String;
+        [WRITES] git_worktree_prune(path: String) -> String;
+        [WRITES] git_stash_push(path: String, message: String) -> String;
+        [WRITES] git_stash_apply(path: String, index: u32, pop: bool) -> String;
+        [WRITES] git_stash_drop(path: String, index: u32) -> String;
+    }
 }
 
 #[cfg(test)]
@@ -1732,9 +1780,9 @@ mod tests {
         assert!(cut.len() < diff.len());
         assert!(cut.contains("[diff truncated"));
         // Whole lines only: a half-written hunk reads as a different change.
-        assert!(cut.lines().all(|l| l.is_empty()
-            || l.starts_with("+line")
-            || l.starts_with("[diff truncated")));
+        assert!(cut
+            .lines()
+            .all(|l| l.is_empty() || l.starts_with("+line") || l.starts_with("[diff truncated")));
     }
 
     #[test]
@@ -1752,8 +1800,7 @@ mod tests {
         std::fs::write(repo.0.join("a.txt"), "two\n").unwrap();
         std::fs::write(repo.0.join("b.txt"), "two\n").unwrap();
 
-        let patch =
-            git_working_diff(repo.0.to_str().unwrap().into(), false, None).unwrap();
+        let patch = git_working_diff(repo.0.to_str().unwrap().into(), false, None).unwrap();
         // One patch, both files, each with its own `diff --git` header — which is
         // what makes it parseable as a multi-file patch.
         assert_eq!(patch.matches("diff --git").count(), 2);
@@ -1770,8 +1817,7 @@ mod tests {
         repo.run(&["commit", "-m", "first"]);
         std::fs::write(repo.0.join("new.txt"), "fresh\n").unwrap();
 
-        let patch =
-            git_working_diff(repo.0.to_str().unwrap().into(), false, None).unwrap();
+        let patch = git_working_diff(repo.0.to_str().unwrap().into(), false, None).unwrap();
         // Not bare `+` lines the way git_file_diff returns them: the renderer
         // needs a header to know which file the additions belong to.
         assert!(patch.contains("diff --git"));
@@ -1789,8 +1835,7 @@ mod tests {
         repo.run(&["add", "a.txt"]);
         std::fs::write(repo.0.join("new.txt"), "fresh\n").unwrap();
 
-        let patch =
-            git_working_diff(repo.0.to_str().unwrap().into(), true, None).unwrap();
+        let patch = git_working_diff(repo.0.to_str().unwrap().into(), true, None).unwrap();
         assert!(patch.contains("+two"));
         // An untracked file has nothing in the index, so it belongs to the
         // working-tree half only — listing it here would offer to unstage
@@ -1910,7 +1955,12 @@ mod tests {
         files
             .iter()
             .find(|f| f.path == path)
-            .unwrap_or_else(|| panic!("{path} not in {:?}", files.iter().map(|f| &f.path).collect::<Vec<_>>()))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{path} not in {:?}",
+                    files.iter().map(|f| &f.path).collect::<Vec<_>>()
+                )
+            })
             .status
             .clone()
     }
@@ -2021,8 +2071,20 @@ mod tests {
         assert_eq!(status_of(&files, "tracked.txt"), " M");
         assert_eq!(status_of(&files, "fresh.txt"), "??");
         assert_eq!(status_of(&files, "staged.txt"), "A ");
-        assert!(files.iter().find(|f| f.path == "fresh.txt").unwrap().untracked);
-        assert!(!files.iter().find(|f| f.path == "tracked.txt").unwrap().untracked);
+        assert!(
+            files
+                .iter()
+                .find(|f| f.path == "fresh.txt")
+                .unwrap()
+                .untracked
+        );
+        assert!(
+            !files
+                .iter()
+                .find(|f| f.path == "tracked.txt")
+                .unwrap()
+                .untracked
+        );
     }
 
     #[test]
@@ -2062,7 +2124,10 @@ mod tests {
             .expect("rename present");
         assert_eq!(rename.old_path.as_deref(), Some("a.txt"));
         assert_eq!(rename.path, "renamed.txt");
-        assert!(log[0].files.iter().any(|f| f.status == "A" && f.path == "b.txt"));
+        assert!(log[0]
+            .files
+            .iter()
+            .any(|f| f.status == "A" && f.path == "b.txt"));
         assert_eq!(log[1].files.len(), 1);
         assert_eq!(log[1].files[0].status, "A");
         assert_eq!(log[1].files[0].path, "a.txt");
@@ -2089,7 +2154,10 @@ mod tests {
         assert!(merge.files.iter().any(|f| f.path == "side.txt"));
 
         let diff = git_commit_diff(repo.path(), merge.sha.clone(), "side.txt".into()).unwrap();
-        assert!(diff.contains("from the branch"), "merge file opens a real diff");
+        assert!(
+            diff.contains("from the branch"),
+            "merge file opens a real diff"
+        );
     }
 
     #[test]
@@ -2209,8 +2277,7 @@ mod tests {
         let patch = "--- a/a.txt\n+++ b/a.txt\n@@ -1,1 +1,1 @@\n-nonexistent\n+x\n";
         let err = git_apply(repo.path(), patch.into(), false, false).unwrap_err();
         assert!(
-            err.to_string().contains("patch does not apply")
-                || err.to_string().contains("error"),
+            err.to_string().contains("patch does not apply") || err.to_string().contains("error"),
             "unexpected error: {err}"
         );
     }
@@ -2228,7 +2295,11 @@ mod tests {
         let log = git_file_log(repo.path(), "new.txt".into()).unwrap();
         assert_eq!(
             log.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(),
-            vec!["feat: extend new", "refactor: rename to new", "feat: add old"]
+            vec![
+                "feat: extend new",
+                "refactor: rename to new",
+                "feat: add old"
+            ]
         );
         assert_eq!(log[1].old_path.as_deref(), Some("old.txt"));
         assert_eq!(log[1].path, "new.txt");
@@ -2320,7 +2391,9 @@ mod tests {
         assert!(out.committed && out.pushed, "{}", out.message);
         assert_eq!(out.branch, "main");
         // The remote actually has it, not just the local branch.
-        assert!(remote.run(&["log", "-1", "--pretty=%s", "main"]).contains("add a"));
+        assert!(remote
+            .run(&["log", "-1", "--pretty=%s", "main"])
+            .contains("add a"));
     }
 
     // Refusing after committing would strand a commit the user did not expect.
@@ -2366,7 +2439,9 @@ mod tests {
 
         let done = git_commit_and_push(repo.path(), "feature work".into(), true).unwrap();
         assert!(done.committed && done.pushed, "{}", done.message);
-        assert!(remote.run(&["log", "-1", "--pretty=%s", "feature"]).contains("feature work"));
+        assert!(remote
+            .run(&["log", "-1", "--pretty=%s", "feature"])
+            .contains("feature work"));
     }
 
     // The commit is in history either way; saying "nothing happened" would send
@@ -2445,7 +2520,9 @@ mod tests {
         git_checkout(repo.path(), "main".into(), false).unwrap();
 
         assert!(git_branch_delete(repo.path(), "feature".into()).is_err());
-        assert!(git_branches(repo.path()).unwrap().contains(&"feature".to_string()));
+        assert!(git_branches(repo.path())
+            .unwrap()
+            .contains(&"feature".to_string()));
     }
 
     #[test]
@@ -2478,7 +2555,10 @@ mod tests {
         // is unknowable, and guessing would settle threads that are still live.
         repo.run(&["branch", "-m", "trunk"]);
 
-        assert_eq!(git_merged_branches(repo.path()).unwrap(), Vec::<String>::new());
+        assert_eq!(
+            git_merged_branches(repo.path()).unwrap(),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -2603,7 +2683,10 @@ prunable gitdir file points to non-existent location
         assert!(!path.starts_with(&repo.0));
         assert!(dir.contains(".emberyx-worktrees"));
         assert!(dir.ends_with("emberyx_test_git_wt_add-feat-wt-add"));
-        assert_eq!(std::fs::read_to_string(path.join("a.txt")).unwrap(), "one\n");
+        assert_eq!(
+            std::fs::read_to_string(path.join("a.txt")).unwrap(),
+            "one\n"
+        );
 
         let trees = git_worktrees(repo.path()).unwrap();
         assert_eq!(trees.len(), 2);
@@ -2620,7 +2703,10 @@ prunable gitdir file points to non-existent location
 
         let first = add_worktree(&repo, "wt-reuse", true).unwrap();
         let second = add_worktree(&repo, "wt-reuse", true).unwrap();
-        assert_eq!(canonical(std::path::Path::new(&first)), canonical(std::path::Path::new(&second)));
+        assert_eq!(
+            canonical(std::path::Path::new(&first)),
+            canonical(std::path::Path::new(&second))
+        );
         assert_eq!(git_worktrees(repo.path()).unwrap().len(), 2);
     }
 
@@ -2676,7 +2762,10 @@ prunable gitdir file points to non-existent location
         repo.commit("init");
 
         let err = git_worktree_remove(repo.path(), repo.path(), true).unwrap_err();
-        assert!(err.to_string().contains("main worktree"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("main worktree"),
+            "unexpected error: {err}"
+        );
         assert!(repo.0.join("a.txt").exists());
     }
 
@@ -2801,11 +2890,9 @@ prunable gitdir file points to non-existent location
         let repo = conflicting_repo("merge_stages");
         merge_ref(&repo, "feature").unwrap();
 
-        let stages = tauri::async_runtime::block_on(git_conflict_stages(
-            repo.path(),
-            "a.txt".to_string(),
-        ))
-        .unwrap();
+        let stages =
+            tauri::async_runtime::block_on(git_conflict_stages(repo.path(), "a.txt".to_string()))
+                .unwrap();
         assert_eq!(stages.base.as_deref(), Some("base\n"));
         assert_eq!(stages.ours.as_deref(), Some("ours\n"));
         assert_eq!(stages.theirs.as_deref(), Some("theirs\n"));
@@ -2866,7 +2953,10 @@ prunable gitdir file points to non-existent location
             Some("chore: merge feature".into()),
         ))
         .unwrap();
-        assert_eq!(repo.run(&["log", "-1", "--pretty=%s"]), "chore: merge feature");
+        assert_eq!(
+            repo.run(&["log", "-1", "--pretty=%s"]),
+            "chore: merge feature"
+        );
     }
 
     #[test]
@@ -2874,7 +2964,11 @@ prunable gitdir file points to non-existent location
         let repo = Repo::new("resolve_escape");
         repo.write("a.txt", "one\n");
         repo.commit("init");
-        let escape = repo.0.parent().unwrap().join("emberyx_test_git_escaped.txt");
+        let escape = repo
+            .0
+            .parent()
+            .unwrap()
+            .join("emberyx_test_git_escaped.txt");
         let _ = std::fs::remove_file(&escape);
 
         assert!(resolve_file(&repo, "../emberyx_test_git_escaped.txt", "pwned\n").is_err());
@@ -2895,7 +2989,10 @@ prunable gitdir file points to non-existent location
             std::fs::read_to_string(repo.0.join("src/a.txt")).unwrap(),
             "two\n"
         );
-        assert_eq!(status_of(&git_changes(repo.path()).unwrap(), "src/a.txt"), "M ");
+        assert_eq!(
+            status_of(&git_changes(repo.path()).unwrap(), "src/a.txt"),
+            "M "
+        );
     }
 
     #[test]
@@ -2943,7 +3040,9 @@ prunable gitdir file points to non-existent location
         repo.write("a.txt", "one\n");
         repo.commit("init");
 
-        assert!(tauri::async_runtime::block_on(git_fetch(repo.path(), Some("nope".into()))).is_err());
+        assert!(
+            tauri::async_runtime::block_on(git_fetch(repo.path(), Some("nope".into()))).is_err()
+        );
     }
 
     /// The same shape the changes panel feeds `git_apply_hunk`: git's own
@@ -3060,8 +3159,18 @@ index 333..444 100644\n\
         repo.write("a.txt", "one\ntwo\nthree\n");
         repo.commit("init");
 
-        let error = git_apply_hunk(repo.path(), TWO_FILES.into(), "a.txt".into(), 5, true, false)
-            .unwrap_err();
-        assert!(error.to_string().contains("no longer in the patch"), "{error}");
+        let error = git_apply_hunk(
+            repo.path(),
+            TWO_FILES.into(),
+            "a.txt".into(),
+            5,
+            true,
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("no longer in the patch"),
+            "{error}"
+        );
     }
 }

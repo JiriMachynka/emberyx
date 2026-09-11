@@ -703,7 +703,7 @@ const ThreadRow = memo(function ThreadRow({
     // Start the thread's first page on the way to the click. The pane reads it
     // out of the cache, so the switch paints without a round trip; a hover that
     // never becomes a click costs one indexed query.
-    if (!open && !thread.imported) prefetchThreadPage(project.path, thread.id);
+    if (!open) prefetchThreadPage(project.path, thread.id);
   };
   const leave = () => {
     window.clearTimeout(timer.current);
@@ -923,6 +923,9 @@ const WorkingChip = memo(function WorkingChip({
   /** What to show when the agent isn't working — the thread's age. */
   idle: string;
 }) {
+  // Out of the React Compiler: the ticker re-renders so `formatElapsed` reads
+  // a fresh clock, and a clock read is not an input the compiler can see.
+  "use no memo";
   const status = useAgentStore((s) => statusOf(s.statuses, id));
   const since = useAgentStore((s) => s.statusSince[id]);
   const [, tick] = useState(0);

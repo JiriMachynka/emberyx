@@ -27,7 +27,14 @@ fn first_line(program: &str, args: &[&str]) -> String {
         .output()
         .ok()
         .filter(|out| out.status.success())
-        .map(|out| String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or("").trim().to_string())
+        .map(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        })
         .unwrap_or_default()
 }
 
@@ -41,9 +48,14 @@ fn device_name() -> String {
     host.strip_suffix(".local").unwrap_or(&host).to_string()
 }
 
-#[tauri::command]
 pub fn machine_name() -> String {
     compose_label(&first_line("id", &["-F"]), &device_name())
+}
+
+pub mod cmd {
+    crate::offload! {
+        machine_name() => String;
+    }
 }
 
 #[cfg(test)]

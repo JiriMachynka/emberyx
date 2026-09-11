@@ -108,23 +108,28 @@ pub(crate) fn auth_token(binary: &str, name: &str, login: &str) -> Result<String
 /// Same, with the login-shell env already in hand — `probe` has one and paying
 /// for a second capture per CLI is the difference between one keychain hit and
 /// four subprocesses.
-fn auth_token_in(binary: &str, name: &str, login: &str, env: &[(String, String)]) -> Result<String> {
-    let resolved = resolve_binary(binary, env).ok_or_else(|| {
-        crate::err!("{name} CLI (`{binary}`) is not installed")
-    })?;
+fn auth_token_in(
+    binary: &str,
+    name: &str,
+    login: &str,
+    env: &[(String, String)],
+) -> Result<String> {
+    let resolved = resolve_binary(binary, env)
+        .ok_or_else(|| crate::err!("{name} CLI (`{binary}`) is not installed"))?;
     // glab has no `auth token`. Current versions print help and exit 0.
     if binary == "glab" {
         if let Some(token) = env_token(env, &["GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN"]) {
             return Ok(token);
         }
-        if let Some(token) = run(&resolved, &["config", "get", "token"], env)
-            .filter(|value| looks_like_token(value))
+        if let Some(token) =
+            run(&resolved, &["config", "get", "token"], env).filter(|value| looks_like_token(value))
         {
             return Ok(token);
         }
         return Err(crate::err!("{name} CLI isn't logged in — run `{login}`"));
     }
-    if let Some(token) = run(&resolved, &["auth", "token"], env).filter(|value| looks_like_token(value))
+    if let Some(token) =
+        run(&resolved, &["auth", "token"], env).filter(|value| looks_like_token(value))
     {
         return Ok(token);
     }
@@ -134,9 +139,7 @@ fn auth_token_in(binary: &str, name: &str, login: &str, env: &[(String, String)]
 fn probe(cli: &Cli, env: &[(String, String)]) -> ForgeCliStatus {
     let binary = resolve_binary(cli.binary, env);
     let installed = binary.is_some();
-    let version = binary
-        .as_ref()
-        .and_then(|path| probe_version(path, env));
+    let version = binary.as_ref().and_then(|path| probe_version(path, env));
     let authenticated = installed && auth_token_in(cli.binary, cli.label, cli.login, env).is_ok();
     ForgeCliStatus {
         id: cli.id.to_string(),
@@ -239,9 +242,8 @@ fn clone_with_cli(provider: String, repository: String, destination: String) -> 
     let dest = std::path::PathBuf::from(destination.trim());
     crate::git::prepare_clone_destination(&dest)?;
     let env = shell_env();
-    let binary = resolve_binary(cli.binary, &env).ok_or_else(|| {
-        crate::err!("{} CLI (`{}`) is not installed", cli.label, cli.binary)
-    })?;
+    let binary = resolve_binary(cli.binary, &env)
+        .ok_or_else(|| crate::err!("{} CLI (`{}`) is not installed", cli.label, cli.binary))?;
     // Confirm login before a clone that would otherwise fail mid-transfer.
     auth_token(cli.binary, cli.label, cli.login)?;
     let dest_s = dest.to_string_lossy().into_owned();
@@ -298,9 +300,8 @@ fn publish_with_cli(
     };
     let cli = cli_for(&provider)?;
     let env = shell_env();
-    let binary = resolve_binary(cli.binary, &env).ok_or_else(|| {
-        crate::err!("{} CLI (`{}`) is not installed", cli.label, cli.binary)
-    })?;
+    let binary = resolve_binary(cli.binary, &env)
+        .ok_or_else(|| crate::err!("{} CLI (`{}`) is not installed", cli.label, cli.binary))?;
     auth_token(cli.binary, cli.label, cli.login)?;
     let vis = if private { "--private" } else { "--public" };
     let push = has_commits(&path);
@@ -380,7 +381,10 @@ fn open_pr_for_branch(path: &str, provider: &str, branch: &str) -> Option<String
     let out = if cli.id == "github" {
         run_checked(
             &binary,
-            &["pr", "list", "--head", branch, "--state", "open", "--json", "url", "--jq", ".[0].url"],
+            &[
+                "pr", "list", "--head", branch, "--state", "open", "--json", "url", "--jq",
+                ".[0].url",
+            ],
             &env,
             Some(path),
         )
@@ -406,11 +410,11 @@ pub async fn forge_pr_for_branch(
     provider: String,
     branch: String,
 ) -> Result<Option<String>> {
-    Ok(tauri::async_runtime::spawn_blocking(move || {
-        open_pr_for_branch(&path, &provider, &branch)
-    })
-    .await
-    .map_err(|e| e.to_string())?)
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || open_pr_for_branch(&path, &provider, &branch))
+            .await
+            .map_err(|e| e.to_string())?,
+    )
 }
 
 fn create_pr_with_cli(
@@ -429,9 +433,8 @@ fn create_pr_with_cli(
         return Err(Error::new("A pull request needs a title."));
     }
     let env = shell_env();
-    let binary = resolve_binary(cli.binary, &env).ok_or_else(|| {
-        crate::err!("{} CLI (`{}`) is not installed", cli.label, cli.binary)
-    })?;
+    let binary = resolve_binary(cli.binary, &env)
+        .ok_or_else(|| crate::err!("{} CLI (`{}`) is not installed", cli.label, cli.binary))?;
     // Fail on the login rather than half-way through the create.
     auth_token(cli.binary, cli.label, cli.login)?;
     let body = body.trim();
@@ -445,7 +448,13 @@ fn create_pr_with_cli(
         // `--yes` skips glab's interactive prompts; without it the command
         // blocks forever on a stdin nobody is attached to.
         let mut args = vec![
-            "mr", "create", "--title", title, "--description", body, "--yes",
+            "mr",
+            "create",
+            "--title",
+            title,
+            "--description",
+            body,
+            "--yes",
         ];
         if let Some(base) = base.as_deref() {
             args.extend(["--target-branch", base]);
@@ -536,7 +545,10 @@ mod tests {
     fn env_token_picks_gitlab_token() {
         let env = vec![
             ("PATH".into(), "/bin".into()),
-            ("GITLAB_TOKEN".into(), "glpat-aaaaaaaaaaaaaaaaaaaaaaaa".into()),
+            (
+                "GITLAB_TOKEN".into(),
+                "glpat-aaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            ),
         ];
         assert_eq!(
             env_token(&env, &["GITLAB_TOKEN", "GITLAB_ACCESS_TOKEN"]).as_deref(),

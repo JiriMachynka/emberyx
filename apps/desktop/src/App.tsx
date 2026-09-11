@@ -1,4 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Profiler, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { markSwitch, onRender } from "@/lib/perf";
 import { toast, Toaster } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -535,6 +536,7 @@ function App() {
   return (
     <div className="flex h-full bg-background text-foreground">
       {revealed && projects.length > 0 && (
+        <Profiler id="Sidebar" onRender={onRender}>
         <Sidebar
           projects={projects}
           activeProjectId={activeProjectId}
@@ -556,6 +558,7 @@ function App() {
           onCloseProject={ws.closeProjectById}
           onPickProject={ws.pickProject}
           onSelectSession={(projectId, id) => {
+            markSwitch(id);
             setSettingsOpen(false);
             setUsageOpen(false);
             ws.activateSession(projectId, id);
@@ -586,6 +589,7 @@ function App() {
           notificationCount={unread}
           onOpenNotifications={toggleNotifications}
         />
+        </Profiler>
       )}
 
       <div className="relative flex min-w-0 flex-1 flex-col">

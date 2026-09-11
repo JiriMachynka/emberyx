@@ -2,9 +2,9 @@ import { useEffect, useRef } from "react";
 import type { FitAddon, Terminal } from "ghostty-web";
 import { loadGhostty, terminalTheme } from "@/lib/ghostty";
 import {
-  killLog,
   rawLog,
   resizeLog,
+  shellSessionId,
   spawnLog,
   subscribeRaw,
   writeLog,
@@ -18,8 +18,6 @@ interface TerminalPaneProps {
   scrollback: number;
   active: boolean;
 }
-
-const terminalSessionId = (cwd: string) => `shell:${cwd}`;
 
 /**
  * An interactive shell, rendered by Ghostty's VT.
@@ -39,18 +37,16 @@ export function TerminalPane({
   const rootRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  const sessionId = terminalSessionId(cwd);
+  const sessionId = shellSessionId(cwd);
   // Read at mount only: scrollback is a live setting, and a shell must not be
   // restarted because a number in Settings changed.
   const scrollbackRef = useRef(scrollback);
 
+  // Spawn only — never kill. The dock unmounts this pane when its tab closes
+  // and the path changes whenever a thread in another project is opened; both
+  // used to kill the shell. Project teardown stops it (useWorkspace).
   useEffect(() => {
     void spawnLog({ sessionId, cwd });
-    // The dock keeps this pane mounted after its tab closes precisely so the
-    // shell survives; unmounting means the project is going away.
-    return () => {
-      void killLog(sessionId);
-    };
   }, [cwd, sessionId]);
 
   useEffect(() => {

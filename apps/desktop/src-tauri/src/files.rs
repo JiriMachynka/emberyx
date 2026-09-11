@@ -26,7 +26,6 @@ const MAX_LISTED: usize = 20_000;
 
 /// List a directory: directories first, then files, each alphabetical. Dot
 /// entries are kept — `.env` and `.gitignore` are worth editing.
-#[tauri::command]
 pub fn list_dir(path: String) -> Result<Vec<DirEntry>> {
     let dir = PathBuf::from(&path);
     if !dir.is_dir() {
@@ -87,7 +86,6 @@ pub fn looks_binary(bytes: &[u8]) -> bool {
 
 /// Read a UTF-8 text file. Errors on binary content or oversized files so the
 /// editor can show a message instead of choking on the buffer.
-#[tauri::command]
 pub fn read_text_file(path: String) -> Result<String> {
     let file = Path::new(&path);
     let meta = std::fs::metadata(file)?;
@@ -108,6 +106,17 @@ pub fn read_text_file(path: String) -> Result<String> {
 #[tauri::command]
 pub fn write_text_file(path: String, contents: String) -> Result<()> {
     Ok(std::fs::write(Path::new(&path), contents)?)
+}
+
+// `write_text_file` stays synchronous: two saves in flight must land in the
+// order they were made, or the older text wins.
+pub mod cmd {
+    use super::*;
+
+    crate::offload! {
+        list_dir(path: String) -> Vec<DirEntry>;
+        read_text_file(path: String) -> String;
+    }
 }
 
 #[cfg(test)]

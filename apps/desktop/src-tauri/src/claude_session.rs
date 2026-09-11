@@ -165,11 +165,7 @@ fn is_user_prompt(entry: &Map<String, Value>) -> bool {
     }
 }
 
-fn write_fork(
-    source: &Path,
-    source_id: &str,
-    kept: &[&Map<String, Value>],
-) -> Result<String> {
+fn write_fork(source: &Path, source_id: &str, kept: &[&Map<String, Value>]) -> Result<String> {
     let writable: Vec<&Map<String, Value>> = kept
         .iter()
         .copied()
@@ -294,9 +290,9 @@ mod tests {
         let entries = read_entries(&path).unwrap();
         let chain = active_chain(&entries);
         assert_eq!(chain.len(), 2);
-        assert!(chain.iter().all(|e| {
-            e.get("sessionId").and_then(Value::as_str) == Some(forked.as_str())
-        }));
+        assert!(chain
+            .iter()
+            .all(|e| { e.get("sessionId").and_then(Value::as_str) == Some(forked.as_str()) }));
         let texts: Vec<_> = chain
             .iter()
             .filter_map(|e| {

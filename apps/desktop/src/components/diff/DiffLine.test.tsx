@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 import { DiffLine } from "@/components/diff/DiffLine";
-import { highlightCached, warmHighlighter } from "@/lib/highlight";
+import { highlightCached } from "@/lib/highlight";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("DiffLine", () => {
-  it("repaints with highlight.js once the engine is in", async () => {
+  it("highlights on the first paint", () => {
     const host = document.createElement("div");
     document.body.appendChild(host);
     const root = createRoot(host);
@@ -23,10 +23,7 @@ describe("DiffLine", () => {
       );
     });
 
-    await act(async () => {
-      await warmHighlighter();
-    });
-
-    expect(host.innerHTML).toContain("hljs-");
+    expect(host.innerHTML).toContain("color:");
+    expect(host.textContent).toContain("const x = 1;");
   });
 });

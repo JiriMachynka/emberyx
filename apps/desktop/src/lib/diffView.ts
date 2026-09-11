@@ -10,7 +10,35 @@
 
 import { registerCustomTheme } from "@pierre/diffs";
 import type { FileDiffContentsLoader, FileDiffLoadedFiles } from "@pierre/diffs";
-import { themeForSurface } from "@/lib/codeHighlighter";
+import type { ThemeRegistrationAny } from "shiki/core";
+
+/**
+ * Vesper is tuned for its own #101010 canvas; the app renders it on a
+ * grey surface instead. Registered as-is it painted a darker slab inside
+ * the code box and left its dim greys under-contrasted. The patch keeps
+ * every hue — it lifts the two neutral greys so the quiet hierarchy
+ * (comment < keyword < plain) survives the lighter background, and hands
+ * the background to the box itself.
+ */
+export const themeForSurface = (theme: ThemeRegistrationAny): ThemeRegistrationAny => {
+  const lift: Record<string, string> = {
+    "#8b8b8b94": "#8f8f8f",
+    "#a0a0a0": "#b0b0b0",
+  };
+  const lifted = (foreground: string | undefined): string | undefined => {
+    if (!foreground) return undefined;
+    return lift[foreground.toLowerCase()] ?? foreground;
+  };
+  return {
+    ...theme,
+    colors: { ...theme.colors, "editor.background": "transparent" },
+    tokenColors: (theme.tokenColors ?? []).map((rule) =>
+      typeof rule === "object" && rule.settings
+        ? { ...rule, settings: { ...rule.settings, foreground: lifted(rule.settings.foreground) } }
+        : rule
+    ),
+  };
+};
 
 registerCustomTheme("vesper", async () => {
   const { default: theme } = await import("@shikijs/themes/vesper");

@@ -1,5 +1,4 @@
 import { DiffLine, type Highlighter } from "@/components/diff/DiffLine";
-import { useHighlightVersion } from "@/lib/highlight";
 
 /** True for unified-diff header lines that aren't source code. */
 export function isDiffMeta(line: string): boolean {
@@ -26,9 +25,6 @@ export function HunkBody({
   lang: string | null;
   highlight: Highlighter;
 }) {
-  // Repaint once the highlight engine's chunk lands — until then `highlight`
-  // answers with escaped plain text.
-  useHighlightVersion();
   return (
     <>
       {text.split("\n").map((line, i) => {

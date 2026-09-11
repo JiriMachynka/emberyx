@@ -403,11 +403,7 @@ mcp__emberyx__preview_console",
     /// `list_threads` surfaces it — headless sessions never get one otherwise.
     /// Runs off the main thread: a title is a whole `claude -p` process, and a
     /// sync command would freeze the UI for its duration.
-    pub fn title_thread(
-        cwd: String,
-        session_id: String,
-        first_message: String,
-    ) -> Result<String> {
+    pub fn title_thread(cwd: String, session_id: String, first_message: String) -> Result<String> {
         let prompt = format!(
             "Generate a concise 3-6 word title for a coding conversation that \
              opens with this user message. Reply with ONLY the title — no quotes, \

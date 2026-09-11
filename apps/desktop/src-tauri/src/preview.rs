@@ -162,7 +162,11 @@ pub fn preview_webview_attach(
                 let builder = WebviewBuilder::new(PREVIEW_LABEL, WebviewUrl::External(parsed))
                     .initialization_script(CONSOLE_BRIDGE);
                 let created = window
-                    .add_child(builder, LogicalPosition::new(x, y), LogicalSize::new(width, height))
+                    .add_child(
+                        builder,
+                        LogicalPosition::new(x, y),
+                        LogicalSize::new(width, height),
+                    )
                     .map_err(|e| e.to_string())?;
                 *guard = Some(created.clone());
                 created

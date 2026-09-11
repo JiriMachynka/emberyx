@@ -19,7 +19,7 @@ import {
 } from "@/lib/toolDisplay";
 import { TOOL_ICONS, TOOL_TINT } from "@/lib/toolIcons";
 import { useAgentStore } from "@/lib/agentStore";
-import { highlightCached, useHighlightVersion } from "@/lib/highlight";
+import { highlightCached } from "@/lib/highlight";
 import { DIFF_PREVIEW_LINES, diffPreview, type DiffRow } from "@/lib/toolDiff";
 import { cn } from "@/lib/utils";
 import type { ToolCall } from "@/hooks/useAgentChat";
@@ -48,14 +48,10 @@ const DiffLine = memo(function DiffLine({
   lang: string | null;
   persist: boolean;
 }) {
-  // memo() would hold the plain text this painted before the engine loaded;
-  // the version is what lets the row through again.
-  useHighlightVersion();
   return (
     <div className={cn("flex gap-2 border-l-2 px-1", TINT[row.sign])}>
       <span className="select-none text-muted-foreground">{row.sign}</span>
       <code
-        className="hljs"
         style={{ background: "transparent", padding: 0 }}
         dangerouslySetInnerHTML={{ __html: highlightCached(row.text, lang, persist) }}
       />
@@ -350,12 +346,9 @@ export const ToolCode = memo(function ToolCode({
   className?: string;
   streaming?: boolean;
 }) {
-  // The engine loads in the background; until it lands this is escaped plain
-  // text, and the version bump is what repaints it colored.
-  const engine = useHighlightVersion();
   const html = useMemo(
     () => highlightCached(code, lang, !streaming),
-    [code, lang, streaming, engine]
+    [code, lang, streaming]
   );
   const tail = useTailScroll<HTMLPreElement>(streaming, code);
   return (
@@ -368,7 +361,6 @@ export const ToolCode = memo(function ToolCode({
       )}
     >
       <code
-        className="hljs"
         style={{ background: "transparent", padding: 0 }}
         dangerouslySetInnerHTML={{ __html: html }}
       />

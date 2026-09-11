@@ -15,6 +15,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import type { ActivityItem } from "@/types";
+
 /** One projected message row from `thread_messages_page`. */
 export interface ProjectedMessageRow {
   messageId: string;
@@ -26,9 +28,18 @@ export interface ProjectedMessageRow {
   payloadJson: string | null;
 }
 
+/** One transcript message's activity rows, keyed by the provider's message id
+ *  (or `line-<index>` for a message that never had one). */
+export interface MessageActivities {
+  messageId: string;
+  activities: ActivityItem[];
+}
+
 export interface MessagePage {
   rows: ProjectedMessageRow[];
   hasMore: boolean;
+  /** Normalized by Rust from these same rows' `payloadJson` lines. */
+  activities: MessageActivities[];
 }
 
 /** Messages fetched per page from the local event store. */
@@ -55,9 +66,9 @@ const cache = new Map<string, Entry>();
 
 const keyOf = (cwd: string, threadId: string) => `${cwd}::${threadId}`;
 
-/** Read a page, skipping the freshness pass when the caller will refresh after
- *  painting. `fresh` is the honest default: a caller that doesn't say otherwise
- *  gets projections brought up to date first. */
+/** Read a page. `fresh: false` skips transcript ingest (the expensive part);
+ *  projectors still run so log-owned history is not an empty pane. `fresh`
+ *  defaults true. */
 export const fetchThreadPage = (
   cwd: string,
   threadId: string,

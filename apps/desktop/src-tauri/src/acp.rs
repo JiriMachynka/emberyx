@@ -100,9 +100,15 @@ pub enum AcpEvent {
     /// until it is answered.
     Request(ServerRequest),
     /// A turn ended: `stopReason` is end_turn / cancelled / refusal / max_tokens.
-    TurnEnded { session_id: String, result: Value },
+    TurnEnded {
+        session_id: String,
+        result: Value,
+    },
     /// A turn failed at the protocol level rather than ending.
-    TurnFailed { session_id: String, message: String },
+    TurnFailed {
+        session_id: String,
+        message: String,
+    },
     Stderr(String),
     Exit(Option<i32>),
 }
@@ -434,9 +440,7 @@ impl Inner {
                 // adds no latency but a delta storm batches.
                 loop {
                     match rx.try_recv() {
-                        Ok(Chunk::Event(AcpEvent::Notification(n)))
-                            if batch.len() < MAX_BATCH =>
-                        {
+                        Ok(Chunk::Event(AcpEvent::Notification(n))) if batch.len() < MAX_BATCH => {
                             batch.push(n)
                         }
                         Ok(Chunk::Event(event)) => {
@@ -498,12 +502,7 @@ fn write_line(handle: &Handle, line: &str) -> Result<()> {
 }
 
 /// One JSON-RPC round trip, bounded by `timeout`.
-fn request_with(
-    handle: &Handle,
-    method: &str,
-    params: Value,
-    timeout: Duration,
-) -> Result<Value> {
+fn request_with(handle: &Handle, method: &str, params: Value, timeout: Duration) -> Result<Value> {
     let id = handle.next_request_id.fetch_add(1, Ordering::SeqCst);
     let rx = handle.pending.register(id);
     let line =
@@ -601,7 +600,11 @@ pub async fn acp_session_new(
 ) -> Result<Value> {
     let handle = manager.handle(id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        request(&handle, "session/new", json!({ "cwd": cwd, "mcpServers": [] }))
+        request(
+            &handle,
+            "session/new",
+            json!({ "cwd": cwd, "mcpServers": [] }),
+        )
     })
     .await
     .map_err(|e| crate::err!("session/new join failed: {e}"))?
@@ -718,7 +721,10 @@ pub fn acp_respond(
 ) -> Result<()> {
     let handle = manager.handle(id)?;
     let outcome = match error {
-        Some(message) => Err(RpcError { code: -32603, message }),
+        Some(message) => Err(RpcError {
+            code: -32603,
+            message,
+        }),
         None => Ok(result.unwrap_or(Value::Null)),
     };
     respond(&handle, request_id, outcome)
@@ -773,7 +779,9 @@ mod tests {
         let update = classify(
             r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1"}}"#,
         );
-        assert!(matches!(update, Frame::Notification { ref method, .. } if method == "session/update"));
+        assert!(
+            matches!(update, Frame::Notification { ref method, .. } if method == "session/update")
+        );
 
         // A permission request the agent is blocked on.
         let permission = classify(

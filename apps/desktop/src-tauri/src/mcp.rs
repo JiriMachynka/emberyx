@@ -118,9 +118,7 @@ fn json_string_map(value: Option<&Value>) -> BTreeMap<String, String> {
         .and_then(Value::as_object)
         .map(|obj| {
             obj.iter()
-                .filter_map(|(k, v)| {
-                    v.as_str().map(|v| (k.clone(), v.to_string()))
-                })
+                .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
                 .collect()
         })
         .unwrap_or_default()
@@ -141,7 +139,12 @@ fn toml_string_map(value: Option<&toml::Value>) -> BTreeMap<String, String> {
 fn json_str_array(value: Option<&Value>) -> Vec<String> {
     value
         .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(String::from)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -350,10 +353,7 @@ fn write_path(harness: Harness) -> Result<PathBuf> {
         Harness::Claude => home.join(".claude.json"),
         Harness::Codex => home.join(".codex").join("config.toml"),
         Harness::Grok => home.join(".grok").join("config.toml"),
-        Harness::Opencode => home
-            .join(".config")
-            .join("opencode")
-            .join("opencode.json"),
+        Harness::Opencode => home.join(".config").join("opencode").join("opencode.json"),
         Harness::Kilo => home.join(".config").join("kilo").join("kilo.json"),
     })
 }
@@ -633,14 +633,11 @@ fn jsonc_uses_servers(text: Option<&str>, default_v2: bool) -> bool {
 /// JSONC has no comment-preserving editor in Rust — the Kilo CLI does this in
 /// TypeScript with `jsonc-parser` — so an edit reserializes plain JSON and
 /// comments in the file are lost. Every other key survives.
-fn jsonc_set(
-    text: Option<&str>,
-    name: &str,
-    transport: &McpTransport,
-    v2: bool,
-) -> Result<String> {
+fn jsonc_set(text: Option<&str>, name: &str, transport: &McpTransport, v2: bool) -> Result<String> {
     let mut root: Value = match text {
-        Some(text) => json5::from_str(text).map_err(|e| crate::err!("config no longer parses: {e}"))?,
+        Some(text) => {
+            json5::from_str(text).map_err(|e| crate::err!("config no longer parses: {e}"))?
+        }
         None => json!({}),
     };
     let mcp = root
@@ -669,8 +666,8 @@ fn jsonc_remove(text: Option<&str>, name: &str) -> Result<Option<String>> {
     let Some(text) = text else {
         return Ok(None);
     };
-    let mut root: Value = json5::from_str(text)
-        .map_err(|e| crate::err!("config no longer parses: {e}"))?;
+    let mut root: Value =
+        json5::from_str(text).map_err(|e| crate::err!("config no longer parses: {e}"))?;
     let Some(mcp) = root.get_mut("mcp").and_then(Value::as_object_mut) else {
         return Ok(None);
     };
@@ -722,7 +719,6 @@ pub struct McpAddSpec {
     pub transport: McpTransport,
 }
 
-#[tauri::command]
 pub fn mcp_list() -> Vec<McpServerInfo> {
     collect()
 }
@@ -734,8 +730,7 @@ pub fn mcp_add(spec: McpAddSpec) -> Result<()> {
         return Err(crate::err!("pick at least one harness"));
     }
     for id in &spec.harnesses {
-        let harness =
-            Harness::from_id(id).ok_or_else(|| crate::err!("unknown harness {id}"))?;
+        let harness = Harness::from_id(id).ok_or_else(|| crate::err!("unknown harness {id}"))?;
         write_server(harness, &spec.name, &spec.transport)?;
     }
     Ok(())
@@ -773,6 +768,16 @@ fn write_server(harness: Harness, name: &str, transport: &McpTransport) -> Resul
     atomic_write(&path, &contents)
 }
 
+// Add and remove stay synchronous: each rewrites a config file wholesale, and
+// two in flight would each drop the other's change.
+pub mod cmd {
+    use super::*;
+
+    crate::offload! {
+        mcp_list() => Vec<McpServerInfo>;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -795,7 +800,10 @@ mod tests {
             filesystem.transport,
             McpTransport::Stdio {
                 command: "npx".into(),
-                args: vec!["-y".into(), "@modelcontextprotocol/server-filesystem".into()],
+                args: vec![
+                    "-y".into(),
+                    "@modelcontextprotocol/server-filesystem".into()
+                ],
                 env: BTreeMap::new(),
             }
         );
@@ -919,7 +927,10 @@ headers = { "Authorization" = "Bearer x" }
         let root: Value = serde_json::from_str(&after).unwrap();
         assert_eq!(root["numStartups"], 9);
         assert_eq!(root["mcpServers"]["old"]["command"], "a");
-        assert_eq!(root["mcpServers"]["context7"]["url"], "https://mcp.context7.com/mcp");
+        assert_eq!(
+            root["mcpServers"]["context7"]["url"],
+            "https://mcp.context7.com/mcp"
+        );
         // Replacing the same name does not accumulate duplicates.
         let again = claude_set(Some(&after), "context7", &transport).unwrap();
         let root: Value = serde_json::from_str(&again).unwrap();
@@ -1091,11 +1102,7 @@ headers = { "Authorization" = "Bearer x" }
                 "/claude.json".into(),
                 vec![raw(true, http.clone())],
             ),
-            (
-                Harness::Codex,
-                "/config.toml".into(),
-                vec![raw(true, http)],
-            ),
+            (Harness::Codex, "/config.toml".into(), vec![raw(true, http)]),
         ]);
         assert!(!same[0].differs);
     }

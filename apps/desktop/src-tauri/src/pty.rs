@@ -289,10 +289,7 @@ impl PtyManager {
         drop(pair.slave);
         let shell_pid = child.process_id();
 
-        let mut reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| e.to_string())?;
+        let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
         let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
 
         // Auto-run the agent command.
@@ -459,11 +456,7 @@ pub fn pty_spawn(
 }
 
 #[tauri::command]
-pub fn pty_write(
-    manager: tauri::State<'_, PtyManager>,
-    id: u32,
-    data: String,
-) -> Result<()> {
+pub fn pty_write(manager: tauri::State<'_, PtyManager>, id: u32, data: String) -> Result<()> {
     manager.write(id, &data)
 }
 
@@ -564,7 +557,11 @@ mod tests {
         };
 
         assert!(wait_for(|| pidfile.exists()), "job never started");
-        let job_pid: u32 = fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
+        let job_pid: u32 = fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
         assert!(alive(job_pid));
 
         signal_session(&session, libc::SIGKILL);

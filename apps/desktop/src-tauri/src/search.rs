@@ -138,11 +138,7 @@ fn clip(line: &str, start: usize, end: usize) -> (String, usize, usize) {
     // Keep some context before the match, then cut on char boundaries.
     let from = floor_boundary(line, start.saturating_sub(40));
     let to = ceil_boundary(line, (from + MAX_LINE).min(line.len()));
-    (
-        line[from..to].to_string(),
-        start - from,
-        end.min(to) - from,
-    )
+    (line[from..to].to_string(), start - from, end.min(to) - from)
 }
 
 fn floor_boundary(s: &str, mut i: usize) -> usize {

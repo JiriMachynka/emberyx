@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { parseDiff } from "@/lib/hunks";
-import { highlightCode, langFromPath, useHighlightVersion } from "@/lib/highlight";
+import { highlightCode, langFromPath } from "@/lib/highlight";
 import {
   invalidateForge,
   useForgeMr,
@@ -463,9 +463,6 @@ function MrDetail({
 /** The same hunk rendering ChangesPanel uses, without the apply actions —
  *  an MR's diff belongs to the server, not the working tree. */
 function ReadOnlyDiff({ text, lang }: { text: string; lang: string | null }) {
-  // This is where `highlightCode` is actually called, so this is what has to
-  // repaint when the highlight engine's chunk lands.
-  useHighlightVersion();
   const parsed = useMemo(() => parseDiff(text), [text]);
 
   if (!text.trim()) {

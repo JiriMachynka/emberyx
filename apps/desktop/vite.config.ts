@@ -28,7 +28,14 @@ const pierreShikiBundle = () => ({
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [pierreShikiBundle(), react(), tailwindcss()],
+  // The React Compiler memoizes components and hooks automatically; it must be
+  // the first Babel plugin, and here it is the only one. vitest.config.ts runs
+  // it too, so the suite exercises the compiled code that ships.
+  plugins: [
+    pierreShikiBundle(),
+    react({ babel: { plugins: ["babel-plugin-react-compiler"] } }),
+    tailwindcss(),
+  ],
 
   resolve: {
     alias: {

@@ -14,7 +14,9 @@ use serde::Serialize;
 use crate::error::Result;
 use crate::models::{TimelineEvent, TimelineEventKind};
 use crate::store::{IngestCursor, Store};
-use crate::threads::{clean_title, encode_cwd, is_machine_prompt, is_synthetic, projects_dir, user_text};
+use crate::threads::{
+    clean_title, encode_cwd, is_machine_prompt, is_synthetic, projects_dir, user_text,
+};
 
 /// Summary of one ingest pass over a project's transcripts.
 #[derive(Debug, Default, Serialize)]
@@ -46,9 +48,15 @@ pub async fn transcripts_ingest(
     cwd: String,
 ) -> Result<IngestSummary> {
     let store = supervisor.store().ok_or("event log not attached")?;
-    tauri::async_runtime::spawn_blocking(move || ingest_project(&store, &cwd))
-        .await
-        .map_err(|e| crate::err!("transcripts_ingest join failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        let summary = ingest_project(&store, &cwd)?;
+        // Ingest writes events; the sidebar and page reads serve projections.
+        // Without this, a Claude-only catch-up left ACP history unprojected.
+        store.run_projectors()?;
+        Ok(summary)
+    })
+    .await
+    .map_err(|e| crate::err!("transcripts_ingest join failed: {e}"))?
 }
 
 /// Shortest gap between two freshness passes for one project.
@@ -87,12 +95,11 @@ const DEFAULT_TURN_PAGE_LIMIT: u32 = 40;
 /// Keyset page over a thread's projected messages, newest-first by default and
 /// paging backwards on `(created_at, messageId)`.
 ///
-/// `fresh: false` serves what is already projected and skips the freshness pass
-/// — which, even as a no-op, is a `read_dir`, a `stat` per transcript and an
-/// 82ms `GROUP BY` over the whole events table (measured 2026-09-08 on a 406MB
-/// log). Opening a thread pays that before it can paint. The caller that skips
-/// it is expected to ingest afterwards and read again if anything changed:
-/// history that is three seconds stale for one frame beats a switch that waits.
+/// `fresh: false` skips transcript ingest — which, even as a no-op, is a
+/// `read_dir`, a `stat` per file and an 82ms `GROUP BY` over the whole events
+/// table (measured 2026-09-08 on a 406MB log). Projectors still run: ACP
+/// threads never ingest, and a reopen that served a stale projection painted
+/// an empty pane after restart. A caught-up log is one empty SELECT.
 #[tauri::command]
 pub async fn thread_messages_page(
     supervisor: tauri::State<'_, crate::supervisor::Supervisor>,
@@ -105,18 +112,44 @@ pub async fn thread_messages_page(
 ) -> Result<crate::store::MessagePage> {
     let store = supervisor.store().ok_or("event log not attached")?;
     tauri::async_runtime::spawn_blocking(move || {
-        if fresh.unwrap_or(true) {
-            ensure_fresh(&store, &cwd)?;
-        }
-        store.messages_page(
+        serve_message_page(
+            &store,
+            &cwd,
             &thread_id,
             before_created_at,
             before_message_id.as_deref(),
             limit.unwrap_or(DEFAULT_MESSAGE_PAGE_LIMIT),
+            fresh.unwrap_or(true),
         )
     })
     .await
     .map_err(|e| crate::err!("thread_messages_page join failed: {e}"))?
+}
+
+fn serve_message_page(
+    store: &Store,
+    cwd: &str,
+    thread_id: &str,
+    before_created_at: Option<u64>,
+    before_message_id: Option<&str>,
+    limit: u32,
+    fresh: bool,
+) -> Result<crate::store::MessagePage> {
+    if fresh {
+        ensure_fresh(store, cwd)?;
+    } else {
+        store.run_projectors()?;
+    }
+    let mut page = store.messages_page(thread_id, before_created_at, before_message_id, limit)?;
+    // Normalized here, from lines already in hand, instead of the frontend
+    // shipping the whole page back for a second round trip.
+    let lines: Vec<&str> = page
+        .rows
+        .iter()
+        .filter_map(|row| row.payload_json.as_deref())
+        .collect();
+    page.activities = crate::activity::transcript_activities(&lines);
+    Ok(page)
 }
 
 /// Same keyset contract over a thread's turns.
@@ -248,7 +281,11 @@ fn process_file(
     if unchanged {
         // Identical stamp ⇒ identical bytes. Interior rewrites preserving size
         // are not detectable without checksums; an accepted trade-off.
-        return Ok(FileOutcome { changed: false, emitted: 0, reset: false });
+        return Ok(FileOutcome {
+            changed: false,
+            emitted: 0,
+            reset: false,
+        });
     }
 
     store.attach_thread_context(&thread_id, project_path, mtime)?;
@@ -328,7 +365,11 @@ fn process_file(
 
     // Last version handed out overall for this thread, whether this pass
     // emitted anything or not.
-    let stream_version = if events.is_empty() { version_base } else { version };
+    let stream_version = if events.is_empty() {
+        version_base
+    } else {
+        version
+    };
     versions.insert(thread_id, stream_version);
 
     store.save_ingest_cursor(
@@ -341,7 +382,11 @@ fn process_file(
         },
     )?;
 
-    Ok(FileOutcome { changed: true, emitted, reset })
+    Ok(FileOutcome {
+        changed: true,
+        emitted,
+        reset,
+    })
 }
 
 /// Complete newline-terminated lines from `offset` to EOF. Reads through a
@@ -491,7 +536,9 @@ mod tests {
 
     fn counts(store: &Store) -> (usize, usize) {
         let events: i64 = store
-            .with_reader(|conn| Ok(conn.query_row("SELECT count(*) FROM events", [], |r| r.get(0))?))
+            .with_reader(
+                |conn| Ok(conn.query_row("SELECT count(*) FROM events", [], |r| r.get(0))?),
+            )
             .unwrap();
         let messages: i64 = store
             .with_reader(|conn| {
@@ -503,6 +550,32 @@ mod tests {
             })
             .unwrap();
         (events as usize, messages as usize)
+    }
+
+    /// Reopen path: events are in the log, projectors have not run, the page
+    /// read skips ingest (`fresh: false`). Serving that page used to return
+    /// nothing — ACP never ingests, so a restart painted an empty pane.
+    #[test]
+    fn a_stale_page_read_still_projects_events_already_in_the_log() {
+        let (store, dir) = store_in("stale-page");
+        store.attach_thread_context("acp-1", "/repo", 42).unwrap();
+        store
+            .append_events(&[TimelineEvent {
+                seq: 1,
+                thread_id: "acp-1".into(),
+                kind: TimelineEventKind::UserPrompt,
+                attribution: None,
+                timestamp: 42,
+                payload: "hello".into(),
+                raw_line: None,
+            }])
+            .unwrap();
+
+        let page = serve_message_page(&store, "/repo", "acp-1", None, None, 60, false).unwrap();
+        assert_eq!(page.rows.len(), 1);
+        assert_eq!(page.rows[0].text, "hello");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -592,12 +665,13 @@ mod tests {
         store.run_projectors().unwrap();
         let projected: Option<String> = store
             .with_reader(|conn| {
-                Ok(conn.query_row(
-                    "SELECT title FROM projection_threads WHERE thread_id='session-a'",
-                    [],
-                    |r| r.get(0),
-                )
-                .optional()?)
+                Ok(conn
+                    .query_row(
+                        "SELECT title FROM projection_threads WHERE thread_id='session-a'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .optional()?)
             })
             .unwrap();
         assert_eq!(projected.as_deref(), Some("Ship the sidebar"));
@@ -616,26 +690,40 @@ mod tests {
         let before = counts(&store);
 
         // The provider appends two more lines (a reply and its title rewrite).
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         use std::io::Write;
         writeln!(
             f,
             r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"Done."}}]}}}}"#
         )
         .unwrap();
-        writeln!(f, r#"{{"type":"ai-title","aiTitle":"Parser fixes, final"}}"#).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"ai-title","aiTitle":"Parser fixes, final"}}"#
+        )
+        .unwrap();
         let stamp = std::time::SystemTime::now();
         f.set_modified(stamp).unwrap();
         drop(f);
 
         let second = ingest_dir(&store, &root, "/tmp/proj").unwrap();
-        assert_eq!(second.events_emitted, 2, "only appended lines become events");
+        assert_eq!(
+            second.events_emitted, 2,
+            "only appended lines become events"
+        );
         assert_eq!(second.files_reset, 0);
 
         store.run_projectors().unwrap();
         let after = counts(&store);
         assert_eq!(after.0, before.0 + 2);
-        assert_eq!(after.1, before.1 + 1, "the new assistant reply projects once");
+        assert_eq!(
+            after.1,
+            before.1 + 1,
+            "the new assistant reply projects once"
+        );
 
         // Stream versions stayed contiguous with no reissue of old ones.
         let versions = store
@@ -686,7 +774,11 @@ mod tests {
                 .collect::<std::result::Result<Vec<i64>, _>>()?)
             })
             .unwrap();
-        assert_eq!(new_events, vec![1, 2], "versions restart from one on rebuild");
+        assert_eq!(
+            new_events,
+            vec![1, 2],
+            "versions restart from one on rebuild"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -705,9 +797,16 @@ mod tests {
         // What the slower pass is still holding.
         let stale = store.ingest_cursor_state(&path).unwrap().unwrap();
 
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
         use std::io::Write;
-        writeln!(f, r#"{{"type":"ai-title","aiTitle":"Parser fixes, final"}}"#).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"ai-title","aiTitle":"Parser fixes, final"}}"#
+        )
+        .unwrap();
         f.set_modified(std::time::SystemTime::now()).unwrap();
         drop(f);
         ingest_dir(&store, &root, "/tmp/proj").unwrap();
@@ -716,7 +815,10 @@ mod tests {
 
         store.save_ingest_cursor(&path, stale).unwrap();
         let after = store.ingest_cursor_state(&path).unwrap().unwrap();
-        assert_eq!(after.byte_offset, fresh.byte_offset, "the write was refused");
+        assert_eq!(
+            after.byte_offset, fresh.byte_offset,
+            "the write was refused"
+        );
         assert_eq!(after.stream_version, fresh.stream_version);
 
         let again = ingest_dir(&store, &root, "/tmp/proj").unwrap();
@@ -758,7 +860,10 @@ mod tests {
             .collect();
 
         for i in 0..LINES {
-            let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
             writeln!(
                 f,
                 r#"{{"type":"user","message":{{"role":"user","content":"line {i}"}}}}"#
@@ -777,18 +882,21 @@ mod tests {
 
         let prompts = store
             .with_reader(|conn| {
-                Ok(conn.prepare(
-                    "SELECT payload_json FROM events
+                Ok(conn
+                    .prepare(
+                        "SELECT payload_json FROM events
                      WHERE thread_id='session-a' AND kind = '\"userPrompt\"'
                      ORDER BY stream_version",
-                )?
-                .query_map([], |row| row.get::<_, String>(0))?
-                .collect::<std::result::Result<Vec<String>, _>>()?)
+                    )?
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<std::result::Result<Vec<String>, _>>()?)
             })
             .unwrap();
         assert_eq!(
             prompts,
-            (0..LINES).map(|i| format!("line {i}")).collect::<Vec<String>>()
+            (0..LINES)
+                .map(|i| format!("line {i}"))
+                .collect::<Vec<String>>()
         );
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -894,17 +1002,18 @@ mod tests {
             let t = std::time::Instant::now();
             let rows: usize = store
                 .with_reader(|conn| {
-                    Ok(conn.prepare(
-                        "SELECT thread_id, title, updated_at, message_count
+                    Ok(conn
+                        .prepare(
+                            "SELECT thread_id, title, updated_at, message_count
                          FROM projection_threads
                          WHERE project_path = ?1 AND deleted_at IS NULL AND archived_at IS NULL
                          ORDER BY updated_at DESC, thread_id DESC",
-                    )?
-                    .query_map(params![cwd], |row| {
-                        let _: String = row.get(0)?;
-                        Ok(())
-                    })?
-                    .count())
+                        )?
+                        .query_map(params![cwd], |row| {
+                            let _: String = row.get(0)?;
+                            Ok(())
+                        })?
+                        .count())
                 })
                 .unwrap();
             samples.push(ms_of(t));
@@ -919,7 +1028,10 @@ mod tests {
         // Thread open: newest page, then walk the whole thread backwards —
         // the worst-case read of the biggest transcript in the project.
         let mut largest: Option<(PathBuf, u64)> = None;
-        for entry in std::fs::read_dir(&project_dir).expect("project dir").flatten() {
+        for entry in std::fs::read_dir(&project_dir)
+            .expect("project dir")
+            .flatten()
+        {
             let path = entry.path();
             if path.extension().and_then(|x| x.to_str()) != Some("jsonl") {
                 continue;

@@ -3,7 +3,7 @@
 //! readers get their own so WAL keeps them off the writer's critical path.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, TryLockError};
 use std::time::Duration;
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -164,34 +164,31 @@ impl Store {
         f(&mut conn)
     }
 
-    /// Record a batch of timeline events in ONE transaction. This is the
-    /// write path's unit of durability: a reader with its own connection sees
-    /// either the whole turn's events or none of them, never a half-written
-    /// turn. A duplicate stream version fails the whole batch (caller bug),
-    /// leaving prior events intact.
+    /// `with_writer` for a caller that would rather skip than wait: `None`
+    /// when another writer holds the connection.
+    pub fn try_with_writer<T>(
+        &self,
+        f: impl FnOnce(&mut Connection) -> Result<T>,
+    ) -> Result<Option<T>> {
+        match self.writer.try_lock() {
+            Ok(mut conn) => f(&mut conn).map(Some),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Poisoned(_)) => Err(crate::err!("store writer connection poisoned")),
+        }
+    }
+
     pub fn append_events(&self, events: &[TimelineEvent]) -> Result<usize> {
-        self.with_writer(|conn| {
-            conn.execute_batch("BEGIN")?;
-            let mut inserted = 0usize;
-            for event in events {
-                match insert_event(conn, event, "INSERT") {
-                    Ok(n) => inserted += n,
-                    Err(e) => {
-                        let _ = conn.execute_batch("ROLLBACK");
-                        return Err(e.into());
-                    }
-                }
-            }
-            conn.execute_batch("COMMIT")?;
-            Ok(inserted)
-        })
+        self.with_writer(|conn| append_events_on(conn, events))
     }
 
     /// Backfill from legacy sources (an old registry.json's in-memory ring).
     /// Events already present are left untouched, so replaying an import that
     /// partially landed before a crash changes nothing. Returns how many rows
     /// were new.
-    pub fn import_events<'a>(&self, events: impl Iterator<Item = &'a TimelineEvent>) -> Result<u64> {
+    pub fn import_events<'a>(
+        &self,
+        events: impl Iterator<Item = &'a TimelineEvent>,
+    ) -> Result<u64> {
         self.with_writer(|conn| {
             conn.execute_batch("BEGIN")?;
             let mut inserted = 0u64;
@@ -241,8 +238,8 @@ impl Store {
     /// scan of the log, which is quadratic over a first backfill.
     pub fn max_stream_versions(&self) -> Result<Vec<(String, u64)>> {
         self.with_reader(|conn| {
-            let mut stmt =
-                conn.prepare("SELECT thread_id, MAX(stream_version) FROM events GROUP BY thread_id")?;
+            let mut stmt = conn
+                .prepare("SELECT thread_id, MAX(stream_version) FROM events GROUP BY thread_id")?;
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
             })?;
@@ -267,22 +264,8 @@ impl Store {
         })
     }
 
-    /// Append one supervisor state snapshot. Older snapshots are pruned so a
-    /// long-running install's state log stays a bounded ring.
     pub fn save_state_snapshot(&self, kind: &str, payload_json: &str) -> Result<()> {
-        self.with_writer(|conn| {
-            conn.execute(
-                "INSERT INTO state_log (kind, payload_json) VALUES (?1, ?2)",
-                params![kind, payload_json],
-            )?;
-            conn.execute(
-                "DELETE FROM state_log WHERE id NOT IN (
-                   SELECT id FROM state_log ORDER BY id DESC LIMIT ?1
-                 )",
-                params![STATE_SNAPSHOT_KEEP],
-            )?;
-            Ok(())
-        })
+        self.with_writer(|conn| save_state_snapshot_on(conn, kind, payload_json))
     }
 
     /// The newest state snapshot, if any. Restore prefers this over the
@@ -303,6 +286,43 @@ impl Store {
             .lock()
             .map_err(|_| crate::err!("store writer connection poisoned"))
     }
+}
+
+/// Record a batch of timeline events in ONE transaction. This is the write
+/// path's unit of durability: a reader with its own connection sees either the
+/// whole turn's events or none of them, never a half-written turn. A duplicate
+/// stream version fails the whole batch (caller bug), leaving prior events
+/// intact.
+pub fn append_events_on(conn: &mut Connection, events: &[TimelineEvent]) -> Result<usize> {
+    conn.execute_batch("BEGIN")?;
+    let mut inserted = 0usize;
+    for event in events {
+        match insert_event(conn, event, "INSERT") {
+            Ok(n) => inserted += n,
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(e.into());
+            }
+        }
+    }
+    conn.execute_batch("COMMIT")?;
+    Ok(inserted)
+}
+
+/// Append one supervisor state snapshot. Older snapshots are pruned so a
+/// long-running install's state log stays a bounded ring.
+pub fn save_state_snapshot_on(conn: &mut Connection, kind: &str, payload_json: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO state_log (kind, payload_json) VALUES (?1, ?2)",
+        params![kind, payload_json],
+    )?;
+    conn.execute(
+        "DELETE FROM state_log WHERE id NOT IN (
+           SELECT id FROM state_log ORDER BY id DESC LIMIT ?1
+         )",
+        params![STATE_SNAPSHOT_KEEP],
+    )?;
+    Ok(())
 }
 
 fn migrate(conn: &Connection) -> Result<()> {
@@ -426,7 +446,11 @@ impl Store {
                 rows.truncate(limit as usize);
             }
             rows.reverse();
-            Ok(MessagePage { rows, has_more })
+            Ok(MessagePage {
+                rows,
+                has_more,
+                activities: Vec::new(),
+            })
         })
     }
 
@@ -515,10 +539,8 @@ impl Store {
                     },
                 ))
             })?;
-            rows.collect::<std::result::Result<
-                std::collections::HashMap<String, IngestCursor>,
-                _,
-            >>()
+            rows.collect::<std::result::Result<std::collections::HashMap<String, IngestCursor>, _>>(
+            )
             .map_err(Into::into)
         })
     }
@@ -531,11 +553,7 @@ impl Store {
     /// under fresh stream versions, so the thread renders twice. The one
     /// legitimate rewind (a transcript that shrank) drops the row first via
     /// `clear_ingest_cursor`.
-    pub fn save_ingest_cursor(
-        &self,
-        path: &Path,
-        cursor: IngestCursor,
-    ) -> Result<()> {
+    pub fn save_ingest_cursor(&self, path: &Path, cursor: IngestCursor) -> Result<()> {
         self.with_writer(|conn| {
             conn.execute(
                 "INSERT INTO ingest_cursor (path, size, mtime, byte_offset, stream_version)
@@ -643,10 +661,13 @@ impl Store {
     pub fn imported_threads(&self, project_path: &str) -> Result<Vec<ImportedThread>> {
         self.with_reader(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT thread_id, title, provider, source, updated_at
-                 FROM projection_threads
-                 WHERE project_path = ?1 AND source IS NOT NULL AND deleted_at IS NULL
-                 ORDER BY updated_at DESC",
+                "SELECT t.thread_id, t.title, t.provider, t.source, t.updated_at,
+                        (SELECT m.text FROM projection_messages m
+                         WHERE m.thread_id = t.thread_id AND m.role = 'user' AND m.text != ''
+                         ORDER BY m.created_at ASC, m.message_id ASC LIMIT 1)
+                 FROM projection_threads t
+                 WHERE t.project_path = ?1 AND t.source IS NOT NULL AND t.deleted_at IS NULL
+                 ORDER BY t.updated_at DESC",
             )?;
             let rows = stmt.query_map(params![project_path], |row| {
                 Ok(ImportedThread {
@@ -655,6 +676,7 @@ impl Store {
                     provider: row.get(2)?,
                     source: row.get(3)?,
                     updated_at: row.get::<_, i64>(4)? as u64,
+                    first_user_text: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
                 })
             })?;
             rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -672,6 +694,8 @@ pub struct ImportedThread {
     pub source: Option<String>,
     /// Unix ms of the thread's newest event.
     pub updated_at: u64,
+    /// Opening user prompt, for a label when `title` is empty or a fence.
+    pub first_user_text: String,
 }
 
 /// One log row: the event plus its global ordering key (`events.seq`), which
@@ -710,9 +734,14 @@ pub struct ProjectedMessage {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MessagePage {
     pub rows: Vec<ProjectedMessage>,
     pub has_more: bool,
+    /// The page's activity rows, normalized from the same `payload_json` lines
+    /// (`thread_messages_page` fills this in). Riding in the same reply means
+    /// the rows and their ordering can never describe two different pages.
+    pub activities: Vec<crate::activity::MessageActivities>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -742,10 +771,7 @@ fn project_batch(conn: &mut Connection, name: &str) -> Result<bool> {
              FROM events WHERE seq > ?1 ORDER BY seq ASC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![cursor, PROJECTOR_BATCH], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                decode_event_row(row)?,
-            ))
+            Ok((row.get::<_, i64>(0)?, decode_event_row(row)?))
         })?;
         rows.map(|row| row.map(|(global_seq, event)| LoggedEvent { global_seq, event }))
             .collect::<std::result::Result<Vec<_>, _>>()?
@@ -1017,6 +1043,21 @@ mod tests {
 
     use crate::models::{Provider, TurnAttribution};
 
+    /// The frontend mocks this page in its own casing, so only a test on the
+    /// real serialization catches a drift — `has_more` went out snake_case for
+    /// two weeks and "Load older" never appeared.
+    #[test]
+    fn a_message_page_speaks_the_frontends_casing() {
+        let page = MessagePage {
+            rows: vec![],
+            has_more: true,
+            activities: vec![],
+        };
+        let json = serde_json::to_value(&page).unwrap();
+        assert_eq!(json["hasMore"], true);
+        assert!(json["activities"].is_array());
+    }
+
     fn test_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("emberyx_store_test_{name}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1127,7 +1168,9 @@ mod tests {
         writer.join().unwrap().unwrap();
         reader.join().unwrap();
         let total: i64 = store
-            .with_reader(|conn| Ok(conn.query_row("SELECT count(*) FROM store_meta", [], |r| r.get(0))?))
+            .with_reader(|conn| {
+                Ok(conn.query_row("SELECT count(*) FROM store_meta", [], |r| r.get(0))?)
+            })
             .unwrap();
         assert_eq!(total, 200);
         let _ = std::fs::remove_dir_all(test_dir("concurrent"));
@@ -1205,7 +1248,10 @@ mod tests {
         let timeline = store.read_timeline("t1", None).unwrap();
         let payloads: Vec<&str> = timeline.iter().map(|e| e.payload.as_str()).collect();
         assert_eq!(payloads, ["older", "live"]);
-        assert_eq!(store.max_stream_versions().unwrap(), vec![("t1".to_string(), 2u64)]);
+        assert_eq!(
+            store.max_stream_versions().unwrap(),
+            vec![("t1".to_string(), 2u64)]
+        );
         let _ = std::fs::remove_dir_all(test_dir("events_import"));
     }
 
@@ -1230,7 +1276,9 @@ mod tests {
     fn projectors_fill_threads_messages_and_turns_from_the_log() {
         let path = test_dir("project").join("emberyx.db");
         let store = Store::open(&path).unwrap();
-        store.append_events(&[prompt("t1", 1, "hello there")]).unwrap();
+        store
+            .append_events(&[prompt("t1", 1, "hello there")])
+            .unwrap();
         store
             .append_events(&[completion("t1", 2, "turn-9", "x-5")])
             .unwrap();
@@ -1261,19 +1309,20 @@ mod tests {
 
         let turns = store
             .with_reader(|conn| {
-                Ok(conn.prepare(
-                    "SELECT thread_id, turn_id, state, provider, model FROM projection_turns",
-                )?
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                    ))
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?)
+                Ok(conn
+                    .prepare(
+                        "SELECT thread_id, turn_id, state, provider, model FROM projection_turns",
+                    )?
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                        ))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?)
             })
             .unwrap();
         assert_eq!(
@@ -1444,7 +1493,11 @@ mod tests {
         let newest = store.messages_page("t1", None, None, 5).unwrap();
         assert!(newest.has_more);
         assert_eq!(
-            newest.rows.iter().map(|r| r.payload_json.clone()).collect::<Vec<_>>(),
+            newest
+                .rows
+                .iter()
+                .map(|r| r.payload_json.clone())
+                .collect::<Vec<_>>(),
             vec![
                 Some("line-8".to_string()),
                 Some("line-9".to_string()),
@@ -1481,8 +1534,16 @@ mod tests {
             .unwrap();
         // The seam hands back only what precedes the cursor, once.
         assert_ne!(
-            second.rows.iter().map(|t| t.requested_at).collect::<Vec<_>>(),
-            first.rows.iter().map(|t| t.requested_at).collect::<Vec<_>>()
+            second
+                .rows
+                .iter()
+                .map(|t| t.requested_at)
+                .collect::<Vec<_>>(),
+            first
+                .rows
+                .iter()
+                .map(|t| t.requested_at)
+                .collect::<Vec<_>>()
         );
         let _ = std::fs::remove_dir_all(test_dir("turns_page"));
     }
@@ -1571,9 +1632,7 @@ mod tests {
                 })
                 .unwrap()
         };
-        out.extend(query(
-            "SELECT * FROM projection_threads ORDER BY thread_id",
-        ));
+        out.extend(query("SELECT * FROM projection_threads ORDER BY thread_id"));
         out.extend(query(
             "SELECT * FROM projection_messages ORDER BY message_id",
         ));

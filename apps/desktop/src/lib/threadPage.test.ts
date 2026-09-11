@@ -20,6 +20,7 @@ const page = (rows: number) => ({
     payloadJson: "{}",
   })),
   hasMore: false,
+  activities: [],
 });
 
 beforeEach(() => {

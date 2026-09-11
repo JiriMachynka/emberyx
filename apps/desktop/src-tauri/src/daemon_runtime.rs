@@ -54,11 +54,7 @@ impl AgentStream {
 /// Buffer one frame and fan it out. Exit is the last frame an agent produces:
 /// the process handle is cleared with it, or the next spawn would "reattach" to
 /// a child that is already gone.
-fn record(
-    streams: &Arc<Mutex<HashMap<String, AgentStream>>>,
-    agent_id: &str,
-    event: AgentEvent,
-) {
+fn record(streams: &Arc<Mutex<HashMap<String, AgentStream>>>, agent_id: &str, event: AgentEvent) {
     let exited = matches!(event, AgentEvent::Exit(_));
     let mut streams = streams.lock().unwrap_or_else(|e| e.into_inner());
     let stream = streams.entry(agent_id.to_string()).or_default();
@@ -143,7 +139,9 @@ impl Runtime {
     /// Write one message to a live agent's stdin.
     pub fn send(&self, agent_id: &str, message: &str) -> Result<(), String> {
         let process_id = self.process_id(agent_id)?;
-        self.manager.send(process_id, message).map_err(|e| e.to_string())
+        self.manager
+            .send(process_id, message)
+            .map_err(|e| e.to_string())
     }
 
     /// Kill an agent and forget its buffer. Deliberate: an agent the user

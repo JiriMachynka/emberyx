@@ -12,12 +12,11 @@ use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
 use crate::error::Result;
-use crate::models::{
-    AgentLifecycle, Provider, TimelineEvent, TimelineEventKind, TurnAttribution,
-};
+use crate::models::{AgentLifecycle, Provider, TimelineEvent, TimelineEventKind, TurnAttribution};
 use crate::queue::{PromptQueue, QueuedPrompt};
-use crate::store::Store;
+use crate::store::{append_events_on, save_state_snapshot_on, Store};
 use crate::time::now_ms;
+use rusqlite::Connection;
 
 pub const MAX_TRANSCRIPT: usize = 400;
 pub const AGENT_EVENT: &str = "agent-event";
@@ -221,15 +220,48 @@ fn flush_pending(inner: &mut Inner) -> Result<()> {
     if inner.pending.is_empty() {
         return Ok(());
     }
-    let Some(store) = inner.store.as_ref() else {
+    let Some(store) = inner.store.clone() else {
         return Ok(());
     };
+    store.with_writer(|conn| drain_pending(inner, conn))
+}
+
+/// `flush_pending` on a writer connection the caller already holds.
+fn drain_pending(inner: &mut Inner, conn: &mut Connection) -> Result<()> {
+    if inner.pending.is_empty() {
+        return Ok(());
+    }
     let batch = std::mem::take(&mut inner.pending);
-    if let Err(e) = store.append_events(&batch) {
+    if let Err(e) = append_events_on(conn, &batch) {
         inner.pending = batch;
         return Err(e);
     }
     Ok(())
+}
+
+/// One tick of the background flusher. Ingest holds the store writer for whole
+/// batches; waiting for it here would hold the registry lock just as long and
+/// stall every agent command behind a transcript import. So a busy writer skips
+/// the tick — the events stay buffered and the next tick retries, and
+/// `FLUSH_BUFFER_SOFT_CAP` still forces a waiting flush if they pile up.
+fn flush_tick(inner: &mut Inner) {
+    let dirty = !inner.pending.is_empty() || inner.mutations != inner.snapshotted_mutations;
+    let Some(store) = inner.store.clone().filter(|_| dirty) else {
+        return;
+    };
+    let tick = store.try_with_writer(|conn| {
+        if let Err(e) = drain_pending(inner, conn) {
+            eprintln!("[emberyx] timeline flush failed: {e}");
+            return Ok(());
+        }
+        if let Err(e) = snapshot_on(inner, conn) {
+            eprintln!("[emberyx] state snapshot failed: {e}");
+        }
+        Ok(())
+    });
+    if let Err(e) = tick {
+        eprintln!("[emberyx] timeline flush failed: {e}");
+    }
 }
 
 /// Serialize the current registry into its persisted form. Callers hold the
@@ -260,11 +292,19 @@ fn write_state_snapshot(inner: &mut Inner) -> Result<()> {
     if inner.mutations == inner.snapshotted_mutations {
         return Ok(());
     }
-    let Some(store) = inner.store.as_ref() else {
+    let Some(store) = inner.store.clone() else {
         return Ok(());
     };
+    store.with_writer(|conn| snapshot_on(inner, conn))
+}
+
+/// `write_state_snapshot` on a writer connection the caller already holds.
+fn snapshot_on(inner: &mut Inner, conn: &mut Connection) -> Result<()> {
+    if inner.mutations == inner.snapshotted_mutations {
+        return Ok(());
+    }
     let json = serde_json::to_string(&registry_snapshot(inner))?;
-    store.save_state_snapshot("registry", &json)?;
+    save_state_snapshot_on(conn, "registry", &json)?;
     inner.snapshotted_mutations = inner.mutations;
     Ok(())
 }
@@ -335,19 +375,7 @@ impl Supervisor {
                     break;
                 };
                 let (lock, _) = &*shared;
-                let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
-                let dirty = !inner.pending.is_empty()
-                    || inner.mutations != inner.snapshotted_mutations;
-                if !dirty {
-                    continue;
-                }
-                if let Err(e) = flush_pending(&mut inner) {
-                    eprintln!("[emberyx] timeline flush failed: {e}");
-                    continue;
-                }
-                if let Err(e) = write_state_snapshot(&mut inner) {
-                    eprintln!("[emberyx] state snapshot failed: {e}");
-                }
+                flush_tick(&mut lock.lock().unwrap_or_else(|e| e.into_inner()));
             });
     }
 
@@ -373,9 +401,9 @@ impl Supervisor {
                 backend: backend.clone(),
                 cwd: cwd.clone(),
                 process_session_id,
-            thread_id: None,
-            turn_id: None,
-            delegation_id: None,
+                thread_id: None,
+                turn_id: None,
+                delegation_id: None,
                 lifecycle: Lifecycle::Idle,
                 current_task: None,
                 created_at: timestamp,
@@ -517,9 +545,7 @@ impl Supervisor {
     /// readers use this to report lifecycle facts without making the frontend
     /// part of the state machine.
     pub fn active() -> Option<Self> {
-        ACTIVE
-            .get()
-            .and_then(|active| active.lock().ok()?.clone())
+        ACTIVE.get().and_then(|active| active.lock().ok()?.clone())
     }
 
     fn observe(&self, agent_id: &str, lifecycle: Lifecycle, kind: &str, payload: String) {
@@ -531,7 +557,11 @@ impl Supervisor {
     pub fn observe_process_exit(&self, agent_id: &str, code: Option<i32>) {
         self.observe(
             agent_id,
-            if code == Some(0) { Lifecycle::Exited } else { Lifecycle::Failed },
+            if code == Some(0) {
+                Lifecycle::Exited
+            } else {
+                Lifecycle::Failed
+            },
             "process-exited",
             serde_json::json!({ "code": code }).to_string(),
         );
@@ -871,7 +901,11 @@ impl Supervisor {
     fn queue_mut(&self, thread_id: &str) -> Result<PromptQueue> {
         let (lock, _) = &*self.inner;
         let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(inner.queues.entry(thread_id.to_string()).or_insert_with(PromptQueue::new).clone())
+        Ok(inner
+            .queues
+            .entry(thread_id.to_string())
+            .or_insert_with(PromptQueue::new)
+            .clone())
     }
 
     fn queue_set(&self, thread_id: &str, queue: PromptQueue) -> Result<()> {
@@ -929,12 +963,7 @@ impl Supervisor {
         Ok(queued)
     }
 
-    pub fn reorder_prompt(
-        &self,
-        thread_id: &str,
-        from: usize,
-        to: usize,
-    ) -> Result<QueuedPrompt> {
+    pub fn reorder_prompt(&self, thread_id: &str, from: usize, to: usize) -> Result<QueuedPrompt> {
         let mut queue = self.queue_mut(thread_id)?;
         let item = queue.reorder(from, to)?;
         self.queue_set(thread_id, queue)?;
@@ -1077,7 +1106,9 @@ impl Supervisor {
             .get_mut(delegation_id)
             .ok_or_else(|| crate::err!("unknown delegation {delegation_id}"))?;
         if delegation.target_agent_id != target_agent_id {
-            return Err(crate::err!("delegation {delegation_id} belongs to a different target"));
+            return Err(crate::err!(
+                "delegation {delegation_id} belongs to a different target"
+            ));
         }
         if delegation.status != Lifecycle::Working {
             return Ok(delegation.clone());
@@ -1402,7 +1433,12 @@ pub fn agent_complete_turn(
         let failed = matches!(status.as_str(), "failed" | "error" | "errored");
         let (event, mirrored) = supervisor.append_with_timeline(
             &agent_id,
-            if failed { "turn-failed" } else { "turn-completed" }.into(),
+            if failed {
+                "turn-failed"
+            } else {
+                "turn-completed"
+            }
+            .into(),
             serde_json::json!({
                 "threadId": thread_id,
                 "turnId": turn_id,
@@ -1617,7 +1653,11 @@ fn queue_event(
 /// Resolve an agent's thread id for queue operations. Queue ops are addressed
 /// by thread, but callers commonly hold an agent id — this routes one to the
 /// other.
-fn queue_thread(supervisor: &Supervisor, agent_id: &str, thread_id: Option<String>) -> Result<String> {
+fn queue_thread(
+    supervisor: &Supervisor,
+    agent_id: &str,
+    thread_id: Option<String>,
+) -> Result<String> {
     match thread_id {
         Some(thread) => Ok(thread),
         None => Ok(supervisor
@@ -1656,7 +1696,14 @@ pub fn agent_queue_enqueue(
 ) -> Result<QueuedPrompt> {
     let thread = queue_thread(&supervisor, agent_id.as_deref().unwrap_or(""), thread_id)?;
     let queued = supervisor.enqueue_prompt(&thread, text, attachments)?;
-    queue_event(&app, &supervisor, &thread, agent_id.as_deref(), "prompt-queued", &queued);
+    queue_event(
+        &app,
+        &supervisor,
+        &thread,
+        agent_id.as_deref(),
+        "prompt-queued",
+        &queued,
+    );
     Ok(queued)
 }
 
@@ -1669,7 +1716,14 @@ pub fn agent_queue_reorder(
     to: usize,
 ) -> Result<QueuedPrompt> {
     let item = supervisor.reorder_prompt(&thread_id, from, to)?;
-    queue_event(&app, &supervisor, &thread_id, None, "prompt-reordered", &item);
+    queue_event(
+        &app,
+        &supervisor,
+        &thread_id,
+        None,
+        "prompt-reordered",
+        &item,
+    );
     Ok(item)
 }
 
@@ -1716,7 +1770,14 @@ pub fn agent_queue_resume(
     thread_id: String,
 ) -> Result<bool> {
     let changed = supervisor.resume_queue(&thread_id)?;
-    queue_event(&app, &supervisor, &thread_id, None, "queue-resumed", changed);
+    queue_event(
+        &app,
+        &supervisor,
+        &thread_id,
+        None,
+        "queue-resumed",
+        changed,
+    );
     Ok(changed)
 }
 
@@ -1728,7 +1789,14 @@ pub fn agent_queue_run_next(
 ) -> Result<Option<QueuedPrompt>> {
     let next = supervisor.run_next_prompt(&thread_id)?;
     if let Some(prompt) = &next {
-        queue_event(&app, &supervisor, &thread_id, None, "prompt-dispatched", prompt);
+        queue_event(
+            &app,
+            &supervisor,
+            &thread_id,
+            None,
+            "prompt-dispatched",
+            prompt,
+        );
     }
     Ok(next)
 }
@@ -1775,7 +1843,11 @@ pub fn agent_delegate(
 ) -> Result<Delegation> {
     let delegation = supervisor.delegate(&source_agent_id, &target_agent_id, task.clone())?;
     if let Err(error) = dispatch_prompt(&supervisor, &claude, &codex, &target_agent_id, &task) {
-        let _ = supervisor.fail_delegation(&delegation.delegation_id, &target_agent_id, error.to_string());
+        let _ = supervisor.fail_delegation(
+            &delegation.delegation_id,
+            &target_agent_id,
+            error.to_string(),
+        );
         return Err(error);
     }
     let event = supervisor.append(&target_agent_id, "delegation".into(), serde_json::json!({"delegationId":delegation.delegation_id,"sourceAgentId":source_agent_id,"targetAgentId":target_agent_id,"task":task}).to_string())?;
@@ -1851,7 +1923,6 @@ mod tests {
         );
     }
 
-
     fn supervisor_at(db_path: &std::path::Path) -> Supervisor {
         let s = Supervisor::new();
         s.attach_store(std::sync::Arc::new(Store::open(db_path).unwrap()))
@@ -1879,6 +1950,39 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("emberyx-supervisor-db-{}-{n}", now_ms()));
         let _ = std::fs::remove_dir_all(&dir);
         supervisor_at(&dir.join("emberyx.db"))
+    }
+
+    #[test]
+    fn a_busy_writer_skips_the_flush_tick_without_losing_events() {
+        let s = supervisor();
+        {
+            let (lock, _) = &*s.inner;
+            let mut inner = lock.lock().unwrap();
+            Supervisor::push_timeline(
+                &mut inner,
+                "t1",
+                TimelineEventKind::UserPrompt,
+                None,
+                "{}".into(),
+            )
+            .unwrap();
+            let store = inner.store.clone().unwrap();
+            // Stand-in for an ingest batch holding the writer mid-tick.
+            store
+                .with_writer(|_| {
+                    flush_tick(&mut inner);
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(
+                inner.pending.len(),
+                1,
+                "a busy writer leaves events buffered"
+            );
+            flush_tick(&mut inner);
+            assert!(inner.pending.is_empty());
+        }
+        assert_eq!(s.read_timeline("t1", None).unwrap().len(), 1);
     }
 
     fn register(s: &Supervisor, agent_id: &str, thread_id: Option<&str>) {
@@ -1972,7 +2076,9 @@ mod tests {
                 None,
             );
         }
-        let delegation = s.delegate("source", "target", "review auth".into()).unwrap();
+        let delegation = s
+            .delegate("source", "target", "review auth".into())
+            .unwrap();
 
         let completed = s
             .complete_delegation(&delegation.delegation_id, "target", "use a token".into())
@@ -1981,7 +2087,10 @@ mod tests {
         assert_eq!(completed.result.as_deref(), Some("use a token"));
         assert!(completed.error.is_none());
         assert_eq!(s.get("target").unwrap().lifecycle, Lifecycle::Idle);
-        assert_eq!(s.get_delegation(&delegation.delegation_id).unwrap(), completed);
+        assert_eq!(
+            s.get_delegation(&delegation.delegation_id).unwrap(),
+            completed
+        );
     }
 
     #[test]
@@ -1997,7 +2106,9 @@ mod tests {
                 None,
             );
         }
-        let delegation = s.delegate("source", "target", "inspect diff".into()).unwrap();
+        let delegation = s
+            .delegate("source", "target", "inspect diff".into())
+            .unwrap();
         assert!(s
             .complete_delegation(&delegation.delegation_id, "other", "wrong".into())
             .is_err());
@@ -2008,8 +2119,12 @@ mod tests {
         assert_eq!(failed.status, Lifecycle::Failed);
         assert_eq!(failed.error.as_deref(), Some("timed out"));
         assert_eq!(
-            s.fail_delegation(&delegation.delegation_id, "target", "different error".into())
-                .unwrap(),
+            s.fail_delegation(
+                &delegation.delegation_id,
+                "target",
+                "different error".into()
+            )
+            .unwrap(),
             failed
         );
     }
@@ -2178,7 +2293,8 @@ mod tests {
         register(&s, "a", Some("t1"));
         s.append("a", "prompt".into(), "hello".into()).unwrap();
         // Not every transcript kind is a timeline fact — this one stays local.
-        s.append("a", "thread-attached".into(), "{}".into()).unwrap();
+        s.append("a", "thread-attached".into(), "{}".into())
+            .unwrap();
         s.append("a", "turn-completed".into(), "{}".into()).unwrap();
 
         let events = s.read_timeline("t1", None).unwrap();
@@ -2206,7 +2322,10 @@ mod tests {
         let missed = s.read_timeline("t1", Some(first)).unwrap();
         assert_eq!(missed.len(), 1);
         assert_eq!(missed[0].payload, "two");
-        assert!(s.read_timeline("t1", Some(missed[0].seq)).unwrap().is_empty());
+        assert!(s
+            .read_timeline("t1", Some(missed[0].seq))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -2250,12 +2369,7 @@ mod tests {
         let second = supervisor_at(&db);
         assert_eq!(second.read_timeline("t1", None).unwrap(), before);
         let next = second
-            .record_thread_event(
-                "t1",
-                TimelineEventKind::Error,
-                None,
-                "after restart".into(),
-            )
+            .record_thread_event("t1", TimelineEventKind::Error, None, "after restart".into())
             .unwrap();
         assert_eq!(next.seq, before[0].seq + 1);
         let _ = std::fs::remove_dir_all(&dir);
@@ -2263,8 +2377,7 @@ mod tests {
 
     #[test]
     fn restore_imports_legacy_registry_timelines_into_the_store() {
-        let path =
-            std::env::temp_dir().join(format!("emberyx-legacy-tl-{}.json", now_ms()));
+        let path = std::env::temp_dir().join(format!("emberyx-legacy-tl-{}.json", now_ms()));
         // A pre-store registry.json: timelines rode along in the snapshot and
         // `next_seq` guarded the cursor. Restore must land them in the event
         // log, then keep appending past them without a collision.
@@ -2298,10 +2411,7 @@ mod tests {
         let events = s.read_timeline("legacy", None).unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].payload, "from json");
-        assert_eq!(
-            events[0].kind,
-            TimelineEventKind::UserPrompt
-        );
+        assert_eq!(events[0].kind, TimelineEventKind::UserPrompt);
         let next = s
             .record_thread_event(
                 "legacy",
@@ -2328,8 +2438,14 @@ mod tests {
 
         let restored = supervisor();
         restored.restore(&path).unwrap();
-        assert_eq!(restored.get("working").unwrap().lifecycle, Lifecycle::Orphaned);
-        assert_eq!(restored.get("blocked").unwrap().lifecycle, Lifecycle::Orphaned);
+        assert_eq!(
+            restored.get("working").unwrap().lifecycle,
+            Lifecycle::Orphaned
+        );
+        assert_eq!(
+            restored.get("blocked").unwrap().lifecycle,
+            Lifecycle::Orphaned
+        );
         // A finished agent stopped on purpose and must not be relabelled.
         assert_eq!(restored.get("done").unwrap().lifecycle, Lifecycle::Done);
         let _ = std::fs::remove_file(path);
@@ -2337,8 +2453,14 @@ mod tests {
 
     #[test]
     fn lifecycles_map_onto_the_provider_neutral_vocabulary() {
-        assert_eq!(AgentLifecycle::from(Lifecycle::Working), AgentLifecycle::Running);
-        assert_eq!(AgentLifecycle::from(Lifecycle::Idle), AgentLifecycle::WaitingInput);
+        assert_eq!(
+            AgentLifecycle::from(Lifecycle::Working),
+            AgentLifecycle::Running
+        );
+        assert_eq!(
+            AgentLifecycle::from(Lifecycle::Idle),
+            AgentLifecycle::WaitingInput
+        );
         assert_eq!(
             AgentLifecycle::from(Lifecycle::Blocked),
             AgentLifecycle::WaitingApproval
@@ -2347,7 +2469,10 @@ mod tests {
             AgentLifecycle::from(Lifecycle::Cancelled),
             AgentLifecycle::Interrupted
         );
-        assert_eq!(AgentLifecycle::from(Lifecycle::Orphaned), AgentLifecycle::Orphaned);
+        assert_eq!(
+            AgentLifecycle::from(Lifecycle::Orphaned),
+            AgentLifecycle::Orphaned
+        );
         // Orphaned is the one non-terminal-looking state that is terminal.
         assert!(AgentLifecycle::from(Lifecycle::Orphaned).is_terminal());
     }
@@ -2382,14 +2507,25 @@ mod tests {
     #[test]
     fn answering_closes_the_approval_and_records_both_ends() {
         let s = supervisor();
-        s.open_approval("ask-1".into(), "t1".into(), "ask", "{\"q\":1}".into(), 60_000);
+        s.open_approval(
+            "ask-1".into(),
+            "t1".into(),
+            "ask",
+            "{\"q\":1}".into(),
+            60_000,
+        );
         let closed = s.close_approval("ask-1", Some("yes")).unwrap();
         assert_eq!(closed.thread_id, "t1");
         assert!(s.pending_approvals(None).is_empty());
         // Closing twice is what a timeout racing an answer does.
         assert!(s.close_approval("ask-1", None).is_none());
 
-        let kinds: Vec<_> = s.read_timeline("t1", None).unwrap().iter().map(|e| e.kind.clone()).collect();
+        let kinds: Vec<_> = s
+            .read_timeline("t1", None)
+            .unwrap()
+            .iter()
+            .map(|e| e.kind.clone())
+            .collect();
         assert_eq!(
             kinds,
             [
@@ -2420,8 +2556,18 @@ mod tests {
 
         // Interleaving threads must not punch holes in either sequence — the
         // client reads a gap as "I missed an event".
-        let one: Vec<u64> = s.read_timeline("t1", None).unwrap().iter().map(|e| e.seq).collect();
-        let two: Vec<u64> = s.read_timeline("t2", None).unwrap().iter().map(|e| e.seq).collect();
+        let one: Vec<u64> = s
+            .read_timeline("t1", None)
+            .unwrap()
+            .iter()
+            .map(|e| e.seq)
+            .collect();
+        let two: Vec<u64> = s
+            .read_timeline("t2", None)
+            .unwrap()
+            .iter()
+            .map(|e| e.seq)
+            .collect();
         assert_eq!(one, [1, 2]);
         assert_eq!(two, [1]);
     }
@@ -2482,14 +2628,13 @@ mod tests {
         drop(s);
         let second = supervisor_at(&db);
         let events = second.read_timeline("t1", None).unwrap();
-        assert_eq!(events.len(), 2, "the unflushed prompt is gone, nothing else");
+        assert_eq!(
+            events.len(),
+            2,
+            "the unflushed prompt is gone, nothing else"
+        );
         let next = second
-            .record_thread_event(
-                "t1",
-                TimelineEventKind::Error,
-                None,
-                "after crash".into(),
-            )
+            .record_thread_event("t1", TimelineEventKind::Error, None, "after crash".into())
             .unwrap();
         assert_eq!(next.seq, 3, "sequence continues past the flushed turn");
         let _ = std::fs::remove_dir_all(dir);

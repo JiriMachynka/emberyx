@@ -141,29 +141,68 @@ pub enum Request {
     // Existing transport-seam ops (Claude/Codex registry).
     Ping,
     List,
-    Get { agent_id: String },
-    Read { agent_id: String, after_event_id: Option<u64> },
-    Register { agent: DaemonAgent },
-    Append { agent_id: String, kind: String, payload: String, timestamp: u64 },
+    Get {
+        agent_id: String,
+    },
+    Read {
+        agent_id: String,
+        after_event_id: Option<u64>,
+    },
+    Register {
+        agent: DaemonAgent,
+    },
+    Append {
+        agent_id: String,
+        kind: String,
+        payload: String,
+        timestamp: u64,
+    },
     // Daemon-wide ops.
     Health,
     Version,
     ListThreads,
-    GetThread { thread_id: String },
-    ReadEvents { thread_id: String, after_seq: Option<u64> },
-    Subscribe { thread_id: String },
-    StartPrompt { agent_id: String, message: String },
-    EnqueuePrompt { agent_id: String, text: String },
-    Interrupt { agent_id: String },
-    StopAgent { agent_id: String },
+    GetThread {
+        thread_id: String,
+    },
+    ReadEvents {
+        thread_id: String,
+        after_seq: Option<u64>,
+    },
+    Subscribe {
+        thread_id: String,
+    },
+    StartPrompt {
+        agent_id: String,
+        message: String,
+    },
+    EnqueuePrompt {
+        agent_id: String,
+        text: String,
+    },
+    Interrupt {
+        agent_id: String,
+    },
+    StopAgent {
+        agent_id: String,
+    },
     // Process ownership. Handled by the daemon runtime, which holds the child
     // processes; `State` is metadata only and rejects them.
-    AgentSpawn { spec: AgentSpec },
-    AgentSend { agent_id: String, message: String },
-    AgentKill { agent_id: String },
+    AgentSpawn {
+        spec: AgentSpec,
+    },
+    AgentSend {
+        agent_id: String,
+        message: String,
+    },
+    AgentKill {
+        agent_id: String,
+    },
     /// Turn this connection into a one-way frame stream, replaying from
     /// `afterFrameId` first. The connection carries no further requests.
-    AgentAttach { agent_id: String, after_frame_id: Option<u64> },
+    AgentAttach {
+        agent_id: String,
+        after_frame_id: Option<u64>,
+    },
     AgentLive,
     Stop,
 }
@@ -193,11 +232,19 @@ pub struct Response {
 
 impl Response {
     pub fn ok<T: Serialize>(value: T) -> Self {
-        Self { ok: true, result: serde_json::to_value(value).unwrap_or(Value::Null), error: None }
+        Self {
+            ok: true,
+            result: serde_json::to_value(value).unwrap_or(Value::Null),
+            error: None,
+        }
     }
 
     pub fn error(message: impl Into<String>) -> Self {
-        Self { ok: false, result: Value::Null, error: Some(message.into()) }
+        Self {
+            ok: false,
+            result: Value::Null,
+            error: Some(message.into()),
+        }
     }
 }
 
@@ -279,54 +326,101 @@ impl State {
                 (Response::ok(health), false)
             }
             Request::Version => (Response::ok(DAEMON_VERSION), false),
-            Request::List => (Response::ok(self.agents.values().collect::<Vec<_>>()), false),
+            Request::List => (
+                Response::ok(self.agents.values().collect::<Vec<_>>()),
+                false,
+            ),
             Request::ListThreads => {
-                let mut threads: Vec<String> = self.agents.values().filter_map(|a| a.thread_id.clone()).collect();
+                let mut threads: Vec<String> = self
+                    .agents
+                    .values()
+                    .filter_map(|a| a.thread_id.clone())
+                    .collect();
                 threads.sort();
                 threads.dedup();
                 (Response::ok(threads), false)
             }
             Request::GetThread { thread_id } => {
-                let mut matches: Vec<&DaemonAgent> = self.agents.values().filter(|a| a.thread_id.as_deref() == Some(thread_id.as_str())).collect();
+                let mut matches: Vec<&DaemonAgent> = self
+                    .agents
+                    .values()
+                    .filter(|a| a.thread_id.as_deref() == Some(thread_id.as_str()))
+                    .collect();
                 if matches.is_empty() {
-                    return (Response::error(format!("unknown thread {thread_id}")), false);
+                    return (
+                        Response::error(format!("unknown thread {thread_id}")),
+                        false,
+                    );
                 }
                 matches.sort_by_key(|a| a.updated_at);
                 let events = self.read_thread_events(&thread_id, None);
                 let queues = self.queues.get(&thread_id).cloned().unwrap_or_default();
-                (Response::ok(serde_json::json!({ "threadId": thread_id, "agents": matches, "events": events, "queue": queues })), false)
+                (
+                    Response::ok(
+                        serde_json::json!({ "threadId": thread_id, "agents": matches, "events": events, "queue": queues }),
+                    ),
+                    false,
+                )
             }
-            Request::ReadEvents { thread_id, after_seq } => {
-                (Response::ok(self.read_thread_events(&thread_id, after_seq)), false)
-            }
+            Request::ReadEvents {
+                thread_id,
+                after_seq,
+            } => (
+                Response::ok(self.read_thread_events(&thread_id, after_seq)),
+                false,
+            ),
             Request::Subscribe { thread_id } => {
                 // Reconnectable subscription: return everything so the client
                 // can resync its local timeline, then watch for new appends.
-                (Response::ok(self.read_thread_events(&thread_id, None)), false)
+                (
+                    Response::ok(self.read_thread_events(&thread_id, None)),
+                    false,
+                )
             }
             Request::Get { agent_id } => match self.agents.get(&agent_id) {
                 Some(agent) => (Response::ok(agent), false),
                 None => (Response::error(format!("unknown agent {agent_id}")), false),
             },
-            Request::Read { agent_id, after_event_id } => {
-                let events = self.events.get(&agent_id).into_iter().flat_map(|items| items.iter())
+            Request::Read {
+                agent_id,
+                after_event_id,
+            } => {
+                let events = self
+                    .events
+                    .get(&agent_id)
+                    .into_iter()
+                    .flat_map(|items| items.iter())
                     .filter(|event| after_event_id.is_none_or(|id| event.event_id > id))
-                    .cloned().collect::<Vec<_>>();
+                    .cloned()
+                    .collect::<Vec<_>>();
                 (Response::ok(events), false)
             }
             Request::Register { agent } => {
                 self.agents.insert(agent.agent_id.clone(), agent.clone());
                 (Response::ok(agent), false)
             }
-            Request::Append { agent_id, kind, payload, timestamp } => {
+            Request::Append {
+                agent_id,
+                kind,
+                payload,
+                timestamp,
+            } => {
                 if !self.agents.contains_key(&agent_id) {
                     return (Response::error(format!("unknown agent {agent_id}")), false);
                 }
                 self.next_event_id += 1;
-                let event = DaemonEvent { event_id: self.next_event_id, agent_id: agent_id.clone(), kind, payload, timestamp };
+                let event = DaemonEvent {
+                    event_id: self.next_event_id,
+                    agent_id: agent_id.clone(),
+                    kind,
+                    payload,
+                    timestamp,
+                };
                 let events = self.events.entry(agent_id).or_default();
                 events.push_back(event.clone());
-                while events.len() > MAX_EVENTS { events.pop_front(); }
+                while events.len() > MAX_EVENTS {
+                    events.pop_front();
+                }
                 (Response::ok(event), false)
             }
             Request::StartPrompt { agent_id, message } => {
@@ -342,7 +436,10 @@ impl State {
                     payload: message,
                     timestamp: up,
                 };
-                self.events.entry(agent_id.clone()).or_default().push_back(event.clone());
+                self.events
+                    .entry(agent_id.clone())
+                    .or_default()
+                    .push_back(event.clone());
                 if let Some(agent) = self.agents.get_mut(&agent_id) {
                     agent.lifecycle = "working".into();
                     agent.updated_at = up;
@@ -355,7 +452,11 @@ impl State {
                 }
                 let up = self.uptime();
                 self.next_queue_id += 1;
-                let thread_id = self.agents.get(&agent_id).and_then(|a| a.thread_id.clone()).unwrap_or_default();
+                let thread_id = self
+                    .agents
+                    .get(&agent_id)
+                    .and_then(|a| a.thread_id.clone())
+                    .unwrap_or_default();
                 let queue = self.queues.entry(thread_id).or_default();
                 let position = queue.len() as u32;
                 let queued = QueuedPrompt {
@@ -438,9 +539,14 @@ impl State {
     }
 
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let temp = path.with_extension("tmp");
-        fs::write(&temp, serde_json::to_vec_pretty(self).map_err(io::Error::other)?)?;
+        fs::write(
+            &temp,
+            serde_json::to_vec_pretty(self).map_err(io::Error::other)?,
+        )?;
         fs::rename(temp, path)
     }
 }
@@ -464,11 +570,31 @@ mod tests {
     #[test]
     fn append_is_bounded_and_read_is_incremental() {
         let mut state = State::default();
-        state.handle(Request::Register { agent: DaemonAgent {
-            agent_id: "a".into(), project_id: "p".into(), workspace_id: "w".into(), backend: "codex".into(), cwd: "/tmp".into(), thread_id: None, lifecycle: "idle".into(), current_task: None, updated_at: 0,
-        }});
-        for i in 0..(MAX_EVENTS + 1) { state.handle(Request::Append { agent_id: "a".into(), kind: "delta".into(), payload: i.to_string(), timestamp: i as u64 }); }
-        let (response, _) = state.handle(Request::Read { agent_id: "a".into(), after_event_id: Some(1) });
+        state.handle(Request::Register {
+            agent: DaemonAgent {
+                agent_id: "a".into(),
+                project_id: "p".into(),
+                workspace_id: "w".into(),
+                backend: "codex".into(),
+                cwd: "/tmp".into(),
+                thread_id: None,
+                lifecycle: "idle".into(),
+                current_task: None,
+                updated_at: 0,
+            },
+        });
+        for i in 0..(MAX_EVENTS + 1) {
+            state.handle(Request::Append {
+                agent_id: "a".into(),
+                kind: "delta".into(),
+                payload: i.to_string(),
+                timestamp: i as u64,
+            });
+        }
+        let (response, _) = state.handle(Request::Read {
+            agent_id: "a".into(),
+            after_event_id: Some(1),
+        });
         assert_eq!(response.result.as_array().unwrap().len(), MAX_EVENTS);
     }
 
@@ -493,7 +619,11 @@ mod tests {
     #[test]
     fn respawning_a_known_agent_keeps_its_row_because_that_is_a_reattach() {
         let mut state = State::default();
-        let spec = AgentSpec { agent_id: "a1".into(), cwd: "/repo".into(), ..AgentSpec::default() };
+        let spec = AgentSpec {
+            agent_id: "a1".into(),
+            cwd: "/repo".into(),
+            ..AgentSpec::default()
+        };
         state.register_spawn(&spec);
         state.agents.get_mut("a1").unwrap().project_id = "p1".into();
         state.register_spawn(&spec);
@@ -504,7 +634,10 @@ mod tests {
     #[test]
     fn a_killed_agent_stops_claiming_to_run() {
         let mut state = State::default();
-        state.register_spawn(&AgentSpec { agent_id: "a1".into(), ..AgentSpec::default() });
+        state.register_spawn(&AgentSpec {
+            agent_id: "a1".into(),
+            ..AgentSpec::default()
+        });
         state.mark_exited("a1");
         assert_eq!(state.agents["a1"].lifecycle, "exited");
         // An id the daemon never knew is not an error worth failing a kill over.
@@ -514,7 +647,10 @@ mod tests {
     #[test]
     fn health_reports_live_agents_separately_from_known_ones() {
         let mut state = State::default();
-        state.register_spawn(&AgentSpec { agent_id: "a1".into(), ..AgentSpec::default() });
+        state.register_spawn(&AgentSpec {
+            agent_id: "a1".into(),
+            ..AgentSpec::default()
+        });
         let (response, _) = state.handle(Request::Health);
         // State alone cannot see processes, so it never guesses: the daemon
         // fills `liveCount` in from the runtime.
@@ -526,10 +662,8 @@ mod tests {
     fn wire_contract_is_camel_case_for_variants_and_fields() {
         // The frontend speaks camelCase everywhere; the daemon protocol must
         // accept it on the wire, not just as Rust constructors.
-        let request: Request = serde_json::from_str(
-            r#"{"op":"enqueuePrompt","agentId":"a1","text":"go"}"#,
-        )
-        .unwrap();
+        let request: Request =
+            serde_json::from_str(r#"{"op":"enqueuePrompt","agentId":"a1","text":"go"}"#).unwrap();
         match request {
             Request::EnqueuePrompt { agent_id, text } => {
                 assert_eq!(agent_id, "a1");
@@ -538,12 +672,13 @@ mod tests {
             other => panic!("expected EnqueuePrompt, got {other:?}"),
         }
 
-        let events: Request = serde_json::from_str(
-            r#"{"op":"readEvents","threadId":"t1","afterSeq":3}"#,
-        )
-        .unwrap();
+        let events: Request =
+            serde_json::from_str(r#"{"op":"readEvents","threadId":"t1","afterSeq":3}"#).unwrap();
         match events {
-            Request::ReadEvents { thread_id, after_seq } => {
+            Request::ReadEvents {
+                thread_id,
+                after_seq,
+            } => {
                 assert_eq!(thread_id, "t1");
                 assert_eq!(after_seq, Some(3));
             }
@@ -570,11 +705,19 @@ mod tests {
     }
 
     fn seed(state: &mut State, agent_id: &str, thread_id: &str) {
-        state.handle(Request::Register { agent: DaemonAgent {
-            agent_id: agent_id.into(), project_id: "p".into(), workspace_id: "w".into(),
-            backend: "codex".into(), cwd: "/tmp".into(), thread_id: Some(thread_id.into()),
-            lifecycle: "idle".into(), current_task: None, updated_at: 0,
-        }});
+        state.handle(Request::Register {
+            agent: DaemonAgent {
+                agent_id: agent_id.into(),
+                project_id: "p".into(),
+                workspace_id: "w".into(),
+                backend: "codex".into(),
+                cwd: "/tmp".into(),
+                thread_id: Some(thread_id.into()),
+                lifecycle: "idle".into(),
+                current_task: None,
+                updated_at: 0,
+            },
+        });
     }
 
     #[test]
@@ -596,10 +739,23 @@ mod tests {
         let mut state = State::default();
         seed(&mut state, "a", "t1");
         seed(&mut state, "b", "t1");
-        state.handle(Request::Append { agent_id: "b".into(), kind: "delta".into(), payload: "b-first".into(), timestamp: 2 });
-        state.handle(Request::Append { agent_id: "a".into(), kind: "delta".into(), payload: "a-second".into(), timestamp: 1 });
+        state.handle(Request::Append {
+            agent_id: "b".into(),
+            kind: "delta".into(),
+            payload: "b-first".into(),
+            timestamp: 2,
+        });
+        state.handle(Request::Append {
+            agent_id: "a".into(),
+            kind: "delta".into(),
+            payload: "a-second".into(),
+            timestamp: 1,
+        });
 
-        let (response, _) = state.handle(Request::ReadEvents { thread_id: "t1".into(), after_seq: None });
+        let (response, _) = state.handle(Request::ReadEvents {
+            thread_id: "t1".into(),
+            after_seq: None,
+        });
         let events: Vec<DaemonEvent> = serde_json::from_value(response.result).unwrap();
         assert_eq!(events.len(), 2);
         // b was appended first, so its event id is lower even though a's
@@ -614,9 +770,17 @@ mod tests {
         let mut state = State::default();
         seed(&mut state, "a", "t1");
         for i in 0..3 {
-            state.handle(Request::Append { agent_id: "a".into(), kind: "delta".into(), payload: i.to_string(), timestamp: i });
+            state.handle(Request::Append {
+                agent_id: "a".into(),
+                kind: "delta".into(),
+                payload: i.to_string(),
+                timestamp: i,
+            });
         }
-        let (response, _) = state.handle(Request::ReadEvents { thread_id: "t1".into(), after_seq: Some(1) });
+        let (response, _) = state.handle(Request::ReadEvents {
+            thread_id: "t1".into(),
+            after_seq: Some(1),
+        });
         let events: Vec<DaemonEvent> = serde_json::from_value(response.result).unwrap();
         assert_eq!(events.len(), 2);
         assert!(events.iter().all(|e| e.event_id > 1));
@@ -626,9 +790,17 @@ mod tests {
     fn enqueue_starts_an_ordered_queue_per_thread() {
         let mut state = State::default();
         seed(&mut state, "a", "t1");
-        state.handle(Request::EnqueuePrompt { agent_id: "a".into(), text: "first".into() });
-        state.handle(Request::EnqueuePrompt { agent_id: "a".into(), text: "second".into() });
-        let (response, _) = state.handle(Request::GetThread { thread_id: "t1".into() });
+        state.handle(Request::EnqueuePrompt {
+            agent_id: "a".into(),
+            text: "first".into(),
+        });
+        state.handle(Request::EnqueuePrompt {
+            agent_id: "a".into(),
+            text: "second".into(),
+        });
+        let (response, _) = state.handle(Request::GetThread {
+            thread_id: "t1".into(),
+        });
         let thread = response.result;
         let queue: Vec<QueuedPrompt> = serde_json::from_value(thread["queue"].clone()).unwrap();
         assert_eq!(queue.len(), 2);
@@ -642,8 +814,13 @@ mod tests {
     fn start_prompt_flips_lifecycle_to_working() {
         let mut state = State::default();
         seed(&mut state, "a", "t1");
-        state.handle(Request::StartPrompt { agent_id: "a".into(), message: "go".into() });
-        let (response, _) = state.handle(Request::Get { agent_id: "a".into() });
+        state.handle(Request::StartPrompt {
+            agent_id: "a".into(),
+            message: "go".into(),
+        });
+        let (response, _) = state.handle(Request::Get {
+            agent_id: "a".into(),
+        });
         let agent: DaemonAgent = serde_json::from_value(response.result).unwrap();
         assert_eq!(agent.lifecycle, "working");
     }
@@ -652,10 +829,14 @@ mod tests {
     fn interrupt_and_stop_are_distinct_terminal_states() {
         let mut state = State::default();
         seed(&mut state, "a", "t1");
-        let (interrupt, _) = state.handle(Request::Interrupt { agent_id: "a".into() });
+        let (interrupt, _) = state.handle(Request::Interrupt {
+            agent_id: "a".into(),
+        });
         let agent: DaemonAgent = serde_json::from_value(interrupt.result).unwrap();
         assert_eq!(agent.lifecycle, "interrupted");
-        let (stop, _) = state.handle(Request::StopAgent { agent_id: "a".into() });
+        let (stop, _) = state.handle(Request::StopAgent {
+            agent_id: "a".into(),
+        });
         let agent: DaemonAgent = serde_json::from_value(stop.result).unwrap();
         assert_eq!(agent.lifecycle, "exited");
     }

@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::agent::{AgentEvent, AgentSink};
-use crate::daemon_protocol::{default_socket, AgentFrame, AgentSpec, Health, Request, Response, SpawnOutcome};
+use crate::daemon_protocol::{
+    default_socket, AgentFrame, AgentSpec, Health, Request, Response, SpawnOutcome,
+};
 use crate::error::Result;
 
 /// How long `ensure` waits for a freshly launched daemon to accept connections.
@@ -113,8 +115,7 @@ impl Daemon {
 
     pub fn health() -> Result<Health> {
         let value = Self::request(&Request::Health)?;
-        let mut health: Health =
-            serde_json::from_value(value).map_err(|e| e.to_string())?;
+        let mut health: Health = serde_json::from_value(value).map_err(|e| e.to_string())?;
         // A daemon left running across an app update speaks the older protocol.
         // Nothing here restarts it — that would kill the agents it is holding,
         // which is the one thing persistent mode promises not to do.
@@ -280,14 +281,12 @@ pub async fn daemon_health() -> Result<Health> {
 }
 
 /// Start the daemon on demand.
-#[tauri::command]
 pub fn daemon_start() -> Result<Health> {
     Daemon::ensure()?;
     Daemon::health()
 }
 
 /// Agent ids the daemon is running right now, across every window.
-#[tauri::command]
 pub fn daemon_live_agents() -> Result<Vec<String>> {
     let value = Daemon::request(&Request::AgentLive)?;
     serde_json::from_value(value).map_err(|e| e.to_string().into())
@@ -295,10 +294,23 @@ pub fn daemon_live_agents() -> Result<Vec<String>> {
 
 /// Stop the daemon and every agent it owns. Explicit: closing the window does
 /// not do this, or the agents would not be persistent.
-#[tauri::command]
 pub fn daemon_stop() -> Result<()> {
     Daemon::request(&Request::Stop)?;
     Ok(())
+}
+
+/// Orders start and stop: two overlapping starts would each find no socket and
+/// spawn a daemon of their own.
+static LIFECYCLE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub mod cmd {
+    use super::*;
+
+    crate::offload! {
+        [LIFECYCLE] daemon_start() -> Health;
+        [LIFECYCLE] daemon_stop() -> ();
+        daemon_live_agents() -> Vec<String>;
+    }
 }
 
 #[cfg(test)]

@@ -159,7 +159,9 @@ interface AgentState {
   setUsage: (id: string, usage: Usage) => void;
   addChange: (change: Change) => void;
   startSubagent: (run: Omit<SubagentRun, "activity" | "startedAt">) => void;
-  addSubagentActivity: (id: string, activity: SubagentActivity) => void;
+  /** Several at once is one store update — one line's worth of a subagent's
+   *  work, rather than a wake-up per tool call for every subscriber. */
+  addSubagentActivity: (id: string, ...activities: SubagentActivity[]) => void;
   endSubagent: (id: string, isError: boolean) => void;
   /** The turn's `result` arrived: end still-open foreground runs, and mark
    *  background ones eligible to settle once they go quiet. */
@@ -277,11 +279,11 @@ export const useAgentStore = create<AgentState>()((set) => ({
         [run.id]: { ...run, startedAt: Date.now(), activity: [] },
       },
     })),
-  addSubagentActivity: (id, activity) =>
+  addSubagentActivity: (id, ...activities) =>
     set((s) => {
       const run = s.subagents[id];
-      if (!run) return s;
-      const next = [...run.activity, activity];
+      if (!run || !activities.length) return s;
+      const next = [...run.activity, ...activities];
       // Activity is proof of life: a background run settled early (or closed by
       // the turn's result) is still working, so reopen it.
       const alive = run.background && run.endedAt != null;

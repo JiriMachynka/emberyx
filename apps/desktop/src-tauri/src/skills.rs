@@ -30,11 +30,7 @@ fn read_dirs(harness: Harness, home: &Path) -> Vec<PathBuf> {
     match harness {
         Harness::Claude => vec![claude],
         Harness::Codex => vec![home.join(".codex").join("skills"), agents],
-        Harness::Opencode => vec![
-            home.join(".config/opencode").join("skills"),
-            claude,
-            agents,
-        ],
+        Harness::Opencode => vec![home.join(".config/opencode").join("skills"), claude, agents],
         Harness::Grok => vec![home.join(".grok").join("skills"), claude, agents],
         Harness::Kilo => vec![
             home.join(".kilo").join("skills"),
@@ -135,8 +131,7 @@ fn scan_dir(dir: &Path, out: &mut Vec<RawSkill>) {
 /// readers; groups keep canonical harness order. `differs` flags names whose
 /// copies under different roots disagree.
 fn collect_at(home: &Path) -> Vec<SkillInfo> {
-    let mut merged: BTreeMap<String, Vec<(Harness, PathBuf, String, String)>> =
-        BTreeMap::new();
+    let mut merged: BTreeMap<String, Vec<(Harness, PathBuf, String, String)>> = BTreeMap::new();
     for harness in Harness::ALL {
         for root in read_dirs(harness, home) {
             let mut found = Vec::new();
@@ -254,8 +249,7 @@ fn validate_name(name: &str) -> Result<()> {
 fn add_at(home: &Path, spec: &SkillAddSpec) -> Result<()> {
     let file = render(&spec.name, &spec.description, &spec.body);
     for id in &spec.harnesses {
-        let harness =
-            Harness::from_id(id).ok_or_else(|| crate::err!("unknown harness {id}"))?;
+        let harness = Harness::from_id(id).ok_or_else(|| crate::err!("unknown harness {id}"))?;
         let dir = write_dir(harness, home).join(&spec.name);
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join("SKILL.md"), &file)?;
@@ -343,7 +337,6 @@ pub struct SkillAddSpec {
     pub harnesses: Vec<String>,
 }
 
-#[tauri::command]
 pub fn skills_list() -> Vec<SkillInfo> {
     match home_dir() {
         Some(home) => collect_at(&home),
@@ -375,16 +368,23 @@ pub fn skills_remove(skill_dir: String) -> Result<()> {
     remove_at(&home, &skill_dir)
 }
 
+// Add, copy and remove stay synchronous: they move directories under one
+// another's feet, and ordering them is what the main thread gave for free.
+pub mod cmd {
+    use super::*;
+
+    crate::offload! {
+        skills_list() => Vec<SkillInfo>;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// A throwaway home with the managed roots laid out under it.
     fn temp_home(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "emberyx-skills-{tag}-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("emberyx-skills-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -464,10 +464,7 @@ mod tests {
                 Harness::Kilo
             ]
         );
-        assert!(!shared
-            .sources[0]
-            .harnesses
-            .contains(&Harness::Claude));
+        assert!(!shared.sources[0].harnesses.contains(&Harness::Claude));
 
         // Claude's own home: Claude reads it first, and the compat readers
         // follow — one folder, four harnesses, still one removal.
@@ -524,7 +521,11 @@ mod tests {
             .join("skills")
             .join("review")
             .join("SKILL.md");
-        let kilo_file = home.join(".kilo").join("skills").join("review").join("SKILL.md");
+        let kilo_file = home
+            .join(".kilo")
+            .join("skills")
+            .join("review")
+            .join("SKILL.md");
         assert!(claude_file.is_file());
         assert!(kilo_file.is_file());
 

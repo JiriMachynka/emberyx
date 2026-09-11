@@ -54,6 +54,7 @@ import {
 } from "@/lib/acp/transport";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
 import { fetchThreadPage, type ProjectedMessageRow } from "@/lib/threadPage";
+import { threadTitleFrom } from "@/lib/threadTitle";
 import { useAgentStore } from "@/lib/agentStore";
 import { settleTurnCheckpoint } from "@/lib/queries";
 import {
@@ -70,14 +71,6 @@ import {
 
 /** Keep the tail of stderr for an exit message; the rest is diagnostics. */
 const STDERR_CAP = 4000;
-
-/** A thread title longer than this stops being a label. */
-const TITLE_MAX = 80;
-
-/** ACP has no title notification, so a thread is named after its opening
- *  prompt's first line — the sidebar row and the recorded `threadTitle` event
- *  must be the same string, or the name changes when the pane goes away. */
-const threadTitleFrom = (text: string) => text.trim().split("\n")[0].slice(0, TITLE_MAX);
 
 /**
  * Rebuild chat messages from a projected page — the history of a thread the
@@ -758,7 +751,8 @@ export function useAcpChat({
       if (adoptedForRef.current !== sessionId) {
         adoptedForRef.current = sessionId;
         adoptThread(sessionId);
-        recordTimeline(sessionId, "threadTitle", threadTitleFrom(text));
+        const title = threadTitleFrom(text);
+        if (title) recordTimeline(sessionId, "threadTitle", title);
       }
       recordTimeline(sessionId, "userPrompt", text);
       void createCheckpoint(cwd, emberyxSessionId, text).then((point) => {
@@ -845,13 +839,13 @@ export function useAcpChat({
     // ACP sessions have nothing to resume, so the pane never opens one it isn't
     // about to use — the process starts on mount and `wake` is already true.
     asleep: false,
-    wake: () => {},
+    wake: noop,
     // ACP agents keep no listable thread store, so the id published here
     // registers the running thread with the sidebar but resumes only inside
     // this pane — see `capabilitiesOf(...).threads` and `canLoad`.
     threadId: liveThreadId,
     send,
-    compact: () => {},
+    compact: noop,
     queued: 0,
     // ACP has no queue of its own; a turn is cancelled and re-sent instead.
     queue: null,
@@ -862,18 +856,26 @@ export function useAcpChat({
     // Rewinding a sent turn is Claude's transcript trick and ACP has no
     // equivalent, so there is never anything to pull back — which is exactly
     // what `null` means to the composer, leaving Escape to do its usual thing.
-    rewind: () => null,
+    rewind: rewindNothing,
     // ACP has no turn-aware truncation. Git restore still hangs off the
     // checkpoint; the conversation stays put, which is why the capability is off.
-    revertTurn: async () => {},
+    revertTurn: revertNothing,
     pendingPermission,
     respond,
     // ACP has no `ask_user`: that is an Emberyx MCP tool wired for Claude. The
     // pane only calls this while a question is showing, and none ever is.
     pendingAsk: null as PendingAsk | null,
-    answerAsk: () => {},
+    answerAsk: noop,
     hasMore: false,
     loadingOlder: false,
-    loadOlder: async () => false,
+    loadOlder: loadNothing,
   };
 }
+
+// Module-level, so the pane sees the same function every render. Inline, each
+// publish handed ChatPane a new `revertTurn`, which rebuilt its `chat` object
+// and re-rendered every visible turn about eight times a second.
+const noop = () => {};
+const rewindNothing = () => null;
+const revertNothing = async () => {};
+const loadNothing = async () => false;

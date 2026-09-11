@@ -96,9 +96,7 @@ pub(crate) fn resolve_on_path(binary: &str, path: &str) -> Option<PathBuf> {
     path_dirs(path)
         .into_iter()
         .map(|dir| dir.join(binary))
-        .find(|candidate| {
-            candidate.is_file() && is_executable(candidate)
-        })
+        .find(|candidate| candidate.is_file() && is_executable(candidate))
 }
 
 #[cfg(unix)]
@@ -179,9 +177,7 @@ fn probe(
 /// non-async command runs on the main thread — which on macOS is the webview's
 /// thread, so six node startups would freeze the window while Settings opens.
 #[tauri::command]
-pub async fn provider_status(
-    commands: Option<HashMap<String, String>>,
-) -> Vec<ProviderStatus> {
+pub async fn provider_status(commands: Option<HashMap<String, String>>) -> Vec<ProviderStatus> {
     let commands = commands.unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || probe_all(&commands))
         .await
@@ -210,7 +206,13 @@ mod tests {
     #[test]
     fn provider_ids_and_labels_are_stable() {
         for p in Provider::all() {
-            assert_eq!(p, Provider::all().into_iter().find(|x| x.id() == p.id()).unwrap());
+            assert_eq!(
+                p,
+                Provider::all()
+                    .into_iter()
+                    .find(|x| x.id() == p.id())
+                    .unwrap()
+            );
             assert!(!p.label().is_empty());
         }
     }
@@ -256,7 +258,10 @@ mod tests {
         let rows = probe_all(&HashMap::new());
         assert_eq!(rows.len(), 6);
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, ["claude", "cursor", "codex", "grok", "opencode", "kilo"]);
+        assert_eq!(
+            ids,
+            ["claude", "cursor", "codex", "grok", "opencode", "kilo"]
+        );
     }
 
     #[test]

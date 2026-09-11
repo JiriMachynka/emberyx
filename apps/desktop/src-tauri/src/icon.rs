@@ -92,9 +92,14 @@ pub fn find(root_str: &str) -> Option<String> {
     None
 }
 
-#[tauri::command]
 pub fn project_icon(path: String) -> Option<String> {
     find(&path)
+}
+
+pub mod cmd {
+    crate::offload! {
+        project_icon(path: String) => Option<String>;
+    }
 }
 
 #[cfg(test)]

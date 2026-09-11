@@ -59,6 +59,10 @@ const pushRaw = (buf: RawBuffer, chunk: string): void => {
 
 const sessions = new Map<string, Entry>();
 
+/** The project's interactive shell — one per project path, shared by every
+ *  terminal view of it. */
+export const shellSessionId = (cwd: string) => `shell:${cwd}`;
+
 const base64ToBytes = (b64: string): Uint8Array => {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);

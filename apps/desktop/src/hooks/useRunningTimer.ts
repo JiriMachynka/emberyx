@@ -30,6 +30,9 @@ export const useRunningTimer = (
   key: string | undefined,
   running: boolean
 ): string | null => {
+  // Out of the React Compiler: the label is a fresh clock read per tick and
+  // the timings live in a module map — neither is an input it can see.
+  "use no memo";
   const visible = usePaneVisible();
   const timing = key ? recordThinkTiming(thinkTimings, key, running, Date.now()) : null;
   const [, tick] = useReducer((n: number) => n + 1, 0);

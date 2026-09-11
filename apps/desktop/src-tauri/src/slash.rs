@@ -31,7 +31,9 @@ pub(crate) fn frontmatter_field(text: &str, field: &str) -> String {
         if trimmed == "---" {
             break;
         }
-        let Some(rest) = trimmed.strip_prefix(field).and_then(|r| r.strip_prefix(':'))
+        let Some(rest) = trimmed
+            .strip_prefix(field)
+            .and_then(|r| r.strip_prefix(':'))
         else {
             continue;
         };

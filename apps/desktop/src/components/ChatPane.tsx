@@ -1,4 +1,5 @@
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { markPainted, onRender } from "@/lib/perf";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Archive,
@@ -619,6 +620,10 @@ export const ChatPane = memo(function ChatPane({
   // Group the flat message list into turns so a finished turn's work (thinking,
   // tools, subagents) renders as one unit and the live clock has a turn to own.
   const turns = useMemo(() => groupTurns(thread), [thread]);
+  const hasTurns = turns.length > 0;
+  useEffect(() => {
+    if (active && hasTurns) markPainted();
+  }, [active, hasTurns]);
 
   // The scroll stream as virtual slots: optional load-earlier bookend and one
   // entry per turn (its provider-switch divider travels with it). Keys are
@@ -943,17 +948,20 @@ export const ChatPane = memo(function ChatPane({
             />
           </div>
         </div>
-        {showScrollEnd && (
-          <button
-            type="button"
-            onClick={scrollToEnd}
-            className="absolute bottom-52 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border/70 bg-card/95 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur transition-colors hover:text-foreground"
-          >
-            <ChevronDown className="size-3.5" />
-            Scroll to end
-          </button>
-        )}
       </div>
+      {/* A sibling of the scroller, not a child: positioned inside it, the
+          button was anchored to the scrolled content and drifted up through
+          the transcript with it. */}
+      {showScrollEnd && (
+        <button
+          type="button"
+          onClick={scrollToEnd}
+          className="absolute bottom-52 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border/70 bg-card/95 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur transition-colors hover:text-foreground"
+        >
+          <ChevronDown className="size-3.5" />
+          Scroll to end
+        </button>
+      )}
 
       <div
         className={cn(
@@ -1030,6 +1038,7 @@ export const ChatPane = memo(function ChatPane({
                     </div>
                   )}
                   <div className="relative z-10">
+                <Profiler id="Composer" onRender={onRender}>
                 <ChatComposer
                   cwd={cwd}
                   backend={activeBackend}
@@ -1061,6 +1070,7 @@ export const ChatPane = memo(function ChatPane({
                   onRewind={rewind}
                   onPreview={setPreview}
                 />
+                </Profiler>
                 </div>
                 </>
               )}

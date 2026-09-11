@@ -282,7 +282,9 @@ fn parse_appended(
     if len == entry.offset {
         return;
     }
-    let Ok(mut file) = File::open(path) else { return };
+    let Ok(mut file) = File::open(path) else {
+        return;
+    };
     if file.seek(SeekFrom::Start(entry.offset)).is_err() {
         return;
     }
@@ -441,9 +443,7 @@ fn scan_agent_db(
         if date.as_str() < cutoff.as_str() {
             continue;
         }
-        let row = rows
-            .entry((date, project, model, provider))
-            .or_default();
+        let row = rows.entry((date, project, model, provider)).or_default();
         row.input += totals.input;
         row.output += totals.output;
         row.cache_read += totals.cache_read;
@@ -470,8 +470,7 @@ fn parse_agent_turn(
     let cache = &tokens["cache"];
     let totals = Totals {
         input: tokens["input"].as_u64().unwrap_or(0),
-        output: tokens["output"].as_u64().unwrap_or(0)
-            + tokens["reasoning"].as_u64().unwrap_or(0),
+        output: tokens["output"].as_u64().unwrap_or(0) + tokens["reasoning"].as_u64().unwrap_or(0),
         cache_read: cache["read"].as_u64().unwrap_or(0),
         cache_creation: cache["write"].as_u64().unwrap_or(0),
         messages: 1,
@@ -557,7 +556,10 @@ mod tests {
         let mut previous = civil_from_days(19_723);
         for day in 19_724..(19_723 + 366) {
             let current = civil_from_days(day);
-            assert!(current > previous, "{current:?} did not follow {previous:?}");
+            assert!(
+                current > previous,
+                "{current:?} did not follow {previous:?}"
+            );
             assert!((1..=12).contains(&current.1));
             assert!((1..=31).contains(&current.2));
             previous = current;
@@ -632,14 +634,20 @@ mod tests {
         let len = append(&path, &format!("{complete}{{\"partial\": tru"));
         parse_claude(path.to_str().unwrap(), len, &mut entry);
 
-        assert_eq!(entry.buckets[&("2026-07-01".into(), "opus".into())].messages, 1);
+        assert_eq!(
+            entry.buckets[&("2026-07-01".into(), "opus".into())].messages,
+            1
+        );
         assert_eq!(entry.offset, complete.len() as u64);
 
         // Once the line is finished, the next pass picks it up whole.
         append(&path, "e}\n");
         let len = append(&path, &turn("2026-07-01T12:00:00Z", "opus", 1, 1));
         parse_claude(path.to_str().unwrap(), len, &mut entry);
-        assert_eq!(entry.buckets[&("2026-07-01".into(), "opus".into())].messages, 2);
+        assert_eq!(
+            entry.buckets[&("2026-07-01".into(), "opus".into())].messages,
+            2
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -649,17 +657,28 @@ mod tests {
         let path = temp("truncated");
         let mut entry = SummaryEntry::default();
 
-        let len = append(&path, &turn("2026-07-01T10:00:00Z", "opus", 10, 5).repeat(3));
+        let len = append(
+            &path,
+            &turn("2026-07-01T10:00:00Z", "opus", 10, 5).repeat(3),
+        );
         parse_claude(path.to_str().unwrap(), len, &mut entry);
-        assert_eq!(entry.buckets[&("2026-07-01".into(), "opus".into())].messages, 3);
+        assert_eq!(
+            entry.buckets[&("2026-07-01".into(), "opus".into())].messages,
+            3
+        );
 
         // A different session resumed at this path and rewrote it shorter.
         let _ = std::fs::remove_file(&path);
         let len = append(&path, &turn("2026-07-05T10:00:00Z", "opus", 1, 1));
         parse_claude(path.to_str().unwrap(), len, &mut entry);
 
-        assert!(!entry.buckets.contains_key(&("2026-07-01".into(), "opus".into())));
-        assert_eq!(entry.buckets[&("2026-07-05".into(), "opus".into())].messages, 1);
+        assert!(!entry
+            .buckets
+            .contains_key(&("2026-07-01".into(), "opus".into())));
+        assert_eq!(
+            entry.buckets[&("2026-07-05".into(), "opus".into())].messages,
+            1
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -681,7 +700,10 @@ mod tests {
         parse_claude(path.to_str().unwrap(), len, &mut entry);
 
         assert_eq!(entry.buckets.len(), 1);
-        assert_eq!(entry.buckets[&("2026-07-01".into(), "opus".into())].input, 7);
+        assert_eq!(
+            entry.buckets[&("2026-07-01".into(), "opus".into())].input,
+            7
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -701,7 +723,10 @@ mod tests {
 
         let mut entry = SummaryEntry::default();
         parse_claude(path.to_str().unwrap(), len, &mut entry);
-        assert_eq!(entry.buckets[&("2026-07-01".into(), "unknown".into())].input, 5);
+        assert_eq!(
+            entry.buckets[&("2026-07-01".into(), "unknown".into())].input,
+            5
+        );
 
         let _ = std::fs::remove_file(&path);
     }
@@ -773,7 +798,14 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    fn agent_turn(model: &str, input: u64, output: u64, reasoning: u64, cache_read: u64, cost: f64) -> serde_json::Value {
+    fn agent_turn(
+        model: &str,
+        input: u64,
+        output: u64,
+        reasoning: u64,
+        cache_read: u64,
+        cost: f64,
+    ) -> serde_json::Value {
         serde_json::json!({
             "role": "assistant",
             "modelID": model,
@@ -887,7 +919,13 @@ mod tests {
 
         let mut rows = HashMap::new();
         let mut sessions = HashMap::new();
-        scan_agent_db(&path, Provider::Opencode, 1_787_000_000, &mut rows, &mut sessions);
+        scan_agent_db(
+            &path,
+            Provider::Opencode,
+            1_787_000_000,
+            &mut rows,
+            &mut sessions,
+        );
 
         let totals = rows
             .get(&(

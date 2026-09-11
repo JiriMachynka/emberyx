@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use serde::Serialize;
 
@@ -114,7 +115,6 @@ fn git_with_index(path: &str, index: &ScratchIndex, args: &[&str]) -> Result<Str
 
 /// Snapshot the working tree. Returns `None` when the path is not a repo —
 /// checkpoints are a git feature, and a non-repo project simply has none.
-#[tauri::command]
 pub fn checkpoint_create(
     path: String,
     thread_id: String,
@@ -144,18 +144,17 @@ pub fn checkpoint_create(
     let sha = run_git(&path, &args)?;
 
     let id = format!("{}-{}-{}", now_ms(), next_seq(), &sha[..7.min(sha.len())]);
-    run_git(&path, &[
-        "update-ref",
-        &format!("{REF_PREFIX}/{id}"),
-        &sha,
-    ])?;
+    run_git(&path, &["update-ref", &format!("{REF_PREFIX}/{id}"), &sha])?;
     // The label and thread ride in the ref's own message, so nothing outside
     // the repo has to stay in sync with it.
-    run_git(&path, &[
-        "config",
-        &format!("emberyx.checkpoint.{id}.meta"),
-        &format!("{thread_id}\u{1f}{}", label.trim()),
-    ])?;
+    run_git(
+        &path,
+        &[
+            "config",
+            &format!("emberyx.checkpoint.{id}.meta"),
+            &format!("{thread_id}\u{1f}{}", label.trim()),
+        ],
+    )?;
 
     Ok(Some(Checkpoint {
         id,
@@ -168,14 +167,17 @@ pub fn checkpoint_create(
 
 /// Every checkpoint in the repo, newest first. `thread_id` filters to one
 /// thread's own snapshots.
-#[tauri::command]
 pub fn checkpoint_list(path: String, thread_id: Option<String>) -> Result<Vec<Checkpoint>> {
     if !is_repo(&path) {
         return Ok(vec![]);
     }
     let refs = run_git(
         &path,
-        &["for-each-ref", "--format=%(refname:short)\u{1f}%(objectname)", REF_PREFIX],
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)\u{1f}%(objectname)",
+            REF_PREFIX,
+        ],
     )
     .unwrap_or_default();
 
@@ -212,13 +214,15 @@ pub fn checkpoint_list(path: String, thread_id: Option<String>) -> Result<Vec<Ch
 }
 
 fn sha_of(path: &str, id: &str) -> Result<String> {
-    run_git(path, &["rev-parse", "--verify", &format!("{REF_PREFIX}/{id}")])
-        .map_err(|_| Error::new(format!("No checkpoint {id}.")))
+    run_git(
+        path,
+        &["rev-parse", "--verify", &format!("{REF_PREFIX}/{id}")],
+    )
+    .map_err(|_| Error::new(format!("No checkpoint {id}.")))
 }
 
 /// What restoring this checkpoint would change, so the user sees it before it
 /// happens rather than after.
-#[tauri::command]
 pub fn checkpoint_changes(path: String, id: String) -> Result<Vec<CheckpointChange>> {
     let sha = sha_of(&path, &id)?;
     // Compare the snapshot against the working tree, untracked files included —
@@ -246,11 +250,8 @@ pub fn checkpoint_changes(path: String, id: String) -> Result<Vec<CheckpointChan
 
     // Untracked files never appear in a diff against a commit, but they are
     // exactly what an agent turn tends to create.
-    let untracked = run_git(
-        &path,
-        &["ls-files", "--others", "--exclude-standard"],
-    )
-    .unwrap_or_default();
+    let untracked =
+        run_git(&path, &["ls-files", "--others", "--exclude-standard"]).unwrap_or_default();
     for file in untracked.lines().filter(|l| !l.trim().is_empty()) {
         if !changes.iter().any(|c| c.path == file) {
             changes.push(CheckpointChange {
@@ -269,7 +270,6 @@ pub fn checkpoint_changes(path: String, id: String) -> Result<Vec<CheckpointChan
 /// the checkpoint are only deleted when it is set. Off by default because a
 /// file created after the snapshot may be the user's own work, and deleting it
 /// here is not undoable.
-#[tauri::command]
 pub fn checkpoint_restore(
     path: String,
     id: String,
@@ -298,16 +298,25 @@ pub fn checkpoint_restore(
 /// own time; nothing in the working tree changes. The turn's settle snapshot,
 /// if one was taken, goes with it — it would never be read without the
 /// checkpoint that keys it.
-#[tauri::command]
 pub fn checkpoint_delete(path: String, id: String) -> Result<()> {
     let sha = sha_of(&path, &id)?;
-    run_git(&path, &["update-ref", "-d", &format!("{REF_PREFIX}/{id}"), &sha])?;
+    run_git(
+        &path,
+        &["update-ref", "-d", &format!("{REF_PREFIX}/{id}"), &sha],
+    )?;
     // No old-value check: the settle commit's sha is not the checkpoint's, and
     // a missed delete only leaves an unreadable ref behind.
-    let _ = run_git(&path, &["update-ref", "-d", &format!("{SETTLE_PREFIX}/{id}")]);
     let _ = run_git(
         &path,
-        &["config", "--unset", &format!("emberyx.checkpoint.{id}.meta")],
+        &["update-ref", "-d", &format!("{SETTLE_PREFIX}/{id}")],
+    );
+    let _ = run_git(
+        &path,
+        &[
+            "config",
+            "--unset",
+            &format!("emberyx.checkpoint.{id}.meta"),
+        ],
     );
     Ok(())
 }
@@ -315,7 +324,6 @@ pub fn checkpoint_delete(path: String, id: String) -> Result<()> {
 /// Snapshot the working tree at the moment a turn settles, under the turn's
 /// checkpoint id. The caller swallows failures: a missed settle only means the
 /// turn's delta runs to the next snapshot instead.
-#[tauri::command]
 pub fn checkpoint_settle(path: String, checkpoint_id: String) -> Result<()> {
     // A settle keys off a checkpoint; without one it would never be read.
     sha_of(&path, &checkpoint_id)?;
@@ -335,11 +343,14 @@ pub fn checkpoint_settle(path: String, checkpoint_id: String) -> Result<()> {
     let message = format!("emberyx settle: {checkpoint_id}");
     args.push(&message);
     let sha = run_git(&path, &args)?;
-    run_git(&path, &[
-        "update-ref",
-        &format!("{SETTLE_PREFIX}/{checkpoint_id}"),
-        &sha,
-    ])?;
+    run_git(
+        &path,
+        &[
+            "update-ref",
+            &format!("{SETTLE_PREFIX}/{checkpoint_id}"),
+            &sha,
+        ],
+    )?;
     Ok(())
 }
 
@@ -416,7 +427,10 @@ fn range_files_between(path: &str, from: &str, to: &str) -> Result<Vec<Checkpoin
             };
             Some(CheckpointRangeFile {
                 path: path.to_string(),
-                kind: kinds.get(path).cloned().unwrap_or_else(|| "modified".into()),
+                kind: kinds
+                    .get(path)
+                    .cloned()
+                    .unwrap_or_else(|| "modified".into()),
                 additions,
                 deletions,
             })
@@ -466,7 +480,11 @@ fn blob_at(path: &str, treeish: &str, file: &str) -> Option<String> {
 fn turn_range_end(path: &str, thread_id: &str, from_id: &str) -> Result<String> {
     if let Ok(settled) = run_git(
         path,
-        &["rev-parse", "--verify", &format!("{SETTLE_PREFIX}/{from_id}")],
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("{SETTLE_PREFIX}/{from_id}"),
+        ],
     ) {
         return Ok(settled);
     }
@@ -483,7 +501,6 @@ fn turn_range_end(path: &str, thread_id: &str, from_id: &str) -> Result<String> 
 /// What changed in one agent turn: from the snapshot taken before it to its
 /// settle snapshot (or, without one, the next turn's snapshot — or the working
 /// tree for the newest turn that hasn't settled).
-#[tauri::command]
 pub fn checkpoint_turn_files(
     path: String,
     thread_id: String,
@@ -512,7 +529,6 @@ fn truncate_patch(mut diff: String, limit: usize) -> String {
 /// renders in a single scroll, the same shape `git_working_diff` serves the
 /// working tree. The per-file command still exists for callers that want one
 /// file; this one exists so the review doesn't spawn a git per file.
-#[tauri::command]
 pub fn checkpoint_turn_patch(path: String, thread_id: String, from_id: String) -> Result<String> {
     let from = sha_of(&path, &from_id)?;
     let to = turn_range_end(&path, &thread_id, &from_id)?;
@@ -537,7 +553,6 @@ pub fn checkpoint_turn_patch(path: String, thread_id: String, from_id: String) -
 
 /// The unified patch for one file inside a turn's range, the way
 /// `git_commit_diff` serves the commit timeline.
-#[tauri::command]
 pub fn checkpoint_turn_diff(
     path: String,
     thread_id: String,
@@ -570,7 +585,6 @@ pub fn checkpoint_turn_diff(
 /// Full old and new contents of one file across a turn's range, so the diff
 /// renderer can expand hunks past the patch's 3-line context. Nulls when the
 /// file is absent on a side, or binary.
-#[tauri::command]
 pub fn checkpoint_turn_contents(
     path: String,
     thread_id: String,
@@ -589,6 +603,28 @@ pub fn checkpoint_turn_contents(
         old_text: blob_at(&path, &from, &file),
         new_text: blob_at(&path, &to, &file),
     })
+}
+
+/// Orders checkpoint writes. Create and delete both rewrite `.git/config`, and
+/// two panes on one repo would otherwise race for `config.lock`. Separate from
+/// `git::WRITES` on purpose: a checkpoint must never wait behind a push.
+static WRITES: Mutex<()> = Mutex::new(());
+
+pub mod cmd {
+    use super::*;
+
+    crate::offload! {
+        [WRITES] checkpoint_create(path: String, thread_id: String, label: String) -> Option<Checkpoint>;
+        [WRITES] checkpoint_restore(path: String, id: String, remove_added: bool) -> Vec<CheckpointChange>;
+        [WRITES] checkpoint_delete(path: String, id: String) -> ();
+        checkpoint_settle(path: String, checkpoint_id: String) -> ();
+        checkpoint_list(path: String, thread_id: Option<String>) -> Vec<Checkpoint>;
+        checkpoint_changes(path: String, id: String) -> Vec<CheckpointChange>;
+        checkpoint_turn_files(path: String, thread_id: String, from_id: String) -> Vec<CheckpointRangeFile>;
+        checkpoint_turn_patch(path: String, thread_id: String, from_id: String) -> String;
+        checkpoint_turn_diff(path: String, thread_id: String, from_id: String, file: String) -> String;
+        checkpoint_turn_contents(path: String, thread_id: String, from_id: String, file: String) -> CheckpointRangeContents;
+    }
 }
 
 #[cfg(test)]
@@ -666,7 +702,9 @@ mod tests {
 
         let changed = checkpoint_restore(repo.path(), point.id, false).unwrap();
         assert_eq!(repo.read("kept.txt"), "original");
-        assert!(changed.iter().any(|c| c.path == "other.txt" && c.kind == "added"));
+        assert!(changed
+            .iter()
+            .any(|c| c.path == "other.txt" && c.kind == "added"));
     }
 
     // Deleting a file the user may have written by hand is not undoable, so it
@@ -722,7 +760,9 @@ mod tests {
     fn checkpoints_stay_off_every_branch() {
         let repo = seeded("hidden");
         checkpoint_create(repo.path(), "t1".into(), "before".into()).unwrap();
-        assert!(!repo.run(&["branch", "--format=%(refname:short)"]).contains("checkpoint"));
+        assert!(!repo
+            .run(&["branch", "--format=%(refname:short)"])
+            .contains("checkpoint"));
         assert!(!repo.run(&["log", "--oneline"]).contains("checkpoint"));
     }
 
@@ -748,7 +788,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().to_string();
-        assert!(checkpoint_create(path.clone(), "t1".into(), "x".into()).unwrap().is_none());
+        assert!(checkpoint_create(path.clone(), "t1".into(), "x".into())
+            .unwrap()
+            .is_none());
         assert!(checkpoint_list(path, None).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -791,7 +833,9 @@ mod tests {
         let untracked = files.iter().find(|f| f.path == "untracked.txt").unwrap();
         assert_eq!(untracked.kind, "added");
         assert_eq!(untracked.additions, Some(3));
-        assert!(files.iter().any(|f| f.path == "kept.txt" && f.kind == "modified"));
+        assert!(files
+            .iter()
+            .any(|f| f.path == "kept.txt" && f.kind == "modified"));
     }
 
     // The settle is the point: edits made after the turn finished belong to no
@@ -813,10 +857,12 @@ mod tests {
         // And the settle ref goes away with the checkpoint.
         checkpoint_delete(repo.path(), point.id).unwrap();
         let dir = &repo.0;
-        assert!(!dir.join(".git/refs/emberyx/settles").exists()
-            || std::fs::read_dir(dir.join(".git/refs/emberyx/settles"))
-                .map(|mut entries| entries.next().is_none())
-                .unwrap_or(true));
+        assert!(
+            !dir.join(".git/refs/emberyx/settles").exists()
+                || std::fs::read_dir(dir.join(".git/refs/emberyx/settles"))
+                    .map(|mut entries| entries.next().is_none())
+                    .unwrap_or(true)
+        );
     }
 
     #[test]
@@ -842,8 +888,13 @@ mod tests {
             .unwrap();
         repo.write("kept.txt", "the agent changed this\n");
 
-        let patch = checkpoint_turn_diff(repo.path(), "t1".into(), point.id.clone(), "kept.txt".into())
-            .unwrap();
+        let patch = checkpoint_turn_diff(
+            repo.path(),
+            "t1".into(),
+            point.id.clone(),
+            "kept.txt".into(),
+        )
+        .unwrap();
         assert!(patch.contains("diff --git a/kept.txt"));
         assert!(patch.contains("+the agent changed this"));
         assert!(!patch.contains("untracked"));
@@ -861,8 +912,13 @@ mod tests {
         repo.write("kept.txt", "original line\nadded line\n");
         repo.write("new.txt", "created\n");
 
-        let contents =
-            checkpoint_turn_contents(repo.path(), "t1".into(), point.id.clone(), "kept.txt".into()).unwrap();
+        let contents = checkpoint_turn_contents(
+            repo.path(),
+            "t1".into(),
+            point.id.clone(),
+            "kept.txt".into(),
+        )
+        .unwrap();
         assert_eq!(contents.old_text.as_deref(), Some("original line\n"));
         assert_eq!(
             contents.new_text.as_deref(),
@@ -870,12 +926,14 @@ mod tests {
         );
 
         let created =
-            checkpoint_turn_contents(repo.path(), "t1".into(), point.id.clone(), "new.txt".into()).unwrap();
+            checkpoint_turn_contents(repo.path(), "t1".into(), point.id.clone(), "new.txt".into())
+                .unwrap();
         assert!(created.old_text.is_none());
         assert_eq!(created.new_text.as_deref(), Some("created\n"));
 
         let missing =
-            checkpoint_turn_contents(repo.path(), "t1".into(), point.id, "nope.txt".into()).unwrap();
+            checkpoint_turn_contents(repo.path(), "t1".into(), point.id, "nope.txt".into())
+                .unwrap();
         assert!(missing.old_text.is_none() && missing.new_text.is_none());
     }
 }

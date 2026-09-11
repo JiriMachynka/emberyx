@@ -118,8 +118,9 @@ So the order changed. `lib/threadPage.ts` owns the read and a small hover cache:
 the sidebar starts a thread's first page when the pointer lands on its row, and
 `useAgentChat` takes it from there — `fresh: false`, because the read must not
 wait on a `read_dir`, a `stat` per transcript and an 82ms `GROUP BY` over a
-406MB log. Activities are attached in a second `setMessages` after the turns are
-already on screen; they only order work *within* a message.
+406MB log. Activities ride in the same reply (`MessagePage.activities`), so the
+turns paint once, already ordered — not painted and then re-rendered when a
+second round trip lands.
 
 Freshness is not dropped, it is deferred: once the thread is painted the pane
 runs `transcripts_ingest`, and re-reads only if a file changed — which is what
@@ -200,7 +201,10 @@ working-tree review. Turn diffs render through `@pierre/diffs`
 app tokens), with context expansion backed by `checkpoint_turn_contents` — the
 working-tree diff renders through the same library (`WorkingDiffView`), as one
 `CodeView` over a single multi-file patch (`git_working_diff`) with the tree on
-the right. Staged and unstaged are a scope toggle, not two lists — one patch
+the right. That tab is the only Shiki path left: transcript fences, tool
+output, hover cards and the inline hunk views paint through `lib/lexer.ts`,
+which runs the same Lezer parsers the editor uses, synchronously, so a fence
+is coloured on the frame it mounts. Staged and unstaged are a scope toggle, not two lists — one patch
 describes one side of the index.
 
 Hunk stage/discard survives that move, but the seam is worth knowing:
@@ -248,12 +252,14 @@ resolved as a port because `new URL("http://999999")` is a valid *IP address*.
 
 Every right-side surface — terminal, files, diff, preview, reviews, dev output,
 project settings — is a tab of one resizable panel (`RightDock`), not an aside
-of its own. `lib/dock.ts` is the pure state behind the strip; the panel owns the
-*mounting* policy, which is where the sharp edge is: `STICKY_KINDS` (terminal,
-dev output) stay mounted after their tab closes, because `TerminalPane` kills
-its PTY on unmount and a dev server that dies when you close a tab is a stop
-button, not a tab. Everything else unmounts with its tab so a closed diff isn't
-still polling git. Panels rendered here pass `embedded` to `SidePanel`, which
+of its own. `lib/dock.ts` is the pure state behind the strip. Every pane unmounts
+with its tab, so a closed diff isn't still polling git — which is safe only
+because no pane owns a process: `lib/ptyLog` holds every PTY (dev servers, and
+the terminal's shell as `shellSessionId(path)`), and a view that remounts
+replays its buffer. A process dies on an explicit act — the stop button,
+project teardown (`useWorkspace.teardownProject`) — never on unmount; a shell
+that dies when you close a tab or open another project's thread is a stop
+button, not a tab. Panels rendered here pass `embedded` to `SidePanel`, which
 drops the frame and keeps the header row.
 
 ### Settings
@@ -494,6 +500,14 @@ turbo / pnpm / npm workspaces).
 - **Commands**: every `#[tauri::command]` must be listed in the
   `generate_handler!` block in `lib.rs`. Forgetting this is the usual "command
   not found" cause.
+- **A plain `fn` command runs on the main thread** and freezes the window for
+  as long as it runs. Anything that spawns git, walks files or touches the
+  network goes through `offload!` (`error.rs`): the sync function stays as is
+  (tests and other modules call it directly) and an async twin in the module's
+  `cmd` submodule is what `lib.rs` registers. Off the main thread, commands no
+  longer queue behind each other — writes that would collide on one lock file
+  name a mutex (`[WRITES]`), and writes whose *order* matters
+  (`write_text_file`, MCP/skill edits) deliberately stay sync.
 - **Per-spawn stream**: `agent_spawn` takes a `Channel<AgentEvent>`; agent
   output flows through that channel, not a global event.
 - **Activities ride alongside the lines, never instead of them.** `activity.rs`
@@ -511,18 +525,21 @@ turbo / pnpm / npm workspaces).
   stateless and a dropped event self-heals on the next one — coalesced to one
   snapshot per row per batch, and holding back `arguments` until the block
   closes, since that is the disclosure body and not something being watched
-  stream. The frontend merges them in `lib/activities.ts` (pure, tested) and the
+  stream. Live reasoning is bounded the same way: while a block streams, its
+  snapshot carries only the last 4 KB (`LIVE_REASONING_TAIL`, marked `…`),
+  and the close restates the whole text — a full-text snapshot per delta made
+  long thinking quadratic over IPC. The frontend merges them in `lib/activities.ts` (pure, tested) and the
   spawn effect reaches `applyActivities` through a ref: putting it in that
   effect's dependency list would respawn the `claude` process.
 
-  Replay goes through the same normalizer, not a second one: the frontend hands
-  the page's raw lines back to `transcript_activities_read`, which buckets rows
-  per message, and `attachTranscriptActivities` zips them onto the messages
-  `parseTranscript` built from those same lines. The join key is the provider's
-  `message.id`, falling back to the line's index — imported history synthesizes
-  messages that never had an id, so a constant fallback would collapse them all
-  into one bucket. A page that fails to normalize keeps its messages: history
-  without the ordering is still history.
+  Replay goes through the same normalizer, not a second one:
+  `thread_messages_page` runs `transcript_activities` over the page's own
+  `payload_json` lines and returns the buckets with the rows, and
+  `attachTranscriptActivities` zips them onto the messages `parseTranscript`
+  built from those same lines. The join key is the provider's `message.id`,
+  falling back to the line's index — imported history synthesizes messages that
+  never had an id, so a constant fallback would collapse them all into one
+  bucket. A message with no bucket keeps the `thinking` + `tools` fallback.
 - **Global events**: `hook-event` and `ask-user`. Both are `app.emit` from a
   background thread.
 

@@ -1,10 +1,7 @@
 import { memo, type ComponentProps } from "react";
 import { Streamdown } from "streamdown";
 import type { CodeHighlighterPlugin, HighlightOptions, ThemeInput } from "streamdown";
-import {
-  highlightTokens,
-  supportedLanguages,
-} from "@/lib/codeHighlighter";
+import { highlightTokens, supportedLanguages } from "@/lib/codeHighlighter";
 
 /** Streamdown types the result inline rather than exporting it. */
 type HighlightResult = NonNullable<ReturnType<CodeHighlighterPlugin["highlight"]>>;
@@ -18,20 +15,11 @@ import { cn } from "@/lib/utils";
  *  class — the window is dark, full stop — so the light slot is the one that
  *  actually paints. Pairing it with a light theme is what put GitHub-light's
  *  blues and reds on the plum canvas. Vesper is warm and low-saturation, which
- *  is the same family as the ember accent. */
+ *  is the same family as the ember accent. The plugin still reports the name
+ *  Streamdown expects; the tokens come from the Lezer lexer, not Shiki. */
 const shikiTheme: [ThemeInput, ThemeInput] = ["vesper", "vesper"];
 
-/** Vesper, loaded with the highlighter rather than bundled: it is the only
- *  theme this app renders, so the name below and the registration are the same
- *  decision written twice. */
-const THEME_NAME = "vesper";
-const loadTheme = () => import("@shikijs/themes/vesper");
-
-/** Highlighting for fences, over the curated grammar set in lib/codeHighlighter
- *  rather than Shiki's full bundle. Streamdown treats a null return as "not
- *  ready" and re-renders from the callback, which is how the first fence pays
- *  for the grammar load without blocking. */
-const shikiPlugin: CodeHighlighterPlugin = {
+const lexerPlugin: CodeHighlighterPlugin = {
   name: "shiki",
   type: "code-highlighter",
   supportsLanguage(language) {
@@ -44,19 +32,11 @@ const shikiPlugin: CodeHighlighterPlugin = {
     return shikiTheme;
   },
   highlight(options: HighlightOptions, callback?: (result: HighlightResult) => void) {
-    return highlightTokens(
-      {
-        code: options.code,
-        language: options.language,
-        themeName: THEME_NAME,
-        loadTheme,
-      },
-      callback
-    );
+    return highlightTokens({ code: options.code, language: options.language }, callback);
   },
 };
 
-const staticPlugins = { code: shikiPlugin };
+const staticPlugins = { code: lexerPlugin };
 
 const components = {
   /** Streamdown routes only inline spans here, so fences keep their own
@@ -91,9 +71,9 @@ const controls = {
   image: false,
 };
 
-/** Renders assistant markdown with GFM. While `streaming`, the text is shown
- *  as plain prose so Streamdown isn't re-parsing a growing buffer every
- *  paint; the settled message is the one that gets the real renderer. */
+/** Renders assistant markdown with GFM. `streaming` uses Streamdown's
+ *  block-memoized mode so settled paragraphs don't reparse as tokens
+ *  arrive; incomplete markers are closed by remend until the real ones land. */
 export const Markdown = memo(function Markdown({
   text,
   fontSize,
@@ -103,21 +83,11 @@ export const Markdown = memo(function Markdown({
   fontSize: number;
   streaming?: boolean;
 }) {
-  if (streaming) {
-    return (
-      <div
-        className="chat-md whitespace-pre-wrap leading-relaxed"
-        style={{ fontSize: `${fontSize}px` }}
-      >
-        {text}
-      </div>
-    );
-  }
   return (
     <div style={{ fontSize: `${fontSize}px` }}>
       <Streamdown
         className="chat-md leading-relaxed"
-        mode="static"
+        mode={streaming ? "streaming" : "static"}
         parseIncompleteMarkdown
         skipHtml
         lineNumbers={false}

@@ -15,7 +15,7 @@ const md = async (text: string, streaming = false) => {
   );
   for (let i = 0; i < 100; i++) {
     const root = container.querySelector(".chat-md");
-    const ready = streaming ? !!root?.textContent : !!root?.children.length;
+    const ready = !!root?.children.length;
     if (ready) break;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -81,15 +81,17 @@ describe("Markdown GFM", () => {
     expect(el.querySelector("img")).toBeNull();
   });
 
-  it("renders streaming text as plain prose until the turn settles", async () => {
-    const el = await md("this is **bo", true);
-    expect(el.querySelector("[data-streamdown]")).toBeNull();
-    expect(el.querySelector(".chat-md")?.textContent).toBe("this is **bo");
+  it("renders markdown, not raw markers, while the turn is still streaming", async () => {
+    const el = await md("this is **bold** text", true);
+    expect(el.querySelector("[data-streamdown]")).not.toBeNull();
+    const text = el.querySelector(".chat-md")?.textContent ?? "";
+    expect(text).toContain("bold");
+    expect(text).not.toContain("**");
   });
 
-  it("does not parse an incomplete fence while streaming", async () => {
+  it("closes an incomplete fence so the code block paints as it streams", async () => {
     const el = await md("```ts\nconst x = 1", true);
-    expect(el.querySelector("pre")).toBeNull();
-    expect(el.querySelector(".chat-md")?.textContent).toContain("const x = 1");
+    expect(el.querySelector("pre")).not.toBeNull();
+    expect(el.querySelector("pre")?.textContent).toContain("const x = 1");
   });
 });

@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use crate::error::Result;
 use crate::paths::home_dir;
+use crate::store::Store;
 
 /// A Claude Code conversation thread stored under ~/.claude/projects.
 #[derive(Serialize)]
@@ -143,11 +144,33 @@ fn strip_blocks(text: &str, open: &str, close: &str) -> String {
     out
 }
 
+/// First line that can be a label: skip blanks and markdown fences, strip a
+/// leading heading mark. A prompt that opens with ` ```javascript ` is a
+/// pasted block, not a title.
+fn first_usable_line(text: &str) -> String {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("```") {
+            continue;
+        }
+        let without_heading = trimmed.trim_start_matches('#').trim();
+        if without_heading.is_empty() {
+            continue;
+        }
+        return without_heading.to_string();
+    }
+    String::new()
+}
+
 /// A prompt as a one-line title: harness-injected blocks and attachment notes
 /// dropped, tags unwrapped, whitespace collapsed, capped. A title is a label,
 /// not an excerpt — the raw first line of a prompt is usually a pasted block.
 pub(crate) fn clean_title(text: &str) -> String {
-    let without_reminders = strip_blocks(text, "<system-reminder>", "</system-reminder>");
+    let picked = first_usable_line(text);
+    if picked.is_empty() {
+        return String::new();
+    }
+    let without_reminders = strip_blocks(&picked, "<system-reminder>", "</system-reminder>");
 
     // "[Attached image "x.png" is saved at: /path]" is the harness talking.
     let mut depth = 0usize;
@@ -446,26 +469,43 @@ pub async fn list_store_threads(
     cwd: String,
 ) -> Result<Vec<Thread>> {
     let store = supervisor.store().ok_or("event log not attached")?;
-    tauri::async_runtime::spawn_blocking(move || {
-        Ok(store
-            .imported_threads(&cwd)?
-            .into_iter()
-            .map(|row| Thread {
-                id: row.id,
-                title: if row.title.trim().is_empty() {
-                    "Imported thread".to_string()
-                } else {
-                    row.title
-                },
-                // Projections keep milliseconds; the sidebar's clock is seconds.
-                modified: row.updated_at / 1000,
-                provider: row.provider,
-                imported: true,
-            })
-            .collect())
-    })
-    .await
-    .map_err(|e| crate::err!("list_store_threads join failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || list_store_threads_impl(&store, &cwd))
+        .await
+        .map_err(|e| crate::err!("list_store_threads join failed: {e}"))?
+}
+
+/// Sidebar listing for log-owned threads. Projectors run first: ACP
+/// conversations never go through transcript ingest (the only other catch-up),
+/// so a title written this session stays unprojected across a restart and the
+/// row falls back to "Imported thread".
+fn list_store_threads_impl(store: &Store, cwd: &str) -> Result<Vec<Thread>> {
+    store.run_projectors()?;
+    Ok(store
+        .imported_threads(cwd)?
+        .into_iter()
+        .map(|row| Thread {
+            id: row.id,
+            title: sidebar_title(&row.title, &row.first_user_text),
+            // Projections keep milliseconds; the sidebar's clock is seconds.
+            modified: row.updated_at / 1000,
+            provider: row.provider,
+            imported: true,
+        })
+        .collect())
+}
+
+/// Prefer the projected title; if that is empty or a fence leftover, the
+/// opening prompt. "Imported thread" is last — a row you cannot name.
+fn sidebar_title(title: &str, first_user_text: &str) -> String {
+    let from_title = clean_title(title);
+    if !from_title.is_empty() {
+        return from_title;
+    }
+    let from_prompt = clean_title(first_user_text);
+    if !from_prompt.is_empty() {
+        return from_prompt;
+    }
+    "Imported thread".to_string()
 }
 
 /// List the Claude Code threads recorded for `cwd`, newest first. Runs off the
@@ -599,6 +639,8 @@ fn list_threads_impl(cwd: &str) -> Result<Vec<Thread>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{TimelineEvent, TimelineEventKind};
+    use crate::store::Store;
 
     /// What the first screen actually waits on, timed against the developer's
     /// own `~/.claude/projects` in a debug build — the profile `tauri dev`
@@ -630,7 +672,9 @@ mod tests {
         assert!(is_machine_prompt(
             "You MUST call the StructuredOutput tool to complete this request."
         ));
-        assert!(!is_machine_prompt("Generate a migration for the users table"));
+        assert!(!is_machine_prompt(
+            "Generate a migration for the users table"
+        ));
     }
 
     #[test]
@@ -641,13 +685,23 @@ mod tests {
             clean_title("<system-reminder>noise</system-reminder>Fix the parser"),
             "Fix the parser"
         );
-        assert_eq!(clean_title("<command-name>/commit</command-name>"), "/commit");
+        assert_eq!(
+            clean_title("<command-name>/commit</command-name>"),
+            "/commit"
+        );
     }
 
     #[test]
     fn caps_a_long_prompt_rather_than_titling_a_thread_with_an_essay() {
         let title = clean_title(&"word ".repeat(200));
         assert_eq!(title.chars().count(), 120);
+    }
+
+    #[test]
+    fn skips_a_markdown_fence_when_titling_a_pasted_block() {
+        let raw = "```javascript\n# Continue: Emberyx performance work\nconst x = 1;\n```";
+        assert_eq!(clean_title(raw), "Continue: Emberyx performance work");
+        assert!(clean_title("```javascript").is_empty());
     }
 
     #[test]
@@ -685,6 +739,83 @@ mod tests {
         let path = std::env::temp_dir().join(format!("emberyx_test_threads_{name}.jsonl"));
         let _ = std::fs::remove_file(&path);
         path
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "emberyx_test_threads_{name}_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Restart situation: the title event is in the log, the thread row exists
+    /// (adopt created it with an empty title), and nothing has projected yet
+    /// because ACP never runs transcript ingest. Listing must still name the
+    /// thread — not fall back to "Imported thread".
+    #[test]
+    fn store_listing_projects_a_title_that_has_not_been_applied_yet() {
+        let dir = temp_dir("unprojected_title");
+        let store = Store::open(&dir.join("emberyx.db")).unwrap();
+        store.attach_thread_context("acp-1", "/repo", 42).unwrap();
+        store.mark_thread_source("acp-1", "acp").unwrap();
+        store
+            .append_events(&[TimelineEvent {
+                seq: 1,
+                thread_id: "acp-1".into(),
+                kind: TimelineEventKind::ThreadTitle,
+                attribution: None,
+                timestamp: 42,
+                payload: "Fix the parser".into(),
+                raw_line: None,
+            }])
+            .unwrap();
+
+        let listed = list_store_threads_impl(&store, "/repo").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "acp-1");
+        assert_eq!(listed[0].title, "Fix the parser");
+        assert!(listed[0].imported);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn store_listing_names_a_thread_from_its_prompt_when_the_title_is_a_fence() {
+        let dir = temp_dir("fence_title");
+        let store = Store::open(&dir.join("emberyx.db")).unwrap();
+        store.attach_thread_context("acp-1", "/repo", 42).unwrap();
+        store.mark_thread_source("acp-1", "acp").unwrap();
+        store
+            .append_events(&[
+                TimelineEvent {
+                    seq: 1,
+                    thread_id: "acp-1".into(),
+                    kind: TimelineEventKind::ThreadTitle,
+                    attribution: None,
+                    timestamp: 42,
+                    payload: "```javascript".into(),
+                    raw_line: None,
+                },
+                TimelineEvent {
+                    seq: 2,
+                    thread_id: "acp-1".into(),
+                    kind: TimelineEventKind::UserPrompt,
+                    attribution: None,
+                    timestamp: 42,
+                    payload: "```javascript\n# Continue: Emberyx performance work\nconst x = 1;"
+                        .into(),
+                    raw_line: None,
+                },
+            ])
+            .unwrap();
+
+        let listed = list_store_threads_impl(&store, "/repo").unwrap();
+        assert_eq!(listed[0].title, "Continue: Emberyx performance work");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -925,9 +1056,7 @@ mod tests {
                 largest = Some((path, len));
             }
         }
-        let sessions = fs::read_dir(&dir)
-            .map(|rd| rd.count())
-            .unwrap_or(0);
+        let sessions = fs::read_dir(&dir).map(|rd| rd.count()).unwrap_or(0);
         println!(
             "[bench] {cwd}\n[bench] transcripts={count} other_files={} total_transcript_bytes={total_bytes} ({:.1} MB)",
             sessions - count as usize,
@@ -938,11 +1067,20 @@ mod tests {
         for i in 0..5 {
             let t = Instant::now();
             let n = list_threads_impl(&cwd).map(|v| v.len()).unwrap_or(0);
-            println!("[bench] list_threads #{}: {:.2} ms ({} threads)", i + 1, ms(t.elapsed()), n);
+            println!(
+                "[bench] list_threads #{}: {:.2} ms ({} threads)",
+                i + 1,
+                ms(t.elapsed()),
+                n
+            );
         }
 
         if let Some((path, bytes)) = largest {
-            let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            let id = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
             println!("[bench] open-largest id={id} bytes={bytes}");
             for limit in [10u32, 50] {
                 let mut samples = Vec::new();
@@ -959,7 +1097,10 @@ mod tests {
                     );
                 }
                 samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                println!("[bench] open turn_limit={limit} median: {:.2} ms", samples[2]);
+                println!(
+                    "[bench] open turn_limit={limit} median: {:.2} ms",
+                    samples[2]
+                );
             }
             let t = Instant::now();
             let full = read_thread_impl(&cwd, &id, None, None).unwrap();

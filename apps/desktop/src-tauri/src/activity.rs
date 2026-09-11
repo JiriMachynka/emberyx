@@ -20,6 +20,7 @@
 //! would buy exactness at the cost of a build step and a generated directory,
 //! neither of which this repo has.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -116,9 +117,7 @@ pub fn kind_for_tool(name: &str) -> ActivityKind {
     let base = name.rsplit("__").next().unwrap_or(name).to_lowercase();
     match base.as_str() {
         "bash" | "bashoutput" | "shell" | "run" | "execute" => ActivityKind::Command,
-        "edit" | "write" | "multiedit" | "notebookedit" | "apply_patch" => {
-            ActivityKind::FileChange
-        }
+        "edit" | "write" | "multiedit" | "notebookedit" | "apply_patch" => ActivityKind::FileChange,
         "read" | "read_file" | "view" => ActivityKind::FileRead,
         "grep" | "search_files" | "codebase_search" => ActivityKind::FileSearch,
         "glob" | "ls" | "list_dir" | "list_directory" => ActivityKind::FileList,
@@ -200,7 +199,9 @@ pub fn from_tool_call(id: &str, name: &str, input: &Value) -> ActivityItem {
         // A command's argument *is* its target; repeating it as a JSON blob
         // gives the disclosure two copies of the same string.
         ActivityKind::Command => None,
-        _ => serde_json::to_string_pretty(input).ok().filter(|s| s != "{}"),
+        _ => serde_json::to_string_pretty(input)
+            .ok()
+            .filter(|s| s != "{}"),
     };
     item
 }
@@ -380,10 +381,10 @@ pub struct MessageActivities {
 /// so this is the same normalizer rather than a second one written in the
 /// frontend. Results are matched across messages: a `tool_result` arrives in a
 /// later line than the call it completes.
-pub fn transcript_activities(lines: &[String]) -> Vec<MessageActivities> {
+pub fn transcript_activities(lines: &[impl AsRef<str>]) -> Vec<MessageActivities> {
     let mut out: Vec<MessageActivities> = Vec::new();
     for (index, line) in lines.iter().enumerate() {
-        match line_outcome(line, &format!("line-{index}")) {
+        match line_outcome(line.as_ref(), &format!("line-{index}")) {
             LineOutcome::Nothing => {}
             LineOutcome::Items(message_id, items) => {
                 if items.is_empty() {
@@ -419,26 +420,43 @@ pub fn transcript_activities(lines: &[String]) -> Vec<MessageActivities> {
     out
 }
 
-/// Normalize a stored transcript's lines into per-message rows.
-///
-/// Deliberately takes the lines the frontend already fetched rather than
-/// re-reading the thread: the two must describe the same page, and a second
-/// read could land on a different one.
-#[tauri::command]
-pub fn transcript_activities_read(lines: Vec<String>) -> Vec<MessageActivities> {
-    transcript_activities(&lines)
-}
-
 /// A tool's accumulated `input_json_delta` is re-parsed on every delta so the
 /// row can name its target as soon as the provider has said it. Past this many
 /// bytes it isn't — a 200 KB `Write` body would otherwise be reparsed once per
 /// token — and the target lands when the block closes instead.
 const PARTIAL_PARSE_LIMIT: usize = 16 * 1024;
 
+/// How much of a still-streaming reasoning block each live snapshot carries.
+/// A whole-text snapshot per delta made a long block quadratic — 60 KB of
+/// thinking crossed IPC as ~180 MB of JSON (measured 2026-09-11) — while the
+/// live box shows about 1.5 KB of it. 4 KB is ~23 MB of snapshots for that
+/// block; 16 KB was ~86 MB. The close restates the full text.
+const LIVE_REASONING_TAIL: usize = 4 * 1024;
+
+/// The last `LIVE_REASONING_TAIL` bytes of `text`, cut on a char boundary and
+/// marked as cut, so a snapshot of a long block stays bounded.
+fn live_reasoning_text(text: &str) -> Cow<'_, str> {
+    if text.len() <= LIVE_REASONING_TAIL {
+        return Cow::Borrowed(text);
+    }
+    let mut start = text.len() - LIVE_REASONING_TAIL;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    Cow::Owned(format!("…{}", &text[start..]))
+}
+
 /// A content block still being streamed.
 enum OpenBlock {
-    Reasoning { id: String, text: String },
-    Tool { id: String, name: String, json: String },
+    Reasoning {
+        id: String,
+        text: String,
+    },
+    Tool {
+        id: String,
+        name: String,
+        json: String,
+    },
 }
 
 /// The live normalizer for Claude's `--include-partial-messages` stream.
@@ -454,7 +472,8 @@ enum OpenBlock {
 /// The one field held back is `arguments` — it is the disclosure body, not
 /// something being watched stream, and re-sending a large tool input on every
 /// token is the whole cost this shape could have had. It arrives once, when
-/// the block closes.
+/// the block closes. Reasoning text is bounded the same way: a live snapshot
+/// carries only its tail (`LIVE_REASONING_TAIL`), the close carries all of it.
 #[derive(Default)]
 pub struct ActivityStream {
     items: Vec<ActivityItem>,
@@ -489,7 +508,11 @@ impl ActivityStream {
     fn push_complete_line(&mut self, line: &str, value: &Value) -> Vec<ActivityItem> {
         // A subagent's turns carry the dispatching tool's id; they are that
         // tool's business, not rows of their own.
-        if value.get("parent_tool_use_id").and_then(Value::as_str).is_some() {
+        if value
+            .get("parent_tool_use_id")
+            .and_then(Value::as_str)
+            .is_some()
+        {
             return Vec::new();
         }
         match line_outcome(line, "message") {
@@ -599,7 +622,7 @@ impl ActivityStream {
                     return Vec::new();
                 };
                 text.push_str(chunk);
-                let mut item = from_reasoning(id.clone(), text);
+                let mut item = from_reasoning(id.clone(), &live_reasoning_text(text));
                 item.complete = false;
                 Some(item)
             }
@@ -669,7 +692,10 @@ mod tests {
         assert_eq!(kind_for_tool("Grep"), ActivityKind::FileSearch);
         assert_eq!(kind_for_tool("TodoWrite"), ActivityKind::Plan);
         // The server segments say who provides it, not what it does.
-        assert_eq!(kind_for_tool("mcp__codedb__read_file"), ActivityKind::FileRead);
+        assert_eq!(
+            kind_for_tool("mcp__codedb__read_file"),
+            ActivityKind::FileRead
+        );
         assert_eq!(kind_for_tool("SomethingNew"), ActivityKind::Tool);
     }
 
@@ -706,11 +732,7 @@ mod tests {
             "MultiEdit",
             &json!({ "edits": [{ "file_path": "a.rs" }, { "file_path": "b.rs" }] }),
         );
-        let paths: Vec<&str> = item
-            .file_changes
-            .iter()
-            .map(|c| c.path.as_str())
-            .collect();
+        let paths: Vec<&str> = item.file_changes.iter().map(|c| c.path.as_str()).collect();
         assert_eq!(paths, vec!["a.rs", "b.rs"]);
     }
 
@@ -867,6 +889,37 @@ mod tests {
     }
 
     #[test]
+    fn a_long_reasoning_block_streams_its_tail_and_closes_whole() {
+        let mut stream_state = ActivityStream::new();
+        stream_state.push_line(&stream(json!({
+            "type": "message_start", "message": { "id": "msg_1" }
+        })));
+        stream_state.push_line(&stream(json!({
+            "type": "content_block_start", "index": 0,
+            "content_block": { "type": "thinking" }
+        })));
+        // Multi-byte chunks, so the cut has to find a char boundary.
+        let chunk = "é".repeat(500);
+        let mut live = Vec::new();
+        for _ in 0..40 {
+            live = stream_state.push_line(&stream(json!({
+                "type": "content_block_delta", "index": 0,
+                "delta": { "type": "thinking_delta", "thinking": chunk }
+            })));
+        }
+        let snapshot = live[0].output.as_deref().unwrap();
+        assert!(!live[0].complete);
+        assert!(snapshot.starts_with('…'));
+        assert!(snapshot.len() <= LIVE_REASONING_TAIL + '…'.len_utf8());
+
+        let closed = stream_state.push_line(&stream(json!({
+            "type": "content_block_stop", "index": 0
+        })));
+        assert!(closed[0].complete);
+        assert_eq!(closed[0].output.as_deref(), Some(chunk.repeat(40).as_str()));
+    }
+
+    #[test]
     fn an_empty_reasoning_block_still_closes() {
         let mut stream_state = ActivityStream::new();
         stream_state.push_line(&stream(json!({
@@ -965,7 +1018,10 @@ mod tests {
             .to_string(),
         );
         assert_eq!(stream_state.items.len(), 2);
-        assert_eq!(stream_state.items[1].display_target.as_deref(), Some("a.rs"));
+        assert_eq!(
+            stream_state.items[1].display_target.as_deref(),
+            Some("a.rs")
+        );
     }
 
     #[test]
@@ -1097,7 +1153,11 @@ mod tests {
         assert_eq!(grouped.len(), 2);
         assert_eq!(grouped[0].message_id, "m1");
         assert_eq!(
-            grouped[0].activities.iter().map(|a| a.kind).collect::<Vec<_>>(),
+            grouped[0]
+                .activities
+                .iter()
+                .map(|a| a.kind)
+                .collect::<Vec<_>>(),
             vec![ActivityKind::Reasoning, ActivityKind::FileRead]
         );
         // The result arrived in a later line than the call it completes.

@@ -11,6 +11,9 @@ import {
  *  detection-derived defaults until the user first edits (which materialises
  *  them). */
 export function useProjectActions(project: Project | null) {
+  // Out of the React Compiler: the list is re-read from storage on the render
+  // a write forces, and storage is not an input the compiler can see.
+  "use no memo";
   const path = project?.path ?? "";
   const workspace = project?.workspace ?? null;
   const [, force] = useState(0);

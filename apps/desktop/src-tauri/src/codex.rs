@@ -86,10 +86,19 @@ pub struct RpcError {
 /// server request, `method` alone is a notification, `id` alone is a response.
 #[derive(Debug, PartialEq)]
 pub enum Frame {
-    Response { id: i64, result: Value },
-    Failure { id: i64, error: RpcError },
+    Response {
+        id: i64,
+        result: Value,
+    },
+    Failure {
+        id: i64,
+        error: RpcError,
+    },
     Request(ServerRequestFrame),
-    Notification { method: String, params: Value },
+    Notification {
+        method: String,
+        params: Value,
+    },
     /// Blank lines and anything that isn't JSON-RPC (stray CLI chatter).
     Other,
 }
@@ -587,8 +596,8 @@ fn request(handle: &Handle, method: &str, params: Value) -> Result<Value> {
     for attempt in 0..MAX_ATTEMPTS {
         let id = handle.next_request_id.fetch_add(1, Ordering::SeqCst);
         let rx = handle.pending.register(id);
-        let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
-            .to_string();
+        let line =
+            json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string();
         if let Err(e) = write_line(handle, &line) {
             handle.pending.forget(id);
             return Err(e);
@@ -620,7 +629,9 @@ fn request(handle: &Handle, method: &str, params: Value) -> Result<Value> {
 
 fn installed_version() -> Option<String> {
     let mut cmd = Command::new("codex");
-    cmd.arg("--version").stdin(Stdio::null()).stderr(Stdio::null());
+    cmd.arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
     if let Some(env) = crate::pty::shell_env_blocking(ENV_WAIT) {
         for (k, v) in &env {
             cmd.env(k, v);
@@ -638,7 +649,9 @@ fn installed_version() -> Option<String> {
 fn version_warning() -> Option<String> {
     let found = installed_version()?;
     (found != TESTED_VERSION).then(|| {
-        format!("codex {found} differs from the tested {TESTED_VERSION}; some features may misbehave")
+        format!(
+            "codex {found} differs from the tested {TESTED_VERSION}; some features may misbehave"
+        )
     })
 }
 
@@ -674,8 +687,8 @@ pub async fn codex_spawn(
             on_event,
         )
     })
-        .await
-        .map_err(|e| crate::err!("codex spawn join failed: {e}"))?
+    .await
+    .map_err(|e| crate::err!("codex spawn join failed: {e}"))?
 }
 
 #[tauri::command]
@@ -740,10 +753,7 @@ pub async fn codex_turn_interrupt(
 }
 
 #[tauri::command]
-pub async fn codex_rate_limits(
-    manager: tauri::State<'_, CodexManager>,
-    id: u32,
-) -> Result<Value> {
+pub async fn codex_rate_limits(manager: tauri::State<'_, CodexManager>, id: u32) -> Result<Value> {
     let handle = manager.handle(id)?;
     blocking_request(handle, "account/rateLimits/read", json!({})).await
 }
@@ -764,7 +774,12 @@ pub fn codex_respond(
     result: Value,
 ) -> Result<()> {
     let handle = manager.handle(id)?;
-    if !handle.open_server_requests.lock().unwrap().remove(&request_id) {
+    if !handle
+        .open_server_requests
+        .lock()
+        .unwrap()
+        .remove(&request_id)
+    {
         return Err(crate::err!("no open codex request {request_id}"));
     }
     write_line(
@@ -834,7 +849,10 @@ mod tests {
     fn ignores_blank_and_non_json_lines() {
         assert_eq!(classify(""), Frame::Other);
         assert_eq!(classify("  "), Frame::Other);
-        assert_eq!(classify("ERROR failed to connect to websocket"), Frame::Other);
+        assert_eq!(
+            classify("ERROR failed to connect to websocket"),
+            Frame::Other
+        );
         assert_eq!(classify("[1,2,3]"), Frame::Other);
         assert_eq!(classify(r#"{"emittedAtMs":1}"#), Frame::Other);
     }
@@ -843,7 +861,8 @@ mod tests {
     /// buffered read must yield one frame per line and nothing else.
     #[test]
     fn splits_ndjson_stream_into_frames() {
-        let stream = format!("{INIT_RESPONSE}\n{NOTIFICATION}\n\n{SERVER_REQUEST}\n{ERROR_RESPONSE}\n");
+        let stream =
+            format!("{INIT_RESPONSE}\n{NOTIFICATION}\n\n{SERVER_REQUEST}\n{ERROR_RESPONSE}\n");
         let frames: Vec<Frame> = BufReader::new(stream.as_bytes())
             .lines()
             .map_while(std::io::Result::ok)
@@ -894,8 +913,14 @@ mod tests {
         let a = pending.register(1);
         let b = pending.register(2);
         pending.fail_all("codex app-server exited");
-        assert_eq!(a.recv().unwrap().unwrap_err().message, "codex app-server exited");
-        assert_eq!(b.recv().unwrap().unwrap_err().message, "codex app-server exited");
+        assert_eq!(
+            a.recv().unwrap().unwrap_err().message,
+            "codex app-server exited"
+        );
+        assert_eq!(
+            b.recv().unwrap().unwrap_err().message,
+            "codex app-server exited"
+        );
         assert!(!pending.resolve(1, Ok(Value::Null)));
     }
 
@@ -954,7 +979,9 @@ mod tests {
     #[test]
     fn request_ids_are_unique_and_monotonic() {
         let counter = AtomicI64::new(1);
-        let ids: Vec<i64> = (0..3).map(|_| counter.fetch_add(1, Ordering::SeqCst)).collect();
+        let ids: Vec<i64> = (0..3)
+            .map(|_| counter.fetch_add(1, Ordering::SeqCst))
+            .collect();
         assert_eq!(ids, vec![1, 2, 3]);
     }
 

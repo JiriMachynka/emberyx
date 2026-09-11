@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import { useAgentStore } from "@/lib/agentStore";
+import type { MessageActivities } from "@/lib/threadPage";
 
 /** Events pushed by the stubbed Channel into the hook, per test. */
 type Emit = (event: Record<string, unknown>) => void;
@@ -101,6 +102,7 @@ type FakePage = {
     payloadJson: string;
   }[];
   hasMore: boolean;
+  activities?: MessageActivities[];
 };
 let messagePages: FakePage[] = [];
 const userRow = (id: string, text: string, createdAt: number) => ({
@@ -127,7 +129,10 @@ beforeEach(() => {
     if (command === "agent_spawn")
       return Promise.resolve({ id: 1, reattached: false, truncated: false, ...spawnReply });
     if (command === "thread_messages_page")
-      return Promise.resolve(messagePages.shift() ?? { rows: [], hasMore: false });
+      return Promise.resolve({
+        activities: [],
+        ...(messagePages.shift() ?? { rows: [], hasMore: false }),
+      });
     if (command === "title_thread") return Promise.resolve("A title");
     if (command === "agent_attach_thread") return Promise.resolve(undefined);
     if (command === "agent_approvals_pending") return Promise.resolve(openApprovals);
@@ -710,6 +715,38 @@ describe("useAgentChat persistent agents", () => {
       expect(result.current.messages.map((m) => m.text)).toEqual(["from-disk"])
     );
     expect(result.current.hasMore).toBe(true);
+  });
+
+  it("paints a page with the activity rows that came in the same reply", async () => {
+    const reasoning = {
+      id: "msg_1:0",
+      kind: "reasoning" as const,
+      title: "Thinking",
+      output: "plan first",
+      failed: false,
+      complete: true,
+    };
+    messagePages = [
+      {
+        rows: [
+          {
+            messageId: "m1",
+            createdAt: 1000,
+            payloadJson: JSON.stringify({
+              type: "assistant",
+              message: { id: "msg_1", content: [{ type: "text", text: "done" }] },
+            }),
+          },
+        ],
+        hasMore: false,
+        activities: [{ messageId: "msg_1", activities: [reasoning] }],
+      },
+    ];
+    const { result } = await mount({ resume: "old-thread" });
+    await waitFor(() => expect(result.current.messages).toHaveLength(1));
+    expect(result.current.messages[0].activities).toEqual([reasoning]);
+    // One reply carries both — no second trip shipping the lines back.
+    expect(sentTo("transcript_activities_read")).toEqual([]);
   });
 
   it("prepends older pages using the keyset cursor, without a seam gap", async () => {

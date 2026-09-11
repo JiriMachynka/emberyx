@@ -164,6 +164,23 @@ describe("thread cache", () => {
     expect(() => cacheThreads("/a", [])).not.toThrow();
     spy.mockRestore();
   });
+
+  it("does not replay a placeholder title from a previous listing", () => {
+    cacheThreads("/a", [
+      { id: "s1", title: "Fix the parser", modified: 100 },
+      { id: "s2", title: "Imported thread", modified: 200, imported: true },
+    ]);
+    expect(cachedThreads("/a")).toEqual([
+      { id: "s1", title: "Fix the parser", modified: 100 },
+    ]);
+    localStorage.setItem(
+      "emberyx.threadCache",
+      JSON.stringify({
+        "/a": [{ id: "s2", title: "Imported thread", modified: 200, imported: true }],
+      })
+    );
+    expect(cachedThreads("/a")).toEqual([]);
+  });
 });
 
 describe("project config", () => {

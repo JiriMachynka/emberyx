@@ -75,7 +75,10 @@ pub fn open_in_terminal(command: String) -> Result<()> {
         .output()
         .map_err(|e| e.to_string())?;
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string().into());
+        return Err(String::from_utf8_lossy(&output.stderr)
+            .trim()
+            .to_string()
+            .into());
     }
     Ok(())
 }

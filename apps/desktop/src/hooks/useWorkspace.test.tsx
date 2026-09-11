@@ -8,6 +8,7 @@ import { setProjectBackend } from "@/lib/projectConfig";
 import { cacheThreads } from "@/lib/threadCache";
 import { useAgentStore } from "@/lib/agentStore";
 import { queryClient } from "@/lib/queries";
+import { shellSessionId, spawnLog } from "@/lib/ptyLog";
 
 const invoked: string[] = [];
 /** Same calls, with their arguments — for assertions the command name alone
@@ -19,6 +20,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (cmd: string, args?: Record<string, unknown>) => {
     invoked.push(cmd);
     calls.push([cmd, args ?? {}]);
+    if (cmd === "pty_spawn") return Promise.resolve(7);
     if (cmd === "list_threads") return Promise.resolve([]);
     if (cmd === "list_store_threads") return Promise.resolve([]);
     if (cmd === "codex_spawn") return Promise.resolve({ id: 1, initialize: {}, version: null });
@@ -200,6 +202,23 @@ describe("useWorkspace agent backend", () => {
     await primaryCommand({ ...DEFAULT_SETTINGS, agentCommand: "codex" });
     expect(invoked).not.toContain("list_threads");
     expect(invoked).toContain("codex_thread_list");
+  });
+});
+
+describe("useWorkspace project shell", () => {
+  // The terminal tab's shell used to die with the pane — on tab close, and on
+  // opening a thread in another project. Closing the project is what stops it.
+  it("stops the project's shell when the project closes", async () => {
+    saveOpenProjects([{ path: "/a", worktree: null }], "/a");
+    const { result } = renderHook(() => useWorkspace(DEFAULT_SETTINGS));
+    await waitFor(() => expect(result.current.projects).toHaveLength(1));
+    await spawnLog({ sessionId: shellSessionId("/a"), cwd: "/a" });
+    const kills = () => calls.filter(([cmd]) => cmd === "pty_kill");
+    expect(kills()).toEqual([]);
+
+    await act(() => result.current.closeProjectById(result.current.projects[0].id));
+
+    expect(kills()).toEqual([["pty_kill", { id: 7 }]]);
   });
 });
 

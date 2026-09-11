@@ -80,11 +80,11 @@ fn tool_definition() -> Value {
     json!({
         "name": "ask_user",
         "description": "Ask the user to choose between options when a decision \
-is genuinely theirs to make — an ambiguous requirement, or a trade-off you \
-cannot resolve from the code. Ask several related questions in one call by \
-passing multiple entries in `questions`; each is rendered as its own tab and \
-answered together. The call blocks until they answer, and returns the options \
-they picked. Do not use it for choices with an obvious default.",
+    is genuinely theirs to make — an ambiguous requirement, or a trade-off you \
+    cannot resolve from the code. Ask several related questions in one call by \
+    passing multiple entries in `questions`; each is rendered as its own tab and \
+    answered together. The call blocks until they answer, and returns the options \
+    they picked. Do not use it for choices with an obvious default.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -166,9 +166,9 @@ fn screenshot_tool() -> Value {
     json!({
         "name": "preview_screenshot",
         "description": "Take a screenshot of the running dev server so you can \
-see what your UI change actually looks like. Defaults to the address the user \
-is previewing, or the first dev server that answers. Local addresses only. Use \
-it after a visual change instead of describing what you think you rendered.",
+    see what your UI change actually looks like. Defaults to the address the user \
+    is previewing, or the first dev server that answers. Local addresses only. Use \
+    it after a visual change instead of describing what you think you rendered.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -194,8 +194,8 @@ fn console_tool() -> Value {
     json!({
         "name": "preview_console",
         "description": "Read the browser console of the running dev server: \
-console output, uncaught exceptions, and failed requests. Local addresses only. \
-Use it when a page misbehaves, before guessing at the cause from the source.",
+    console output, uncaught exceptions, and failed requests. Local addresses only. \
+    Use it when a page misbehaves, before guessing at the cause from the source.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -270,8 +270,7 @@ pub fn start(app: &AppHandle) -> Result<AskServer> {
     let (server, port, token) = match bound {
         Some(bound) => bound,
         None => {
-            let server =
-                tiny_http::Server::http("127.0.0.1:0").map_err(|e| e.to_string())?;
+            let server = tiny_http::Server::http("127.0.0.1:0").map_err(|e| e.to_string())?;
             let port = match server.server_addr() {
                 tiny_http::ListenAddr::IP(addr) => addr.port(),
                 #[allow(unreachable_patterns)]
@@ -306,7 +305,10 @@ pub fn start(app: &AppHandle) -> Result<AskServer> {
 fn serve(mut req: tiny_http::Request, app: &AppHandle, token: &str) {
     let url = req.url().to_string();
     let authorized = req.headers().iter().any(|h| {
-        h.field.as_str().as_str().eq_ignore_ascii_case("x-emberyx-token")
+        h.field
+            .as_str()
+            .as_str()
+            .eq_ignore_ascii_case("x-emberyx-token")
             && h.value.as_str() == token
     });
     let mut body = String::new();
@@ -438,10 +440,7 @@ Start your dev server, or pass `url`."
     } else {
         look.console.join("\n")
     };
-    let summary = format!(
-        "{} — {}\n\n{console}",
-        look.final_url, look.status
-    );
+    let summary = format!("{} — {}\n\n{console}", look.final_url, look.status);
 
     let mut content = Vec::new();
     // Image first: a client that truncates content shows the picture, which is
@@ -500,7 +499,7 @@ fn ask_user(app: &AppHandle, url: &str, params: &Value) -> std::result::Result<V
             "content": [{
                 "type": "text",
                 "text": "The user did not answer. Proceed with your best judgement, \
-stating the assumption you made.",
+        stating the assumption you made.",
             }],
             "isError": true,
         })),

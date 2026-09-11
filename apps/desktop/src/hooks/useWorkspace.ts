@@ -27,7 +27,9 @@ import {
 import { getRecents, addRecent, removeRecent } from "@/lib/recents";
 import { getOpenProjects, saveOpenProjects } from "@/lib/openProjects";
 import { cachedThreads, cacheThreads } from "@/lib/threadCache";
-import { disposeLog, killLog, spawnLog } from "@/lib/ptyLog";
+import { threadTitleFrom } from "@/lib/threadTitle";
+import { disposeLog, killLog, shellSessionId, spawnLog } from "@/lib/ptyLog";
+import { markSwitch } from "@/lib/perf";
 import { useProjects } from "@/hooks/useProjects";
 import { useSessions } from "@/hooks/useSessions";
 import type {
@@ -282,7 +284,7 @@ export function useWorkspace(settings: Settings) {
     if (project.threads.some((t) => t.id === threadId)) return;
     const thread: Thread = {
       id: threadId,
-      title: firstMessage.trim().split("\n")[0],
+      title: threadTitleFrom(firstMessage) || firstMessage.trim().split("\n")[0],
       modified: Date.now(),
       provider: backend,
     };
@@ -347,6 +349,9 @@ export function useWorkspace(settings: Settings) {
     torndownRef.current.add(id);
     const own = sessionsFor(id);
     for (const s of own) if (s.kind === "dev") void killLog(s.id);
+    // The terminal tab's shell outlives the tab, so this is where it stops.
+    const path = projectsRef.current.find((p) => p.id === id)?.path;
+    if (path) void killLog(shellSessionId(path));
     closeProjectSessions(id);
     useAgentStore.getState().clearSessions(own.map((s) => s.id));
     closeProject(id);
@@ -528,6 +533,7 @@ export function useWorkspace(settings: Settings) {
   /** Resume a thread in a new chat tab of the given project, revealing and
    *  focusing it. */
   function resumeThreadIn(projectId: string, path: string, thread: Thread) {
+    markSwitch(labelFor(thread));
     setRevealed(true);
     setActiveProjectId(projectId);
     // A thread that's already open gets focused, not opened again — a second

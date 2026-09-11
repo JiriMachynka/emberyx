@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useRef } from "react";
+import { Profiler, useCallback, useMemo, useRef } from "react";
+import { onRender } from "@/lib/perf";
 import { ChatPane } from "@/components/ChatPane";
 import { PaneErrorBoundary } from "@/components/PaneErrorBoundary";
 import { useAgentStore } from "@/lib/agentStore";
@@ -151,6 +152,7 @@ function SessionPaneRow({
         // Keyed on the session so one pane's crash never blanks its siblings,
         // and so re-keying resets a boundary that belonged to a closed session.
         <PaneErrorBoundary key={session.id} label="This chat">
+        <Profiler id="ChatPane" onRender={onRender}>
         <ChatPane
           sessionId={session.id}
           cwd={session.cwd}
@@ -179,6 +181,7 @@ function SessionPaneRow({
           onTitled={handleTitled}
           onThreadStarted={handleThreadStarted}
         />
+        </Profiler>
         </PaneErrorBoundary>
       ) : null}
     </div>

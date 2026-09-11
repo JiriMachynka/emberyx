@@ -346,17 +346,15 @@ pub async fn gitlab_mr_notes(path: String, iid: u64) -> Result<Vec<MrNote>> {
     tauri::async_runtime::spawn_blocking(move || {
         let token = token()?;
         let project = project(&path)?;
-        let url =
-            format!("{API_BASE}/projects/{project}/merge_requests/{iid}/notes?per_page=100&sort=asc");
+        let url = format!(
+            "{API_BASE}/projects/{project}/merge_requests/{iid}/notes?per_page=100&sort=asc"
+        );
         let notes: Vec<ApiNote> = get_json(&url, &token)?;
         Ok(notes
             .into_iter()
             .map(|n| MrNote {
                 id: n.id,
-                author_name: n
-                    .author
-                    .and_then(|a| a.name)
-                    .unwrap_or_default(),
+                author_name: n.author.and_then(|a| a.name).unwrap_or_default(),
                 body: n.body.unwrap_or_default(),
                 created_at: n.created_at.unwrap_or_default(),
                 system: n.system.unwrap_or(false),

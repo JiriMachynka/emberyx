@@ -162,10 +162,7 @@ impl BrowserManager {
 
         // Its own profile, so the user's real Chrome session, cookies and
         // logins are never touched by an agent.
-        let profile = std::env::temp_dir().join(format!(
-            "emberyx-browser-{}",
-            std::process::id()
-        ));
+        let profile = std::env::temp_dir().join(format!("emberyx-browser-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&profile);
         let _ = std::fs::remove_file(profile.join(PORT_FILE));
 
@@ -256,7 +253,10 @@ impl BrowserManager {
             status: if loaded {
                 "loaded".into()
             } else {
-                format!("did not fire a load event within {}s", LOAD_TIMEOUT.as_secs())
+                format!(
+                    "did not fire a load event within {}s",
+                    LOAD_TIMEOUT.as_secs()
+                )
             },
         })
     }
@@ -606,18 +606,30 @@ mod tests {
     #[ignore]
     fn browser_sees_a_real_page() {
         let manager = BrowserManager::default();
-        let url = std::env::var("EMBERYX_PROBE_URL")
-            .unwrap_or_else(|_| "http://localhost:8391/".into());
+        let url =
+            std::env::var("EMBERYX_PROBE_URL").unwrap_or_else(|_| "http://localhost:8391/".into());
         let look = manager.look(&url, false, 600, true).expect("look failed");
         manager.kill_all();
 
         let shot = look.screenshot.expect("no screenshot");
         assert!(shot.len() > 1000, "screenshot suspiciously small");
         let joined = look.console.join("\n");
-        assert!(joined.contains("hello from the probe"), "missing log: {joined}");
-        assert!(joined.contains("deliberate console error"), "missing error: {joined}");
-        assert!(joined.contains("deliberate uncaught error"), "missing throw: {joined}");
-        assert!(joined.contains("definitely-missing.js"), "missing 404: {joined}");
+        assert!(
+            joined.contains("hello from the probe"),
+            "missing log: {joined}"
+        );
+        assert!(
+            joined.contains("deliberate console error"),
+            "missing error: {joined}"
+        );
+        assert!(
+            joined.contains("deliberate uncaught error"),
+            "missing throw: {joined}"
+        );
+        assert!(
+            joined.contains("definitely-missing.js"),
+            "missing 404: {joined}"
+        );
         assert_eq!(look.status, "loaded");
     }
 

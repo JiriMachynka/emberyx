@@ -40,7 +40,12 @@ import { basename } from "@/lib/path";
 import { usePromptQueue } from "@/lib/promptQueue";
 
 /** Paging over the local event store, plus the sidebar's hover prefetch. */
-import { fetchThreadPage, takePrefetchedPage } from "@/lib/threadPage";
+import {
+  fetchThreadPage,
+  takePrefetchedPage,
+  type MessageActivities,
+} from "@/lib/threadPage";
+import { markPage } from "@/lib/perf";
 
 /** A stream-json line from the headless `claude` process (Rust AgentEvent). */
 type AgentEvent =
@@ -304,14 +309,14 @@ const parseAttachments = (raw: string | null | undefined): ChatImage[] | undefin
  */
 export function parseTranscript(text: string): ChatMessage[] {
   const out: ChatMessage[] = [];
+  // Results arrive lines after their call; indexed so matching one isn't a
+  // scan of every message parsed so far. First call with an id owns it.
+  const toolsById = new Map<string, ChatMessage["tools"][number]>();
   const attach = (toolUseId: string, result: string, isError: boolean) => {
-    for (const m of out) {
-      const t = m.tools.find((x) => x.id === toolUseId);
-      if (t) {
-        t.result = result;
-        t.isError = isError;
-        return;
-      }
+    const t = toolsById.get(toolUseId);
+    if (t) {
+      t.result = result;
+      t.isError = isError;
     }
   };
   for (const [index, line] of text.split("\n").entries()) {
@@ -371,12 +376,14 @@ export function parseTranscript(text: string): ChatMessage[] {
           // Same id trap as tool_result above: tools are matched to their
           // results by id, so an id-less call collects someone else's output.
           if (typeof b.id !== "string" || typeof b.name !== "string") continue;
-          m.tools.push({
+          const tool = {
             id: b.id,
             name: b.name,
             input: isRecord(b.input) ? b.input : {},
             partial: "",
-          });
+          };
+          m.tools.push(tool);
+          if (!toolsById.has(tool.id)) toolsById.set(tool.id, tool);
         }
       }
       if (m.text || m.thinking || m.tools.length) out.push(m);
@@ -477,37 +484,14 @@ export function readActivity(content: unknown): SubagentActivity[] {
   return out;
 }
 
-/** Ask Rust to normalize the lines this page was built from. A failure is not
- *  worth losing the page over — the messages render without the ordering. */
-const readTranscriptActivities = async (
-  lines: string[]
-): Promise<MessageActivities[]> => {
-  try {
-    const rows = await invoke<MessageActivities[]>("transcript_activities_read", { lines });
-    // The command is registered, but a page must not be lost to a build where
-    // it isn't — an absent reply is "no ordering", not a broken transcript.
-    return Array.isArray(rows) ? rows : [];
-  } catch (e) {
-    console.error("[emberyx] transcript_activities_read failed", e);
-    return [];
-  }
-};
-
-/** One transcript message's rows, from `transcript_activities_read`. */
-interface MessageActivities {
-  messageId: string;
-  activities: ActivityItem[];
-}
-
 /**
  * Attach the Rust-normalized rows to the messages the frontend parser built
- * from the same lines.
+ * from the same lines — both arrive in one `thread_messages_page` reply.
  *
  * The replay path could have re-derived these in TypeScript, but then a
  * resumed thread and a live one would be describing the same turn through two
  * different implementations — the exact drift the ordered model exists to end.
- * A page that fails to normalize keeps its messages: history without the
- * ordering is still history, and the `thinking` + `tools` fallback renders it.
+ * A message with no rows keeps the `thinking` + `tools` fallback.
  */
 export const attachTranscriptActivities = (
   messages: ChatMessage[],
@@ -1104,9 +1088,7 @@ export function useAgentChat({
       if (typeof parent === "string" && parent) {
         if (type === "assistant") {
           const inner = (msg.message as Record<string, unknown>)?.content;
-          for (const activity of readActivity(inner)) {
-            addSubagentActivity(parent, activity);
-          }
+          addSubagentActivity(parent, ...readActivity(inner));
           // A Task/Agent tool_use *inside* a subagent turn is a nested run —
           // register it so it gets its own chip and captures its own activity.
           if (Array.isArray(inner)) {
@@ -1303,15 +1285,9 @@ export function useAgentChat({
           .map((row) => row.payloadJson)
           .filter((line): line is string => typeof line === "string");
         const transcript = lines.join("\n");
-        // Paint the turns, then colour them. Activities are a second round trip
-        // and they only add ordering *within* a message, so waiting for them
-        // holds back the whole conversation for something no one can see yet.
-        const parsed = parseTranscript(transcript);
-        void readTranscriptActivities(lines).then((rows) => {
-          if (cancelled || !rows.length) return;
-          setMessages((prev) => attachTranscriptActivities(prev, rows));
-        });
-        if (cancelled) return;
+        // Activities come in the same reply, so the turns paint once, already
+        // ordered — not painted and then re-rendered when a second trip lands.
+        const parsed = attachTranscriptActivities(parseTranscript(transcript), page.activities);
         const oldest = page.rows[0];
         oldestCursorRef.current = oldest
           ? { createdAt: oldest.createdAt, messageId: oldest.messageId }
@@ -1323,6 +1299,7 @@ export function useAgentChat({
         // a live event won the race is how a resumed thread lost every turn
         // before the one you just sent.
         if (parsed.length) setMessages((prev) => [...parsed, ...prev]);
+        markPage();
         const hu = parseTranscriptUsage(transcript);
         setUsage((prev) => {
           if (prev.model || prev.costUsd != null || prev.outputTokens != null) {
@@ -1363,17 +1340,16 @@ export function useAgentChat({
           .map((row) => row.payloadJson)
           .filter((line): line is string => typeof line === "string");
         if (freshLines.length === lines.length) return;
-        const reparsed = parseTranscript(freshLines.join("\n"));
+        const reparsed = attachTranscriptActivities(
+          parseTranscript(freshLines.join("\n")),
+          fresher.activities
+        );
         setMessages((prev) => (prev.length === parsed.length ? reparsed : prev));
         setHasMore(fresher.hasMore);
         const freshOldest = fresher.rows[0];
         oldestCursorRef.current = freshOldest
           ? { createdAt: freshOldest.createdAt, messageId: freshOldest.messageId }
           : oldestCursorRef.current;
-        void readTranscriptActivities(freshLines).then((rows) => {
-          if (cancelled || !rows.length) return;
-          setMessages((prev) => attachTranscriptActivities(prev, rows));
-        });
       } catch (e) {
         // Let a later mount retry; a failed read must not look hydrated.
         hydratedRef.current = null;
@@ -1407,7 +1383,7 @@ export function useAgentChat({
         .filter((line): line is string => typeof line === "string");
       const older = attachTranscriptActivities(
         parseTranscript(lines.join("\n")),
-        await readTranscriptActivities(lines)
+        page.activities
       );
       if (older.length) setMessages((prev) => [...older, ...prev]);
       return true;

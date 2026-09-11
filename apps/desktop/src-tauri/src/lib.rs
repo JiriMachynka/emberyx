@@ -1,39 +1,39 @@
 pub mod acp;
 pub mod activity;
 pub mod agent;
-mod claude_session;
-pub mod daemon;
-pub mod daemon_protocol;
-pub mod daemon_runtime;
-mod machine;
 mod ask;
 mod browser;
 mod checkpoints;
+mod claude_session;
 mod codex;
+pub mod daemon;
+pub mod daemon_protocol;
+pub mod daemon_runtime;
 mod defs;
 mod draft;
+mod machine;
 
 pub mod error;
 mod files;
+mod forge_cli;
 mod fs_walk;
 mod git;
-mod forge_cli;
 mod github;
 mod gitlab;
 mod icon;
 mod ide;
 mod ingest;
-mod menu;
 mod mcp;
+mod menu;
 pub mod models;
-pub mod pty;
 mod paths;
 mod preview;
 mod providers;
+pub mod pty;
 mod queue;
 mod search;
-mod slash;
 mod skills;
+mod slash;
 mod store;
 pub mod supervisor;
 mod t3_import;
@@ -46,8 +46,8 @@ use agent::AgentManager;
 use codex::CodexManager;
 use pty::PtyManager;
 use supervisor::Supervisor;
-use tauri::Manager;
 use tauri::path::BaseDirectory;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -86,8 +86,9 @@ pub fn run() {
                 .and_then(|path| store::Store::open(&path).map_err(|e| e.to_string()))
             {
                 Ok(store) => {
-                    if let Err(e) =
-                        app.state::<Supervisor>().attach_store(std::sync::Arc::new(store))
+                    if let Err(e) = app
+                        .state::<Supervisor>()
+                        .attach_store(std::sync::Arc::new(store))
                     {
                         eprintln!("[emberyx] event store attach failed: {e}");
                     }
@@ -114,12 +115,12 @@ pub fn run() {
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
-            machine::machine_name,
+            machine::cmd::machine_name,
             agent::agent_spawn,
             daemon::daemon_health,
-            daemon::daemon_start,
-            daemon::daemon_live_agents,
-            daemon::daemon_stop,
+            daemon::cmd::daemon_start,
+            daemon::cmd::daemon_live_agents,
+            daemon::cmd::daemon_stop,
             agent::agent_send,
             agent::agent_kill,
             agent::agent_detach,
@@ -180,64 +181,64 @@ pub fn run() {
             supervisor::agent_delegation_get,
             supervisor::agent_delegation_cancel,
             ask::answer_ask,
-            workspace::scan_workspace,
-            files::list_dir,
+            workspace::cmd::scan_workspace,
+            files::cmd::list_dir,
             files::list_files,
-            defs::find_definition,
-            defs::resolve_import,
-            defs::hover_info,
-            files::read_text_file,
+            defs::cmd::find_definition,
+            defs::cmd::resolve_import,
+            defs::cmd::hover_info,
+            files::cmd::read_text_file,
             files::write_text_file,
             search::search_text,
             slash::slash_commands,
-            icon::project_icon,
+            icon::cmd::project_icon,
             ide::open_in_ide,
             ide::open_in_terminal,
-            git::git_changes,
-            git::git_file_diff,
-            git::git_working_diff,
-            git::git_commit,
+            git::cmd::git_changes,
+            git::cmd::git_file_diff,
+            git::cmd::git_working_diff,
+            git::cmd::git_commit,
             git::git_draft_commit_message,
             draft::draft_warm,
-            git::git_stage,
-            git::git_unstage,
-            git::git_discard,
-            git::git_apply,
-            git::git_apply_hunk,
-            git::git_file_log,
-            git::git_show_file,
-            git::git_log,
-            git::git_commit_diff,
-            git::git_pickaxe,
-            git::git_branch,
-            git::git_branches,
-            git::git_merged_branches,
-            git::git_default_branch,
-            git::git_pull,
-            git::git_push,
-            git::git_push_to,
-            git::git_commit_and_push,
-            checkpoints::checkpoint_create,
-            checkpoints::checkpoint_list,
-            checkpoints::checkpoint_changes,
-            checkpoints::checkpoint_restore,
-            checkpoints::checkpoint_delete,
-            checkpoints::checkpoint_settle,
-            checkpoints::checkpoint_turn_files,
-            checkpoints::checkpoint_turn_diff,
-            checkpoints::checkpoint_turn_patch,
-            checkpoints::checkpoint_turn_contents,
-            git::git_checkout,
-            git::git_branch_delete,
-            git::git_worktrees,
-            git::git_repo_root,
+            git::cmd::git_stage,
+            git::cmd::git_unstage,
+            git::cmd::git_discard,
+            git::cmd::git_apply,
+            git::cmd::git_apply_hunk,
+            git::cmd::git_file_log,
+            git::cmd::git_show_file,
+            git::cmd::git_log,
+            git::cmd::git_commit_diff,
+            git::cmd::git_pickaxe,
+            git::cmd::git_branch,
+            git::cmd::git_branches,
+            git::cmd::git_merged_branches,
+            git::cmd::git_default_branch,
+            git::cmd::git_pull,
+            git::cmd::git_push,
+            git::cmd::git_push_to,
+            git::cmd::git_commit_and_push,
+            checkpoints::cmd::checkpoint_create,
+            checkpoints::cmd::checkpoint_list,
+            checkpoints::cmd::checkpoint_changes,
+            checkpoints::cmd::checkpoint_restore,
+            checkpoints::cmd::checkpoint_delete,
+            checkpoints::cmd::checkpoint_settle,
+            checkpoints::cmd::checkpoint_turn_files,
+            checkpoints::cmd::checkpoint_turn_diff,
+            checkpoints::cmd::checkpoint_turn_patch,
+            checkpoints::cmd::checkpoint_turn_contents,
+            git::cmd::git_checkout,
+            git::cmd::git_branch_delete,
+            git::cmd::git_worktrees,
+            git::cmd::git_repo_root,
             git::git_worktree_add,
-            git::git_worktree_remove,
-            git::git_worktree_prune,
-            git::git_stash_push,
-            git::git_stash_list,
-            git::git_stash_apply,
-            git::git_stash_drop,
+            git::cmd::git_worktree_remove,
+            git::cmd::git_worktree_prune,
+            git::cmd::git_stash_push,
+            git::cmd::git_stash_list,
+            git::cmd::git_stash_apply,
+            git::cmd::git_stash_drop,
             git::git_fetch,
             git::git_checkout_remote,
             git::git_merge,
@@ -247,7 +248,7 @@ pub fn run() {
             git::git_merge_abort,
             git::git_merge_continue,
             git::git_merge_state,
-            git::git_remote_host,
+            git::cmd::git_remote_host,
             git::git_clone,
             forge_cli::forge_cli_status,
             forge_cli::forge_clone,
@@ -268,16 +269,14 @@ pub fn run() {
             threads::read_thread,
             ingest::transcripts_ingest,
             ingest::thread_messages_page,
-            activity::transcript_activities_read,
             ingest::thread_turns_page,
-            t3_import::t3_import_available,
+            t3_import::cmd::t3_import_available,
             t3_import::t3_import_run,
-
             providers::provider_status,
-            mcp::mcp_list,
+            mcp::cmd::mcp_list,
             mcp::mcp_add,
             mcp::mcp_remove,
-            skills::skills_list,
+            skills::cmd::skills_list,
             skills::skills_add,
             skills::skills_copy,
             skills::skills_remove,

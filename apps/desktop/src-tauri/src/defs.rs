@@ -28,8 +28,23 @@ const CODE_EXTS: [&str; 22] = [
 /// counts as a definition when one of these is immediately followed by the
 /// symbol — a deliberately simple, language-agnostic heuristic (no parsing).
 const KEYWORDS: [&str; 17] = [
-    "fn", "function", "const", "let", "var", "class", "interface", "type", "enum", "struct",
-    "trait", "impl", "mod", "def", "macro_rules!", "static", "namespace",
+    "fn",
+    "function",
+    "const",
+    "let",
+    "var",
+    "class",
+    "interface",
+    "type",
+    "enum",
+    "struct",
+    "trait",
+    "impl",
+    "mod",
+    "def",
+    "macro_rules!",
+    "static",
+    "namespace",
 ];
 
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -105,7 +120,6 @@ fn scan_all(root: &Path, symbol: &str) -> Vec<DefMatch> {
 
 /// Find definition sites for `symbol` under `root`. Matches from the file the
 /// click came from sort first, then shorter paths (closer to the root).
-#[tauri::command]
 pub fn find_definition(root: String, symbol: String, from: String) -> Result<Vec<DefMatch>> {
     if symbol.is_empty() || !symbol.chars().all(is_word_char) {
         return Ok(vec![]);
@@ -149,7 +163,13 @@ fn dedent(lines: &[&str]) -> String {
         .unwrap_or(0);
     lines
         .iter()
-        .map(|l| if l.len() >= indent { &l[indent..] } else { l.trim_start() })
+        .map(|l| {
+            if l.len() >= indent {
+                &l[indent..]
+            } else {
+                l.trim_start()
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -200,7 +220,6 @@ fn snippet(lines: &[&str], index: usize) -> String {
 }
 
 /// Best definition for `symbol`, formatted for a hover card.
-#[tauri::command]
 pub fn hover_info(root: String, symbol: String, from: String) -> Result<Option<HoverInfo>> {
     let matches = find_definition(root, symbol, from)?;
     let Some(best) = matches.first() else {
@@ -222,7 +241,9 @@ pub fn hover_info(root: String, symbol: String, from: String) -> Result<Option<H
 }
 
 /// Extensions tried when an import specifier has none.
-const IMPORT_EXTS: [&str; 9] = ["ts", "tsx", "js", "jsx", "vue", "svelte", "mts", "d.ts", "json"];
+const IMPORT_EXTS: [&str; 9] = [
+    "ts", "tsx", "js", "jsx", "vue", "svelte", "mts", "d.ts", "json",
+];
 
 /// Lexically clean a path: drop `.` segments and collapse `..`. Kept lexical
 /// (not `canonicalize`) so paths stay comparable with the ones the file tree
@@ -263,7 +284,6 @@ fn resolve_file(base: &Path) -> Option<String> {
 
 /// Resolve an import specifier to a file on disk. Handles relative paths and
 /// the common `@/…` / `~/…` source-root aliases; returns null for packages.
-#[tauri::command]
 pub fn resolve_import(root: String, from: String, spec: String) -> Option<String> {
     let root = PathBuf::from(&root);
     let dir = PathBuf::from(&from).parent()?.to_path_buf();
@@ -286,21 +306,43 @@ pub fn resolve_import(root: String, from: String, spec: String) -> Option<String
     None
 }
 
+pub mod cmd {
+    use super::*;
+
+    crate::offload! {
+        find_definition(root: String, symbol: String, from: String) -> Vec<DefMatch>;
+        hover_info(root: String, symbol: String, from: String) -> Option<HoverInfo>;
+        resolve_import(root: String, from: String, spec: String) => Option<String>;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn recognizes_definition_lines() {
-        assert!(defines("export function fileIcon(name: string) {", "fileIcon"));
-        assert!(defines("pub fn find_definition(root: String) {", "find_definition"));
-        assert!(defines("const HIGHLIGHT_LIMIT = 100_000;", "HIGHLIGHT_LIMIT"));
+        assert!(defines(
+            "export function fileIcon(name: string) {",
+            "fileIcon"
+        ));
+        assert!(defines(
+            "pub fn find_definition(root: String) {",
+            "find_definition"
+        ));
+        assert!(defines(
+            "const HIGHLIGHT_LIMIT = 100_000;",
+            "HIGHLIGHT_LIMIT"
+        ));
         assert!(defines("interface EditorPaneProps {", "EditorPaneProps"));
         assert!(defines("  struct DefMatch {", "DefMatch"));
         assert!(defines("def parse_row(self):", "parse_row"));
         // Uses, not definitions.
         assert!(!defines("  const icon = fileIcon(name);", "fileIcon"));
-        assert!(!defines("import { fileIcon } from \"@/lib/fileIcon\";", "fileIcon"));
+        assert!(!defines(
+            "import { fileIcon } from \"@/lib/fileIcon\";",
+            "fileIcon"
+        ));
         // Prefix collisions must not match.
         assert!(!defines("const fileIconMap = {};", "fileIcon"));
     }

@@ -1,7 +1,7 @@
 import type { Hover } from "@/hooks/useSymbolHover";
 
 /** Floating definition card: where the symbol is defined, plus its declaration
- *  rendered by shiki. Flips above the pointer in the lower half of the window. */
+ *  highlighted. Flips above the pointer in the lower half of the window. */
 export function HoverCard({
   hover,
   projectPath,
@@ -34,10 +34,8 @@ export function HoverCard({
         )}
       </button>
       <div className="overflow-x-auto p-2 font-mono text-xs">
-        {/* hljs emits bare token spans, so the block element is ours. */}
         <pre className="m-0">
           <code
-            className="hljs"
             style={{ background: "transparent", padding: 0 }}
             dangerouslySetInnerHTML={{ __html: hover.html }}
           />
