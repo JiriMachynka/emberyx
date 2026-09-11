@@ -417,11 +417,13 @@ export function useAcpChat({
       // ACP conversation has — the provider keeps no history of its own — so
       // this is recorded or it is gone when the pane closes. Tool rows ride
       // ahead of the reply, which is the order a reopened page reads back in.
-      const sessionId = sessionRef.current;
-      if (sessionId && ended.message) {
+      // Reopened history lives under `resume`; the provider's new session id
+      // is ephemeral and must not fork a second store thread.
+      const logId = resume ?? sessionRef.current;
+      if (logId && ended.message) {
         for (const tool of ended.message.tools) {
           recordTimeline(
-            sessionId,
+            logId,
             "toolInvocation",
             JSON.stringify({
               name: tool.name,
@@ -432,12 +434,12 @@ export function useAcpChat({
           );
         }
         if (ended.message.text.trim()) {
-          recordTimeline(sessionId, "assistantResponse", ended.message.text);
+          recordTimeline(logId, "assistantResponse", ended.message.text);
         }
       }
-      if (sessionId) {
+      if (logId) {
         recordTimeline(
-          sessionId,
+          logId,
           ended.status === "error" ? "error" : "completion",
           JSON.stringify({ stopReason: ended.status === "error" ? reason : ended.status })
         );
@@ -447,7 +449,7 @@ export function useAcpChat({
       const settledId = lastCheckpointIdRef.current;
       if (settledId) void settleTurnCheckpoint(cwd, settledId);
     },
-    [publish, cwd, recordTimeline]
+    [publish, cwd, recordTimeline, resume]
   );
 
   /**
@@ -745,16 +747,18 @@ export function useAcpChat({
       stoppedRef.current = false;
       turnRef.current = { message: null, status: "thinking" };
       publish();
-      // Adopt the thread once per session id, and title it from the first
-      // prompt — the projection's title is how the sidebar's store listing
-      // names the thread once the pane that created it is gone.
-      if (adoptedForRef.current !== sessionId) {
-        adoptedForRef.current = sessionId;
-        adoptThread(sessionId);
-        const title = threadTitleFrom(text);
-        if (title) recordTimeline(sessionId, "threadTitle", title);
+      // Reopened history already lives under `resume`. Adopting the provider's
+      // new session id would mint a second sidebar row titled from this prompt.
+      const logId = resume ?? sessionId;
+      if (adoptedForRef.current !== logId) {
+        adoptedForRef.current = logId;
+        if (!resume) {
+          adoptThread(logId);
+          const title = threadTitleFrom(text);
+          if (title) recordTimeline(logId, "threadTitle", title);
+        }
       }
-      recordTimeline(sessionId, "userPrompt", text);
+      recordTimeline(logId, "userPrompt", text);
       void createCheckpoint(cwd, emberyxSessionId, text).then((point) => {
         if (!point) return;
         lastCheckpointIdRef.current = point.id;
@@ -763,7 +767,7 @@ export function useAcpChat({
       });
       void acpPrompt(id, sessionId, text, images);
     },
-    [cwd, emberyxSessionId, publish, adoptThread, recordTimeline]
+    [cwd, emberyxSessionId, publish, adoptThread, recordTimeline, resume]
   );
 
   // Name a fresh chat once its first turn settles. No ACP agent announces a
@@ -840,10 +844,11 @@ export function useAcpChat({
     // about to use — the process starts on mount and `wake` is already true.
     asleep: false,
     wake: noop,
-    // ACP agents keep no listable thread store, so the id published here
-    // registers the running thread with the sidebar but resumes only inside
-    // this pane — see `capabilitiesOf(...).threads` and `canLoad`.
-    threadId: liveThreadId,
+    // ACP agents keep no listable thread store. A fresh chat publishes the
+    // session id the provider just issued so the sidebar can list it; a
+    // reopened thread keeps the id it was opened with, so a restart cannot
+    // register the provider's new session as a second row.
+    threadId: resume ?? liveThreadId,
     send,
     compact: noop,
     queued: 0,

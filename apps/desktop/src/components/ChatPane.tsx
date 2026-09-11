@@ -341,16 +341,20 @@ export const ChatPane = memo(function ChatPane({
   // transcript scan finds it on disk — a thread you are already talking to is
   // missing from the list for the whole first turn. The message stands in as the
   // title until the real one is generated.
+  //
+  // A resumed thread already has a row, including imported ACP history. The
+  // agent behind an imported thread is always fresh (the provider keeps no
+  // session store) and the pane paints only the tail page, so treating that
+  // agent's new id as a new thread named the row after whatever user prompt
+  // happened to sit in the tail — a console dump, a later "create the patch"
+  // — and a restart minted another one.
   const startedRef = useRef(false);
   const firstUserMessage = messages.find((m) => m.role === "user")?.text;
   useEffect(() => {
-    // An imported thread has no live provider thread yet, so the one its fresh
-    // agent starts still needs registering — unlike an ordinary resume.
-    if (startedRef.current || (resume && !imported) || !threadId || !firstUserMessage)
-      return;
+    if (startedRef.current || resume || !threadId || !firstUserMessage) return;
     startedRef.current = true;
     onThreadStarted?.(threadId, firstUserMessage);
-  }, [resume, imported, threadId, firstUserMessage, onThreadStarted]);
+  }, [resume, threadId, firstUserMessage, onThreadStarted]);
 
   // Walks the whole thread, and the pane re-renders per published frame — a
   // 500-message thread would scan it several times a second otherwise.

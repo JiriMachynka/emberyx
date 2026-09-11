@@ -147,6 +147,13 @@ describe("useAcpChat thread registration", () => {
     expect(view.result.current.threadId).toBeUndefined();
     expect(view.result.current.ready).toBe(false);
   });
+
+  // A restart issues a new ACP session. Publishing that id would register a
+  // second sidebar row, titled from whatever user prompt sits in the tail page.
+  it("keeps a reopened thread on the id it was opened with", async () => {
+    const view = await mount({ resume: "old-thread" });
+    expect(view.result.current.threadId).toBe("old-thread");
+  });
 });
 
 describe("useAcpChat thread durability", () => {
@@ -173,6 +180,15 @@ describe("useAcpChat thread durability", () => {
     expect(adopts).toHaveLength(1);
     const later = appended();
     expect(later[later.length - 1]?.kind).toBe("userPrompt");
+  });
+
+  it("does not adopt a new store thread when sending on a reopened one", async () => {
+    const view = await mount({ resume: "old-thread" });
+    await act(async () => view.result.current.send("next turn"));
+    expect(invoke.mock.calls.filter(([name]) => name === "thread_adopt")).toHaveLength(0);
+    const events = appended();
+    expect(events.map((e) => e.kind)).toEqual(["userPrompt"]);
+    expect(events[0]).toMatchObject({ threadId: "old-thread", payload: "next turn" });
   });
 
   it("does not title a thread from a markdown fence", async () => {
