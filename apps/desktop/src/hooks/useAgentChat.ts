@@ -574,13 +574,11 @@ export function useAgentChat({
   // the transcript on resume, plus each completed live turn added on top).
   const sessionUsageRef = useRef({ input: 0, output: 0 });
   const [ready, setReady] = useState(false);
-  // Whether this pane wants a process at all. Opening an old thread from the
-  // sidebar used to launch a CLI just to look at it — a second of work landing
-  // on the frame that switches panes. A resumed thread stays asleep until the
-  // user actually sends (or focuses the composer); a fresh chat was opened to
-  // be talked to, and a persistent one may have a live daemon agent to reattach
-  // to, so both spawn on mount as before.
-  const [awake, setAwake] = useState(() => !resume || persistent);
+  // Whether this pane wants a process at all. Opening a thread used to launch a
+  // CLI on the frame that switches panes — a second of work before the empty
+  // screen could paint. Stay asleep until the user types or sends; a persistent
+  // one may have a live daemon agent to reattach to, so those still spawn now.
+  const [awake, setAwake] = useState(() => persistent);
   const wake = useCallback(() => setAwake(true), []);
   // A turn accepted before the process existed. Delivered by the effect below
   // the moment the spawn lands; further turns queue normally, since the status

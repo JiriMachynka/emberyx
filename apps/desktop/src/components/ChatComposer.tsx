@@ -237,7 +237,7 @@ export const ChatComposer = memo(function ChatComposer({
   };
 
   const submit = () => {
-    if ((!input.trim() && images.length === 0) || !ready) return;
+    if ((!input.trim() && images.length === 0) || exited) return;
     if (
       onCompact &&
       !neverResumeAsk.current &&
@@ -534,13 +534,11 @@ export const ChatComposer = memo(function ChatComposer({
           placeholder={
             exited
               ? "Session ended"
-              : !ready
-                ? "Starting agent…"
-                : busy
-                  ? "Queue a message…"
-                   : "Ask for changes, send follow-ups, or attach images"
+              : busy
+                ? "Queue a message…"
+                : "Ask for changes, send follow-ups, or attach images"
           }
-          disabled={!ready || exited}
+          disabled={exited}
           rows={1}
           // `block` overrides the shadcn base's `flex`: as a flex container the
           // textarea's inner editor gets a min-content floor, so one long
@@ -627,7 +625,7 @@ export const ChatComposer = memo(function ChatComposer({
               type="button"
               title="Attach image"
               onClick={() => fileRef.current?.click()}
-              disabled={!ready || exited}
+              disabled={exited}
               className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
             >
               <ImagePlus className="size-4" />
@@ -652,7 +650,7 @@ export const ChatComposer = memo(function ChatComposer({
               size="icon"
               onClick={submit}
               title={busy ? "Queue message" : "Send"}
-              disabled={(!input.trim() && images.length === 0) || !ready || exited}
+              disabled={(!input.trim() && images.length === 0) || exited}
               className="rounded-full"
             >
               <ArrowUp className="size-4" />

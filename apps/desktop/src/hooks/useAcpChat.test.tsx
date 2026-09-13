@@ -61,9 +61,25 @@ beforeEach(() => {
 
 const mount = async (extra: Record<string, unknown> = {}) => {
   const view = renderHook(() => useAcpChat({ ...options, ...extra }));
+  act(() => view.result.current.wake());
   await waitFor(() => expect(view.result.current.ready).toBe(true));
   return view;
 };
+
+describe("useAcpChat lifecycle", () => {
+  it("spawns nothing for a fresh thread until the pane is woken", async () => {
+    const view = renderHook(() => useAcpChat(options));
+    expect(
+      invoke.mock.calls.filter(([name]) => name === "acp_spawn")
+    ).toHaveLength(0);
+    expect(view.result.current.asleep).toBe(true);
+    act(() => view.result.current.wake());
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    expect(
+      invoke.mock.calls.filter(([name]) => name === "acp_spawn")
+    ).toHaveLength(1);
+  });
+});
 
 describe("useAcpChat model switching", () => {
   it("reports the session's own model without asking for a switch", async () => {
@@ -143,6 +159,7 @@ describe("useAcpChat thread registration", () => {
       return new Promise(() => {});
     });
     const view = renderHook(() => useAcpChat(options));
+    act(() => view.result.current.wake());
     await act(async () => {});
     expect(view.result.current.threadId).toBeUndefined();
     expect(view.result.current.ready).toBe(false);

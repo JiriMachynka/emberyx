@@ -1,30 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { createRoot } from "react-dom/client";
+import { render } from "@testing-library/react";
 import { Markdown } from "@/components/Markdown";
 
-/**
- * Mounted on a bare root rather than through Testing Library: the renderer
- * may commit asynchronously (Shiki grammars, block splits). Poll until the
- * chat wrapper has children.
- */
-const md = async (text: string, streaming = false) => {
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  createRoot(container).render(
-    <Markdown text={text} fontSize={13} streaming={streaming} />
-  );
-  for (let i = 0; i < 100; i++) {
-    const root = container.querySelector(".chat-md");
-    const ready = !!root?.children.length;
-    if (ready) break;
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  return container;
-};
+const md = (text: string, streaming = false) =>
+  render(<Markdown text={text} fontSize={13} streaming={streaming} />).container;
 
 describe("Markdown code rendering", () => {
-  it("renders a fence with no language as a plain block, not inline pills", async () => {
-    const el = await md("```\n$ find src -type f\n(no output)\n```");
+  it("renders a fence with no language as a plain block, not inline pills", () => {
+    const el = md("```\n$ find src -type f\n(no output)\n```");
     const pre = el.querySelector("pre")!;
     expect(pre).not.toBeNull();
     expect(pre.textContent).toContain("$ find src -type f");
@@ -32,73 +15,72 @@ describe("Markdown code rendering", () => {
     expect(el.querySelector("p code")).toBeNull();
   });
 
-  it("renders a language fence as a code block", async () => {
-    const el = await md("```bash\nfind src -type f\n```");
+  it("renders a language fence as a code block", () => {
+    const el = md("```bash\nfind src -type f\n```");
     const pre = el.querySelector("pre")!;
     expect(pre).not.toBeNull();
     expect(pre.textContent).toContain("find src -type f");
   });
 
-  it("still styles genuine inline code as a pill", async () => {
-    const el = await md("run `find src` first");
+  it("still styles genuine inline code as a pill", () => {
+    const el = md("run `find src` first");
     expect(el.querySelector("pre")).toBeNull();
     expect(el.querySelector("code")?.textContent).toBe("find src");
   });
 
-  it("gives an inline file reference its filetype icon", async () => {
-    const el = await md("look at `src/components/ChatPane.tsx` now");
-    // Streamdown's `inlineCode` slot only sees inline spans, so the fence
-    // renderer stays untouched — that separation is what this guards.
+  it("gives an inline file reference its filetype icon", () => {
+    const el = md("look at `src/components/ChatPane.tsx` now");
+    // Inline `code` is a string child; fence `code` is highlighted HTML, so
+    // the file-reference path never sees the fence.
     expect(el.querySelector("img")?.getAttribute("src")).toBe(
       "/file-icons/react_ts.svg",
     );
     expect(el.textContent).toContain("src/components/ChatPane.tsx");
   });
 
-  it("leaves inline code that only looks dotted alone", async () => {
-    const el = await md("call `React.useState` here");
+  it("leaves inline code that only looks dotted alone", () => {
+    const el = md("call `React.useState` here");
     expect(el.querySelector("img")).toBeNull();
     expect(el.querySelector("code")?.textContent).toBe("React.useState");
   });
 
-  it("keeps a fenced block out of the file-reference path", async () => {
-    const el = await md("```ts\nsrc/a.ts\n```");
+  it("keeps a fenced block out of the file-reference path", () => {
+    const el = md("```ts\nsrc/a.ts\n```");
     expect(el.querySelector("pre")).not.toBeNull();
     expect(el.querySelector("img")).toBeNull();
   });
 });
 
 describe("Markdown GFM", () => {
-  it("renders tables, strikethrough and task lists", async () => {
-    const el = await md("| a |\n|---|\n| 1 |\n\n~~gone~~\n\n- [x] done");
+  it("renders tables, strikethrough and task lists", () => {
+    const el = md("| a |\n|---|\n| 1 |\n\n~~gone~~\n\n- [x] done");
     expect(el.querySelector("table td")?.textContent).toBe("1");
     expect(el.querySelector("del")?.textContent).toBe("gone");
     expect(el.querySelector("input[type=checkbox]")).not.toBeNull();
   });
 
-  it("leaves raw HTML inert", async () => {
-    const el = await md("<img src=x onerror=alert(1)> done");
+  it("leaves raw HTML inert", () => {
+    const el = md("<img src=x onerror=alert(1)> done");
     expect(el.querySelector("img")).toBeNull();
   });
 
-  it("renders markdown, not raw markers, while the turn is still streaming", async () => {
-    const el = await md("this is **bold** text", true);
-    expect(el.querySelector("[data-streamdown]")).not.toBeNull();
+  it("renders markdown, not raw markers, while the turn is still streaming", () => {
+    const el = md("this is **bold** text", true);
+    expect(el.querySelector("strong")?.textContent).toBe("bold");
     const text = el.querySelector(".chat-md")?.textContent ?? "";
     expect(text).toContain("bold");
     expect(text).not.toContain("**");
   });
 
-  it("closes an incomplete fence so the code block paints as it streams", async () => {
-    const el = await md("```ts\nconst x = 1", true);
+  it("closes an incomplete fence so the code block paints as it streams", () => {
+    const el = md("```ts\nconst x = 1", true);
     expect(el.querySelector("pre")).not.toBeNull();
     expect(el.querySelector("pre")?.textContent).toContain("const x = 1");
   });
 
-  it("veils new words while streaming and drops the spans once settled", async () => {
-    const live = await md("hello world", true);
-    expect(live.querySelector("[data-sd-animate]")).not.toBeNull();
-    const done = await md("hello world", false);
-    expect(done.querySelector("[data-sd-animate]")).toBeNull();
+  it("closes incomplete bold while the closer is still in flight", () => {
+    const el = md("this is **bol", true);
+    expect(el.querySelector("strong")?.textContent).toBe("bol");
+    expect(el.querySelector(".chat-md")?.textContent).not.toContain("**");
   });
 });

@@ -1,6 +1,6 @@
 import { Fragment, memo, useMemo, useState } from "react";
 import { ChevronRight, Loader2 } from "lucide-react";
-import { MarkdownAsync as Markdown } from "@/components/MarkdownAsync";
+import { Markdown } from "@/components/Markdown";
 import { isTodoTool, lastTodos } from "@/lib/toolDisplay";
 import { isEmptyThought } from "@/lib/activityDisplay";
 import type { ChatMessage } from "@/hooks/useAgentChat";

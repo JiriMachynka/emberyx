@@ -4,7 +4,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { Check, Copy, Undo2 } from "lucide-react";
 import { TextWithFileRefs } from "@/components/FileRef";
-import { MarkdownAsync as Markdown } from "@/components/MarkdownAsync";
+import { Markdown } from "@/components/Markdown";
 import { splitFencedBlocks } from "@/lib/fileRef";
 import { capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
 import type { ChatMessage } from "@/hooks/useAgentChat";

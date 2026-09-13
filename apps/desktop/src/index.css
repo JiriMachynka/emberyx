@@ -1,10 +1,5 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "streamdown/styles.css";
-
-/* Streamdown ships utilities inside its JS. */
-@source "../node_modules/streamdown/dist/*.js";
-@source "../node_modules/@streamdown/code/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -240,15 +235,6 @@
     );
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    [data-sd-animate] {
-      animation: none;
-    }
-    [data-sd-animate-marker]::marker {
-      animation: none;
-    }
-  }
-
   /* Chat markdown: restore block spacing that Tailwind's reset strips. */
   .chat-md pre,
   .chat-md code,
@@ -281,6 +267,9 @@
   }
   .chat-md li {
     margin: 0.15rem 0;
+  }
+  .chat-md li:has(> input[type="checkbox"]) {
+    list-style: none;
   }
   .chat-md h1,
   .chat-md h2,
@@ -319,39 +308,32 @@
   }
 }
 
-/* Code blocks: one surface — the code's grey background fills the whole box,
-   padding included, so the header row and code sit inset in one grey surface
-   (Streamdown tints the outer frame `bg-sidebar` and floats the copy chip over
-   the code instead; the wrapper has no data attribute, hence the :has()).
-   These must stay UNLAYERED: Streamdown styles its chrome with Tailwind
-   utilities, and anything in `@layer components` loses to the utilities layer
-   no matter the specificity. */
-.chat-md [data-streamdown="code-block"] {
-  gap: 0;
+/* Code blocks: one grey surface for header + code. Stay unlayered so later
+   utilities cannot beat these rules. */
+.chat-md .md-fence {
   overflow: hidden;
+  margin: 0.5rem 0;
   background: var(--background);
+  border-radius: var(--radius-lg);
 }
-.chat-md [data-streamdown="code-block-header"] {
-  padding: 0 1rem;
-}
-.chat-md [data-streamdown="code-block-header"] span {
-  margin-left: 0;
-}
-.chat-md
-  [data-streamdown="code-block"]
-  > div:has(> [data-streamdown="code-block-actions"]) {
-  position: static;
+.chat-md .md-fence-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   height: 2rem;
-  margin-top: -2rem;
-  padding-right: 0.75rem;
+  padding: 0 0.5rem 0 1rem;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
 }
-.chat-md [data-streamdown="code-block-body"] {
-  border: 0;
-  border-radius: 0;
+.chat-md .md-fence-header span {
+  margin-left: 0;
 }
 /* Code reads a touch smaller than the prose around it and breathes on a
    taller line — 14px fences next to 15px prose read as a shout. */
-.chat-md [data-streamdown="code-block-body"] pre {
+.chat-md .md-fence pre {
+  margin: 0;
+  padding: 0.75rem 1rem 1rem;
+  overflow-x: auto;
   font-size: 0.9em;
   line-height: 1.6;
 }
@@ -359,7 +341,7 @@
 /* Language icon beside the fence label — the same Material icons the file
    rows render, keyed off the header's data-language and left untinted like
    FileTypeIcon. Unknown languages fall back to the generic file icon. */
-.chat-md [data-streamdown="code-block-header"] span::before {
+.chat-md .md-fence-header[data-language] span::before {
   content: "";
   display: inline-block;
   width: 0.875rem;
@@ -368,97 +350,97 @@
   vertical-align: -0.125rem;
   background: url("/file-icons/file.svg") center / contain no-repeat;
 }
-.chat-md [data-streamdown="code-block-header"][data-language="css"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="scss"] span::before {
+.chat-md .md-fence-header[data-language="css"] span::before,
+.chat-md .md-fence-header[data-language="scss"] span::before {
   background-image: url("/file-icons/css.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="ts"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="typescript"] span::before {
+.chat-md .md-fence-header[data-language="ts"] span::before,
+.chat-md .md-fence-header[data-language="typescript"] span::before {
   background-image: url("/file-icons/typescript.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="tsx"] span::before {
+.chat-md .md-fence-header[data-language="tsx"] span::before {
   background-image: url("/file-icons/react_ts.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="js"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="javascript"] span::before {
+.chat-md .md-fence-header[data-language="js"] span::before,
+.chat-md .md-fence-header[data-language="javascript"] span::before {
   background-image: url("/file-icons/javascript.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="jsx"] span::before {
+.chat-md .md-fence-header[data-language="jsx"] span::before {
   background-image: url("/file-icons/react.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="json"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="jsonc"] span::before {
+.chat-md .md-fence-header[data-language="json"] span::before,
+.chat-md .md-fence-header[data-language="jsonc"] span::before {
   background-image: url("/file-icons/json.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="html"] span::before {
+.chat-md .md-fence-header[data-language="html"] span::before {
   background-image: url("/file-icons/html.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="py"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="python"] span::before {
+.chat-md .md-fence-header[data-language="py"] span::before,
+.chat-md .md-fence-header[data-language="python"] span::before {
   background-image: url("/file-icons/python.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="rs"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="rust"] span::before {
+.chat-md .md-fence-header[data-language="rs"] span::before,
+.chat-md .md-fence-header[data-language="rust"] span::before {
   background-image: url("/file-icons/rust.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="go"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="golang"] span::before {
+.chat-md .md-fence-header[data-language="go"] span::before,
+.chat-md .md-fence-header[data-language="golang"] span::before {
   background-image: url("/file-icons/go.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="sh"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="bash"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="shell"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="zsh"] span::before {
+.chat-md .md-fence-header[data-language="sh"] span::before,
+.chat-md .md-fence-header[data-language="bash"] span::before,
+.chat-md .md-fence-header[data-language="shell"] span::before,
+.chat-md .md-fence-header[data-language="zsh"] span::before {
   background-image: url("/file-icons/console.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="sql"] span::before {
+.chat-md .md-fence-header[data-language="sql"] span::before {
   background-image: url("/file-icons/database.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="md"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="markdown"] span::before {
+.chat-md .md-fence-header[data-language="md"] span::before,
+.chat-md .md-fence-header[data-language="markdown"] span::before {
   background-image: url("/file-icons/markdown.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="yaml"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="yml"] span::before {
+.chat-md .md-fence-header[data-language="yaml"] span::before,
+.chat-md .md-fence-header[data-language="yml"] span::before {
   background-image: url("/file-icons/yaml.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="toml"] span::before {
+.chat-md .md-fence-header[data-language="toml"] span::before {
   background-image: url("/file-icons/toml.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="swift"] span::before {
+.chat-md .md-fence-header[data-language="swift"] span::before {
   background-image: url("/file-icons/swift.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="kt"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="kotlin"] span::before {
+.chat-md .md-fence-header[data-language="kt"] span::before,
+.chat-md .md-fence-header[data-language="kotlin"] span::before {
   background-image: url("/file-icons/kotlin.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="java"] span::before {
+.chat-md .md-fence-header[data-language="java"] span::before {
   background-image: url("/file-icons/java.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="c"] span::before {
+.chat-md .md-fence-header[data-language="c"] span::before {
   background-image: url("/file-icons/c.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="cpp"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="c++"] span::before {
+.chat-md .md-fence-header[data-language="cpp"] span::before,
+.chat-md .md-fence-header[data-language="c++"] span::before {
   background-image: url("/file-icons/cpp.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="rb"] span::before,
-.chat-md [data-streamdown="code-block-header"][data-language="ruby"] span::before {
+.chat-md .md-fence-header[data-language="rb"] span::before,
+.chat-md .md-fence-header[data-language="ruby"] span::before {
   background-image: url("/file-icons/ruby.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="php"] span::before {
+.chat-md .md-fence-header[data-language="php"] span::before {
   background-image: url("/file-icons/php.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="vue"] span::before {
+.chat-md .md-fence-header[data-language="vue"] span::before {
   background-image: url("/file-icons/vue.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="svelte"] span::before {
+.chat-md .md-fence-header[data-language="svelte"] span::before {
   background-image: url("/file-icons/svelte.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="lua"] span::before {
+.chat-md .md-fence-header[data-language="lua"] span::before {
   background-image: url("/file-icons/lua.svg");
 }
-.chat-md [data-streamdown="code-block-header"][data-language="zig"] span::before {
+.chat-md .md-fence-header[data-language="zig"] span::before {
   background-image: url("/file-icons/zig.svg");
 }
 

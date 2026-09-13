@@ -26,7 +26,6 @@ import { StandardSQL } from "@codemirror/lang-sql";
 import { StreamLanguage, type StringStream } from "@codemirror/language";
 import { TreeFragment, type Parser, type Tree } from "@lezer/common";
 import { highlightCode, tagHighlighter, tags as t } from "@lezer/highlight";
-import type { TokensResult } from "shiki/core";
 import { record } from "@/lib/perf";
 
 const PLAIN = "text";
@@ -277,12 +276,10 @@ interface Span {
   color?: string;
 }
 
-/** One highlighted fence, plus the two output shapes derived from it on
- *  first request — a re-render of a cached fence builds nothing. */
+/** One highlighted fence. HTML is derived lazily; a cache hit rebuilds nothing. */
 interface Painted {
   lines: Span[][];
   html?: string;
-  tokens?: TokensResult;
 }
 
 const cache = new Map<string, Painted>();
@@ -407,23 +404,4 @@ export const highlightToHtml = (code: string, language: string): string => {
   });
   painted.html = html;
   return html;
-};
-
-/** Returns the cached result on a hit — callers must not mutate it. */
-export const highlightToTokens = (code: string, language: string): TokensResult => {
-  const painted = paint(code, language);
-  if (painted.tokens) return painted.tokens;
-  let offset = 0;
-  const tokens = painted.lines.map((line, i) => {
-    if (i > 0) offset += 1;
-    return line.map((span) => {
-      const token = span.color
-        ? { content: span.text, color: span.color, offset }
-        : { content: span.text, offset };
-      offset += span.text.length;
-      return token;
-    });
-  });
-  painted.tokens = { tokens, fg: INK, bg: "transparent", themeName: "vesper" };
-  return painted.tokens;
 };

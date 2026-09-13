@@ -5,6 +5,7 @@ import {
   codexGeneration,
   codexModelEntries,
   labelForModel,
+  prettyModelId,
   modelFitsBackend,
   modelRowLabels,
   opencodeOwnModels,
@@ -117,6 +118,18 @@ describe("labelForModel", () => {
   });
 });
 
+describe("prettyModelId", () => {
+  it("phrases a kebab id the way the chip should read it", () => {
+    expect(prettyModelId("grok-4.6")).toBe("Grok 4.6");
+    expect(prettyModelId("grok-4-fast")).toBe("Grok 4 Fast");
+    expect(prettyModelId("gpt-5.6-luna")).toBe("GPT 5.6 Luna");
+  });
+
+  it("keeps the model half of a vendor-prefixed id", () => {
+    expect(prettyModelId("opencode/glm-5.3-flash")).toBe("GLM 5.3 Flash");
+  });
+});
+
 describe("withModelPrefs", () => {
   const catalog: ModelEntry[] = [
     { id: "claude-sonnet-5", label: "Claude Sonnet 5", provider: "claude", legacy: false },
@@ -142,6 +155,7 @@ describe("withModelPrefs", () => {
     ]);
     const custom = withCustom.find((e) => e.id === "gpt-6-secret");
     expect(custom?.provider).toBe("codex");
+    expect(custom?.label).toBe("GPT 6 Secret");
     expect(custom?.legacy).toBe(false);
   });
 

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   highlightToHtml,
-  highlightToTokens,
   resolveLang,
   supportedLanguages,
 } from "@/lib/lexer";
@@ -105,31 +104,17 @@ describe("highlightToHtml", () => {
     expect(html).toContain("#ff8080");
     expect(textOf(html)).toBe("+added\n-removed\n context");
   });
-});
 
-describe("highlightToTokens", () => {
-  it("returns Shiki-shaped tokens whose contents rejoin the source", () => {
-    const result = highlightToTokens("const x = 1;", "ts");
-    expect(result.bg).toBe("transparent");
-    expect(result.themeName).toBe("vesper");
-    const text = result.tokens.flat().map((t) => t.content).join("");
-    expect(text).toBe("const x = 1;");
-    expect(result.tokens.flat().some((t) => t.color === "#b0b0b0")).toBe(true);
-  });
-
-  it("serves the same fence from cache the second time", () => {
+  it("serves the same string from cache the second time", () => {
     const code = "fn main() {}";
-    const first = highlightToTokens(code, "rust");
-    const second = highlightToTokens(code, "rust");
-    expect(second.tokens).toEqual(first.tokens);
+    expect(highlightToHtml(code, "rust")).toBe(highlightToHtml(code, "rust"));
   });
 
   it("keeps two fences apart that share their length and both ends", () => {
     const edge = "x".repeat(120);
-    const first = highlightToTokens(`${edge}\nconst a = 1;\n${edge}`, "ts");
-    const second = highlightToTokens(`${edge}\nlet bbb = 2;\n${edge}`, "ts");
-    const text = (r: typeof first) => r.tokens.flat().map((t) => t.content).join("");
-    expect(text(second)).toContain("let bbb = 2;");
-    expect(text(first)).not.toBe(text(second));
+    const first = highlightToHtml(`${edge}\nconst a = 1;\n${edge}`, "ts");
+    const second = highlightToHtml(`${edge}\nlet bbb = 2;\n${edge}`, "ts");
+    expect(textOf(second)).toContain("let bbb = 2;");
+    expect(first).not.toBe(second);
   });
 });

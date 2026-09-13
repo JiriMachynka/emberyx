@@ -33,7 +33,6 @@ apps/desktop/          the app
       checkpoints.ts   per-turn working-tree snapshots
       preview.ts       dev-server URL normalising
       dock.ts          right-hand dock tab model (pure state)
-      streamBlocks.ts  Streamdown block split for a streaming turn, tail-only
       lexer.ts         sync Lezer highlighter for fences, tool output, hovers
   src-tauri/src/       Rust core, one module per capability; the big two are
                        directories: git/ (changes, commit, log, branch,
@@ -42,6 +41,11 @@ apps/desktop/          the app
                        delegation, commands)
 apps/web/              Astro marketing site (separate, rarely touched)
 ```
+
+Chat markdown is `@tanstack/markdown` + remend (incomplete markers) + `lexer.ts`.
+Not Streamdown. Not TanStack Highlight — Highlight's docs language set drops
+Rust/Python/Go/SQL/diff, and Lezer is already the editor's tree. Shiki stays
+on the Pierre diff tab only.
 
 ## Commands
 

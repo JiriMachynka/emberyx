@@ -122,15 +122,21 @@ describe("ChatComposer", () => {
     expect(textarea().value).toBe("first line");
   });
 
-  it("does not send an empty box, or before the agent is ready", async () => {
+  it("does not send an empty box", async () => {
     const sent: [string, ChatImage[]][] = [];
-    const { rerender } = await mount(propsFor("claude", sent));
+    await mount(propsFor("claude", sent));
     fireEvent.keyDown(textarea(), { key: "Enter" });
     expect(sent).toEqual([]);
+  });
 
+  it("accepts a turn before the agent is ready", async () => {
+    const sent: [string, ChatImage[]][] = [];
+    const { rerender } = await mount(propsFor("claude", sent));
     rerender(<ChatComposer {...propsFor("claude", sent)} ready={false} />);
-    expect(textarea().disabled).toBe(true);
-    expect((screen.getByTitle("Send") as HTMLButtonElement).disabled).toBe(true);
+    expect(textarea().disabled).toBe(false);
+    fireEvent.change(textarea(), { target: { value: "hello" } });
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(sent).toEqual([["hello", []]]);
   });
 
   it("the send button sends the same thing ↵ does", async () => {

@@ -185,6 +185,25 @@ export const labelForModel = (
   entries: ModelEntry[]
 ): string | undefined => entries.find((e) => e.id === id)?.label;
 
+const ACRONYMS = new Set(["gpt", "glm", "tts"]);
+
+/** Chip name for an id the catalog has not labelled yet.
+ *  `grok-4.6` → `Grok 4.6`. Catalog labels always win over this. */
+export const prettyModelId = (id: string): string => {
+  if (id === "") return id;
+  const slug = id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id;
+  return slug
+    .split("-")
+    .filter(Boolean)
+    .map((part) => {
+      if (/[0-9]/.test(part)) return part;
+      const lower = part.toLowerCase();
+      if (ACRONYMS.has(lower)) return lower.toUpperCase();
+      return part.charAt(0).toUpperCase() + part.slice(1);
+    })
+    .join(" ");
+};
+
 /** Apply the picker's stored preferences: drop hidden ids, then append the
  *  per-provider custom slugs (a custom sharing an id with a catalog entry is
  *  dropped — the catalog entry wins, first-seen). */
@@ -200,7 +219,12 @@ export function withModelPrefs(
       return (ids ?? [])
         .map((id) => id.trim())
         .filter((id) => id !== "" && !hide.has(id))
-        .map((id) => ({ id, label: id, provider: providerKey, legacy: false }));
+        .map((id) => ({
+          id,
+          label: prettyModelId(id),
+          provider: providerKey,
+          legacy: false,
+        }));
     }
   );
   return [...entries, ...customs].filter((e) => !hide.has(e.id));

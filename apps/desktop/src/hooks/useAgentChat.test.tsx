@@ -41,10 +41,9 @@ const options = { cwd: "/repo", emberyxSessionId: "emberyx-1" };
 /** Mount the hook and wait until the agent process is reported ready. */
 async function mount(extra: Record<string, unknown> = {}) {
   const view = renderHook(() => useAgentChat({ ...options, ...extra }));
-  // A resumed pane stays asleep until the user shows intent — opening a thread
-  // to read it must not launch a CLI. Every test that resumes below is about
-  // what the agent does once it is awake, so wake it here.
-  if (extra.resume) act(() => view.result.current.wake());
+  // A pane stays asleep until the user shows intent. Tests that go through
+  // `mount` are about the agent once it is awake, so wake it here.
+  act(() => view.result.current.wake());
   await waitFor(() => expect(view.result.current.ready).toBe(true));
   const channel = channels[channels.length - 1];
   const emit: Emit = (event) =>
@@ -186,9 +185,17 @@ describe("useAgentChat lifecycle", () => {
     expect(sentTo("agent_spawn")[0][1]).toMatchObject({ resume: "sess-9" });
   });
 
-  // Opening an old thread from the sidebar used to launch a CLI just to read
-  // it, on the frame that switches panes. Nothing spawns until the user shows
-  // intent — a keystroke in the composer, or the turn itself.
+  // Opening a thread used to launch a CLI on the frame that switches panes.
+  // Nothing spawns until the user shows intent — a keystroke, or the turn.
+  it("spawns nothing for a fresh thread until the pane is woken", async () => {
+    const view = renderHook(() => useAgentChat(options));
+    expect(sentTo("agent_spawn")).toHaveLength(0);
+    expect(view.result.current.asleep).toBe(true);
+    act(() => view.result.current.wake());
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    expect(sentTo("agent_spawn")).toHaveLength(1);
+  });
+
   it("spawns nothing for a resumed thread until the pane is woken", async () => {
     const view = renderHook(() =>
       useAgentChat({ ...options, resume: "sess-9" })
@@ -325,6 +332,7 @@ describe("useAgentChat lifecycle", () => {
     );
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { result } = renderHook(() => useAgentChat(options));
+    act(() => result.current.wake());
     await waitFor(() => expect(result.current.status).toBe("error"));
     expect(result.current.ready).toBe(false);
     // "Session failed." on its own is true and useless.
@@ -1507,6 +1515,7 @@ describe("useAgentChat reasoning effort", () => {
     const view = renderHook(({ effort }) => useAgentChat({ ...options, effort }), {
       initialProps: { effort: "low" },
     });
+    act(() => view.result.current.wake());
     await waitFor(() => expect(view.result.current.ready).toBe(true));
     expect(sentTo("agent_spawn")).toHaveLength(1);
 
@@ -1522,6 +1531,7 @@ describe("useAgentChat reasoning effort", () => {
       ({ model }) => useAgentChat({ ...options, model, effort: "high" }),
       { initialProps: { model: "opus" } }
     );
+    act(() => view.result.current.wake());
     await waitFor(() => expect(view.result.current.ready).toBe(true));
 
     view.rerender({ model: "sonnet" });

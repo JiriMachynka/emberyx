@@ -187,11 +187,10 @@ export function useCodexChat({
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
   const [ready, setReady] = useState(false);
-  // Whether this pane wants an app-server at all. Opening an old thread from
-  // the sidebar used to launch one just to read it; a resumed thread now waits
-  // for the first send (or a composer focus). A fresh chat was opened to be
-  // talked to, so it starts as before.
-  const [awake, setAwake] = useState(() => !resume);
+  // Whether this pane wants an app-server at all. Opening a thread used to
+  // launch one on the frame that switches panes. Stay asleep until the user
+  // types or sends, same as a resumed thread.
+  const [awake, setAwake] = useState(false);
   const wake = useCallback(() => setAwake(true), []);
   // Turns accepted before the process existed, delivered in order once it is.
   const pendingSendRef = useRef<{ text: string; images?: ChatImage[] }[]>([]);

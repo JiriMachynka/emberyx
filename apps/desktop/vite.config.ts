@@ -14,7 +14,7 @@ const host = process.env.TAURI_DEV_HOST;
  * languages this app never opens. The shim swaps that map for a curated one.
  *
  * Scoped to pierre's own files rather than done with `resolve.alias`, because
- * an alias is global: streamdown resolves its own Shiki and must keep it.
+ * an alias is global and would rewrite every `shiki` import.
  */
 const pierreShikiBundle = () => ({
   name: "emberyx:pierre-shiki-bundle",

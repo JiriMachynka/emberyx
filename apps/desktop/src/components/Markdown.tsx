@@ -1,48 +1,66 @@
-import { memo, useState, type ComponentProps } from "react";
-import { Streamdown } from "streamdown";
-import type { CodeHighlighterPlugin, HighlightOptions, ThemeInput } from "streamdown";
-import { highlightTokens, supportedLanguages } from "@/lib/codeHighlighter";
-import { createStreamingSplitter } from "@/lib/streamBlocks";
-
-/** Streamdown types the result inline rather than exporting it. */
-type HighlightResult = NonNullable<ReturnType<CodeHighlighterPlugin["highlight"]>>;
+import { memo, useRef, useState, type ComponentProps } from "react";
+import { Markdown as TanStackMarkdown, type MarkdownComponents } from "@tanstack/markdown/react";
+import type { CodeHighlighter } from "@tanstack/markdown";
+import { streamingMarkdownExtension } from "@tanstack/markdown/extensions/streaming";
+import remend from "remend";
+import { Check, Copy } from "lucide-react";
 import { FileRef } from "@/components/FileRef";
 import { PrLink } from "@/components/PrLink";
 import { fileRefPath, isFileReference } from "@/lib/fileRef";
+import { highlightToHtml } from "@/lib/lexer";
 import { cn } from "@/lib/utils";
 
-/** Both slots take the same dark theme. Streamdown picks its dark colors
- *  behind a `dark:` variant, and nothing in this app ever sets the `dark`
- *  class — the window is dark, full stop — so the light slot is the one that
- *  actually paints. Pairing it with a light theme is what put GitHub-light's
- *  blues and reds on the plum canvas. Vesper is warm and low-saturation, which
- *  is the same family as the ember accent. The plugin still reports the name
- *  Streamdown expects; the tokens come from the Lezer lexer, not Shiki. */
-const shikiTheme: [ThemeInput, ThemeInput] = ["vesper", "vesper"];
+const streamingExtensions = [streamingMarkdownExtension()];
 
-const lexerPlugin: CodeHighlighterPlugin = {
-  name: "shiki",
-  type: "code-highlighter",
-  supportsLanguage(language) {
-    return supportedLanguages().includes(language.trim().toLowerCase());
-  },
-  getSupportedLanguages() {
-    return supportedLanguages();
-  },
-  getThemes() {
-    return shikiTheme;
-  },
-  highlight(options: HighlightOptions, callback?: (result: HighlightResult) => void) {
-    return highlightTokens({ code: options.code, language: options.language }, callback);
-  },
-};
+/** Inner token HTML only — TanStack Markdown owns the pre/code frame. */
+const highlightCode: CodeHighlighter = (code, lang) =>
+  highlightToHtml(code, lang ?? "text");
 
-const staticPlugins = { code: lexerPlugin };
+function Fence({
+  children,
+  className,
+  ...rest
+}: ComponentProps<"pre"> & { "data-lang"?: string }) {
+  const preRef = useRef<HTMLPreElement>(null);
+  const [copied, setCopied] = useState(false);
+  const langAttr = rest["data-lang"];
+  const lang = langAttr && langAttr !== "plaintext" ? langAttr : "";
+
+  const copy = () => {
+    const text = preRef.current?.textContent ?? "";
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  return (
+    <div className="md-fence">
+      <div className="md-fence-header" data-language={lang || undefined}>
+        {lang ? <span>{lang}</span> : null}
+        <button
+          type="button"
+          onClick={copy}
+          title="Copy code"
+          className="ml-auto rounded-md p-1 text-muted-foreground outline-none transition-colors hover:text-foreground"
+        >
+          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+        </button>
+      </div>
+      <pre ref={preRef} className={className} {...rest}>
+        {children}
+      </pre>
+    </div>
+  );
+}
 
 const components = {
-  /** Streamdown routes only inline spans here, so fences keep their own
-   *  renderer. An inline span that names a file gets the file's icon. */
-  inlineCode({ children, className, ...rest }: ComponentProps<"code">) {
+  pre: Fence,
+  /** Inline spans only: fence `code` arrives with highlighted HTML, not a string. */
+  code({ children, className, ...rest }: ComponentProps<"code">) {
+    if ("dangerouslySetInnerHTML" in rest) {
+      return <code className={className} {...rest} />;
+    }
     const text = typeof children === "string" ? children : null;
     if (text !== null && isFileReference(text)) {
       return <FileRef path={fileRefPath(text)} label={text} />;
@@ -63,30 +81,13 @@ const components = {
       </PrLink>
     );
   },
-};
+  img: () => null,
+} satisfies MarkdownComponents;
 
-const controls = {
-  code: { copy: true, download: false as const },
-  table: false,
-  mermaid: false,
-  image: false,
-};
-
-/** Paint-only dissolve on newly mounted words. Stagger is off so a batch of
- *  tokens fades as one veil, not a cascade; duration sits in the 150–250ms
- *  enter range. Settled turns pass `false` so the spans never ship. */
-const streamAnimate = {
-  animation: "fadeIn" as const,
-  duration: 200,
-  easing: "cubic-bezier(0.2, 0, 0, 1)",
-  stagger: 0,
-};
-
-/** Renders assistant markdown with GFM. `streaming` uses Streamdown's
- *  block-memoized mode so settled paragraphs don't reparse as tokens
- *  arrive; incomplete markers are closed by remend until the real ones land.
- *  Both passes run in `streamBlocks` over the unsettled tail only, which is
- *  why Streamdown's own whole-text remend is off. */
+/** Assistant markdown. Streaming runs remend so incomplete markers paint as
+ *  the intended structure until the closer arrives; the streaming extension
+ *  hides empty trailing headings/quotes/list items. Colouring is the Lezer
+ *  lexer, same tree as the editor. */
 export const Markdown = memo(function Markdown({
   text,
   fontSize,
@@ -96,27 +97,18 @@ export const Markdown = memo(function Markdown({
   fontSize: number;
   streaming?: boolean;
 }) {
-  const [splitStreaming] = useState(createStreamingSplitter);
+  const source = streaming ? remend(text) : text;
   return (
-    <div style={{ fontSize: `${fontSize}px` }}>
-      <Streamdown
-        className="chat-md leading-relaxed"
-        mode={streaming ? "streaming" : "static"}
-        animated={streaming ? streamAnimate : false}
-        isAnimating={streaming}
-        parseIncompleteMarkdown={false}
-        parseMarkdownIntoBlocksFn={streaming ? splitStreaming : undefined}
-        skipHtml
-        lineNumbers={false}
-        codeBlockMaxHeight={0}
-        shikiTheme={shikiTheme}
-        linkSafety={{ enabled: false }}
-        controls={controls}
-        plugins={staticPlugins}
+    <div className="chat-md leading-relaxed" style={{ fontSize: `${fontSize}px` }}>
+      <TanStackMarkdown
+        frontmatter={false}
+        headingIds={false}
+        highlighter={highlightCode}
+        extensions={streaming ? streamingExtensions : undefined}
         components={components}
       >
-        {text}
-      </Streamdown>
+        {source}
+      </TanStackMarkdown>
     </div>
   );
 });

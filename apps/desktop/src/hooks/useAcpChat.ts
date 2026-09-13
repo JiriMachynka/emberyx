@@ -182,6 +182,13 @@ export function useAcpChat({
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
   const [ready, setReady] = useState(false);
+  // Stay asleep until the user types or sends, so switching onto a fresh ACP
+  // chat does not wait on spawn to paint the empty screen.
+  const [awake, setAwake] = useState(false);
+  const wake = useCallback(() => setAwake(true), []);
+  const pendingSendRef = useRef<{ text: string; images?: ChatImage[] } | null>(
+    null
+  );
   const [exitReason, setExitReason] = useState<string | null>(null);
   const [pendingPermission, setPendingPermission] =
     useState<PendingPermission | null>(null);
@@ -517,7 +524,7 @@ export function useAcpChat({
   }, []);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !awake) return;
     let disposed = false;
     const channel = new Channel<AcpEvent>();
     channelRef.current = channel;
@@ -666,6 +673,7 @@ export function useAcpChat({
     };
   }, [
     enabled,
+    awake,
     provider,
     cwd,
     resume,
@@ -729,7 +737,7 @@ export function useAcpChat({
       const sessionId = sessionRef.current;
       const channel = channelRef.current;
       const hasImages = !!images && images.length > 0;
-      if (id === null || !sessionId || !channel || (!text.trim() && !hasImages)) return;
+      if (!text.trim() && !hasImages) return;
       committedRef.current = [
         ...committedRef.current,
         {
@@ -747,6 +755,11 @@ export function useAcpChat({
       stoppedRef.current = false;
       turnRef.current = { message: null, status: "thinking" };
       publish();
+      if (id === null || !sessionId || !channel) {
+        pendingSendRef.current = { text, images };
+        wake();
+        return;
+      }
       // Reopened history already lives under `resume`. Adopting the provider's
       // new session id would mint a second sidebar row titled from this prompt.
       const logId = resume ?? sessionId;
@@ -767,8 +780,36 @@ export function useAcpChat({
       });
       void acpPrompt(id, sessionId, text, images);
     },
-    [cwd, emberyxSessionId, publish, adoptThread, recordTimeline, resume]
+    [cwd, emberyxSessionId, publish, adoptThread, recordTimeline, resume, wake]
   );
+
+  // The turn that woke the pane goes on the wire as soon as the spawn lands.
+  useEffect(() => {
+    if (!ready) return;
+    const held = pendingSendRef.current;
+    if (!held) return;
+    pendingSendRef.current = null;
+    const id = processRef.current;
+    const sessionId = sessionRef.current;
+    if (id === null || !sessionId) return;
+    const logId = resume ?? sessionId;
+    if (adoptedForRef.current !== logId) {
+      adoptedForRef.current = logId;
+      if (!resume) {
+        adoptThread(logId);
+        const title = threadTitleFrom(held.text);
+        if (title) recordTimeline(logId, "threadTitle", title);
+      }
+    }
+    recordTimeline(logId, "userPrompt", held.text);
+    void createCheckpoint(cwd, emberyxSessionId, held.text).then((point) => {
+      if (!point) return;
+      lastCheckpointIdRef.current = point.id;
+      committedRef.current = attachCheckpoint(committedRef.current, point.id);
+      publish();
+    });
+    void acpPrompt(id, sessionId, held.text, held.images);
+  }, [ready, cwd, emberyxSessionId, publish, adoptThread, recordTimeline, resume]);
 
   // Name a fresh chat once its first turn settles. No ACP agent announces a
   // title, so the name is derived here rather than awaited — without it the
@@ -799,6 +840,7 @@ export function useAcpChat({
   }, [clearPermissions, commitTurn]);
 
   const restart = useCallback(() => {
+    setAwake(true);
     // The prompt belongs to the process about to be killed: its request ids
     // mean nothing to the next one, which numbers its own from scratch.
     clearPermissions(false);
@@ -840,10 +882,8 @@ export function useAcpChat({
     status,
     usage,
     ready,
-    // ACP sessions have nothing to resume, so the pane never opens one it isn't
-    // about to use — the process starts on mount and `wake` is already true.
-    asleep: false,
-    wake: noop,
+    asleep: !awake,
+    wake,
     // ACP agents keep no listable thread store. A fresh chat publishes the
     // session id the provider just issued so the sidebar can list it; a
     // reopened thread keeps the id it was opened with, so a restart cannot

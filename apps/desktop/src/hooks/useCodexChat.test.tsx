@@ -31,10 +31,9 @@ type Emit = (event: Record<string, unknown>) => void;
 
 async function mount(extra: Record<string, unknown> = {}) {
   const view = renderHook(() => useCodexChat({ ...options, ...extra }));
-  // A resumed pane stays asleep until the user shows intent — opening a thread
-  // to read it must not launch an app-server. The resume tests below are about
-  // what happens once it is awake.
-  if (extra.resume) act(() => view.result.current.wake());
+  // A pane stays asleep until the user shows intent. Tests that go through
+  // `mount` are about the agent once it is awake, so wake it here.
+  act(() => view.result.current.wake());
   await waitFor(() => expect(view.result.current.ready).toBe(true));
   const channel = channels[channels.length - 1];
   const emit: Emit = (event) => act(() => channel.onmessage!(event));
@@ -103,6 +102,15 @@ describe("useCodexChat lifecycle", () => {
   it("spawns nothing while another backend owns the pane", async () => {
     renderHook(() => useCodexChat({ ...options, enabled: false }));
     expect(sentTo("codex_spawn")).toHaveLength(0);
+  });
+
+  it("spawns nothing for a fresh thread until the pane is woken", async () => {
+    const view = renderHook(() => useCodexChat(options));
+    expect(sentTo("codex_spawn")).toHaveLength(0);
+    expect(view.result.current.asleep).toBe(true);
+    act(() => view.result.current.wake());
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    expect(sentTo("codex_spawn")).toHaveLength(1);
   });
 
   it("replays a resumed thread's turns into the transcript", async () => {
@@ -446,6 +454,7 @@ describe("useCodexChat model and reasoning effort", () => {
     const view = renderHook(({ effort }) => useCodexChat({ ...options, effort }), {
       initialProps: { effort: "low" },
     });
+    act(() => view.result.current.wake());
     await waitFor(() => expect(view.result.current.ready).toBe(true));
     expect(sentTo("codex_spawn")).toHaveLength(1);
 
@@ -464,6 +473,7 @@ describe("useCodexChat model and reasoning effort", () => {
     const view = renderHook(({ model }) => useCodexChat({ ...options, model }), {
       initialProps: { model: "gpt-5.6-luna" },
     });
+    act(() => view.result.current.wake());
     await waitFor(() => expect(view.result.current.ready).toBe(true));
 
     view.rerender({ model: "gpt-5.4-mini" });
