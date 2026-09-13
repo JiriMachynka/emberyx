@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Cargo build output from the crates/ spike workspace
+/target
+
 # Turborepo / Astro
 .turbo
 .astro

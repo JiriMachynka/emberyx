@@ -1,0 +1,26 @@
+[package]
+name = "emberyx-spike-diff"
+# Not a release artifact: the GPUI go/no-go spike (docs/gpui-migration).
+version = "0.0.0"
+publish = false
+description = "GPUI spike — the diff viewer rendered from emberyx-core's own git and checkpoint commands."
+edition = "2021"
+
+[dependencies]
+emberyx-core = { path = "../emberyx-core" }
+# The current gpui-component, not the 0.4 the kept client pins: a spike that
+# measured the stack a rewrite would not ship on would answer nothing.
+gpui = { package = "gpui-pre", version = "0.3.1" }
+gpui-component = { version = "0.6.1", features = ["tree-sitter-languages"] }
+anyhow = "1"
+
+# Its own workspace: see the root manifest's `exclude`.
+[workspace]
+
+# Same release profile as the root workspace, so binary sizes compare.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+strip = true
+panic = "abort"
