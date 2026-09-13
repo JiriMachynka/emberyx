@@ -3,13 +3,15 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::ipc::Channel;
 
+use crate::daemon::Daemon;
+use crate::daemon_protocol::{ProcFrame, ProcIo, ProcSink, ProcSpec};
 use crate::error::Result;
 
 /// The `codex-cli` release this client was written against. A mismatch is
@@ -223,8 +225,10 @@ fn jitter_source() -> u64 {
 // ---------------------------------------------------------------------------
 
 struct Session {
-    child: Child,
-    stdin: Arc<Mutex<ChildStdin>>,
+    /// The child, when this window owns the process. A daemon-backed session
+    /// has none: the process lives in `emberyxd`, and kill routes there.
+    child: Option<Child>,
+    stdin: StdinRoute,
     next_request_id: Arc<AtomicI64>,
     pending: Arc<Pending>,
     /// Server->client request ids handed to the frontend but not yet answered.
@@ -232,14 +236,84 @@ struct Session {
     open_server_requests: Arc<Mutex<HashSet<i64>>>,
 }
 
+/// Where a session's stdin goes. In-process it is the child's own pipe;
+/// persistent mode shuttles bytes over the daemon socket, which owns the
+/// child. The daemon never parses what crosses — this side keeps every
+/// decoder, the pending map and the server-request registry exactly as they
+/// were when the process was local.
+#[derive(Clone)]
+pub(crate) enum StdinRoute {
+    Pipe(Arc<Mutex<ChildStdin>>),
+    Daemon(Arc<Daemon>, u32),
+}
+
 /// The pieces a command needs to talk to a live session, cloned out from under
 /// the sessions lock so a blocking round trip never holds it.
 #[derive(Clone)]
 struct Handle {
-    stdin: Arc<Mutex<ChildStdin>>,
+    stdin: StdinRoute,
     next_request_id: Arc<AtomicI64>,
     pending: Arc<Pending>,
     open_server_requests: Arc<Mutex<HashSet<i64>>>,
+    /// Set on a reattached daemon session: the daemon is replaying frames the
+    /// previous window produced, and among them are responses to *its*
+    /// requests. Sending a new request before the replay drains could have
+    /// its response misresolved by an old frame with the same id, so the
+    /// first send waits for the backlog to finish.
+    drain: Option<Arc<Drain>>,
+}
+
+/// Tracks how much of a reattach replay is still in flight. `expected` is the
+/// daemon's buffered-frame count at spawn time; `seen` counts frames the
+/// attach stream has delivered. The backlog precedes live frames on the wire,
+/// so `seen >= expected` means the replay is done and ids are ours again.
+pub(crate) struct Drain {
+    state: Mutex<(u64, bool)>,
+    done: Condvar,
+}
+
+impl Drain {
+    pub(crate) fn new(expected: u64) -> Self {
+        Self {
+            state: Mutex::new((expected, false)),
+            done: Condvar::new(),
+        }
+    }
+
+    pub(crate) fn frame(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.0 = state.0.saturating_sub(1);
+        if state.0 == 0 {
+            self.done.notify_all();
+        }
+    }
+
+    /// The child died mid-replay: stop waiting, there is nothing more coming.
+    pub(crate) fn dead(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.1 = true;
+        self.done.notify_all();
+    }
+
+    /// Block until the replay has drained (or the child died), so a request
+    /// sent now can only be answered by the live process. Bounded by the
+    /// request timeout: a socket that died mid-replay must fail loudly, not
+    /// hang the turn forever.
+    pub(crate) fn wait(&self) {
+        let mut state = self.state.lock().unwrap();
+        let deadline = std::time::Instant::now() + REQUEST_TIMEOUT;
+        while state.0 > 0 && !state.1 {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return;
+            }
+            let (next, _timeout) = self
+                .done
+                .wait_timeout(state, deadline - now)
+                .unwrap();
+            state = next;
+        }
+    }
 }
 
 #[derive(Default)]
@@ -259,6 +333,10 @@ pub struct SpawnResult {
     /// The `initialize` result: userAgent, codexHome, platformFamily, platformOs.
     pub initialize: Value,
     pub version: Option<String>,
+    /// True when the daemon already had this process running and replayed its
+    /// output: the frontend must not open or resume a thread, the replay is
+    /// the transcript, and the first request waits for the replay to drain.
+    pub reattached: bool,
 }
 
 impl Default for CodexManager {
@@ -279,10 +357,11 @@ impl CodexManager {
         let sessions = self.inner.sessions.lock().unwrap();
         let session = sessions.get(&id).ok_or("no such codex session")?;
         Ok(Handle {
-            stdin: Arc::clone(&session.stdin),
+            stdin: session.stdin.clone(),
             next_request_id: Arc::clone(&session.next_request_id),
             pending: Arc::clone(&session.pending),
             open_server_requests: Arc::clone(&session.open_server_requests),
+            drain: None,
         })
     }
 
@@ -298,14 +377,30 @@ impl Inner {
     /// streaming notifications over `on_event`. Returns once initialize replies.
     /// `command` overrides the binary (Settings → Providers); the built-in
     /// `app-server` argument and shell env stay.
+    ///
+    /// In persistent mode the process is spawned by — and lives in — the
+    /// daemon; this window only shuttles bytes and keeps the parsers. A
+    /// reattach replays the previous window's whole output first, and no
+    /// request is sent until it has drained.
+    #[allow(clippy::too_many_arguments)]
     fn spawn(
         self: &Arc<Self>,
         cwd: String,
         command: Option<String>,
         extra_args: Vec<String>,
         env: HashMap<String, String>,
+        persistent: bool,
+        session_id: Option<String>,
+        daemon: Option<Arc<Daemon>>,
         on_event: Channel<CodexEvent>,
     ) -> Result<SpawnResult> {
+        if persistent {
+            let daemon = daemon.ok_or("persistent codex needs the daemon")?;
+            let proc_id = session_id.ok_or("persistent codex needs a session id")?;
+            return self.spawn_daemonized(
+                proc_id, cwd, command, extra_args, env, daemon, on_event,
+            );
+        }
         let mut cmd = Command::new(command.as_deref().unwrap_or("codex"));
         cmd.arg("app-server")
             .args(&extra_args)
@@ -330,17 +425,18 @@ impl Inner {
 
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let session = Session {
-            child,
-            stdin: Arc::new(Mutex::new(stdin)),
+            child: Some(child),
+            stdin: StdinRoute::Pipe(Arc::new(Mutex::new(stdin))),
             next_request_id: Arc::new(AtomicI64::new(1)),
             pending: Arc::new(Pending::default()),
             open_server_requests: Arc::new(Mutex::new(HashSet::new())),
         };
         let handle = Handle {
-            stdin: Arc::clone(&session.stdin),
+            stdin: session.stdin.clone(),
             next_request_id: Arc::clone(&session.next_request_id),
             pending: Arc::clone(&session.pending),
             open_server_requests: Arc::clone(&session.open_server_requests),
+            drain: None,
         };
         self.sessions.lock().unwrap().insert(id, session);
 
@@ -376,6 +472,115 @@ impl Inner {
             id,
             initialize,
             version: installed_version(),
+            reattached: false,
+        })
+    }
+
+    /// The persistent twin of `spawn`: the daemon owns the child, this side
+    /// reassembles its stdout into lines and runs the same parser. The
+    /// `initialize` handshake is skipped on a reattach — the process was
+    /// initialized by the window that started it, and its reply is already in
+    /// the replay.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_daemonized(
+        self: &Arc<Self>,
+        proc_id: String,
+        cwd: String,
+        command: Option<String>,
+        extra_args: Vec<String>,
+        env: HashMap<String, String>,
+        daemon: Arc<Daemon>,
+        on_event: Channel<CodexEvent>,
+    ) -> Result<SpawnResult> {
+        let mut argv = vec![command.unwrap_or_else(|| "codex".into()), "app-server".into()];
+        argv.extend(extra_args);
+        let spec = ProcSpec {
+            proc_id,
+            argv,
+            cwd,
+            env,
+            shell_env: true,
+            ..Default::default()
+        };
+
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let pending = Arc::new(Pending::default());
+        let open_server_requests = Arc::new(Mutex::new(HashSet::new()));
+        let next_request_id = Arc::new(AtomicI64::new(1));
+        let drain = Arc::new(Drain::new(0));
+
+        // The attach starts inside proc_spawn, so no frame is ever missed; the
+        // sink below decodes and reassembles. The handle is built once the
+        // spawn answers with the frontend handle for proc writes.
+        let (tx, rx) = mpsc::channel::<Chunk>();
+        let sink = frame_sink(
+            Arc::clone(&pending),
+            Arc::clone(&open_server_requests),
+            Arc::clone(&drain),
+            tx.clone(),
+        );
+        let (proc_handle, outcome) = daemon.proc_spawn(spec, None, sink)?;
+        let handle = Handle {
+            stdin: StdinRoute::Daemon(Arc::clone(&daemon), proc_handle),
+            next_request_id: Arc::clone(&next_request_id),
+            pending: Arc::clone(&pending),
+            open_server_requests: Arc::clone(&open_server_requests),
+            drain: Some(Arc::clone(&drain)),
+        };
+        self.sessions.lock().unwrap().insert(
+            id,
+            Session {
+                child: None,
+                stdin: StdinRoute::Daemon(Arc::clone(&daemon), proc_handle),
+                next_request_id,
+                pending,
+                open_server_requests,
+            },
+        );
+        let exit_code = Arc::new(Mutex::new(None));
+        let reap = {
+            let inner = Arc::clone(self);
+            let exit_code = Arc::clone(&exit_code);
+            move || {
+                inner.sessions.lock().unwrap().remove(&id);
+                *exit_code.lock().unwrap()
+            }
+        };
+        self.spawn_forwarder(id, rx, on_event.clone(), Arc::new(reap));
+
+        if let Some(warning) = version_warning() {
+            let _ = on_event.send(CodexEvent::Warning(warning));
+        }
+
+        if outcome.reattached {
+            // The replay carries the previous window's responses. The first
+            // request waits for it to drain (see `Drain`), so no old reply
+            // with a recycled id can answer this window's turn.
+            return Ok(SpawnResult {
+                id,
+                initialize: Value::Null,
+                version: installed_version(),
+                reattached: true,
+            });
+        }
+
+        let initialize = request(
+            &handle,
+            "initialize",
+            json!({
+                "clientInfo": {
+                    "name": "emberyx",
+                    "title": "Emberyx",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+            }),
+        )?;
+
+        Ok(SpawnResult {
+            id,
+            initialize,
+            version: installed_version(),
+            reattached: false,
         })
     }
 
@@ -389,40 +594,16 @@ impl Inner {
         handle: &Handle,
         on_event: Channel<CodexEvent>,
     ) {
-        enum Chunk {
-            Event(CodexEvent),
-            Done,
-        }
         let (tx, rx) = mpsc::channel::<Chunk>();
         let pending = Arc::clone(&handle.pending);
         let open = Arc::clone(&handle.open_server_requests);
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(std::io::Result::ok) {
-                let event = match classify(&line) {
-                    Frame::Response { id, result } => {
-                        pending.resolve(id, Ok(result));
-                        continue;
+                if let Some(event) = route_line(&pending, &open, &line) {
+                    if tx.send(Chunk::Event(event)).is_err() {
+                        return;
                     }
-                    Frame::Failure { id, error } => {
-                        pending.resolve(id, Err(error));
-                        continue;
-                    }
-                    Frame::Request(req) => {
-                        open.lock().unwrap().insert(req.id);
-                        CodexEvent::Request(ServerRequest {
-                            id: req.id,
-                            method: req.method,
-                            params: req.params,
-                        })
-                    }
-                    Frame::Notification { method, params } => {
-                        CodexEvent::Notification(Notify { method, params })
-                    }
-                    Frame::Other => continue,
-                };
-                if tx.send(Chunk::Event(event)).is_err() {
-                    return;
                 }
             }
             pending.fail_all("codex app-server exited");
@@ -430,17 +611,32 @@ impl Inner {
         });
 
         let inner = Arc::clone(self);
+        let reap = move || {
+            inner
+                .sessions
+                .lock()
+                .unwrap()
+                .remove(&id)
+                .and_then(|mut s| s.child.take())
+                .and_then(|mut child| child.wait().ok())
+                .and_then(|status| status.code())
+        };
+        self.spawn_forwarder(id, rx, on_event, Arc::new(reap));
+    }
+
+    /// The forwarder half of the reader: coalesces adjacent notifications into
+    /// one IPC message, reaps on EOF, reports exit. Shared by the local pipe
+    /// reader and the daemon frame reassembler — the batching and the exit
+    /// contract are the same either way.
+    fn spawn_forwarder(
+        self: &Arc<Self>,
+        id: u32,
+        rx: Receiver<Chunk>,
+        on_event: Channel<CodexEvent>,
+        reap: Arc<dyn Fn() -> Option<i32> + Send + Sync>,
+    ) {
         std::thread::spawn(move || {
             const MAX_BATCH: usize = 512;
-            let reap = || {
-                inner
-                    .sessions
-                    .lock()
-                    .unwrap()
-                    .remove(&id)
-                    .and_then(|mut s| s.child.wait().ok())
-                    .and_then(|status| status.code())
-            };
             // Only adjacent notifications coalesce; a request must be delivered
             // on its own so the frontend can prompt without unpacking a batch.
             let mut batch: Vec<Notify> = Vec::new();
@@ -510,18 +706,45 @@ impl Inner {
 
     /// Terminate and reap. The reader normally reaps on EOF but can't once the
     /// session is removed here, so wait() outside the lock to avoid a zombie.
+    /// A daemon-backed session's process lives in the daemon: the kill routes
+    /// there, and the local session is just the parsers.
     fn kill(&self, id: u32) -> Result<()> {
         let session = self.sessions.lock().unwrap().remove(&id);
         if let Some(mut session) = session {
             session.pending.fail_all("codex session killed");
-            let _ = session.child.kill();
-            let _ = session.child.wait();
+            match &session.stdin {
+                StdinRoute::Pipe(_) => {
+                    if let Some(mut child) = session.child.take() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                }
+                StdinRoute::Daemon(daemon, proc_handle) => {
+                    daemon.proc_kill(*proc_handle)?;
+                }
+            }
         }
         Ok(())
     }
 
-    /// Kill and reap every live child. Called on app exit — std's Child does not
-    /// kill on drop, so skipping this orphans `codex app-server` processes.
+    /// Let go of a daemon-backed session without stopping it. This is what
+    /// closing a pane does in persistent mode — the process keeps running in
+    /// the daemon, and a reopened window reattaches to it.
+    fn detach(&self, id: u32) -> Result<()> {
+        let session = self.sessions.lock().unwrap().remove(&id);
+        if let Some(session) = session {
+            session.pending.fail_all("codex session detached");
+            if let StdinRoute::Daemon(daemon, proc_handle) = &session.stdin {
+                daemon.detach(*proc_handle);
+            }
+        }
+        Ok(())
+    }
+
+    /// Kill and reap every locally-owned child. Called on app exit — std's
+    /// Child does not kill on drop, so skipping this orphans `codex
+    /// app-server` processes. Daemon-backed sessions are deliberately
+    /// untouched: outliving this window is the whole point of them.
     fn kill_all(&self) {
         let sessions: Vec<Session> = self
             .sessions
@@ -532,8 +755,12 @@ impl Inner {
             .collect();
         for mut session in sessions {
             session.pending.fail_all("codex session killed");
-            let _ = session.child.kill();
-            let _ = session.child.wait();
+            if let StdinRoute::Pipe(_) = &session.stdin {
+                if let Some(mut child) = session.child.take() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
         }
     }
 }
@@ -541,6 +768,12 @@ impl Inner {
 impl CodexManager {
     pub fn kill(&self, id: u32) -> Result<()> {
         self.inner.kill(id)
+    }
+
+    /// Let go of a daemon-backed session without stopping it. A local session
+    /// has nothing to detach from — killing is the only stop it has.
+    pub fn detach(&self, id: u32) -> Result<()> {
+        self.inner.detach(id)
     }
 
     /// Called from `RunEvent::Exit` — std's Child does not kill on drop, so
@@ -580,18 +813,147 @@ impl CodexManager {
     }
 }
 
+/// One parsed stdout line, on its way to the frontend. Responses to our own
+/// requests are resolved in the parser and never become events.
+enum Chunk {
+    Event(CodexEvent),
+    Done,
+}
+
+/// One stdout line → the event the frontend should see, if any. Shared by the
+/// local pipe reader and the daemon frame reassembler: responses resolve their
+/// waiter and stop here, requests are tracked so `codex_respond` can validate
+/// them, notifications ride on.
+fn route_line(
+    pending: &Pending,
+    open: &Mutex<HashSet<i64>>,
+    line: &str,
+) -> Option<CodexEvent> {
+    match classify(line) {
+        Frame::Response { id, result } => {
+            pending.resolve(id, Ok(result));
+            None
+        }
+        Frame::Failure { id, error } => {
+            pending.resolve(id, Err(error));
+            None
+        }
+        Frame::Request(req) => {
+            open.lock().unwrap().insert(req.id);
+            Some(CodexEvent::Request(ServerRequest {
+                id: req.id,
+                method: req.method,
+                params: req.params,
+            }))
+        }
+        Frame::Notification { method, params } => {
+            Some(CodexEvent::Notification(Notify { method, params }))
+        }
+        Frame::Other => None,
+    }
+}
+
+/// Reassembles newline-delimited lines out of arbitrary byte chunks. The
+/// daemon delivers raw bytes (base64 in its frames) and a line can straddle
+/// two frames, so the tail is held until its newline arrives.
+#[derive(Default)]
+pub(crate) struct LineSplitter {
+    tail: Vec<u8>,
+}
+
+impl LineSplitter {
+    pub(crate) fn push(&mut self, bytes: &[u8]) -> Vec<String> {
+        self.tail.extend_from_slice(bytes);
+        let mut lines = Vec::new();
+        while let Some(pos) = self.tail.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = self.tail.drain(..=pos).collect();
+            lines.push(String::from_utf8_lossy(&line[..line.len() - 1]).into_owned());
+        }
+        lines
+    }
+}
+
+/// The `ProcSink` for a daemon-backed codex session: decodes each frame's
+/// bytes, reassembles stdout into JSON-RPC lines through the same parser the
+/// pipe path uses, and turns the terminal frame into the forwarder's Done —
+/// with the exit code stashed where the reap closure reads it.
+fn frame_sink(
+    pending: Arc<Pending>,
+    open: Arc<Mutex<HashSet<i64>>>,
+    drain: Arc<Drain>,
+    tx: Sender<Chunk>,
+) -> ProcSink {
+    use base64::Engine;
+    let exit_code: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
+    let out = Mutex::new(LineSplitter::default());
+    let err = Mutex::new(LineSplitter::default());
+    Arc::new(move |frame: ProcFrame| {
+        drain.frame();
+        if let Some(code) = frame.exit.as_ref().and_then(|e| e.code) {
+            *exit_code.lock().unwrap() = Some(code);
+        }
+        let Some(data) = &frame.data else {
+            // The terminal frame (or a frame with neither data nor exit) ends
+            // the stream either way.
+            if frame.exit.is_some() {
+                pending.fail_all("codex app-server exited");
+                drain.dead();
+                let _ = tx.send(Chunk::Done);
+                return false;
+            }
+            return true;
+        };
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data) else {
+            return true;
+        };
+        match frame.stream {
+            ProcIo::Out => {
+                for line in out.lock().unwrap().push(&bytes) {
+                    if let Some(event) = route_line(&pending, &open, &line) {
+                        if tx.send(Chunk::Event(event)).is_err() {
+                            return false;
+                        }
+                    }
+                }
+            }
+            ProcIo::Err => {
+                for line in err.lock().unwrap().push(&bytes) {
+                    if tx.send(Chunk::Event(CodexEvent::Stderr(line))).is_err() {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    })
+}
+
 fn write_line(handle: &Handle, line: &str) -> Result<()> {
-    let mut stdin = handle.stdin.lock().unwrap();
-    stdin
-        .write_all(line.as_bytes())
-        .and_then(|_| stdin.write_all(b"\n"))
-        .and_then(|_| stdin.flush())?;
+    let mut bytes = line.as_bytes().to_vec();
+    bytes.push(b'\n');
+    match &handle.stdin {
+        StdinRoute::Pipe(stdin) => {
+            let mut stdin = stdin.lock().unwrap();
+            stdin
+                .write_all(&bytes)
+                .and_then(|_| stdin.flush())
+                .map_err(|e| crate::err!("{e}"))?;
+        }
+        StdinRoute::Daemon(daemon, proc_handle) => {
+            daemon.proc_write(*proc_handle, &bytes)?;
+        }
+    }
     Ok(())
 }
 
 /// One JSON-RPC round trip, retrying -32001 (backpressure) with jittered
 /// backoff under a fresh request id each attempt.
 fn request(handle: &Handle, method: &str, params: Value) -> Result<Value> {
+    // A reattached session's replay must finish before anything can send, or
+    // an old reply with a recycled id would answer this request.
+    if let Some(drain) = &handle.drain {
+        drain.wait();
+    }
     let mut last: Option<RpcError> = None;
     for attempt in 0..MAX_ATTEMPTS {
         let id = handle.next_request_id.fetch_add(1, Ordering::SeqCst);
@@ -667,23 +1029,31 @@ async fn blocking_request(handle: Handle, method: &'static str, params: Value) -
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn codex_spawn(
     manager: tauri::State<'_, CodexManager>,
+    daemon: tauri::State<'_, crate::daemon::Daemon>,
     cwd: String,
     command: Option<String>,
     extra_args: Option<Vec<String>>,
     env: Option<HashMap<String, String>>,
+    persistent: Option<bool>,
+    session_id: Option<String>,
     on_event: Channel<CodexEvent>,
 ) -> Result<SpawnResult> {
     // Blocks on the initialize round trip and a `codex --version` subprocess,
     // so keep it off the async runtime's worker threads.
     let inner = manager.shared();
+    let daemon = Arc::new(daemon.inner().clone());
     tauri::async_runtime::spawn_blocking(move || {
         inner.spawn(
             cwd,
             command,
             extra_args.unwrap_or_default(),
             env.unwrap_or_default(),
+            persistent.unwrap_or(false),
+            session_id,
+            Some(daemon),
             on_event,
         )
     })
@@ -694,6 +1064,13 @@ pub async fn codex_spawn(
 #[tauri::command]
 pub fn codex_kill(manager: tauri::State<'_, CodexManager>, id: u32) -> Result<()> {
     manager.kill(id)
+}
+
+/// Let go of a persistent codex session without stopping it. Closing a pane is
+/// not the user asking the agent to stop.
+#[tauri::command]
+pub fn codex_detach(manager: tauri::State<'_, CodexManager>, id: u32) -> Result<()> {
+    manager.detach(id)
 }
 
 /// Escape hatch for the long tail of app-server methods (`model/list`,
@@ -988,5 +1365,58 @@ mod tests {
     #[test]
     fn tested_version_matches_the_probed_binary() {
         assert_eq!(TESTED_VERSION, "0.147.0");
+    }
+
+    #[test]
+    fn splitter_reassembles_lines_across_chunks() {
+        let mut splitter = LineSplitter::default();
+        assert!(splitter.push(b"{\"id\":").is_empty());
+        let lines = splitter.push(b"1}\n{\"a\":2}\n");
+        assert_eq!(lines, vec![r#"{"id":1}"#, r#"{"a":2}"#]);
+        // A tail without its newline waits for the next chunk.
+        assert!(splitter.push(b"{\"par").is_empty());
+        let lines = splitter.push(b"tial\":3}\n");
+        assert_eq!(lines, vec![r#"{"partial":3}"#]);
+        assert!(splitter.tail.is_empty());
+    }
+
+    #[test]
+    fn route_line_resolves_waiters_and_forwards_the_rest() {
+        let pending = Pending::default();
+        let open = Mutex::new(HashSet::new());
+        let rx = pending.register(1);
+        assert!(route_line(&pending, &open, INIT_RESPONSE).is_none());
+        assert_eq!(rx.recv().unwrap().unwrap()["platformOs"], "macos");
+        match route_line(&pending, &open, NOTIFICATION) {
+            Some(CodexEvent::Notification(n)) => assert_eq!(n.method, "item/agentMessage/delta"),
+            _ => panic!("expected notification"),
+        }
+        match route_line(&pending, &open, SERVER_REQUEST) {
+            Some(CodexEvent::Request(req)) => {
+                assert_eq!(req.id, 7);
+                assert!(open.lock().unwrap().contains(&7));
+            }
+            _ => panic!("expected request"),
+        }
+        assert!(route_line(&pending, &open, "ERROR chatter").is_none());
+    }
+
+    #[test]
+    fn drain_counts_frames_down_and_releases_at_zero() {
+        let drain = Arc::new(Drain::new(2));
+        let waiter = Arc::clone(&drain);
+        let handle = std::thread::spawn(move || waiter.wait());
+        drain.frame();
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(!handle.is_finished(), "released before the replay drained");
+        drain.frame();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn a_dead_child_ends_the_drain_wait() {
+        let drain = Drain::new(5);
+        drain.dead();
+        drain.wait();
     }
 }

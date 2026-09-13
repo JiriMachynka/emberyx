@@ -8,6 +8,7 @@
  * explicit act (stop button, project teardown) or the child exiting.
  */
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { loadSettings } from "@/lib/settings";
 
 type PtyEvent =
   | { type: "output"; data: string }
@@ -117,13 +118,26 @@ export async function spawnLog(opts: SpawnLogOptions): Promise<void> {
   };
 
   try {
-    const id = await invoke<number>("pty_spawn", {
-      cwd: opts.cwd,
-      command: opts.command ?? null,
-      cols,
-      rows,
-      onEvent: channel,
-    });
+    // Persistent mode hands the process to the daemon under the session id,
+    // so a shell or dev server outlives the window: a reopened view reattaches
+    // and replays instead of starting a second one. Write, resize and kill
+    // keep their normal commands — the Rust side routes daemon handles there.
+    const id = loadSettings().persistentAgents
+      ? await invoke<number>("pty_spawn_persistent", {
+          sessionId: opts.sessionId,
+          cwd: opts.cwd,
+          command: opts.command ?? null,
+          cols,
+          rows,
+          onEvent: channel,
+        })
+      : await invoke<number>("pty_spawn", {
+          cwd: opts.cwd,
+          command: opts.command ?? null,
+          cols,
+          rows,
+          onEvent: channel,
+        });
     if (sessions.get(opts.sessionId) !== entry) {
       // Strict Mode can unmount and remount a pane while spawn is still in
       // flight. The stale PTY must not survive after its entry is replaced.

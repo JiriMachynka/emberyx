@@ -181,16 +181,16 @@ pub enum PtyEvent {
     Exit(Option<i32>),
 }
 
-struct PtySession {
-    master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+pub(crate) struct PtySession {
+    pub(crate) master: Box<dyn MasterPty + Send>,
+    pub(crate) writer: Box<dyn Write + Send>,
     /// The shell we spawned. Its descendants are reached through the
     /// terminal's foreground process group instead.
-    shell_pid: Option<u32>,
+    pub(crate) shell_pid: Option<u32>,
 }
 
 /// Grace period between asking a job to stop and killing it outright.
-const KILL_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
+pub(crate) const KILL_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// Signal everything running under a PTY: the terminal's foreground process
 /// group — the running job and whatever it spawned, e.g. `bun run dev` and its
@@ -199,13 +199,96 @@ const KILL_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
 /// Dropping the master is not enough. The reader thread holds a cloned master
 /// fd, so the PTY never hangs up, no SIGHUP is delivered, and a dev server
 /// keeps running (and holding its port) after its tab is gone.
-fn signal_session(session: &PtySession, sig: i32) {
+pub(crate) fn signal_session(session: &PtySession, sig: i32) {
     if let Some(pgid) = session.master.process_group_leader() {
         unsafe { libc::killpg(pgid, sig) };
     }
     if let Some(pid) = session.shell_pid {
         unsafe { libc::kill(pid as libc::pid_t, sig) };
     }
+}
+
+/// Ask a session to stop, then kill it outright after the grace period. The
+/// one stop sequence, shared by the window's PTY manager and the daemon's
+/// proc table so a persistent terminal dies exactly like a window-scoped one.
+pub(crate) fn stop_session(session: PtySession) {
+    stop_session_ids(&session);
+}
+
+/// The same graceful stop for a session that must stay owned by its stream:
+/// TERM now, KILL after the grace period, signalling through ids captured up
+/// front because the thread cannot borrow the session.
+pub(crate) fn stop_session_ids(session: &PtySession) {
+    signal_session(session, libc::SIGTERM);
+    let pgid = session.master.process_group_leader();
+    let shell_pid = session.shell_pid;
+    std::thread::spawn(move || {
+        std::thread::sleep(KILL_GRACE);
+        if let Some(pgid) = pgid {
+            unsafe { libc::killpg(pgid as libc::pid_t, libc::SIGKILL) };
+        }
+        if let Some(pid) = shell_pid {
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        }
+    });
+}
+
+/// What opening a PTY yields: the session to write to / resize / signal, the
+/// master's output for a reader thread, and the child to reap on EOF.
+pub(crate) struct PtySpawned {
+    pub(crate) session: PtySession,
+    pub(crate) reader: Box<dyn Read + Send>,
+    pub(crate) child: Box<dyn portable_pty::Child + Send + Sync>,
+}
+
+/// Open a PTY and spawn `argv` in it, executed directly — never through a
+/// shell. The caller decides the shell and its flags; this decides only the
+/// terminal itself.
+pub(crate) fn open_pty(
+    cwd: &str,
+    argv: &[String],
+    env: &HashMap<String, String>,
+    cols: u16,
+    rows: u16,
+) -> Result<PtySpawned> {
+    let program = argv.first().ok_or("empty argv")?;
+    let pty_system = NativePtySystem::default();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut cmd = CommandBuilder::new(program);
+    for arg in &argv[1..] {
+        cmd.arg(arg);
+    }
+    for (k, v) in env {
+        if !k.is_empty() {
+            cmd.env(k, v);
+        }
+    }
+    cmd.cwd(cwd);
+    cmd.env("TERM", "xterm-256color");
+
+    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    drop(pair.slave);
+    let shell_pid = child.process_id();
+    let reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+
+    Ok(PtySpawned {
+        session: PtySession {
+            master: pair.master,
+            writer,
+            shell_pid,
+        },
+        reader,
+        child,
+    })
 }
 
 pub struct PtyManager {
@@ -242,75 +325,25 @@ impl PtyManager {
         rows: u16,
         on_event: Channel<PtyEvent>,
     ) -> Result<u32> {
-        let pty_system = NativePtySystem::default();
-        let pair = pty_system
-            .openpty(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| e.to_string())?;
-
-        let shell = Self::user_shell();
-        let mut cmd = CommandBuilder::new(&shell);
-        // A terminal the user will type in is a login shell, so their rc runs
-        // and they get their own prompt, aliases and functions — the whole
-        // point of an integrated terminal.
-        //
-        // Sessions that auto-run a command take a fast path instead: once the
-        // resolved shell env is captured we skip the rc (`-f` for zsh,
-        // `--norc` for bash), because those startup files (p10k / oh-my-zsh /
-        // nvm) cost ~1.4s that would only delay the command. Unknown shells,
-        // or spawns before the capture lands, fall back to the login shell so
-        // PATH / nvm / bun still resolve.
-        let norc = if shell.ends_with("zsh") {
-            Some("-f")
-        } else if shell.ends_with("bash") {
-            Some("--norc")
-        } else {
-            None
-        };
-        match (command.is_some().then(shell_env_now).flatten(), norc) {
-            (Some(env), Some(flag)) => {
-                cmd.arg(flag);
-                for (k, v) in &env {
-                    cmd.env(k, v);
-                }
-            }
-            _ => {
-                cmd.arg("-l");
-            }
-        }
-        cmd.cwd(&cwd);
-        cmd.env("TERM", "xterm-256color");
-
-        let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-        drop(pair.slave);
-        let shell_pid = child.process_id();
-
-        let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-        let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+        let (argv, env) = shell_launch(command.as_deref());
+        let PtySpawned {
+            mut session,
+            mut reader,
+            mut child,
+        } = open_pty(&cwd, &argv, &env, cols, rows)?;
 
         // Auto-run the agent command.
         if let Some(cmd_str) = command {
             let line = format!("{}\n", cmd_str);
-            let _ = writer.write_all(line.as_bytes());
-            let _ = writer.flush();
+            let _ = session.writer.write_all(line.as_bytes());
+            let _ = session.writer.flush();
         }
 
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
 
         // Register before the reader thread starts so a fast-exiting process
         // can't be removed from the map before it was ever inserted.
-        self.sessions.lock().unwrap().insert(
-            id,
-            PtySession {
-                master: pair.master,
-                writer,
-                shell_pid,
-            },
-        );
+        self.sessions.lock().unwrap().insert(id, session);
 
         // Output pipeline: a reader thread pulls raw bytes off the PTY and a
         // forwarder thread coalesces everything already queued into a single
@@ -415,11 +448,7 @@ impl PtyManager {
         let Some(session) = self.sessions.lock().unwrap().remove(&id) else {
             return Ok(());
         };
-        signal_session(&session, libc::SIGTERM);
-        std::thread::spawn(move || {
-            std::thread::sleep(KILL_GRACE);
-            signal_session(&session, libc::SIGKILL);
-        });
+        stop_session(session);
         Ok(())
     }
 
@@ -443,6 +472,38 @@ impl PtyManager {
     }
 }
 
+/// The argv and env a PTY session runs, shared by the window-scoped spawn and
+/// the persistent one: a login shell for interactive use — their rc runs and
+/// they get their own prompt, aliases and functions — and an rc-skipping fast
+/// path with the captured env for one that auto-runs a command, because those
+/// startup files (p10k / oh-my-zsh / nvm) cost ~1.4s that would only delay it.
+/// Unknown shells, or spawns before the capture lands, fall back to the login
+/// shell so PATH / nvm / bun still resolve.
+pub(crate) fn shell_launch(command: Option<&str>) -> (Vec<String>, HashMap<String, String>) {
+    let shell = PtyManager::user_shell();
+    let norc = if shell.ends_with("zsh") {
+        Some("-f")
+    } else if shell.ends_with("bash") {
+        Some("--norc")
+    } else {
+        None
+    };
+    let mut argv = vec![shell];
+    let mut env: HashMap<String, String> = HashMap::new();
+    match (command.is_some().then(shell_env_now).flatten(), norc) {
+        (Some(captured), Some(flag)) => {
+            argv.push(flag.to_string());
+            for (k, v) in captured {
+                env.insert(k, v);
+            }
+        }
+        _ => {
+            argv.push("-l".to_string());
+        }
+    }
+    (argv, env)
+}
+
 #[tauri::command]
 pub fn pty_spawn(
     manager: tauri::State<'_, PtyManager>,
@@ -456,22 +517,84 @@ pub fn pty_spawn(
 }
 
 #[tauri::command]
-pub fn pty_write(manager: tauri::State<'_, PtyManager>, id: u32, data: String) -> Result<()> {
+pub async fn pty_spawn_persistent(
+    daemon: tauri::State<'_, crate::daemon::Daemon>,
+    session_id: String,
+    cwd: String,
+    command: Option<String>,
+    cols: u16,
+    rows: u16,
+    on_event: Channel<PtyEvent>,
+) -> Result<u32> {
+    let daemon = daemon.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let daemon = Arc::new(daemon);
+        let (argv, env) = shell_launch(command.as_deref());
+        let sink: crate::daemon_protocol::ProcSink = Arc::new(move |frame| {
+            // The daemon's data frames are already base64 — the same encoding
+            // PtyEvent::Output carries — so they pass through untouched.
+            if let Some(data) = &frame.data {
+                return on_event.send(PtyEvent::Output(data.clone())).is_ok();
+            }
+            if let Some(exit) = &frame.exit {
+                return on_event.send(PtyEvent::Exit(exit.code)).is_ok();
+            }
+            true
+        });
+        let spec = crate::daemon_protocol::ProcSpec {
+            proc_id: session_id,
+            argv,
+            cwd,
+            env,
+            pty: true,
+            cols,
+            rows,
+            // The env was captured in this window, if the fast path wanted it.
+            shell_env: false,
+        };
+        let (handle, _outcome) = daemon.proc_spawn(spec, None, sink)?;
+        Ok(handle)
+    })
+    .await
+    .map_err(|e| crate::err!("pty_spawn_persistent join failed: {e}"))?
+}
+
+#[tauri::command]
+pub fn pty_write(
+    manager: tauri::State<'_, PtyManager>,
+    daemon: tauri::State<'_, crate::daemon::Daemon>,
+    id: u32,
+    data: String,
+) -> Result<()> {
+    if daemon.agent_for(id).is_some() {
+        return daemon.proc_write(id, data.as_bytes());
+    }
     manager.write(id, &data)
 }
 
 #[tauri::command]
 pub fn pty_resize(
     manager: tauri::State<'_, PtyManager>,
+    daemon: tauri::State<'_, crate::daemon::Daemon>,
     id: u32,
     cols: u16,
     rows: u16,
 ) -> Result<()> {
+    if daemon.agent_for(id).is_some() {
+        return daemon.proc_resize(id, cols, rows);
+    }
     manager.resize(id, cols, rows)
 }
 
 #[tauri::command]
-pub fn pty_kill(manager: tauri::State<'_, PtyManager>, id: u32) -> Result<()> {
+pub fn pty_kill(
+    manager: tauri::State<'_, PtyManager>,
+    daemon: tauri::State<'_, crate::daemon::Daemon>,
+    id: u32,
+) -> Result<()> {
+    if daemon.agent_for(id).is_some() {
+        return daemon.proc_kill(id);
+    }
     manager.kill(id)
 }
 

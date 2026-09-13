@@ -73,7 +73,7 @@ pub struct AgentManager {
 /// launch race that capture, and unlike a terminal pane there is no usable
 /// fallback: with Finder's stub PATH the spawn fails with ENOENT and the chat is
 /// stuck disabled until the user opens a new one.
-const ENV_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+pub(crate) const ENV_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl Default for AgentManager {
     fn default() -> Self {

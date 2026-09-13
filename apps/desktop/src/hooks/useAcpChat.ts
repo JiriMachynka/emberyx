@@ -40,6 +40,7 @@ import type { AcpSessionUpdate } from "@/lib/acp/protocol";
 import { accessLevelFrom, type PermissionMode } from "@/lib/settings";
 import {
   acpCancel,
+  acpDetach,
   acpKill,
   acpPrompt,
   acpRespond,
@@ -150,6 +151,8 @@ interface Options {
   /** Binary override + extra args from Settings → Providers. Identity-stable
    *  at the call site — it rides the spawn effect's deps. */
   launch?: { command: string | null; args: string[]; env?: Record<string, string> };
+  /** Run the agent in `emberyxd` so it survives closing the window. */
+  persistent?: boolean;
   /** The composer's access level, as the pair Claude's flags need. ACP has no
    *  spawn-time equivalent, so the level is applied per request in
    *  `handleRequest` instead — see `autoPermission`. */
@@ -177,14 +180,17 @@ export function useAcpChat({
   enabled,
   onTitled,
   visible = true,
+  persistent = false,
 }: Options) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
   const [ready, setReady] = useState(false);
   // Stay asleep until the user types or sends, so switching onto a fresh ACP
-  // chat does not wait on spawn to paint the empty screen.
-  const [awake, setAwake] = useState(false);
+  // chat does not wait on spawn to paint the empty screen — unless the agent
+  // is persistent, in which case it may already be running in the daemon and
+  // the pane attaches right away to show it.
+  const [awake, setAwake] = useState(persistent);
   const wake = useCallback(() => setAwake(true), []);
   const pendingSendRef = useRef<{ text: string; images?: ChatImage[] } | null>(
     null
@@ -530,6 +536,24 @@ export function useAcpChat({
     channelRef.current = channel;
     let stderr = "";
 
+    // A reattached daemon session rebuilds its transcript from the replayed
+    // notifications, which carry the session id in their params — the
+    // fallback for when `resume` doesn't already name it.
+    const captureSessionId = (params: unknown) => {
+      if (sessionRef.current !== null) return;
+      if (
+        typeof params === "object" &&
+        params !== null &&
+        "sessionId" in params &&
+        typeof (params as { sessionId: unknown }).sessionId === "string"
+      ) {
+        const id = (params as { sessionId: string }).sessionId;
+        sessionRef.current = id;
+        issuedSessionRef.current = id;
+        setLiveThreadId(id);
+      }
+    };
+
     channel.onmessage = (ev) => {
       // StrictMode's double-mount kills the first process; its exit must not
       // flip the live session to "exited".
@@ -544,6 +568,7 @@ export function useAcpChat({
       }
       switch (ev.type) {
         case "notification": {
+          captureSessionId(ev.data.params);
           applyNotification(ev.data.method, ev.data.params);
           const stop = grokTurnStop(ev.data.method, ev.data.params);
           if (stop) commitTurn(stop);
@@ -553,6 +578,7 @@ export function useAcpChat({
         case "notifications": {
           let stop: string | null = null;
           for (const n of ev.data) {
+            captureSessionId(n.params);
             applyNotification(n.method, n.params);
             stop = grokTurnStop(n.method, n.params) ?? stop;
           }
@@ -602,6 +628,14 @@ export function useAcpChat({
       }
     };
 
+    // In persistent mode the daemon's replay is the only source for the
+    // rendered transcript (same rule as the Claude transport): start empty so
+    // the replay rebuilds it exactly once, whatever this pane showed before.
+    if (persistent) {
+      committedRef.current = [];
+      turnRef.current = emptyTurn();
+    }
+
     void (async () => {
       try {
         const spawned = await acpSpawn(
@@ -612,13 +646,22 @@ export function useAcpChat({
             args: launch?.args ?? [],
             env: launch?.env ?? {},
           },
-          channel
+          channel,
+          { persistent, sessionId: emberyxSessionId }
         );
         if (disposed) {
-          void acpKill(spawned.id);
+          void (persistent ? acpDetach(spawned.id) : acpKill(spawned.id));
           return;
         }
         processRef.current = spawned.id;
+        if (spawned.reattached) {
+          // The process was initialized by the window that started it and
+          // still holds its ACP session; the replay rebuilt the transcript
+          // and the session id arrives in the replayed notifications.
+          publish();
+          setReady(true);
+          return;
+        }
         // Resuming is only offered by agents that report `loadSession`, and only
         // for an id *this provider* issued — a load is attempted only when a
         // previous session in this pane produced the id, so a foreign id (say a
@@ -669,7 +712,11 @@ export function useAcpChat({
       const id = processRef.current;
       processRef.current = null;
       sessionRef.current = null;
-      if (id !== null) void acpKill(id);
+      if (id !== null) {
+        // Persistent agents are detached, never killed: the pane closing is
+        // not the user asking the agent to stop.
+        void (persistent ? acpDetach(id) : acpKill(id));
+      }
     };
   }, [
     enabled,
@@ -678,6 +725,7 @@ export function useAcpChat({
     cwd,
     resume,
     launch,
+    persistent,
     restartNonce,
     applyNotification,
     handleRequest,

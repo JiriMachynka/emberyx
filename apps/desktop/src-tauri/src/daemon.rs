@@ -20,7 +20,8 @@ use serde_json::Value;
 
 use crate::agent::{AgentEvent, AgentSink};
 use crate::daemon_protocol::{
-    default_socket, AgentFrame, AgentSpec, Health, Request, Response, SpawnOutcome,
+    default_socket, AgentFrame, AgentSpec, Health, ProcFrame, ProcOutcome, ProcSink, ProcSpec,
+    Request, Response, SpawnOutcome, PROTOCOL_PROCS,
 };
 use crate::error::Result;
 
@@ -237,6 +238,105 @@ impl Daemon {
             .cloned()
     }
 
+    /// Generic child processes — Codex's app-server, ACP agents, PTY shells —
+    /// go through the same handle space as agents: the frontend addresses both
+    /// kinds with one integer, and only these methods know which wire op a
+    /// handle means.
+    /// True when the running daemon can own generic child processes. A daemon
+    /// from before the proc protocol reports level 0, which reads as older
+    /// than everything — including one that predates the field entirely.
+    fn proc_gate(health: &Health) -> Result<()> {
+        if health.protocol >= PROTOCOL_PROCS {
+            return Ok(());
+        }
+        Err(crate::err!(
+            "persistent mode needs a newer emberyxd — the running daemon predates it. Restart the daemon to upgrade it."
+        ))
+    }
+
+    /// Start a generic child in the daemon (or reattach to the running one),
+    /// stream its frames into `sink`, and return the frontend handle. Fails
+    /// in the open against an old daemon — never a quiet in-process fallback.
+    pub fn proc_spawn(
+        &self,
+        spec: ProcSpec,
+        after_frame_id: Option<u64>,
+        sink: ProcSink,
+    ) -> Result<(u32, ProcOutcome)> {
+        Self::proc_gate(&Self::health()?)?;
+        Self::ensure()?;
+        let proc_id = spec.proc_id.clone();
+        let outcome: ProcOutcome =
+            serde_json::from_value(Self::request(&Request::ProcSpawn { spec })?)
+                .map_err(|e| e.to_string())?;
+        Self::attach_proc(&proc_id, after_frame_id, sink)?;
+        let handle = self.next_handle.fetch_add(1, Ordering::SeqCst);
+        self.handles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(handle, proc_id);
+        Ok((handle, outcome))
+    }
+
+    /// Open the streaming connection for a proc and forward frames into `sink`
+    /// on its own thread. Same lifetime rules as `attach`.
+    fn attach_proc(proc_id: &str, after_frame_id: Option<u64>, sink: ProcSink) -> Result<()> {
+        let stream = Self::connect().ok_or("emberyxd is not running")?;
+        let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
+        let reader = BufReader::new(stream);
+        let request = Request::ProcAttach {
+            proc_id: proc_id.to_string(),
+            after_frame_id,
+        };
+        serde_json::to_writer(&mut writer, &request).map_err(|e| e.to_string())?;
+        writer.write_all(b"\n").map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+        std::thread::spawn(move || {
+            for line in reader.lines().map_while(std::io::Result::ok) {
+                let Ok(frame) = serde_json::from_str::<ProcFrame>(&line) else {
+                    continue;
+                };
+                if !sink(frame) {
+                    return;
+                }
+            }
+        });
+        Ok(())
+    }
+
+    /// Write raw bytes to a proc's stdin. Encoded here because the wire is
+    /// newline-delimited JSON and the bytes are neither lines nor UTF-8.
+    pub fn proc_write(&self, handle: u32, data: &[u8]) -> Result<()> {
+        use base64::Engine;
+        let proc_id = self.agent_for(handle).ok_or("no such daemon agent")?;
+        let data = base64::engine::general_purpose::STANDARD.encode(data);
+        Self::request(&Request::ProcWrite { proc_id, data })?;
+        Ok(())
+    }
+
+    pub fn proc_resize(&self, handle: u32, cols: u16, rows: u16) -> Result<()> {
+        let proc_id = self.agent_for(handle).ok_or("no such daemon agent")?;
+        Self::request(&Request::ProcResize {
+            proc_id,
+            cols,
+            rows,
+        })?;
+        Ok(())
+    }
+
+    /// Stop a proc for good. Same rules as `kill`: detaching happens on its
+    /// own when the pane unmounts, this is the explicit "kill it" path.
+    pub fn proc_kill(&self, handle: u32) -> Result<()> {
+        let proc_id = self
+            .handles
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&handle)
+            .ok_or("no such daemon agent")?;
+        Self::request(&Request::ProcKill { proc_id })?;
+        Ok(())
+    }
+
     pub fn send(&self, handle: u32, message: &str) -> Result<()> {
         let agent_id = self.agent_for(handle).ok_or("no such daemon agent")?;
         Self::request(&Request::AgentSend {
@@ -334,5 +434,30 @@ mod tests {
         // branch produces rather than driving it.
         let error = crate::err!("emberyxd is not installed at {}", "/nowhere/emberyxd");
         assert!(error.to_string().contains("/nowhere/emberyxd"));
+    }
+
+    #[test]
+    fn an_old_daemon_fails_the_proc_gate_in_the_open() {
+        let mut health = Health {
+            ok: true,
+            version: "0.2.30".into(),
+            protocol: 0,
+            pid: 1,
+            uptime_ms: 0,
+            agent_count: 1,
+            event_count: 0,
+            live_count: 0,
+            outdated: true,
+        };
+        assert!(Daemon::proc_gate(&health).is_err());
+        // A daemon that predates the protocol field reports 0 via serde
+        // default — same verdict, not a parse error.
+        let old_json: Health = serde_json::from_str(
+            r#"{"ok":true,"version":"0.2.30","pid":1,"uptimeMs":0,"agentCount":0,"eventCount":0}"#,
+        )
+        .unwrap();
+        assert!(Daemon::proc_gate(&old_json).is_err());
+        health.protocol = PROTOCOL_PROCS;
+        assert!(Daemon::proc_gate(&health).is_ok());
     }
 }

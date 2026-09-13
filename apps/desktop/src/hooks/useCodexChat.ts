@@ -34,6 +34,7 @@ import {
 } from "@/lib/codex/adapter";
 import { decodeThreadStart, isRecord } from "@/lib/codex/decode";
 import {
+  codexDetach,
   codexKill,
   codexRespond,
   codexSetThreadName,
@@ -84,6 +85,8 @@ interface Options {
   /** Binary override + extra args from Settings → Providers. Identity-stable
    *  at the call site — it rides the spawn effect's deps. */
   launch?: { command: string | null; args: string[]; env?: Record<string, string> };
+  /** Run the app-server in `emberyxd` so it survives closing the window. */
+  persistent?: boolean;
   /** Sandbox posture for the thread; "" derives it from `skipPermissions`.
    *  Thread-scoped, so changing it respawns. */
   codexSandbox?: string;
@@ -182,6 +185,7 @@ export function useCodexChat({
   onTitled,
   enabled = true,
   visible = true,
+  persistent = false,
 }: Options) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
@@ -189,8 +193,10 @@ export function useCodexChat({
   const [ready, setReady] = useState(false);
   // Whether this pane wants an app-server at all. Opening a thread used to
   // launch one on the frame that switches panes. Stay asleep until the user
-  // types or sends, same as a resumed thread.
-  const [awake, setAwake] = useState(false);
+  // types or sends, same as a resumed thread — unless the agent is persistent,
+  // in which case it may already be running in the daemon and the pane
+  // attaches right away to show it.
+  const [awake, setAwake] = useState(persistent);
   const wake = useCallback(() => setAwake(true), []);
   // Turns accepted before the process existed, delivered in order once it is.
   const pendingSendRef = useRef<{ text: string; images?: ChatImage[] }[]>([]);
@@ -447,17 +453,32 @@ export function useCodexChat({
       reportAccountIssue(emberyxSessionId, issue);
     };
 
+    // A reattached daemon session rebuilds its transcript from the replayed
+    // notifications, which carry the thread id in their params — the fallback
+    // for when `resume` doesn't already name it.
+    const captureThreadId = (params: unknown) => {
+      if (threadRef.current) return;
+      if (isRecord(params) && typeof params.threadId === "string") {
+        threadRef.current = params.threadId;
+        setLiveThreadId(params.threadId);
+      }
+    };
+
     channel.onmessage = (ev) => {
       // StrictMode's double-mount kills the first process; its exit must not
       // flip the live session to "exited".
       if (disposed) return;
       switch (ev.type) {
         case "notification":
+          captureThreadId(ev.data.params);
           applyNotification(ev.data.method, ev.data.params);
           schedulePublish();
           break;
         case "notifications":
-          for (const n of ev.data) applyNotification(n.method, n.params);
+          for (const n of ev.data) {
+            captureThreadId(n.params);
+            applyNotification(n.method, n.params);
+          }
           schedulePublish();
           break;
         case "request":
@@ -489,6 +510,13 @@ export function useCodexChat({
       }
     };
 
+    // In persistent mode the daemon's replay is the only source for the
+    // rendered transcript (same rule as the Claude transport): start empty so
+    // the replay rebuilds it exactly once, whatever this pane showed before.
+    if (persistent) {
+      stateRef.current = initialCodexState();
+    }
+
     void (async () => {
       try {
         const spawned = await codexSpawn(
@@ -498,14 +526,23 @@ export function useCodexChat({
             args: launch?.args ?? [],
             env: launch?.env ?? {},
           },
-          channel
+          channel,
+          { persistent, sessionId: emberyxSessionId }
         );
         if (disposed) {
-          void codexKill(spawned.id);
+          void (persistent ? codexDetach(spawned.id) : codexKill(spawned.id));
           return;
         }
         idRef.current = spawned.id;
         void registerAgent(emberyxSessionId, cwd, "codex", spawned.id);
+        if (spawned.reattached) {
+          // The process was initialized by the window that started it and
+          // still has its thread open; the replay rebuilt the transcript, so
+          // no open/resume round trip runs.
+          publish();
+          setReady(true);
+          return;
+        }
         // Prefer the live thread id so a respawn (model switch, restart) picks
         // the same thread back up instead of starting a fresh one.
         const threadId = threadRef.current ?? resume;
@@ -552,7 +589,9 @@ export function useCodexChat({
       disposed = true;
       setReady(false);
       if (idRef.current !== null) {
-        void codexKill(idRef.current);
+        // Persistent agents are detached, never killed: the pane closing is
+        // not the user asking the agent to stop.
+        void (persistent ? codexDetach(idRef.current) : codexKill(idRef.current));
         idRef.current = null;
       }
     };
@@ -568,6 +607,7 @@ export function useCodexChat({
     launch,
     skipPermissions,
     emberyxSessionId,
+    persistent,
     attempt,
     applyNotification,
     handleRequest,

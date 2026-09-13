@@ -36,18 +36,24 @@ export interface CodexSpawnResult {
   id: number;
   initialize: unknown;
   version: string | null;
+  /** True when the daemon already had this process running and replayed its
+   *  output: the replay is the transcript, and no thread open/resume runs. */
+  reattached: boolean;
 }
 
 export const codexSpawn = (
   cwd: string,
   launch: SpawnLaunch,
-  onEvent: Channel<CodexEvent>
+  onEvent: Channel<CodexEvent>,
+  opts?: { persistent?: boolean; sessionId?: string }
 ) =>
   invoke<CodexSpawnResult>("codex_spawn", {
     cwd,
     command: launch.command,
     extraArgs: launch.args,
     env: launch.env,
+    persistent: opts?.persistent ?? false,
+    sessionId: opts?.sessionId ?? null,
     onEvent,
   });
 
@@ -61,6 +67,10 @@ export const codexProbeLaunch = (): SpawnLaunch => {
 };
 
 export const codexKill = (id: number) => invoke("codex_kill", { id });
+
+/** Let go of a persistent session without stopping it — the process keeps
+ *  running in the daemon, and a reopened window reattaches to it. */
+export const codexDetach = (id: number) => invoke("codex_detach", { id });
 
 type Params = Record<string, unknown>;
 

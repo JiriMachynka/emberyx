@@ -16,6 +16,16 @@ pub const MAX_EVENTS: usize = 400;
 pub const MAX_FRAMES: usize = 20_000;
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Protocol capability level, separate from the release version: a daemon from
+/// before an addition reports the lower level, and the app gates new ops on it
+/// instead of comparing release strings (which two builds of the same version
+/// would make meaningless). 1 = agents only. 2 = generic child processes
+/// (Codex/ACP/PTY can be persistent). A daemon that predates the field reports
+/// 0 via serde default, which reads as "older than everything".
+pub const PROTOCOL_VERSION: u32 = 2;
+/// Lowest protocol level that can own generic child processes.
+pub const PROTOCOL_PROCS: u32 = 2;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DaemonAgent {
@@ -95,6 +105,86 @@ pub struct AgentFrame {
     pub timestamp: u64,
 }
 
+/// Everything the daemon needs to launch a generic child process — Codex's
+/// app-server, an ACP agent, a PTY shell. Executed directly, never through a
+/// shell, so a path with spaces stays one argument. The daemon knows nothing
+/// about what the bytes mean; parsing stays in the window.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcSpec {
+    /// Stable id — how a reconnecting client finds this process again.
+    pub proc_id: String,
+    pub argv: Vec<String>,
+    pub cwd: String,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    /// Run argv under a PTY (terminal sessions) instead of pipes (JSON-RPC
+    /// stdio transports). PTY size comes from cols/rows; resize is an op.
+    #[serde(default)]
+    pub pty: bool,
+    #[serde(default)]
+    pub cols: u16,
+    #[serde(default)]
+    pub rows: u16,
+    /// Apply the daemon's own login-shell env capture before `env`, so PATH
+    /// finds `codex`/`claude` in a daemon launched from a packaged app.
+    #[serde(default)]
+    pub shell_env: bool,
+}
+
+/// Which side of a pipe a data frame came from. A PTY has no stderr, so its
+/// frames are always `out`.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ProcIo {
+    #[default]
+    Out,
+    Err,
+}
+
+/// How a child ended. `code` is absent when a signal killed it — that absence
+/// is the honest answer, not a zero.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcExit {
+    pub code: Option<i32>,
+}
+
+/// One buffered frame of child output. `frameId` is monotonic per process; a
+/// frame with `exit` is the terminal one and the process handle is gone after
+/// it. Data is base64: the protocol is newline-delimited JSON, and PTY bytes
+/// are neither lines nor UTF-8.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcFrame {
+    pub frame_id: u64,
+    pub proc_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    #[serde(default)]
+    pub stream: ProcIo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<ProcExit>,
+    pub timestamp: u64,
+}
+
+/// The answer to a proc spawn: whether a live child was found and reattached
+/// rather than started.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcOutcome {
+    pub proc_id: String,
+    pub reattached: bool,
+    /// Frames already buffered for this process — what a replay would deliver.
+    pub buffered: u64,
+    /// True when the buffer dropped frames the client never saw.
+    pub truncated: bool,
+}
+
+/// Where a proc's output goes. Same contract as `AgentSink`, for the same
+/// reason: returning `false` is the only backpressure signal.
+pub type ProcSink = std::sync::Arc<dyn Fn(ProcFrame) -> bool + Send + Sync>;
+
 /// The answer to a spawn: whether a live agent was found and reattached rather
 /// than started. A client that reattached must replay instead of resuming from
 /// the provider's own transcript, or it renders the conversation twice.
@@ -117,6 +207,9 @@ pub struct SpawnOutcome {
 pub struct Health {
     pub ok: bool,
     pub version: String,
+    /// Protocol capability level. A daemon that predates this field reports 0.
+    #[serde(default)]
+    pub protocol: u32,
     pub pid: u32,
     pub uptime_ms: u64,
     /// Agents the daemon has metadata for, live or not.
@@ -204,6 +297,30 @@ pub enum Request {
         after_frame_id: Option<u64>,
     },
     AgentLive,
+    // Generic child processes — same runtime, same buffering, but the daemon
+    // owns bytes, not meaning. Codex/ACP/PTY persistent sessions ride these.
+    ProcSpawn {
+        spec: ProcSpec,
+    },
+    ProcWrite {
+        proc_id: String,
+        /// base64 of the bytes to write to the child's stdin.
+        data: String,
+    },
+    ProcResize {
+        proc_id: String,
+        cols: u16,
+        rows: u16,
+    },
+    ProcKill {
+        proc_id: String,
+    },
+    /// One-way frame stream, like `AgentAttach`.
+    ProcAttach {
+        proc_id: String,
+        after_frame_id: Option<u64>,
+    },
+    ProcLive,
     Stop,
 }
 
@@ -218,6 +335,12 @@ impl Request {
                 | Request::AgentKill { .. }
                 | Request::AgentAttach { .. }
                 | Request::AgentLive
+                | Request::ProcSpawn { .. }
+                | Request::ProcWrite { .. }
+                | Request::ProcResize { .. }
+                | Request::ProcKill { .. }
+                | Request::ProcAttach { .. }
+                | Request::ProcLive
         )
     }
 }
@@ -314,6 +437,7 @@ impl State {
                 let health = Health {
                     ok: true,
                     version: DAEMON_VERSION.into(),
+                    protocol: PROTOCOL_VERSION,
                     pid: std::process::id(),
                     uptime_ms: self.uptime(),
                     agent_count: self.agents.len(),
@@ -497,7 +621,13 @@ impl State {
             | Request::AgentSend { .. }
             | Request::AgentKill { .. }
             | Request::AgentAttach { .. }
-            | Request::AgentLive => (
+            | Request::AgentLive
+            | Request::ProcSpawn { .. }
+            | Request::ProcWrite { .. }
+            | Request::ProcResize { .. }
+            | Request::ProcKill { .. }
+            | Request::ProcAttach { .. }
+            | Request::ProcLive => (
                 Response::error("process op requires the daemon runtime"),
                 false,
             ),
@@ -693,6 +823,84 @@ mod tests {
             Request::Register { agent } => assert_eq!(agent.thread_id.as_deref(), Some("t1")),
             other => panic!("expected Register, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn proc_ops_speak_the_same_wire_contract() {
+        let spawn: Request = serde_json::from_str(
+            r#"{"op":"procSpawn","spec":{"procId":"p1","argv":["codex","app-server"],"cwd":"/repo","pty":false,"shellEnv":true}}"#,
+        )
+        .unwrap();
+        match spawn {
+            Request::ProcSpawn { spec } => {
+                assert_eq!(spec.proc_id, "p1");
+                assert_eq!(spec.argv, vec!["codex".to_string(), "app-server".to_string()]);
+                assert!(spec.shell_env);
+                assert!(!spec.pty);
+            }
+            other => panic!("expected ProcSpawn, got {other:?}"),
+        }
+
+        let write: Request =
+            serde_json::from_str(r#"{"op":"procWrite","procId":"p1","data":"aGk="}"#).unwrap();
+        match write {
+            Request::ProcWrite { proc_id, data } => {
+                assert_eq!(proc_id, "p1");
+                assert_eq!(data, "aGk=");
+            }
+            other => panic!("expected ProcWrite, got {other:?}"),
+        }
+
+        let resize: Request =
+            serde_json::from_str(r#"{"op":"procResize","procId":"p1","cols":80,"rows":24}"#)
+                .unwrap();
+        match resize {
+            Request::ProcResize { proc_id, cols, rows } => {
+                assert_eq!((proc_id.as_str(), cols, rows), ("p1", 80, 24));
+            }
+            other => panic!("expected ProcResize, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn proc_frames_round_trip_with_optional_fields() {
+        let data = ProcFrame {
+            frame_id: 1,
+            proc_id: "p1".into(),
+            data: Some("aGk=".into()),
+            stream: ProcIo::Out,
+            exit: None,
+            timestamp: 5,
+        };
+        let json = serde_json::to_value(&data).unwrap();
+        // Optional fields stay off the wire when absent, so an old client and a
+        // new one agree on every frame either produces.
+        assert!(json.get("exit").is_none());
+        assert_eq!(json["stream"], "out");
+        assert_eq!(serde_json::from_value::<ProcFrame>(json).unwrap(), data);
+
+        let exit = ProcFrame {
+            frame_id: 2,
+            proc_id: "p1".into(),
+            data: None,
+            stream: ProcIo::Out,
+            exit: Some(ProcExit { code: Some(0) }),
+            timestamp: 6,
+        };
+        let json = serde_json::to_value(&exit).unwrap();
+        assert!(json.get("data").is_none());
+        assert_eq!(json["exit"]["code"], 0);
+        assert_eq!(serde_json::from_value::<ProcFrame>(json).unwrap(), exit);
+    }
+
+    #[test]
+    fn a_health_reply_from_before_the_protocol_field_reads_as_oldest() {
+        // An old daemon's Health JSON has no `protocol` field; serde default
+        // must turn that into "older than everything", not a parse error.
+        let health: Health =
+            serde_json::from_str(r#"{"ok":true,"version":"0.2.34","pid":1,"uptimeMs":0,"agentCount":0,"eventCount":0}"#).unwrap();
+        assert_eq!(health.protocol, 0);
+        assert!(health.protocol < PROTOCOL_PROCS);
     }
 
     #[test]

@@ -192,10 +192,9 @@ restoring a registry turns a `Working`/`Blocked` agent into `Orphaned`, not
 is the single conversion point between the live transport vocabulary and the
 provider-neutral persisted one.
 
-Still open: only Claude runs in the daemon. Codex, ACP and PTY children are
-still window-scoped and killed on `RunEvent::Exit`, so persistent mode is a
-Claude-only promise — `lib.rs` deliberately leaves daemon-owned agents out of
-that list.
+`lib.rs` deliberately leaves daemon-owned children out of the `RunEvent::Exit`
+kill list — every manager's `kill_all` skips its daemon-backed sessions on its
+own, because outliving the window is the whole point of them.
 
 ### Checkpoints, commits, and forges
 
@@ -399,10 +398,24 @@ Each switch appends a `providerSwitch` timeline event to this thread.
    - **Persistent mode skips the on-disk transcript prefill.** The daemon replay
      and the CLI's own transcript carry the same turns; rendering both would
      duplicate the conversation. So resuming an *older* thread in persistent
-     mode starts visually empty and fills from the next turn on.
-   - **Codex is still in-process.** `codex app-server` is a long-lived JSON-RPC
-     peer with server→client requests to answer; proxying that through the
-     socket is its own migration.
+     mode starts visually empty and fills from the next turn on. Codex and ACP
+     follow the same rule their own way: on a reattach the hook resets its
+     state and the replayed frames rebuild the transcript, so no thread
+     open/resume round trip runs — the process still holds the thread.
+   - **Codex, ACP and PTY are persistent too, over a byte shuttle.** The daemon
+     owns *processes and bytes*, never meaning: `daemon_protocol.rs` speaks
+     generic `Proc*` ops (`ProcSpawn/Write/Resize/Kill/Attach`, base64 frames,
+     exit as a terminal frame) and `daemon_runtime.rs` keeps one proc table
+     beside the agent streams. The window keeps every parser — codex.rs and
+     acp.rs reassemble lines out of the frames and run the same `classify`
+     path; pty.rs passes frames straight through. A reattached session waits
+     for the replay to drain before its first request (`Drain`), or an old
+     reply with a recycled id would answer a new turn. Capability is gated on
+     `Health.protocol` (`PROTOCOL_PROCS`), never the release version, and an
+     old daemon fails the spawn in the open — never a quiet in-process
+     fallback. Persistent PTYs (shells, dev servers) ride the same ops via
+     `pty_spawn_persistent`; `pty_write/resize/kill` route daemon handles by
+     id, so ptyLog's call sites are unchanged.
    - **Packaging ships it as a sidecar.** `Daemon::ensure()` looks for
      `emberyxd` beside the app executable, which is exactly where Tauri puts an
      `externalBin` — it resolves `binaries/emberyxd-<triple>` and drops the

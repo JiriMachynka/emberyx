@@ -23,9 +23,42 @@ fn handle_runtime(runtime: &Runtime, request: Request) -> Response {
             Err(error) => Response::error(error),
         },
         Request::AgentLive => Response::ok(runtime.live()),
+        Request::ProcSpawn { spec } => match runtime.proc_spawn(spec) {
+            Ok(outcome) => Response::ok(outcome),
+            Err(error) => Response::error(error),
+        },
+        Request::ProcWrite { proc_id, data } => {
+            // The wire is JSON, so stdin bytes arrive base64 — the same
+            // encoding the output frames leave in.
+            match decode_data(&data)
+                .ok_or_else(|| "proc write data is not valid base64".to_string())
+                .and_then(|bytes| runtime.proc_write(&proc_id, &bytes))
+            {
+                Ok(()) => Response::ok(true),
+                Err(error) => Response::error(error),
+            }
+        }
+        Request::ProcResize {
+            proc_id,
+            cols,
+            rows,
+        } => match runtime.proc_resize(&proc_id, cols, rows) {
+            Ok(()) => Response::ok(true),
+            Err(error) => Response::error(error),
+        },
+        Request::ProcKill { proc_id } => match runtime.proc_kill(&proc_id) {
+            Ok(()) => Response::ok(true),
+            Err(error) => Response::error(error),
+        },
+        Request::ProcLive => Response::ok(runtime.proc_live()),
         // Attach never reaches here — it takes over the connection first.
         other => Response::error(format!("unsupported runtime op: {other:?}")),
     }
+}
+
+fn decode_data(data: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.decode(data).ok()
 }
 
 /// Put the runtime's live-agent count into a `Health` reply. Done on the
@@ -53,6 +86,28 @@ fn stream_frames(
     after_frame_id: Option<u64>,
 ) {
     let (backlog, rx) = runtime.attach(agent_id, after_frame_id);
+    for frame in backlog {
+        if serde_json::to_writer(&mut writer, &frame).is_err() || writer.write_all(b"\n").is_err() {
+            return;
+        }
+    }
+    let _ = writer.flush();
+    while let Ok(frame) = rx.recv() {
+        if serde_json::to_writer(&mut writer, &frame).is_err() || writer.write_all(b"\n").is_err() {
+            return;
+        }
+        let _ = writer.flush();
+    }
+}
+
+/// The same one-way stream for a generic child process.
+fn stream_proc_frames(
+    mut writer: UnixStream,
+    runtime: &Runtime,
+    proc_id: &str,
+    after_frame_id: Option<u64>,
+) {
+    let (backlog, rx) = runtime.proc_attach(proc_id, after_frame_id);
     for frame in backlog {
         if serde_json::to_writer(&mut writer, &frame).is_err() || writer.write_all(b"\n").is_err() {
             return;
@@ -103,12 +158,23 @@ fn serve(
             stream_frames(writer, runtime, &agent_id, after_frame_id);
             return false;
         }
+        if let Request::ProcAttach {
+            proc_id,
+            after_frame_id,
+        } = request
+        {
+            stream_proc_frames(writer, runtime, &proc_id, after_frame_id);
+            return false;
+        }
         // Health is the one op that needs both halves: the counts come from
         // metadata, but "how many agents are actually running" is only knowable
-        // from the runtime.
+        // from the runtime. Generic procs count too — they are real children.
         if matches!(request, Request::Health) {
             let (response, _) = state.lock().unwrap().handle(request);
-            let response = with_live_count(response, runtime.live().len());
+            let response = with_live_count(
+                response,
+                runtime.live().len() + runtime.proc_live().len(),
+            );
             if serde_json::to_writer(&mut writer, &response).is_err()
                 || writer.write_all(b"\n").is_err()
             {

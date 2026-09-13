@@ -44,6 +44,9 @@ export interface AcpSpawnResult {
     agentCapabilities?: Record<string, unknown>;
     agentInfo?: { name?: string; version?: string };
   };
+  /** True when the daemon already had this process running and replayed its
+   *  output: the replay is the transcript, and no session open/load runs. */
+  reattached: boolean;
 }
 
 /** Grok publishes its catalog under a vendor-namespaced `_meta` key rather than
@@ -81,7 +84,8 @@ export const acpSpawn = (
   provider: string,
   cwd: string,
   launch: SpawnLaunch,
-  onEvent: Channel<AcpEvent>
+  onEvent: Channel<AcpEvent>,
+  opts?: { persistent?: boolean; sessionId?: string }
 ): Promise<AcpSpawnResult> =>
   invoke<AcpSpawnResult>("acp_spawn", {
     provider,
@@ -89,10 +93,16 @@ export const acpSpawn = (
     command: launch.command,
     extraArgs: launch.args,
     env: launch.env,
+    persistent: opts?.persistent ?? false,
+    sessionId: opts?.sessionId ?? null,
     onEvent,
   });
 
 export const acpKill = (id: number): Promise<void> => invoke("acp_kill", { id });
+
+/** Let go of a persistent session without stopping it — the process keeps
+ *  running in the daemon, and a reopened window reattaches to it. */
+export const acpDetach = (id: number): Promise<void> => invoke("acp_detach", { id });
 
 /** The launch override a throwaway probe runs under. A probe that ignored it
  *  would spawn a different installation than the chat pane does — the model

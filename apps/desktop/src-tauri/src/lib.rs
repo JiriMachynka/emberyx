@@ -118,6 +118,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             pty::pty_spawn,
+            pty::pty_spawn_persistent,
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
@@ -133,6 +134,7 @@ pub fn run() {
             agent::title_thread,
             codex::codex_spawn,
             codex::codex_kill,
+            codex::codex_detach,
             codex::codex_request,
             codex::codex_respond,
             codex::codex_thread_start,
@@ -149,6 +151,7 @@ pub fn run() {
             claude_session::claude_session_rewind,
             acp::acp_spawn,
             acp::acp_kill,
+            acp::acp_detach,
             acp::acp_session_new,
             acp::acp_session_load,
             acp::acp_session_list,
@@ -297,8 +300,10 @@ pub fn run() {
 
     // Managed state isn't dropped on exit, so kill + reap spawned children here
     // or orphaned headless `claude` processes and PTY shells keep running.
-    // Daemon-owned agents are deliberately untouched: `emberyxd` holds those
-    // children, and outliving this window is the whole point of them.
+    // Daemon-owned children are deliberately untouched: `emberyxd` holds the
+    // agents it spawned *and* every persistent proc (Codex, ACP, PTY), and
+    // outliving this window is the whole point of them. Each manager's
+    // kill_all skips its daemon-backed sessions on its own.
     app.run(|app_handle, event| {
         if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
             if let Ok(path) = app_handle

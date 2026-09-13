@@ -36,16 +36,21 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::ipc::Channel;
 
-use crate::codex::{classify, Frame, Pending, RpcError, ServerRequest};
+use crate::codex::{
+    classify, Drain, Frame, LineSplitter, Pending, RpcError, ServerRequest, StdinRoute,
+};
+use crate::daemon::Daemon;
+use crate::daemon_protocol::{ProcFrame, ProcIo, ProcSink, ProcSpec};
 use crate::error::Result;
 
 /// The ACP revision this client negotiates.
@@ -123,8 +128,10 @@ struct OpenRequest {
 }
 
 struct Session {
-    child: Child,
-    stdin: Arc<Mutex<ChildStdin>>,
+    /// The child, when this window owns the process. A daemon-backed session
+    /// has none: the process lives in `emberyxd`, and kill routes there.
+    child: Option<Child>,
+    stdin: StdinRoute,
     next_request_id: Arc<AtomicI64>,
     pending: Arc<Pending>,
     /// Agent->client requests handed to the frontend but not yet answered.
@@ -139,11 +146,14 @@ struct Session {
 /// the sessions lock so a blocking round trip never holds it.
 #[derive(Clone)]
 struct Handle {
-    stdin: Arc<Mutex<ChildStdin>>,
+    stdin: StdinRoute,
     next_request_id: Arc<AtomicI64>,
     pending: Arc<Pending>,
     open_agent_requests: Arc<Mutex<HashMap<i64, OpenRequest>>>,
     on_event: Channel<AcpEvent>,
+    /// Set on a reattached daemon session; see `codex.rs` — the first send
+    /// waits for the previous window's replay to drain.
+    drain: Option<Arc<Drain>>,
 }
 
 #[derive(Default)]
@@ -162,6 +172,9 @@ pub struct SpawnResult {
     pub id: u32,
     /// The `initialize` result: protocolVersion, agentCapabilities, authMethods.
     pub initialize: Value,
+    /// True when the daemon already had this process running and replayed its
+    /// output: the replay is the transcript, and no initialize round trip runs.
+    pub reattached: bool,
 }
 
 impl Default for AcpManager {
@@ -182,11 +195,12 @@ impl AcpManager {
         let sessions = self.inner.sessions.lock().unwrap();
         let session = sessions.get(&id).ok_or("no such ACP session")?;
         Ok(Handle {
-            stdin: Arc::clone(&session.stdin),
+            stdin: session.stdin.clone(),
             next_request_id: Arc::clone(&session.next_request_id),
             pending: Arc::clone(&session.pending),
             open_agent_requests: Arc::clone(&session.open_agent_requests),
             on_event: session.on_event.clone(),
+            drain: None,
         })
     }
 
@@ -197,6 +211,12 @@ impl AcpManager {
 
     pub fn kill(&self, id: u32) -> Result<()> {
         self.inner.kill(id)
+    }
+
+    /// Let go of a daemon-backed session without stopping it. A local session
+    /// has nothing to detach from — killing is the only stop it has.
+    pub fn detach(&self, id: u32) -> Result<()> {
+        self.inner.detach(id)
     }
 
     /// Called from `RunEvent::Exit` — std's Child does not kill on drop, so
@@ -223,7 +243,9 @@ pub fn acp_command(provider: &str) -> Result<(&'static str, &'static [&'static s
 impl Inner {
     /// Spawn the provider's ACP command, complete `initialize`, and stream.
     /// `command` overrides the binary (Settings → Providers); the per-provider
-    /// subcommand stays.
+    /// subcommand stays. In persistent mode the process lives in the daemon
+    /// and this window only shuttles bytes — see `spawn_daemonized`.
+    #[allow(clippy::too_many_arguments)]
     fn spawn(
         self: &Arc<Self>,
         provider: String,
@@ -231,8 +253,18 @@ impl Inner {
         command: Option<String>,
         extra_args: Vec<String>,
         env: HashMap<String, String>,
+        persistent: bool,
+        session_id: Option<String>,
+        daemon: Option<Arc<Daemon>>,
         on_event: Channel<AcpEvent>,
     ) -> Result<SpawnResult> {
+        if persistent {
+            let daemon = daemon.ok_or("persistent ACP needs the daemon")?;
+            let proc_id = session_id.ok_or("persistent ACP needs a session id")?;
+            return self.spawn_daemonized(
+                provider, proc_id, cwd, command, extra_args, env, daemon, on_event,
+            );
+        }
         let (binary, args) = acp_command(&provider)?;
         let mut cmd = Command::new(command.as_deref().unwrap_or(binary));
         cmd.args(args)
@@ -258,19 +290,20 @@ impl Inner {
 
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let session = Session {
-            child,
-            stdin: Arc::new(Mutex::new(stdin)),
+            child: Some(child),
+            stdin: StdinRoute::Pipe(Arc::new(Mutex::new(stdin))),
             next_request_id: Arc::new(AtomicI64::new(1)),
             pending: Arc::new(Pending::default()),
             open_agent_requests: Arc::new(Mutex::new(HashMap::new())),
             on_event: on_event.clone(),
         };
         let handle = Handle {
-            stdin: Arc::clone(&session.stdin),
+            stdin: session.stdin.clone(),
             next_request_id: Arc::clone(&session.next_request_id),
             pending: Arc::clone(&session.pending),
             open_agent_requests: Arc::clone(&session.open_agent_requests),
             on_event: on_event.clone(),
+            drain: None,
         };
         self.sessions.lock().unwrap().insert(id, session);
 
@@ -317,7 +350,121 @@ impl Inner {
             }
         };
 
-        Ok(SpawnResult { id, initialize })
+        Ok(SpawnResult {
+            id,
+            initialize,
+            reattached: false,
+        })
+    }
+
+    /// The persistent twin of `spawn`: the daemon owns the child, this side
+    /// reassembles its stdout into lines and runs the same parser. On a
+    /// reattach the process was initialized by the window that started it, so
+    /// the handshake is skipped and the first request waits for the replay.
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_daemonized(
+        self: &Arc<Self>,
+        provider: String,
+        proc_id: String,
+        cwd: String,
+        command: Option<String>,
+        extra_args: Vec<String>,
+        env: HashMap<String, String>,
+        daemon: Arc<Daemon>,
+        on_event: Channel<AcpEvent>,
+    ) -> Result<SpawnResult> {
+        let (binary, args) = acp_command(&provider)?;
+        let mut argv = vec![command.unwrap_or_else(|| binary.into())];
+        argv.extend(args.iter().map(|a| a.to_string()));
+        argv.extend(extra_args);
+        let spec = ProcSpec {
+            proc_id,
+            argv,
+            cwd,
+            env,
+            shell_env: true,
+            ..Default::default()
+        };
+
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let pending = Arc::new(Pending::default());
+        let open_agent_requests = Arc::new(Mutex::new(HashMap::new()));
+        let next_request_id = Arc::new(AtomicI64::new(1));
+        let drain = Arc::new(Drain::new(0));
+
+        // The attach starts inside proc_spawn, so no frame is ever missed.
+        let (tx, rx) = mpsc::channel::<Chunk>();
+        let sink = frame_sink(
+            Arc::clone(&pending),
+            Arc::clone(&open_agent_requests),
+            Arc::clone(&drain),
+            tx.clone(),
+        );
+        let (proc_handle, outcome) = daemon.proc_spawn(spec, None, sink)?;
+        self.sessions.lock().unwrap().insert(
+            id,
+            Session {
+                child: None,
+                stdin: StdinRoute::Daemon(Arc::clone(&daemon), proc_handle),
+                next_request_id: Arc::clone(&next_request_id),
+                pending: Arc::clone(&pending),
+                open_agent_requests: Arc::clone(&open_agent_requests),
+                on_event: on_event.clone(),
+            },
+        );
+        let exit_code = Arc::new(Mutex::new(None));
+        let reap = {
+            let inner = Arc::clone(self);
+            let exit_code = Arc::clone(&exit_code);
+            move || {
+                inner.sessions.lock().unwrap().remove(&id);
+                *exit_code.lock().unwrap()
+            }
+        };
+        Self::spawn_forwarder(rx, on_event.clone(), Arc::new(reap));
+
+        if outcome.reattached {
+            return Ok(SpawnResult {
+                id,
+                initialize: Value::Null,
+                reattached: true,
+            });
+        }
+
+        let mut initialize_params = json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "clientCapabilities": {
+                "fs": { "readTextFile": true, "writeTextFile": true },
+            },
+            "clientInfo": {
+                "name": "emberyx",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+        });
+        if provider == "cursor" {
+            initialize_params["_meta"] = json!({ "parameterizedModelPicker": true });
+        }
+        let handle = Handle {
+            stdin: StdinRoute::Daemon(Arc::clone(&daemon), proc_handle),
+            next_request_id,
+            pending,
+            open_agent_requests,
+            on_event: on_event.clone(),
+            drain: Some(drain),
+        };
+        let initialize = match request(&handle, "initialize", initialize_params) {
+            Ok(value) => value,
+            Err(e) => {
+                self.kill(id).ok();
+                return Err(e);
+            }
+        };
+
+        Ok(SpawnResult {
+            id,
+            initialize,
+            reattached: false,
+        })
     }
 
     /// stdout is parsed on one thread and forwarded on another, so a burst of
@@ -329,46 +476,16 @@ impl Inner {
         handle: &Handle,
         on_event: Channel<AcpEvent>,
     ) {
-        enum Chunk {
-            Event(AcpEvent),
-            Done,
-        }
         let (tx, rx) = mpsc::channel::<Chunk>();
         let pending = Arc::clone(&handle.pending);
         let open = Arc::clone(&handle.open_agent_requests);
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(std::io::Result::ok) {
-                let event = match classify(&line) {
-                    Frame::Response { id, result } => {
-                        pending.resolve(id, Ok(result));
-                        continue;
+                if let Some(event) = route_line(&pending, &open, &line) {
+                    if tx.send(Chunk::Event(event)).is_err() {
+                        return;
                     }
-                    Frame::Failure { id, error } => {
-                        pending.resolve(id, Err(error));
-                        continue;
-                    }
-                    Frame::Request(req) => {
-                        open.lock().unwrap().insert(
-                            req.id,
-                            OpenRequest {
-                                method: req.method.clone(),
-                                at: std::time::Instant::now(),
-                            },
-                        );
-                        AcpEvent::Request(ServerRequest {
-                            id: req.id,
-                            method: req.method,
-                            params: req.params,
-                        })
-                    }
-                    Frame::Notification { method, params } => {
-                        AcpEvent::Notification(Notify { method, params })
-                    }
-                    Frame::Other => continue,
-                };
-                if tx.send(Chunk::Event(event)).is_err() {
-                    return;
                 }
             }
             pending.fail_all("the ACP agent exited");
@@ -398,17 +515,30 @@ impl Inner {
         }
 
         let inner = Arc::clone(self);
+        let reap = move || {
+            inner
+                .sessions
+                .lock()
+                .unwrap()
+                .remove(&id)
+                .and_then(|mut s| s.child.take())
+                .and_then(|mut child| child.wait().ok())
+                .and_then(|status| status.code())
+        };
+        Self::spawn_forwarder(rx, on_event, Arc::new(reap));
+    }
+
+    /// The forwarder half of the reader: coalesces adjacent notifications into
+    /// one IPC message, reaps on EOF, reports exit. Shared by the local pipe
+    /// reader and the daemon frame reassembler. (No supervisor call here, so
+    /// unlike codex's forwarder it needs no session id.)
+    fn spawn_forwarder(
+        rx: Receiver<Chunk>,
+        on_event: Channel<AcpEvent>,
+        reap: Arc<dyn Fn() -> Option<i32> + Send + Sync>,
+    ) {
         std::thread::spawn(move || {
             const MAX_BATCH: usize = 512;
-            let reap = || {
-                inner
-                    .sessions
-                    .lock()
-                    .unwrap()
-                    .remove(&id)
-                    .and_then(|mut s| s.child.wait().ok())
-                    .and_then(|status| status.code())
-            };
             let mut batch: Vec<Notify> = Vec::new();
             let flush = |batch: &mut Vec<Notify>| -> bool {
                 let event = match batch.len() {
@@ -466,16 +596,43 @@ impl Inner {
 
     /// Terminate and reap. The reader normally reaps on EOF but can't once the
     /// session is removed here, so wait() outside the lock to avoid a zombie.
+    /// A daemon-backed session's process lives in the daemon: the kill routes
+    /// there, and the local session is just the parsers.
     fn kill(&self, id: u32) -> Result<()> {
         let session = self.sessions.lock().unwrap().remove(&id);
         if let Some(mut session) = session {
             session.pending.fail_all("ACP session killed");
-            let _ = session.child.kill();
-            let _ = session.child.wait();
+            match &session.stdin {
+                StdinRoute::Pipe(_) => {
+                    if let Some(mut child) = session.child.take() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                }
+                StdinRoute::Daemon(daemon, proc_handle) => {
+                    daemon.proc_kill(*proc_handle)?;
+                }
+            }
         }
         Ok(())
     }
 
+    /// Let go of a daemon-backed session without stopping it. Closing a pane
+    /// is not the user asking the agent to stop.
+    fn detach(&self, id: u32) -> Result<()> {
+        let session = self.sessions.lock().unwrap().remove(&id);
+        if let Some(session) = session {
+            session.pending.fail_all("ACP session detached");
+            if let StdinRoute::Daemon(daemon, proc_handle) = &session.stdin {
+                daemon.detach(*proc_handle);
+            }
+        }
+        Ok(())
+    }
+
+    /// Kill and reap every locally-owned child. Called on app exit — std's
+    /// Child does not kill on drop, so skipping this orphans the agent
+    /// processes. Daemon-backed sessions are deliberately untouched.
     fn kill_all(&self) {
         let sessions: Vec<Session> = self
             .sessions
@@ -486,23 +643,138 @@ impl Inner {
             .collect();
         for mut session in sessions {
             session.pending.fail_all("ACP session killed");
-            let _ = session.child.kill();
-            let _ = session.child.wait();
+            if let StdinRoute::Pipe(_) = &session.stdin {
+                if let Some(mut child) = session.child.take() {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
         }
     }
 }
 
+/// One parsed stdout line, on its way to the frontend.
+enum Chunk {
+    Event(AcpEvent),
+    Done,
+}
+
+/// One stdout line → the event the frontend should see, if any. Responses
+/// resolve their waiter and stop here; requests are tracked so `acp_respond`
+/// can validate them and so the stuck-request watchdog can age them.
+fn route_line(
+    pending: &Pending,
+    open: &Mutex<HashMap<i64, OpenRequest>>,
+    line: &str,
+) -> Option<AcpEvent> {
+    match classify(line) {
+        Frame::Response { id, result } => {
+            pending.resolve(id, Ok(result));
+            None
+        }
+        Frame::Failure { id, error } => {
+            pending.resolve(id, Err(error));
+            None
+        }
+        Frame::Request(req) => {
+            open.lock().unwrap().insert(
+                req.id,
+                OpenRequest {
+                    method: req.method.clone(),
+                    at: std::time::Instant::now(),
+                },
+            );
+            Some(AcpEvent::Request(ServerRequest {
+                id: req.id,
+                method: req.method,
+                params: req.params,
+            }))
+        }
+        Frame::Notification { method, params } => {
+            Some(AcpEvent::Notification(Notify { method, params }))
+        }
+        Frame::Other => None,
+    }
+}
+
+/// The `ProcSink` for a daemon-backed ACP session: decodes each frame's bytes,
+/// reassembles stdout into JSON-RPC lines through the same parser the pipe
+/// path uses, and turns the terminal frame into the forwarder's Done — with
+/// the exit code stashed where the reap closure reads it.
+fn frame_sink(
+    pending: Arc<Pending>,
+    open: Arc<Mutex<HashMap<i64, OpenRequest>>>,
+    drain: Arc<Drain>,
+    tx: mpsc::Sender<Chunk>,
+) -> ProcSink {
+    use base64::Engine;
+    let exit_code: Arc<Mutex<Option<i32>>> = Arc::new(Mutex::new(None));
+    let out = Mutex::new(LineSplitter::default());
+    let err = Mutex::new(LineSplitter::default());
+    Arc::new(move |frame: ProcFrame| {
+        drain.frame();
+        if let Some(code) = frame.exit.as_ref().and_then(|e| e.code) {
+            *exit_code.lock().unwrap() = Some(code);
+        }
+        let Some(data) = &frame.data else {
+            if frame.exit.is_some() {
+                pending.fail_all("the ACP agent exited");
+                drain.dead();
+                let _ = tx.send(Chunk::Done);
+                return false;
+            }
+            return true;
+        };
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data) else {
+            return true;
+        };
+        match frame.stream {
+            ProcIo::Out => {
+                for line in out.lock().unwrap().push(&bytes) {
+                    if let Some(event) = route_line(&pending, &open, &line) {
+                        if tx.send(Chunk::Event(event)).is_err() {
+                            return false;
+                        }
+                    }
+                }
+            }
+            ProcIo::Err => {
+                for line in err.lock().unwrap().push(&bytes) {
+                    if tx.send(Chunk::Event(AcpEvent::Stderr(line))).is_err() {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    })
+}
+
 fn write_line(handle: &Handle, line: &str) -> Result<()> {
-    let mut stdin = handle.stdin.lock().unwrap();
-    stdin
-        .write_all(line.as_bytes())
-        .and_then(|_| stdin.write_all(b"\n"))
-        .and_then(|_| stdin.flush())?;
+    let mut bytes = line.as_bytes().to_vec();
+    bytes.push(b'\n');
+    match &handle.stdin {
+        StdinRoute::Pipe(stdin) => {
+            let mut stdin = stdin.lock().unwrap();
+            stdin
+                .write_all(&bytes)
+                .and_then(|_| stdin.flush())
+                .map_err(|e| crate::err!("{e}"))?;
+        }
+        StdinRoute::Daemon(daemon, proc_handle) => {
+            daemon.proc_write(*proc_handle, &bytes)?;
+        }
+    }
     Ok(())
 }
 
 /// One JSON-RPC round trip, bounded by `timeout`.
 fn request_with(handle: &Handle, method: &str, params: Value, timeout: Duration) -> Result<Value> {
+    // A reattached session's replay must finish before anything can send, or
+    // an old reply with a recycled id would answer this request.
+    if let Some(drain) = &handle.drain {
+        drain.wait();
+    }
     let id = handle.next_request_id.fetch_add(1, Ordering::SeqCst);
     let rx = handle.pending.register(id);
     let line =
@@ -560,17 +832,22 @@ fn respond(handle: &Handle, id: i64, outcome: std::result::Result<Value, RpcErro
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn acp_spawn(
     manager: tauri::State<'_, AcpManager>,
+    daemon: tauri::State<'_, crate::daemon::Daemon>,
     provider: String,
     cwd: String,
     command: Option<String>,
     extra_args: Option<Vec<String>>,
     env: Option<HashMap<String, String>>,
+    persistent: Option<bool>,
+    session_id: Option<String>,
     on_event: Channel<AcpEvent>,
 ) -> Result<SpawnResult> {
     // Blocks on the initialize round trip, so keep it off the runtime's workers.
     let inner = manager.shared();
+    let daemon = Arc::new(daemon.inner().clone());
     tauri::async_runtime::spawn_blocking(move || {
         inner.spawn(
             provider,
@@ -578,6 +855,9 @@ pub async fn acp_spawn(
             command,
             extra_args.unwrap_or_default(),
             env.unwrap_or_default(),
+            persistent.unwrap_or(false),
+            session_id,
+            Some(daemon),
             on_event,
         )
     })
@@ -588,6 +868,13 @@ pub async fn acp_spawn(
 #[tauri::command]
 pub fn acp_kill(manager: tauri::State<'_, AcpManager>, id: u32) -> Result<()> {
     manager.kill(id)
+}
+
+/// Let go of a persistent ACP session without stopping it. Closing a pane is
+/// not the user asking the agent to stop.
+#[tauri::command]
+pub fn acp_detach(manager: tauri::State<'_, AcpManager>, id: u32) -> Result<()> {
+    manager.detach(id)
 }
 
 /// Open a conversation. The reply carries the session id *and* `configOptions`
@@ -806,5 +1093,43 @@ mod tests {
             }
             other => panic!("expected a response, got {other:?}"),
         }
+    }
+
+    /// The reader thread's dispatch, shared with the daemon frame reassembler.
+    #[test]
+    fn route_line_resolves_waiters_tracks_requests_and_forwards_the_rest() {
+        let pending = Pending::default();
+        let open = Mutex::new(HashMap::new());
+        let rx = pending.register(2);
+        assert!(route_line(&pending, &open, r#"{"jsonrpc":"2.0","id":2,"result":{}}"#).is_none());
+        assert_eq!(rx.recv().unwrap().unwrap(), serde_json::json!({}));
+        match route_line(
+            &pending,
+            &open,
+            r#"{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{}}"#,
+        ) {
+            Some(AcpEvent::Request(req)) => {
+                assert_eq!(req.id, 7);
+                assert!(open.lock().unwrap().contains_key(&7));
+            }
+            _ => panic!("expected a request"),
+        }
+        match route_line(
+            &pending,
+            &open,
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1"}}"#,
+        ) {
+            Some(AcpEvent::Notification(n)) => assert_eq!(n.method, "session/update"),
+            _ => panic!("expected a notification"),
+        }
+        assert!(route_line(&pending, &open, "chatter").is_none());
+    }
+
+    #[test]
+    fn splitter_reassembles_acp_lines_across_frames() {
+        let mut splitter = LineSplitter::default();
+        assert!(splitter.push(br#"{"jsonrpc":"2.0","meth"#).is_empty());
+        let lines = splitter.push(b"od\":\"session/update\"}\n");
+        assert_eq!(lines, vec![r#"{"jsonrpc":"2.0","method":"session/update"}"#]);
     }
 }
