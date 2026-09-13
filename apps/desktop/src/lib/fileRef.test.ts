@@ -69,6 +69,25 @@ describe("splitFileRefs", () => {
       { kind: "text", text: "no files here at all" },
     ]);
   });
+
+  it("pulls a pasted URL out of prose and keeps the punctuation", () => {
+    const segments = splitFileRefs("see https://github.com/jiri/emberyx.");
+    expect(segments).toEqual([
+      { kind: "text", text: "see " },
+      {
+        kind: "link",
+        text: "https://github.com/jiri/emberyx",
+        href: "https://github.com/jiri/emberyx",
+      },
+      { kind: "text", text: "." },
+    ]);
+  });
+
+  it("does not treat a bare domain as a link", () => {
+    expect(splitFileRefs("talk to example.com later")).toEqual([
+      { kind: "text", text: "talk to example.com later" },
+    ]);
+  });
 });
 
 describe("pasteLanguage", () => {

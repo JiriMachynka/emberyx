@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { LinkChip } from "@/components/LinkChip";
 import {
   getThreadMeta,
   setThreadMeta,
@@ -114,12 +115,9 @@ export function PrLink({
 
   return (
     <>
-      <a
+      <LinkChip
         {...rest}
         href={href}
-        target="_blank"
-        rel="noreferrer"
-        className="text-primary underline underline-offset-2"
         onContextMenu={(e) => {
           if (!thread || !parsed) return;
           e.preventDefault();
@@ -127,7 +125,7 @@ export function PrLink({
         }}
       >
         {children}
-      </a>
+      </LinkChip>
       {menu &&
         createPortal(
           <div

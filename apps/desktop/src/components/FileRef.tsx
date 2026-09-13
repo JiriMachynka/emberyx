@@ -1,5 +1,6 @@
 import { createContext, useContext, useState } from "react";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
+import { LinkChip } from "@/components/LinkChip";
 import {
   Tooltip,
   TooltipContent,
@@ -118,24 +119,29 @@ function LinkedFileRef({
 }
 
 /**
- * Plain (non-markdown) message text with its file references picked out. Used
- * for the prose in a user's own message; fenced code is split off and
- * highlighted separately so a paste doesn't stay a wall of backticks.
+ * Plain (non-markdown) message text with its file references and web links
+ * picked out. Used for the prose in a user's own message; fenced code is
+ * split off and highlighted separately so a paste doesn't stay a wall of
+ * backticks.
  */
 export function TextWithFileRefs({ text }: { text: string }) {
   return (
     <>
-      {splitFileRefs(text).map((segment, i) =>
-        segment.kind === "file" ? (
-          <FileRef
-            key={`${i}:${segment.path}`}
-            path={segment.path}
-            label={segment.text}
-          />
-        ) : (
-          <span key={`${i}:text`}>{segment.text}</span>
-        )
-      )}
+      {splitFileRefs(text).map((segment, i) => {
+        if (segment.kind === "file") {
+          return (
+            <FileRef
+              key={`${i}:${segment.path}`}
+              path={segment.path}
+              label={segment.text}
+            />
+          );
+        }
+        if (segment.kind === "link") {
+          return <LinkChip key={`${i}:${segment.href}`} href={segment.href} />;
+        }
+        return <span key={`${i}:text`}>{segment.text}</span>;
+      })}
     </>
   );
 }

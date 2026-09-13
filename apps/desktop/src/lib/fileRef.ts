@@ -7,6 +7,7 @@
  */
 
 import { FILE_EXTENSIONS, FILE_NAMES } from "@/lib/fileIconMap";
+import { parseHttpUrl } from "@/lib/linkRef";
 
 /** Trailing characters that belong to the sentence, not to the filename. */
 const TRAILING = /[.,;:!?)\]}'"`]+$/;
@@ -54,10 +55,11 @@ export function fileRefPath(token: string): string {
   return token.replace(LEADING, "").replace(TRAILING, "");
 }
 
-/** A run of message text: prose, or a token that names a file. */
+/** A run of message text: prose, a file, or a web link. */
 export type TextSegment =
   | { kind: "text"; text: string }
-  | { kind: "file"; text: string; path: string };
+  | { kind: "file"; text: string; path: string }
+  | { kind: "link"; text: string; href: string };
 
 /** A run of a user message: verbatim prose, or a markdown fence to highlight. */
 export type MessagePart =
@@ -102,17 +104,31 @@ export function splitFencedBlocks(text: string): MessagePart[] {
 }
 
 /**
- * Split plain message text into prose and file references. Used for text that
- * is *not* markdown — a user's own message — where an `@src/lib/a.ts` mention
- * should read as the file it names.
+ * Split plain message text into prose, file references, and web links. Used
+ * for text that is *not* markdown — a user's own message — where an
+ * `@src/lib/a.ts` mention should read as the file it names, and a pasted URL
+ * as the site it points at.
  */
 export function splitFileRefs(text: string): TextSegment[] {
   const out: TextSegment[] = [];
   let prose = "";
   // Whitespace is kept with the prose so the original spacing survives.
   for (const token of text.split(/(\s+)/)) {
-    const path = fileRefPath(token);
-    if (path.length === 0 || !isFileReference(path)) {
+    const core = fileRefPath(token);
+    const url = parseHttpUrl(core);
+    if (url !== null) {
+      const start = token.indexOf(core);
+      const lead = start > 0 ? token.slice(0, start) : "";
+      const trail = start >= 0 ? token.slice(start + core.length) : "";
+      if (prose.length > 0 || lead.length > 0) {
+        out.push({ kind: "text", text: prose + lead });
+        prose = "";
+      }
+      out.push({ kind: "link", text: core, href: url.href });
+      prose = trail;
+      continue;
+    }
+    if (core.length === 0 || !isFileReference(core)) {
       prose += token;
       continue;
     }
@@ -120,7 +136,7 @@ export function splitFileRefs(text: string): TextSegment[] {
       out.push({ kind: "text", text: prose });
       prose = "";
     }
-    out.push({ kind: "file", text: token, path });
+    out.push({ kind: "file", text: token, path: core });
   }
   if (prose.length > 0) out.push({ kind: "text", text: prose });
   return out;

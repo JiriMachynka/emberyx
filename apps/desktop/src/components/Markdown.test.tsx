@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import { Markdown } from "@/components/Markdown";
+import { faviconSrc } from "@/lib/linkRef";
 
 const md = (text: string, streaming = false) =>
   render(<Markdown text={text} fontSize={13} streaming={streaming} />).container;
@@ -62,6 +63,17 @@ describe("Markdown GFM", () => {
   it("leaves raw HTML inert", () => {
     const el = md("<img src=x onerror=alert(1)> done");
     expect(el.querySelector("img")).toBeNull();
+  });
+
+  it("renders a markdown link as a favicon chip", () => {
+    const el = md("see [repo](https://github.com/jiri/emberyx)");
+    expect(el.querySelector("img")?.getAttribute("src")).toBe(
+      faviconSrc("github.com"),
+    );
+    expect(el.querySelector("a")?.textContent).toBe("repo");
+    expect(el.querySelector("a")?.getAttribute("href")).toBe(
+      "https://github.com/jiri/emberyx",
+    );
   });
 
   it("renders markdown, not raw markers, while the turn is still streaming", () => {

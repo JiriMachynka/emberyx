@@ -1,0 +1,70 @@
+{
+  "fixture": {
+    "repo": "/private/var/folders/9y/6j_5d4vx2rgbzq9p24b6gzsr0000gn/T/emberyx-e2e-Htxxgh/bench-repo"
+  },
+  "welcomeMs": 2,
+  "composerReadyMs": 165,
+  "diffOpenMs": 2185,
+  "diff": {
+    "hosts": {
+      "DIFFS-CONTAINER": 48
+    },
+    "lines": 19200,
+    "scroller": {
+      "ch": 2750668,
+      "sh": 2750668
+    }
+  },
+  "memoryAfterDiff": {
+    "rows": [
+      {
+        "pid": 60423,
+        "comm": "/Users/jiri/Desktop/Personal/emberyx/target/debug/emberyx-desktop",
+        "rssMb": 150
+      },
+      {
+        "pid": 60427,
+        "comm": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU",
+        "rssMb": 52
+      },
+      {
+        "pid": 60428,
+        "comm": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.Networking.xpc/Contents/MacOS/com.apple.WebKit.Networking",
+        "rssMb": 27
+      },
+      {
+        "pid": 60429,
+        "comm": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
+        "rssMb": 1098
+      }
+    ],
+    "totalMb": 1327
+  },
+  "threadOpenMs": 36,
+  "memoryAfterThread": {
+    "rows": [
+      {
+        "pid": 60423,
+        "comm": "/Users/jiri/Desktop/Personal/emberyx/target/debug/emberyx-desktop",
+        "rssMb": 150
+      },
+      {
+        "pid": 60427,
+        "comm": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU",
+        "rssMb": 52
+      },
+      {
+        "pid": 60428,
+        "comm": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.Networking.xpc/Contents/MacOS/com.apple.WebKit.Networking",
+        "rssMb": 27
+      },
+      {
+        "pid": 60429,
+        "comm": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
+        "rssMb": 1128
+      }
+    ],
+    "totalMb": 1357
+  },
+  "title": "Bench thread: refactor the parser"
+}
