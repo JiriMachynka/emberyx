@@ -955,6 +955,17 @@ describe("useAgentChat sending", () => {
     expect(result.current.threadId).toBe("sess-77");
   });
 
+  // `resume` names imported history, not a live CLI session. Publishing it as
+  // threadId would hide the imported-history banner the moment the pane opens.
+  it("does not treat imported history as a live thread id", async () => {
+    const { result, emit } = await mount({ resume: "imported-1", imported: true });
+    expect(result.current.threadId).toBeUndefined();
+
+    emit({ type: "system", subtype: "init", session_id: "sess-77" });
+
+    expect(result.current.threadId).toBe("sess-77");
+  });
+
   it("interrupts the turn without killing the session", async () => {
     const { result } = await mount();
     act(() => result.current.stop());

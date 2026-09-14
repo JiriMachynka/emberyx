@@ -172,7 +172,8 @@ that can render the log's stored lines.
 
 An imported thread is history, not a conversation to continue: `Session.imported`
 suppresses `--resume` (the id names a thread no CLI ever wrote), the pane says so
-in a banner, and `startPrimaryAgent` never auto-resumes one. Import is idempotent
+in a banner until the fresh agent names a thread, and `startPrimaryAgent` never
+auto-resumes one. Import is idempotent
 by thread id — a thread already in the log is skipped whole, because stream
 versions stay contiguous only if one writer owns a thread's stream.
 

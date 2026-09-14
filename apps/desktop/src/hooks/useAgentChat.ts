@@ -702,7 +702,11 @@ export function useAgentChat({
   const clearedResumeRef = useRef(false);
   // The CLI's own thread id, published so the pane can register the thread with
   // the sidebar before the first turn (and its transcript on disk) exists.
-  const [threadId, setThreadId] = useState<string | undefined>(resume);
+  // Imported history has no CLI session, same as sessionRef, until the fresh
+  // agent reports one — otherwise the imported-history banner never appears.
+  const [threadId, setThreadId] = useState<string | undefined>(
+    imported ? undefined : resume
+  );
   // The assistant message currently being streamed, plus block-index → tool map.
   const draftRef = useRef<ChatMessage | null>(null);
   const blockToolRef = useRef<Record<number, number>>({});

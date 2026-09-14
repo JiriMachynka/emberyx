@@ -763,9 +763,9 @@ export const ChatPane = memo(function ChatPane({
       className="chat-pane relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
       style={{ fontFamily }}
     >
-      {imported && (
-        // Said once, at the top, rather than per turn: the history below is
-        // real, but the agent that answers the next prompt never saw it.
+      {imported && !threadId && (
+        // Until the fresh agent names a thread: the history below is real,
+        // but the agent that answers the next prompt never saw it.
         <div className="z-10 flex items-center gap-2 border-b border-border/60 px-5 py-2 text-xs text-muted-foreground">
           <Archive className="size-3.5 shrink-0" />
           <span className="min-w-0 flex-1">

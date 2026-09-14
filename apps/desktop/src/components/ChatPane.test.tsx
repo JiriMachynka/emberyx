@@ -117,9 +117,18 @@ describe("ChatPane", () => {
     await mount();
     await waitFor(() => expect(transcript().textContent).toContain(FIRST_USER));
     await waitFor(() => expect(transcript().textContent).toContain(FIRST_ANSWER));
+    expect(screen.queryByText(/Imported history/)).toBeNull();
     // More than one turn, and each user message once — not doubled by a merge.
     const occurrences = transcript().textContent?.split(FIRST_USER).length ?? 0;
     expect(occurrences - 1).toBe(1);
+  });
+
+  // The mock transport never issues a live thread id, so an imported pane
+  // keeps the banner — the same condition that hides it once a real agent
+  // names a thread.
+  it("shows the imported-history banner while the agent has no thread", async () => {
+    await mount({ ...PROPS, imported: true });
+    expect(screen.getByText(/Imported history/)).toBeTruthy();
   });
 
   it("puts the checkpoint's file delta under a settled turn", async () => {
