@@ -10,6 +10,7 @@ interface SnapshotsStatus {
   platform: string;
   screenRecording: boolean;
   accessibility: boolean;
+  inputMonitoring: boolean;
   tapRunning: boolean;
   tapError?: string;
 }
@@ -97,6 +98,10 @@ export const SnapshotsSection = ({
 
   const needsCapturePermission = status != null && !status.screenRecording;
   const needsAccessibility = settings.snapshotsIncludeAppText && status != null && !status.accessibility;
+  // A listen-only tap can still "run" without Input Monitoring — it just
+  // only sees keys while Emberyx is focused. Don't treat tapRunning as enough.
+  const shortcutNeedsGrant =
+    status != null && (!status.tapRunning || !status.inputMonitoring);
 
   return (
     <>
@@ -156,9 +161,9 @@ export const SnapshotsSection = ({
         <Row
           label="Shortcut"
           hint={
-            settings.snapshotsEnabled && status && !status.tapRunning
+            settings.snapshotsEnabled && status && shortcutNeedsGrant
               ? status.tapError ??
-                "The trigger isn't registered yet — macOS asks for Input Monitoring before an app may watch the keyboard globally. Grant it and the shortcut starts working."
+                "The trigger isn't registered yet — macOS asks for Input Monitoring before an app may watch the keyboard globally. Grant it, then quit and reopen Emberyx."
               : "A regular key chord can be added later if the modifier pair can't be registered on this Mac."
           }
           control={
@@ -167,7 +172,7 @@ export const SnapshotsSection = ({
                 tone={
                   !settings.snapshotsEnabled
                     ? "off"
-                    : status?.tapRunning
+                    : status?.tapRunning && status.inputMonitoring
                       ? "on"
                       : "warn"
                 }
@@ -176,15 +181,23 @@ export const SnapshotsSection = ({
             </span>
           }
         >
-          {settings.snapshotsEnabled && status && !status.tapRunning && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="justify-self-start"
-              onClick={() => void requestPermission("input")}
-            >
-              Open System Settings
-            </Button>
+          {settings.snapshotsEnabled && status && shortcutNeedsGrant && (
+            <div className="flex flex-wrap gap-2 justify-self-start">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void requestPermission("input")}
+              >
+                Open System Settings
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void relaunch()}
+              >
+                Quit and reopen
+              </Button>
+            </div>
           )}
         </Row>
         <Row

@@ -48,8 +48,16 @@ export function useSnapshots(settings: Settings) {
         .then((image) => {
           if (cancelled) return;
           if (image) useAgentStore.getState().setPendingSnapshot(image);
+          else if (!ev.payload.error) {
+            toast.error("SnapShots couldn't capture", {
+              description: "The window produced no image.",
+            });
+          }
         })
-        .catch((e) => console.error("[emberyx] snapshot attach failed", e));
+        .catch((e) => {
+          console.error("[emberyx] snapshot attach failed", e);
+          toast.error("SnapShots couldn't attach", { description: String(e) });
+        });
       if (ev.payload.error) {
         toast.error("SnapShots couldn't capture", {
           description: ev.payload.error,

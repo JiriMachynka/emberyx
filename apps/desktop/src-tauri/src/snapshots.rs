@@ -144,6 +144,8 @@ mod platform {
         ) -> CFMachPortRef;
         fn CGEventTapEnable(tap: CFMachPortRef, enable: u8);
         fn CGEventGetFlags(event: *mut c_void) -> u64;
+        fn CGEventSourceKeyState(state_id: u32, key: u16) -> u8;
+        static CGRectNull: CGRect;
         fn CGWindowListCopyWindowInfo(option: u32, relative_to: CGWindowID) -> CFArrayRef;
         fn CGWindowListCreateImage(
             window_bounds: CGRect,
@@ -153,8 +155,44 @@ mod platform {
         ) -> CGImageRef;
         fn CGPreflightScreenCaptureAccess() -> u8;
         fn CGRequestScreenCaptureAccess() -> u8;
+        fn CGPreflightListenEventAccess() -> u8;
         fn CGMainDisplayID() -> CGDirectDisplayID;
         fn CGDisplayPixelsHigh(display: CGDirectDisplayID) -> c_long;
+    }
+
+    // IOHIDRequestAccess is what actually puts the app on the Input
+    // Monitoring list. CGEventTapCreate for a listen-only HID tap can
+    // still succeed without it — and then only sees keys while Emberyx
+    // is focused, which is the "works in Emberyx, dead in the browser"
+    // failure mode.
+    #[link(name = "IOKit", kind = "framework")]
+    extern "C" {
+        fn IOHIDRequestAccess(request_type: u32) -> u8;
+    }
+    const K_IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 0;
+
+    // Global-hotkey apps steal focus with SetFrontProcessWithOptions;
+    // `activateIgnoringOtherApps:` on NSApp is ignored on macOS 14+ when
+    // the call isn't a user gesture on the main thread.
+    #[repr(C)]
+    struct ProcessSerialNumber {
+        high: u32,
+        low: u32,
+    }
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn GetCurrentProcess(psn: *mut ProcessSerialNumber) -> i32;
+        fn SetFrontProcessWithOptions(psn: *const ProcessSerialNumber, options: u32) -> i32;
+    }
+    const K_SET_FRONT_PROCESS_FRONT_WINDOW_ONLY: u32 = 1;
+    const NS_APPLICATION_ACTIVATE_ALL_WINDOWS: usize = 1;
+    const NS_APPLICATION_ACTIVATE_IGNORING_OTHER_APPS: usize = 1 << 1;
+
+    #[link(name = "objc")]
+    extern "C" {
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
     }
 
     /// Listen-only HID taps need Input Monitoring, not Accessibility. A session
@@ -165,8 +203,16 @@ mod platform {
     const K_CG_EVENT_TAP_OPTION_LISTEN_ONLY: u32 = 1;
     /// `kCGEventFlagsChanged` (`NX_FLAGSCHANGED`); the tap mask is one bit.
     const K_CG_EVENT_FLAGS_CHANGED: u32 = 12;
+    const K_CG_EVENT_KEY_DOWN: u32 = 10;
+    const K_CG_EVENT_KEY_UP: u32 = 11;
     const K_CG_EVENT_TAP_DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE;
     const K_CG_EVENT_TAP_DISABLED_BY_USER_INPUT: u32 = 0xFFFF_FFFF;
+    const K_CG_EVENT_SOURCE_STATE_HID: u32 = 1;
+    const KEY_SHIFT_L: u16 = 56;
+    const KEY_SHIFT_R: u16 = 60;
+    /// Two `flagsChanged` events for one mash (left, then right) are a few
+    /// milliseconds apart. A new mash after a missed release is hundreds.
+    const CHORD_COOLDOWN_MS: u64 = 400;
 
     const K_CG_WINDOW_LIST_ON_SCREEN_ONLY: u32 = 1;
     const K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
@@ -181,6 +227,14 @@ mod platform {
 
     pub fn both_shifts_down(flags: u64) -> bool {
         flags & SHIFT_LEFT != 0 && flags & SHIFT_RIGHT != 0
+    }
+
+    /// Rising-edge of both-Shifts is not enough: if the tap drops the
+    /// release (`kCGEventTapDisabledByTimeout`), `was` stays true and the
+    /// next mash is ignored. Cooldown from the last fire lets a new mash
+    /// through without double-firing left-then-right (~20ms apart).
+    pub fn should_fire_chord(both: bool, since_last_fire_ms: u64) -> bool {
+        both && since_last_fire_ms >= CHORD_COOLDOWN_MS
     }
 
     // ---- ImageIO: PNG encode ----
@@ -319,13 +373,19 @@ mod platform {
         pub name: Option<String>,
     }
 
-    /// The frontmost app window: the first layer-0 entry, since the list is
-    /// ordered front to back and everything the UI draws above windows (menu
-    /// bar, dock, overlays) lives on other layers. Emberyx itself is *not*
-    /// skipped — pressing the shortcut while Emberyx is frontmost captures
-    /// Emberyx.
+    /// Titlebars and Chromium tab strips are layer 0 but only a few dozen
+    /// pixels tall and sit in front of the real window. Menu bar / dock live
+    /// on layers ≥ 20. Floating panels (PiP) sit on 1..=8 — those are what
+    /// the user is looking at. Emberyx itself is *not* skipped.
+    const MIN_APP_EDGE: f64 = 120.0;
+
     pub fn pick_frontmost(rows: &[WindowRow]) -> Option<&WindowRow> {
-        rows.iter().find(|row| row.layer == 0)
+        rows.iter().find(|row| {
+            row.layer >= 0
+                && row.layer < 20
+                && row.bounds.size.width >= MIN_APP_EDGE
+                && row.bounds.size.height >= MIN_APP_EDGE
+        })
     }
 
     unsafe fn dict_number(dict: CFDictionaryRef, key: CFStringRef) -> Option<f64> {
@@ -540,12 +600,23 @@ mod platform {
     }
 
     unsafe fn capture_png(id: CGWindowID, bounds: CGRect) -> Option<Vec<u8>> {
-        let image = CGWindowListCreateImage(
-            bounds,
+        // `CGRectNull` asks for the window's tight bounds. Passing the list
+        // row's rect fails for some windows (retina, off-space, transformed)
+        // even though the window itself photographs.
+        let mut image = CGWindowListCreateImage(
+            CGRectNull,
             K_CG_WINDOW_LIST_INCLUDING_WINDOW,
             id,
             K_CG_WINDOW_IMAGE_NO_SHADOW,
         );
+        if image.is_null() {
+            image = CGWindowListCreateImage(
+                bounds,
+                K_CG_WINDOW_LIST_INCLUDING_WINDOW,
+                id,
+                K_CG_WINDOW_IMAGE_NO_SHADOW,
+            );
+        }
         if image.is_null() {
             return None;
         }
@@ -636,12 +707,16 @@ mod platform {
 
     // ---- The both-Shifts event tap ----
 
+    static TAP_EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
+
     struct TapContext {
         app: AppHandle,
         include_text: Arc<AtomicBool>,
-        /// Rising-edge guard: one capture per press of the chord, not one per
-        /// `flagsChanged` while both are held.
-        both_down: AtomicBool,
+        /// Last fire, milliseconds from `TAP_EPOCH`. 0 = never.
+        last_fire_ms: AtomicU64,
+        /// One capture at a time — a second mash while the first is still
+        /// photographing would race `activate_main` and grab Emberyx.
+        busy: Arc<AtomicBool>,
         /// Shared with `ThreadState` so teardown never has to dereference this
         /// box from the manager thread — it flips the same `Arc`.
         alive: Arc<AtomicBool>,
@@ -690,14 +765,26 @@ mod platform {
                     CGEventTapEnable(tap, 1);
                 }
             }
-            K_CG_EVENT_FLAGS_CHANGED => {
-                let both = both_shifts_down(CGEventGetFlags(event));
-                let was = ctx.both_down.swap(both, Ordering::Relaxed);
-                if both && !was {
-                    // Capture off the callback thread: a listen-only tap that
-                    // stalls its run loop drops keystrokes system-wide.
+            K_CG_EVENT_FLAGS_CHANGED | K_CG_EVENT_KEY_DOWN | K_CG_EVENT_KEY_UP => {
+                let flags_both = both_shifts_down(CGEventGetFlags(event));
+                let hid_both = CGEventSourceKeyState(K_CG_EVENT_SOURCE_STATE_HID, KEY_SHIFT_L) != 0
+                    && CGEventSourceKeyState(K_CG_EVENT_SOURCE_STATE_HID, KEY_SHIFT_R) != 0;
+                let both = flags_both || hid_both;
+                let now = TAP_EPOCH.elapsed().as_millis() as u64;
+                let last = ctx.last_fire_ms.load(Ordering::Relaxed);
+                let since = now.saturating_sub(last);
+                if should_fire_chord(both, since)
+                    && ctx
+                        .busy
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                        .is_ok()
+                {
+                    ctx.last_fire_ms.store(now, Ordering::Relaxed);
                     let app = ctx.app.clone();
                     let include_text = ctx.include_text.load(Ordering::Relaxed);
+                    let busy = Arc::clone(&ctx.busy);
+                    // Capture off the callback thread: a listen-only tap that
+                    // stalls its run loop drops keystrokes system-wide.
                     std::thread::spawn(move || {
                         let payload = capture(include_text).unwrap_or_else(|e| SnapshotCapture {
                             error: Some(e.to_string()),
@@ -705,6 +792,7 @@ mod platform {
                         });
                         activate_main(&app);
                         let _ = app.emit("snapshot-captured", payload);
+                        busy.store(false, Ordering::Release);
                     });
                 }
             }
@@ -715,9 +803,71 @@ mod platform {
 
     /// Bring Emberyx back to the front after the capture, so the thumb the user
     /// is about to see is on the window they were looking at a moment ago.
+    ///
+    /// `WebviewWindow::set_focus` only does `makeKeyAndOrderFront` +
+    /// `activateIgnoringOtherApps`, and tao skips it when the window is
+    /// miniaturized. On macOS 14+ that does not steal from the browser.
     fn activate_main(app: &AppHandle) {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.set_focus();
+        let Some(window) = app.get_webview_window("main") else {
+            return;
+        };
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = app.show();
+        let ns_window = window.ns_window().ok().map(|p| p as usize).unwrap_or(0);
+        let _ = app.run_on_main_thread(move || unsafe { steal_focus(ns_window as *mut c_void) });
+        let _ = window.set_focus();
+    }
+
+    fn sel(name: &[u8]) -> *mut c_void {
+        unsafe { sel_registerName(name.as_ptr().cast()) }
+    }
+
+    // One `objc_msgSend` symbol, three call ABIs. Transmute a real fn
+    // pointer (fixed 64-bit size) — not a generic `F`, which E0512 rejects.
+    unsafe fn msg0(obj: *mut c_void, sel: *mut c_void) -> *mut c_void {
+        let send: unsafe extern "C" fn() = objc_msgSend;
+        let f: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+            std::mem::transmute(send);
+        f(obj, sel)
+    }
+
+    unsafe fn msg1_ptr(obj: *mut c_void, sel: *mut c_void, arg: *mut c_void) -> *mut c_void {
+        let send: unsafe extern "C" fn() = objc_msgSend;
+        let f: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) -> *mut c_void =
+            std::mem::transmute(send);
+        f(obj, sel, arg)
+    }
+
+    unsafe fn msg1_uint(obj: *mut c_void, sel: *mut c_void, arg: usize) -> *mut c_void {
+        let send: unsafe extern "C" fn() = objc_msgSend;
+        let f: unsafe extern "C" fn(*mut c_void, *mut c_void, usize) -> *mut c_void =
+            std::mem::transmute(send);
+        f(obj, sel, arg)
+    }
+
+    unsafe fn steal_focus(ns_window: *mut c_void) {
+        let mut psn = ProcessSerialNumber { high: 0, low: 0 };
+        let _ = GetCurrentProcess(&mut psn);
+        let _ = SetFrontProcessWithOptions(&psn, K_SET_FRONT_PROCESS_FRONT_WINDOW_ONLY);
+
+        let running_cls = objc_getClass(b"NSRunningApplication\0".as_ptr().cast());
+        if !running_cls.is_null() {
+            let running = msg0(running_cls, sel(b"currentApplication\0"));
+            if !running.is_null() {
+                let _ = msg1_uint(
+                    running,
+                    sel(b"activateWithOptions:\0"),
+                    NS_APPLICATION_ACTIVATE_ALL_WINDOWS | NS_APPLICATION_ACTIVATE_IGNORING_OTHER_APPS,
+                );
+            }
+        }
+
+        if !ns_window.is_null() {
+            let nil = ptr::null_mut();
+            let _ = msg1_ptr(ns_window, sel(b"deminiaturize:\0"), nil);
+            let _ = msg1_ptr(ns_window, sel(b"makeKeyAndOrderFront:\0"), nil);
+            let _ = msg0(ns_window, sel(b"orderFrontRegardless\0"));
         }
     }
 
@@ -730,7 +880,9 @@ mod platform {
             K_CG_HID_EVENT_TAP,
             K_CG_HEAD_INSERT_EVENT_TAP,
             K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
-            1u64 << K_CG_EVENT_FLAGS_CHANGED,
+            (1u64 << K_CG_EVENT_FLAGS_CHANGED)
+                | (1u64 << K_CG_EVENT_KEY_DOWN)
+                | (1u64 << K_CG_EVENT_KEY_UP),
             tap_callback,
             ctx as *mut c_void,
         );
@@ -772,7 +924,8 @@ mod platform {
         let context = Box::into_raw(Box::new(TapContext {
             app,
             include_text: Arc::clone(&include_text),
-            both_down: AtomicBool::new(false),
+            last_fire_ms: AtomicU64::new(0),
+            busy: Arc::new(AtomicBool::new(false)),
             alive: Arc::clone(&alive),
             tap: AtomicPtr::new(ptr::null_mut()),
         }));
@@ -891,6 +1044,7 @@ mod platform {
             screen_recording: unsafe { CGPreflightScreenCaptureAccess() } != 0
                 || CAPTURED_OK.load(Ordering::Relaxed),
             accessibility: unsafe { AXIsProcessTrusted() } != 0,
+            input_monitoring: unsafe { CGPreflightListenEventAccess() } != 0,
             tap_running: manager.is_running(),
             tap_error: manager.last_error(),
         }
@@ -942,7 +1096,9 @@ mod platform {
                 unsafe { CGRequestScreenCaptureAccess() };
             }
             "accessibility" => prompt_accessibility(),
-            "input" => {}
+            "input" => {
+                unsafe { IOHIDRequestAccess(K_IOHID_REQUEST_TYPE_LISTEN_EVENT) };
+            }
             other => return Err(err!("snapshots: unknown permission kind \"{other}\"")),
         }
         let pane = permission_pane(kind)?;
@@ -965,13 +1121,17 @@ mod platform {
         use super::*;
 
         fn row(id: u32, layer: i64, owner: &str) -> WindowRow {
+            row_sized(id, layer, owner, 800.0, 600.0)
+        }
+
+        fn row_sized(id: u32, layer: i64, owner: &str, width: f64, height: f64) -> WindowRow {
             WindowRow {
                 id,
                 pid: 100 + id as i32,
                 layer,
                 bounds: CGRect {
                     origin: CGPoint { x: 0.0, y: 0.0 },
-                    size: CGSize { width: 800.0, height: 600.0 },
+                    size: CGSize { width, height },
                 },
                 owner: Some(owner.into()),
                 name: Some(format!("window {id}")),
@@ -1005,6 +1165,29 @@ mod platform {
             assert!(pick_frontmost(&rows).is_none());
         }
 
+        // Overlay titlebars (y=-44, 44pt) and Chromium tab strips (~68pt) are
+        // layer 0 and sit in front of the real window. Photographing them is
+        // why a "working" capture of Emberyx/Brave looks like nothing.
+        #[test]
+        fn a_thin_titlebar_in_front_is_not_the_window() {
+            let rows = vec![
+                row_sized(1, 0, "Emberyx", 1920.0, 44.0),
+                row_sized(2, 0, "Emberyx", 1920.0, 1080.0),
+            ];
+            assert_eq!(pick_frontmost(&rows).unwrap().id, 2);
+        }
+
+        // Picture-in-picture and other floating panels are what the user is
+        // looking at; they live above layer 0.
+        #[test]
+        fn a_floating_panel_beats_the_window_underneath() {
+            let rows = vec![
+                row_sized(1, 3, "Brave Browser", 1470.0, 827.0),
+                row_sized(2, 0, "Emberyx", 1920.0, 1080.0),
+            ];
+            assert_eq!(pick_frontmost(&rows).unwrap().owner.as_deref(), Some("Brave Browser"));
+        }
+
         #[test]
         fn both_shift_keys_down_is_the_trigger() {
             assert!(both_shifts_down(SHIFT_LEFT | SHIFT_RIGHT));
@@ -1020,6 +1203,15 @@ mod platform {
             // The generic shift bit alone (a synthesised event without device
             // bits) cannot name a side, so it is not the chord.
             assert!(!both_shifts_down(0x0002_0000));
+        }
+
+        #[test]
+        fn a_fresh_mash_fires_and_a_held_chord_does_not() {
+            assert!(should_fire_chord(true, CHORD_COOLDOWN_MS));
+            assert!(should_fire_chord(true, 10_000));
+            assert!(!should_fire_chord(true, 0));
+            assert!(!should_fire_chord(true, CHORD_COOLDOWN_MS - 1));
+            assert!(!should_fire_chord(false, 10_000));
         }
 
         #[test]
@@ -1092,6 +1284,7 @@ mod platform {
             platform: "other",
             screen_recording: false,
             accessibility: false,
+            input_monitoring: false,
             tap_running: false,
             tap_error: None,
         }
@@ -1156,6 +1349,7 @@ pub struct SnapshotsStatus {
     pub platform: &'static str,
     pub screen_recording: bool,
     pub accessibility: bool,
+    pub input_monitoring: bool,
     pub tap_running: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tap_error: Option<String>,
