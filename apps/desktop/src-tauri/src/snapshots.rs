@@ -15,8 +15,8 @@
 //! in a large binding surface for a handful of C calls into system frameworks.
 //!
 //! Permissions are the user's to grant: Screen Recording for the pixels,
-//! Accessibility for the tree (and for the tap itself). A missing permission
-//! is reported by name, never degraded around.
+//! Input Monitoring for the listen-only HID tap, Accessibility for the tree.
+//! A missing permission is reported by name, never degraded around.
 
 use serde::Serialize;
 
@@ -157,7 +157,10 @@ mod platform {
         fn CGDisplayPixelsHigh(display: CGDirectDisplayID) -> c_long;
     }
 
-    const K_CG_SESSION_EVENT_TAP: u32 = 1;
+    /// Listen-only HID taps need Input Monitoring, not Accessibility. A session
+    /// tap was the previous choice and silently failed unless the process was
+    /// already AX-trusted — Screen Recording alone was not enough.
+    const K_CG_HID_EVENT_TAP: u32 = 0;
     const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
     const K_CG_EVENT_TAP_OPTION_LISTEN_ONLY: u32 = 1;
     /// `kCGEventFlagsChanged` (`NX_FLAGSCHANGED`); the tap mask is one bit.
@@ -215,6 +218,42 @@ mod platform {
         fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, timeout: f32);
         fn AXValueGetValue(value: AXValueRef, the_type: u32, buffer: *mut c_void) -> u8;
         fn AXIsProcessTrusted() -> u8;
+        fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> u8;
+        static kAXTrustedCheckOptionPrompt: CFStringRef;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFBooleanTrue: CFTypeRef;
+        static kCFTypeDictionaryKeyCallBacks: CFDictionaryKeyCallBacks;
+        static kCFTypeDictionaryValueCallBacks: CFDictionaryValueCallBacks;
+        fn CFDictionaryCreate(
+            allocator: CFAllocatorRef,
+            keys: *const *const c_void,
+            values: *const *const c_void,
+            num_values: CFIndex,
+            key_call_backs: *const CFDictionaryKeyCallBacks,
+            value_call_backs: *const CFDictionaryValueCallBacks,
+        ) -> CFDictionaryRef;
+    }
+
+    #[repr(C)]
+    struct CFDictionaryKeyCallBacks {
+        version: CFIndex,
+        retain: *const c_void,
+        release: *const c_void,
+        copy_description: *const c_void,
+        equal: *const c_void,
+        hash: *const c_void,
+    }
+
+    #[repr(C)]
+    struct CFDictionaryValueCallBacks {
+        version: CFIndex,
+        retain: *const c_void,
+        release: *const c_void,
+        copy_description: *const c_void,
+        equal: *const c_void,
     }
 
     const K_AX_VALUE_TYPE_POINT: u32 = 1;
@@ -548,6 +587,11 @@ mod platform {
         result
     }
 
+    /// A successful capture this process: `CGPreflightScreenCaptureAccess` stays
+    /// false until relaunch even after the user flips the System Settings
+    /// toggle, so status also trusts a capture that actually produced pixels.
+    static CAPTURED_OK: AtomicBool = AtomicBool::new(false);
+
     /// Capture whatever is frontmost right now. Shared by the tap and the
     /// settings page's test button.
     pub fn capture(include_text: bool) -> Result<SnapshotCapture> {
@@ -557,20 +601,23 @@ mod platform {
         };
         let app = win.owner.clone().unwrap_or_default();
         let title = win.name.clone().unwrap_or_default();
-        if unsafe { CGPreflightScreenCaptureAccess() } == 0 {
-            return Ok(SnapshotCapture {
-                app,
-                title,
-                error: Some(
-                    "Screen Recording permission is missing — allow Emberyx in System Settings → Privacy & Security → Screen Recording."
-                        .into(),
-                ),
-                ..SnapshotCapture::default()
-            });
-        }
+        // Preflight is cached until relaunch. Try the image first — a grant
+        // that System Settings already shows as on often still photographs.
         let Some(bytes) = (unsafe { capture_png(win.id, win.bounds) }) else {
+            if unsafe { CGPreflightScreenCaptureAccess() } == 0 {
+                return Ok(SnapshotCapture {
+                    app,
+                    title,
+                    error: Some(
+                        "Screen Recording permission is missing — allow Emberyx in System Settings → Privacy & Security → Screen Recording, then quit and reopen Emberyx."
+                            .into(),
+                    ),
+                    ..SnapshotCapture::default()
+                });
+            }
             return Err(err!("could not capture the frontmost window"));
         };
+        CAPTURED_OK.store(true, Ordering::Relaxed);
         // A missing Accessibility grant degrades to image-only, the same way a
         // slow AX server does — the pixels are the part the user asked for.
         let a11y = if include_text && unsafe { AXIsProcessTrusted() } != 0 {
@@ -680,7 +727,7 @@ mod platform {
     ) {
         let ctx = state.context;
         let tap = CGEventTapCreate(
-            K_CG_SESSION_EVENT_TAP,
+            K_CG_HID_EVENT_TAP,
             K_CG_HEAD_INSERT_EVENT_TAP,
             K_CG_EVENT_TAP_OPTION_LISTEN_ONLY,
             1u64 << K_CG_EVENT_FLAGS_CHANGED,
@@ -690,7 +737,7 @@ mod platform {
         if tap.is_null() {
             drop(Box::from_raw(ctx));
             let _ = report.send(Err(
-                "snapshots: could not create the global tap — grant Emberyx Accessibility (Input Monitoring) in System Settings"
+                "snapshots: could not create the global tap — grant Emberyx Input Monitoring in System Settings → Privacy & Security → Input Monitoring"
                     .into(),
             ));
             return;
@@ -775,35 +822,55 @@ mod platform {
     }
 
     #[derive(Default)]
+    struct ManagerState {
+        tap: Option<RunningTap>,
+        last_error: Option<String>,
+    }
+
+    #[derive(Default)]
     pub struct SnapshotManager {
-        inner: Mutex<Option<RunningTap>>,
+        inner: Mutex<ManagerState>,
     }
 
     impl SnapshotManager {
         fn is_running(&self) -> bool {
-            self.inner.lock().map(|g| g.is_some()).unwrap_or(false)
+            self.inner.lock().map(|g| g.tap.is_some()).unwrap_or(false)
+        }
+
+        fn last_error(&self) -> Option<String> {
+            self.inner.lock().ok().and_then(|g| g.last_error.clone())
         }
 
         /// Start the tap only while enabled; a re-`set_enabled` with the same
         /// state just refreshes the "include app text" flag the callback reads.
         pub fn set_enabled(&self, app: AppHandle, enabled: bool, include_text: bool) -> Result<()> {
             let mut guard = self.inner.lock().map_err(|_| "snapshots: lock poisoned")?;
-            match (enabled, guard.as_mut()) {
-                (false, Some(_)) => {
-                    if let Some(running) = guard.take() {
+            match (enabled, guard.tap.is_some()) {
+                (false, true) => {
+                    if let Some(running) = guard.tap.take() {
                         stop_tap(running);
+                    }
+                    guard.last_error = None;
+                    Ok(())
+                }
+                (true, true) => {
+                    if let Some(running) = guard.tap.as_mut() {
+                        running.include_text.store(include_text, Ordering::Relaxed);
                     }
                     Ok(())
                 }
-                (true, Some(running)) => {
-                    running.include_text.store(include_text, Ordering::Relaxed);
-                    Ok(())
-                }
-                (true, None) => {
-                    *guard = Some(start_tap(app, include_text)?);
-                    Ok(())
-                }
-                (false, None) => Ok(()),
+                (true, false) => match start_tap(app, include_text) {
+                    Ok(running) => {
+                        guard.tap = Some(running);
+                        guard.last_error = None;
+                        Ok(())
+                    }
+                    Err(e) => {
+                        guard.last_error = Some(e.to_string());
+                        Err(e)
+                    }
+                },
+                (false, false) => Ok(()),
             }
         }
 
@@ -811,7 +878,7 @@ mod platform {
         /// the app that registered it.
         pub fn kill_all(&self) {
             if let Ok(mut guard) = self.inner.lock() {
-                if let Some(running) = guard.take() {
+                if let Some(running) = guard.tap.take() {
                     stop_tap(running);
                 }
             }
@@ -821,24 +888,64 @@ mod platform {
     pub fn status(manager: &SnapshotManager) -> SnapshotsStatus {
         SnapshotsStatus {
             platform: "macos",
-            screen_recording: unsafe { CGPreflightScreenCaptureAccess() } != 0,
+            screen_recording: unsafe { CGPreflightScreenCaptureAccess() } != 0
+                || CAPTURED_OK.load(Ordering::Relaxed),
             accessibility: unsafe { AXIsProcessTrusted() } != 0,
             tap_running: manager.is_running(),
+            tap_error: manager.last_error(),
+        }
+    }
+
+    fn permission_pane(kind: &str) -> Result<&'static str> {
+        match kind {
+            "screen" => {
+                Ok("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            }
+            "accessibility" => {
+                Ok("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            }
+            "input" => {
+                Ok("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
+            }
+            other => Err(err!("snapshots: unknown permission kind \"{other}\"")),
+        }
+    }
+
+    fn prompt_accessibility() {
+        // Puts Emberyx on the Accessibility list and shows the system sheet.
+        // Opening the pane alone does not register an app that has never asked.
+        unsafe {
+            let prompt = kAXTrustedCheckOptionPrompt;
+            if prompt.is_null() || kCFBooleanTrue.is_null() {
+                return;
+            }
+            let keys: [*const c_void; 1] = [prompt as *const c_void];
+            let values: [*const c_void; 1] = [kCFBooleanTrue];
+            let dict = CFDictionaryCreate(
+                ptr::null(),
+                keys.as_ptr(),
+                values.as_ptr(),
+                1,
+                &kCFTypeDictionaryKeyCallBacks,
+                &kCFTypeDictionaryValueCallBacks,
+            );
+            if !dict.is_null() {
+                AXIsProcessTrustedWithOptions(dict);
+                CFRelease(dict);
+            }
         }
     }
 
     pub fn request_permission(kind: &str) -> Result<()> {
-        // The System Settings pane is the prompt; no programmatic dialog on top.
-        let pane = match kind {
+        match kind {
             "screen" => {
                 unsafe { CGRequestScreenCaptureAccess() };
-                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
             }
-            "accessibility" => {
-                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-            }
+            "accessibility" => prompt_accessibility(),
+            "input" => {}
             other => return Err(err!("snapshots: unknown permission kind \"{other}\"")),
-        };
+        }
+        let pane = permission_pane(kind)?;
         let status = std::process::Command::new("open")
             .arg(pane)
             .status()
@@ -916,6 +1023,14 @@ mod platform {
         }
 
         #[test]
+        fn permission_panes_are_named_kinds() {
+            assert!(permission_pane("screen").unwrap().contains("ScreenCapture"));
+            assert!(permission_pane("accessibility").unwrap().contains("Accessibility"));
+            assert!(permission_pane("input").unwrap().contains("ListenEvent"));
+            assert!(permission_pane("camera").is_err());
+        }
+
+        #[test]
         fn ax_frames_land_in_window_space() {
             let win = CGRect {
                 origin: CGPoint { x: 100.0, y: 200.0 },
@@ -978,6 +1093,7 @@ mod platform {
             screen_recording: false,
             accessibility: false,
             tap_running: false,
+            tap_error: None,
         }
     }
 
@@ -1041,6 +1157,8 @@ pub struct SnapshotsStatus {
     pub screen_recording: bool,
     pub accessibility: bool,
     pub tap_running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tap_error: Option<String>,
 }
 
 #[tauri::command]

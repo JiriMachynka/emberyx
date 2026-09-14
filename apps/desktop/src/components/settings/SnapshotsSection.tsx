@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { Button } from "@/components/ui/button";
 import { Group, Row, StatusDot, SwitchRow } from "@/components/SettingsFields";
 import type { SnapshotCaptured } from "@/lib/snapshotA11y";
@@ -10,6 +11,7 @@ interface SnapshotsStatus {
   screenRecording: boolean;
   accessibility: boolean;
   tapRunning: boolean;
+  tapError?: string;
 }
 
 /**
@@ -44,7 +46,7 @@ export const SnapshotsSection = ({
     return () => window.removeEventListener("focus", refresh);
   }, [refresh]);
 
-  const requestPermission = async (kind: "screen" | "accessibility") => {
+  const requestPermission = async (kind: "screen" | "accessibility" | "input") => {
     try {
       await invoke("snapshots_request_permission", { kind });
     } catch (e) {
@@ -114,16 +116,26 @@ export const SnapshotsSection = ({
               <p className="text-sm font-medium">1. Allow capture</p>
               <p className="text-xs leading-relaxed text-muted-foreground">
                 Screen Recording lets Emberyx photograph the frontmost window.
-                The capture never leaves your machine.
+                The capture never leaves your machine. macOS only applies the
+                grant to a new launch — if the toggle is already on, quit and
+                reopen Emberyx.
               </p>
-              <Button
-                size="sm"
-                variant="outline"
-                className="justify-self-start"
-                onClick={() => void requestPermission("screen")}
-              >
-                Open System Settings
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void requestPermission("screen")}
+                >
+                  Open System Settings
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void relaunch()}
+                >
+                  Quit and reopen
+                </Button>
+              </div>
             </div>
             <div className="grid gap-1.5">
               <p className="text-sm font-medium">2. Choose shortcut</p>
@@ -144,10 +156,9 @@ export const SnapshotsSection = ({
         <Row
           label="Shortcut"
           hint={
-            // The tap itself can demand Accessibility even with app text off —
-            // a shortcut that silently never fires is the failure worth naming.
-            settings.snapshotsEnabled && status && !status.tapRunning && !status.accessibility
-              ? "The trigger isn't registered yet — macOS asks for Accessibility before an app may watch the keyboard. Grant it and the shortcut starts working."
+            settings.snapshotsEnabled && status && !status.tapRunning
+              ? status.tapError ??
+                "The trigger isn't registered yet — macOS asks for Input Monitoring before an app may watch the keyboard globally. Grant it and the shortcut starts working."
               : "A regular key chord can be added later if the modifier pair can't be registered on this Mac."
           }
           control={
@@ -170,7 +181,7 @@ export const SnapshotsSection = ({
               size="sm"
               variant="outline"
               className="justify-self-start"
-              onClick={() => void requestPermission("accessibility")}
+              onClick={() => void requestPermission("input")}
             >
               Open System Settings
             </Button>

@@ -118,7 +118,7 @@ export const TABS: TabMeta[] = [
     // ships only the both-Shifts trigger), and a key no control writes is one
     // Restore resets behind its users' backs.
     keys: ["snapshotsEnabled", "snapshotsIncludeAppText"],
-    finds: "snapshot screenshot capture shift window accessibility screen recording attach",
+    finds: "snapshot screenshot capture shift window accessibility screen recording input monitoring attach",
   },
   {
     id: "sourceControl",

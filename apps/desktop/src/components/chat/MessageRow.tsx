@@ -102,10 +102,13 @@ export interface ChatContext {
   revertTurn: (checkpointId: string) => Promise<void>;
 }
 
-/** The hover strip under an assistant message. */
+/** The hover strip under an assistant message.
+ *  `top-full` sits the control below the text; `-mt-2 pt-2` overlaps the last
+ *  line so the pointer never leaves the group on the way down, and the hide
+ *  is delayed so a slow approach doesn't lose it mid-travel. */
 export function MessageActions({ text }: { text: string }) {
   return (
-    <div className="absolute left-0 top-full flex w-fit items-center gap-1 text-xs opacity-0 transition-opacity group-hover:opacity-100">
+    <div className="absolute left-0 top-full z-10 -mt-2 flex w-fit items-center gap-1 pt-2 text-xs opacity-0 transition-opacity delay-150 duration-150 group-hover:opacity-100 group-hover:delay-0">
       <CopyButton text={text} />
     </div>
   );
