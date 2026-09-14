@@ -33,9 +33,9 @@ const FAVORITES = "favorites" as const;
 type Rail = typeof FAVORITES | Provider;
 
 /** Providers whose models Emberyx can actually enumerate. Claude's list is
- *  hand-written (the CLI has none to ask); Codex's comes off its app-server;
- *  the ACP providers answer with theirs on `session/new`, read here from a
- *  throwaway session. */
+ *  derived from LiteLLM (the CLI has none to ask); Codex's comes off its
+ *  app-server; the ACP providers answer with theirs on `session/new`, read
+ *  here from a throwaway session. */
 const isLiveProvider = (p: Provider) => isAgentBackend(p);
 
 interface ModelPickerProps {

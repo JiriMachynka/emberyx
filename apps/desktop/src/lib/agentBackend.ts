@@ -50,8 +50,9 @@ export interface AgentCapabilities {
   accountIssues: boolean;
   /** The live session announces its own model catalog (ACP hands one back with
    *  `session/new`), so the chat's own provider never has to be probed a second
-   *  time. Claude's list is hand-written and Codex's has to be read off an
-   *  `app-server` even for the session already running on it. */
+   *  time. Claude's list is derived from LiteLLM plus a seed — the CLI has no
+   *  list command — and Codex's has to be read off an `app-server` even for the
+   *  session already running on it. */
   sessionModelCatalog: boolean;
   /** Several named launch configurations can be saved and picked per session —
    *  a second account, a router in front of the API. Only Claude has them:
