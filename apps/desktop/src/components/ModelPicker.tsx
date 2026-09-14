@@ -5,7 +5,6 @@ import { cn } from "@/lib/utils";
 import { BACKEND_LABEL, isAgentBackend, type AgentBackend } from "@/lib/agentBackend";
 import { PROVIDERS, PROVIDER_LABEL, type Provider } from "@/lib/providers";
 import {
-  CLAUDE_MODELS,
   acpModelEntries,
   codexModelEntries,
   labelForModel,
@@ -26,7 +25,7 @@ import {
 } from "@/lib/modelFavorites";
 import { codexEffortForModel } from "@/lib/codex/models";
 import { contextLabel } from "@/lib/modelContext";
-import { useAcpModels, useCodexModels, useProviderStatus } from "@/lib/queries";
+import { useAcpModels, useClaudeModels, useCodexModels, useProviderStatus } from "@/lib/queries";
 import type { ChatUsage } from "@/hooks/useAgentChat";
 
 /** The rail's first entry: whatever the user starred, across providers. */
@@ -97,6 +96,7 @@ export const ModelPicker = memo(function ModelPicker({
   // Read once per mount, like favourites — the Settings surface owns edits.
   const [hiddenModels] = useState(getHiddenModels);
   const [customModels] = useState(getCustomModels);
+  const claudeModels = useClaudeModels();
 
   const installed = useProviderStatus().data ?? [];
   // Reading a catalog means opening an app-server (Codex) or a throwaway
@@ -113,7 +113,7 @@ export const ModelPicker = memo(function ModelPicker({
     backend === "codex" ||
     rail === "codex" ||
     (rail === FAVORITES &&
-      favorites.some((id) => !CLAUDE_MODELS.some((m) => m.id === id)));
+      favorites.some((id) => !claudeModels.some((m) => m.id === id)));
   const codexCatalog = useCodexModels(
     cwd,
     (wantsCodex && open) ||
@@ -159,7 +159,7 @@ export const ModelPicker = memo(function ModelPicker({
 
   const all = useMemo<ModelEntry[]>(() => {
     const entries = [
-      ...CLAUDE_MODELS,
+      ...claudeModels,
       ...codexModelEntries(codexModels),
       ...acpModelEntries("grok", grokCatalog.data ?? []),
       ...acpModelEntries("opencode", opencodeOwnModels(opencodeCatalog.data ?? [])),
@@ -183,6 +183,7 @@ export const ModelPicker = memo(function ModelPicker({
     return withModelPrefs(deduped, hiddenModels, customModels);
   }, [
     backend,
+    claudeModels,
     codexModels,
     grokCatalog.data,
     opencodeCatalog.data,

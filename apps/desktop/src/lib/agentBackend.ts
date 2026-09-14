@@ -159,7 +159,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     compact: true,
     conversationRewind: true,
     accountIssues: true,
-    // Catalog is hand-written in modelCatalog.ts, not announced by the session.
+    // Catalog is derived from LiteLLM + seed, not announced by the session.
     sessionModelCatalog: false,
     launchProfiles: true,
     configDirOverride: true,

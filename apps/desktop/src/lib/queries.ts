@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import {
   QueryClient,
   useMutation,
@@ -23,6 +23,8 @@ import type {
 import { listCodexModels, listCodexSkills } from "@/lib/codex/transport";
 import { readAcpModels } from "@/lib/acp/transport";
 import { loadSettings } from "@/lib/settings";
+import { claudeModelEntries, claudePinsFromCatalog } from "@/lib/modelCatalog";
+import { pricingCatalogIds, subscribePricing } from "@/lib/pricing";
 import {
   checkpointTurnContents,
   checkpointTurnFiles,
@@ -861,6 +863,13 @@ export const useSlashCommands = (
   });
 
 export const codexKeys = { models: ["codex", "models"] as const };
+
+/** Claude's catalog: seed until LiteLLM loads, then live pins generation-folded.
+ *  Same fetch as pricing — no second network call. */
+export const useClaudeModels = () => {
+  const keys = useSyncExternalStore(subscribePricing, pricingCatalogIds, pricingCatalogIds);
+  return useMemo(() => claudeModelEntries(claudePinsFromCatalog(keys)), [keys]);
+};
 
 /** Codex's model catalog. Account-wide, so it isn't keyed by project, and it
  *  only loads once the picker that needs it is mounted. */

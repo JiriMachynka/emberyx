@@ -129,11 +129,40 @@ interface PricingCache {
   contexts: Record<string, number>;
 }
 
+const EMPTY_IDS: readonly string[] = [];
+const pricingListeners = new Set<() => void>();
+let pinSnapshot: readonly string[] = EMPTY_IDS;
+
+const notifyPricing = (rates: Record<string, Rate> | undefined) => {
+  const next = rates ? Object.keys(rates) : EMPTY_IDS;
+  if (
+    next.length === pinSnapshot.length &&
+    next.every((key, i) => key === pinSnapshot[i])
+  ) {
+    return;
+  }
+  pinSnapshot = next;
+  for (const listener of pricingListeners) listener();
+};
+
+/** Subscribe to LiteLLM catalog identity changes. Snapshot is a stable array
+ *  of catalog keys — same reference until the key list actually changes. */
+export const subscribePricing = (onStoreChange: () => void): (() => void) => {
+  pricingListeners.add(onStoreChange);
+  return () => {
+    pricingListeners.delete(onStoreChange);
+  };
+};
+
+/** Live LiteLLM catalog keys (lowercased). Empty until a cache or fetch lands. */
+export const pricingCatalogIds = (): readonly string[] => pinSnapshot;
+
 // Populated synchronously from localStorage at load, then kept fresh by
 // `refreshPricing()`. Keys are lowercased Claude model ids as they appear in
 // the LiteLLM catalog (e.g. "claude-opus-4-1").
 let liveRates: Record<string, Rate> | undefined = readCache()?.rates;
 let liveContexts: Record<string, number> | undefined = readCache()?.contexts;
+if (liveRates) pinSnapshot = Object.keys(liveRates);
 
 /**
  * A cache written by an older version — or hand-edited — can hold anything.
@@ -246,6 +275,7 @@ async function fetchPricing(): Promise<void> {
     liveRates = rates;
     liveContexts = contexts;
     localStorage.setItem(CACHE_KEY, JSON.stringify({ fetchedAt: Date.now(), rates, contexts }));
+    notifyPricing(rates);
   } catch {
     // Offline or the catalog moved — fallback table carries on.
   }

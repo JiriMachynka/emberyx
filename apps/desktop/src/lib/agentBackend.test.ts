@@ -14,7 +14,7 @@ describe("capabilitiesOf", () => {
   // spawn-time `--effort`, Codex per turn.
   it("gives Claude everything its CLI implements", () => {
     const caps = capabilitiesOf("claude");
-    // Hand-written catalog, and listing reads files rather than spawning.
+    // Catalog is derived, not announced by the session; listing reads files.
     expect(caps.sessionModelCatalog).toBe(false);
     expect(caps.threadScanSpawnsChild).toBe(false);
     const { sessionModelCatalog: _catalog, threadScanSpawnsChild: _scan, ...rest } =

@@ -7,8 +7,9 @@
  *
  * `legacy` splits the list the way the picker shows it: current generation up
  * top, everything still selectable but superseded folded into one row. Claude's
- * catalog is hand-written (the CLI has no list command); Codex's arrives from
- * `codex app-server`, so its generations are derived rather than declared.
+ * CLI has no list command, so pins are derived from the LiteLLM catalog (same
+ * fetch as pricing) and generation-folded; `CLAUDE_MODELS` is the offline
+ * seed. Codex's catalog arrives from `codex app-server`.
  */
 
 import type { AgentBackend } from "@/lib/agentBackend";
@@ -34,23 +35,116 @@ const claude = (id: string, label: string, legacy = false): ModelEntry => ({
   legacy,
 });
 
-/** Claude's catalog. The bare aliases resolve to whatever the CLI thinks is
- *  latest, which is a different promise from a pinned id — they sit with the
- *  older pins rather than pretending to be a named model. */
+/** Claude's offline seed. The bare aliases resolve to whatever the CLI thinks
+ *  is latest, which is a different promise from a pinned id — they sit with the
+ *  older pins rather than pretending to be a named model. Live pins from the
+ *  LiteLLM catalog replace the pinned rows once pricing has loaded. */
 export const CLAUDE_MODELS: ModelEntry[] = [
   claude("claude-opus-5", "Claude Opus 5"),
-  claude("claude-fable-5", "Claude Fable 5"),
+  claude("claude-fable-5-1", "Claude Fable 5.1"),
   claude("claude-sonnet-5", "Claude Sonnet 5"),
   claude("claude-haiku-4-5", "Claude Haiku 4.5"),
   claude("opus", "Opus (latest)", true),
   claude("sonnet", "Sonnet (latest)", true),
   claude("haiku", "Haiku (latest)", true),
+  claude("fable", "Fable (latest)", true),
   claude("sonnet[1m]", "Claude Sonnet (1M context)", true),
+  claude("claude-fable-5", "Claude Fable 5", true),
   claude("claude-opus-4-8", "Claude Opus 4.8", true),
   claude("claude-opus-4-7", "Claude Opus 4.7", true),
   claude("claude-opus-4-6", "Claude Opus 4.6", true),
   claude("claude-sonnet-4-6", "Claude Sonnet 4.6", true),
 ];
+
+/** Family order on the current-generation row — matches the seed. */
+const CLAUDE_FAMILY_ORDER = ["opus", "fable", "sonnet", "haiku"] as const;
+
+/** First-party undated pin (`claude-fable-5-1`). Drops vendor prefixes, dated
+ *  snapshots (`-20250514`), Mythos, and bracket variants. */
+const CLAUDE_CATALOG_PIN = /^claude-(opus|sonnet|haiku|fable)-\d+(?:-\d{1,2})?$/;
+
+/** A Claude Code id, pin or not. Bracket suffixes (`[1m]`) are stripped so a
+ *  1M variant still reports the pin's generation. */
+const CLAUDE_ID =
+  /^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2}))?$/;
+
+const parseClaudeId = (id: string): { family: string; gen: number } | undefined => {
+  const bare = id.replace(/\[.*$/, "").toLowerCase();
+  const match = CLAUDE_ID.exec(bare);
+  const family = match?.[1];
+  const major = match?.[2];
+  if (!family || !major) return undefined;
+  const gen = match[3] === undefined ? Number(major) : Number(`${major}.${match[3]}`);
+  return { family, gen };
+};
+
+/** Numeric generation of a Claude pin ("claude-fable-5-1" → 5.1); -1 when
+ *  unreadable, so an alias is never mistaken for the newest pin. */
+export const claudeGeneration = (id: string): number => parseClaudeId(id)?.gen ?? -1;
+
+/** First-party undated family pins from a pricing-catalog key list. */
+export const claudePinsFromCatalog = (keys: readonly string[]): string[] => {
+  const seen = new Set<string>();
+  const pins: string[] = [];
+  for (const key of keys) {
+    const id = key.toLowerCase();
+    if (seen.has(id) || !CLAUDE_CATALOG_PIN.test(id)) continue;
+    seen.add(id);
+    pins.push(id);
+  }
+  return pins;
+};
+
+const claudePinLabel = (id: string): string => {
+  const seeded = CLAUDE_MODELS.find((m) => m.id === id);
+  if (seeded) return seeded.label;
+  const parsed = parseClaudeId(id);
+  if (!parsed) return id;
+  const family = parsed.family.charAt(0).toUpperCase() + parsed.family.slice(1);
+  return `Claude ${family} ${parsed.gen}`;
+};
+
+const claudeFamilyRank = (id: string): number => {
+  const family = parseClaudeId(id)?.family;
+  if (!family) return CLAUDE_FAMILY_ORDER.length;
+  const at = CLAUDE_FAMILY_ORDER.findIndex((f) => f === family);
+  return at === -1 ? CLAUDE_FAMILY_ORDER.length : at;
+};
+
+/**
+ * Claude's catalog as picker entries. Live LiteLLM pins replace the seed's
+ * pins and fold the same way Codex does: newest generation per family is
+ * current, everything behind it is legacy. An empty pin list keeps the seed
+ * so the picker is populated before pricing loads. Aliases stay on the seed —
+ * LiteLLM does not list them.
+ */
+export const claudeModelEntries = (livePins: readonly string[]): ModelEntry[] => {
+  if (livePins.length === 0) return CLAUDE_MODELS;
+  const newest = new Map<string, number>();
+  for (const id of livePins) {
+    const parsed = parseClaudeId(id);
+    if (!parsed) continue;
+    newest.set(parsed.family, Math.max(newest.get(parsed.family) ?? -1, parsed.gen));
+  }
+  const pins = livePins.map((id) => {
+    const parsed = parseClaudeId(id);
+    const top = parsed ? (newest.get(parsed.family) ?? -1) : -1;
+    return {
+      id,
+      label: claudePinLabel(id),
+      provider: "claude" as const,
+      legacy: !parsed || parsed.gen < top,
+    };
+  });
+  pins.sort(
+    (a, b) =>
+      Number(a.legacy) - Number(b.legacy) ||
+      claudeFamilyRank(a.id) - claudeFamilyRank(b.id) ||
+      a.id.localeCompare(b.id)
+  );
+  const aliases = CLAUDE_MODELS.filter((m) => claudeGeneration(m.id) < 0);
+  return [...pins, ...aliases];
+};
 
 /** Numeric generation of a Codex id ("gpt-5.6-luna" → 5.6); -1 when unreadable,
  *  so an id we can't parse is never mistaken for the newest one. */
@@ -230,18 +324,25 @@ export function withModelPrefs(
   return [...entries, ...customs].filter((e) => !hide.has(e.id));
 }
 
+/** A Claude-shaped id: a family pin (including Mythos), a seed alias, or a
+ *  custom slug. New pins are recognized before the catalog refresh. */
+const isClaudeId = (model: string, custom: string[]): boolean => {
+  if (custom.includes(model)) return true;
+  if (CLAUDE_MODELS.some((m) => m.id === model)) return true;
+  return /^claude-(opus|sonnet|haiku|fable|mythos)-/i.test(model);
+};
+
 /**
  * Can a pinned model id run under this backend?
  *
  * The stored default model is provider-blind: a pick writes it globally, while
  * the backend a new chat launches on is resolved separately (per-project pin
  * first, then the global default) — the two can disagree, and a pane seeds both
- * without the reconciliation a manual pick does. Claude is the one backend
- * whose ids are fully known without spawning anything (hand-written catalog
- * plus the user's custom slugs), so the check is exact in both directions it
- * can be: a non-Claude id under Claude is foreign, and so is a Claude id under
- * anyone else. Other providers' catalogs are only readable by opening a
- * session, so an id they might own is kept — this is a guard, not an oracle.
+ * without the reconciliation a manual pick does. Claude ids are recognized by
+ * shape (family pin, seed alias, custom slug), so a new pin is not treated as
+ * foreign before the catalog refresh. Other providers' catalogs are only
+ * readable by opening a session, so an id they might own is kept — this is a
+ * guard, not an oracle.
  */
 export const modelFitsBackend = (
   model: string,
@@ -249,9 +350,6 @@ export const modelFitsBackend = (
   custom: Partial<Record<AgentBackend, string[]>>
 ): boolean => {
   if (model === "") return true;
-  const claudeIds = new Set([
-    ...CLAUDE_MODELS.map((m) => m.id),
-    ...(custom.claude ?? []),
-  ]);
-  return backend === "claude" ? claudeIds.has(model) : !claudeIds.has(model);
+  const claude = isClaudeId(model, custom.claude ?? []);
+  return backend === "claude" ? claude : !claude;
 };

@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   CLAUDE_MODELS,
   acpModelEntries,
+  claudeGeneration,
+  claudeModelEntries,
+  claudePinsFromCatalog,
   codexGeneration,
   codexModelEntries,
   labelForModel,
@@ -24,12 +27,104 @@ describe("CLAUDE_MODELS", () => {
     const current = CLAUDE_MODELS.filter((m) => !m.legacy).map((m) => m.id);
     expect(current).toEqual([
       "claude-opus-5",
-      "claude-fable-5",
+      "claude-fable-5-1",
       "claude-sonnet-5",
       "claude-haiku-4-5",
     ]);
     // A bare alias is a different promise from a pinned id.
     expect(CLAUDE_MODELS.find((m) => m.id === "opus")?.legacy).toBe(true);
+    expect(CLAUDE_MODELS.find((m) => m.id === "fable")?.legacy).toBe(true);
+    expect(CLAUDE_MODELS.find((m) => m.id === "claude-fable-5")?.legacy).toBe(true);
+  });
+});
+
+describe("claudeGeneration", () => {
+  it("reads the version out of a pin, ignoring a bracket suffix", () => {
+    expect(claudeGeneration("claude-fable-5-1")).toBe(5.1);
+    expect(claudeGeneration("claude-fable-5")).toBe(5);
+    expect(claudeGeneration("claude-opus-5")).toBe(5);
+    expect(claudeGeneration("claude-opus-4-8")).toBe(4.8);
+    expect(claudeGeneration("claude-haiku-4-5")).toBe(4.5);
+    expect(claudeGeneration("claude-sonnet-5[1m]")).toBe(5);
+  });
+
+  it("is -1 for an alias it can't parse", () => {
+    expect(claudeGeneration("fable")).toBe(-1);
+    expect(claudeGeneration("opus")).toBe(-1);
+  });
+});
+
+describe("claudePinsFromCatalog", () => {
+  it("keeps first-party undated family pins", () => {
+    expect(
+      claudePinsFromCatalog([
+        "claude-fable-5-1",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-haiku-4-5",
+        "claude-fable-5",
+      ])
+    ).toEqual([
+      "claude-fable-5-1",
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-haiku-4-5",
+      "claude-fable-5",
+    ]);
+  });
+
+  it("drops vendor prefixes, dated snapshots and mythos", () => {
+    expect(
+      claudePinsFromCatalog([
+        "anthropic.claude-fable-5-1",
+        "claude-fable-5-1-20260901",
+        "claude-opus-4-20250514",
+        "claude-mythos-5-1",
+        "claude-sonnet-5[1m]",
+        "claude-fable-5-1",
+      ])
+    ).toEqual(["claude-fable-5-1"]);
+  });
+});
+
+describe("claudeModelEntries", () => {
+  it("keeps the seed when no live pins have loaded", () => {
+    expect(claudeModelEntries([])).toBe(CLAUDE_MODELS);
+    expect(claudeModelEntries([]).map((m) => m.id)).toContain("claude-fable-5-1");
+  });
+
+  it("marks older pins in a family as legacy", () => {
+    const entries = claudeModelEntries([
+      "claude-fable-5-1",
+      "claude-fable-5",
+      "claude-opus-5",
+      "claude-opus-4-8",
+      "claude-sonnet-5",
+      "claude-haiku-4-5",
+    ]);
+    const byId = Object.fromEntries(entries.map((e) => [e.id, e.legacy]));
+    expect(byId["claude-fable-5-1"]).toBe(false);
+    expect(byId["claude-fable-5"]).toBe(true);
+    expect(entries.find((e) => e.id === "claude-fable-5-1")?.label).toBe("Claude Fable 5.1");
+    expect(byId["claude-opus-5"]).toBe(false);
+    expect(byId["claude-opus-4-8"]).toBe(true);
+    expect(entries.filter((e) => !e.legacy).map((e) => e.id)).toEqual([
+      "claude-opus-5",
+      "claude-fable-5-1",
+      "claude-sonnet-5",
+      "claude-haiku-4-5",
+    ]);
+  });
+
+  it("keeps aliases from the seed after live pins", () => {
+    const entries = claudeModelEntries(["claude-opus-5"]);
+    expect(entries.find((e) => e.id === "fable")?.legacy).toBe(true);
+    expect(entries.find((e) => e.id === "opus")?.legacy).toBe(true);
+  });
+
+  it("labels a live pin that is not in the seed", () => {
+    const entries = claudeModelEntries(["claude-opus-5", "claude-opus-4-1"]);
+    expect(entries.find((e) => e.id === "claude-opus-4-1")?.label).toBe("Claude Opus 4.1");
   });
 });
 
@@ -264,6 +359,12 @@ describe("modelFitsBackend", () => {
 
   it("accepts a catalog id under its own backend", () => {
     expect(modelFitsBackend("claude-sonnet-5", "claude", {})).toBe(true);
+    expect(modelFitsBackend("claude-fable-5-1", "claude", {})).toBe(true);
+  });
+
+  it("accepts a Claude-shaped pin that is not in the seed yet", () => {
+    expect(modelFitsBackend("claude-opus-6", "claude", {})).toBe(true);
+    expect(modelFitsBackend("claude-opus-6", "codex", {})).toBe(false);
   });
 
   it("accepts a custom claude slug under claude — customs are claude's too", () => {

@@ -5,6 +5,7 @@ import {
   contextWindowFor,
   costOf,
   formatTokens,
+  pricingCatalogIds,
   refreshPricing,
   reportsOwnCost,
   rowCost,
@@ -112,6 +113,7 @@ describe("refreshPricing", () => {
     await refreshPricing();
     // Live rate ($4/M) overrides the fallback table's $3/M for sonnet.
     expect(costOf(usage({ input: 1_000_000, model: "claude-sonnet-4-5" }), "claude")).toBeCloseTo(4, 10);
+    expect(pricingCatalogIds()).toContain("claude-sonnet-4-5");
   });
 
   it("skips the network call when the cache is still fresh", async () => {
