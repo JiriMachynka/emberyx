@@ -57,6 +57,7 @@ import { useProjectActions } from "@/hooks/useProjectActions";
 import { ActionDialog } from "@/components/ActionDialog";
 import { getStoredActions, type ProjectAction } from "@/lib/actions";
 import { useShortcuts } from "@/hooks/useShortcuts";
+import { useSnapshots } from "@/hooks/useSnapshots";
 import { useLaunchUpdateCheck } from "@/hooks/useLaunchUpdateCheck";
 import { usePricingRefresh } from "@/hooks/usePricingRefresh";
 
@@ -392,6 +393,7 @@ function App() {
       if (target) ws.activateSession(target.projectId, target.id);
     },
   });
+  useSnapshots(settings);
   useLaunchUpdateCheck();
   usePricingRefresh();
 

@@ -1,6 +1,7 @@
 import {
   Bell,
   Boxes,
+  Camera,
   GitBranch,
   Info,
   Keyboard,
@@ -23,6 +24,7 @@ export type Tab =
   | "mcp"
   | "skills"
   | "connections"
+  | "snapshots"
   | "sourceControl"
   | "notifications"
   | "about";
@@ -107,6 +109,16 @@ export const TABS: TabMeta[] = [
       "ideCustomCommand",
     ],
     finds: "daemon emberyxd persistent background editor ide vscode",
+  },
+  {
+    id: "snapshots",
+    label: "SnapShots",
+    icon: Camera,
+    // `snapshotsShortcut` is deliberately absent: no control writes it yet (v1
+    // ships only the both-Shifts trigger), and a key no control writes is one
+    // Restore resets behind its users' backs.
+    keys: ["snapshotsEnabled", "snapshotsIncludeAppText"],
+    finds: "snapshot screenshot capture shift window accessibility screen recording attach",
   },
   {
     id: "sourceControl",

@@ -599,3 +599,41 @@ describe("useCodexChat revertTurn", () => {
     expect(result.current.messages).toEqual([]);
   });
 });
+
+describe("useCodexChat snapshots", () => {
+  it("sends a snapshot image followed by its accessibility text block", async () => {
+    const { result } = await mount();
+    act(() =>
+      result.current.send("look", [
+        {
+          id: "i1",
+          mediaType: "image/png",
+          data: "AAAA",
+          snapshot: {
+            app: "Safari",
+            title: "Start Page",
+            a11y: 'window "Start Page" 0,0 100x100',
+          },
+        },
+        { id: "i2", mediaType: "image/png", data: "BBBB" },
+      ])
+    );
+
+    expect(sentTo("codex_turn_start")[0][1]).toEqual({
+      id: 7,
+      params: {
+        threadId: "t1",
+        input: [
+          { type: "text", text: "look", text_elements: [] },
+          { type: "image", url: "data:image/png;base64,AAAA" },
+          {
+            type: "text",
+            text: '[Snapshot — Safari: Start Page]\nwindow "Start Page" 0,0 100x100',
+            text_elements: [],
+          },
+          { type: "image", url: "data:image/png;base64,BBBB" },
+        ],
+      },
+    });
+  });
+});

@@ -620,6 +620,26 @@ spike wins, `preview_console` should read this console and `browser.rs` keeps
 only screenshots (a child webview cannot be photographed). Until the verdict,
 the iframe is the shipping surface.
 
+### SnapShots
+
+A user-triggered capture of *whatever window they are looking at* — distinct
+from the agent's own headless Chrome above, which photographs dev servers and
+stays that way. `snapshots.rs` holds a hand-rolled `CGEventTap` (listen-only,
+`flagsChanged`) watching the device-dependent left/right shift bits —
+`tauri-plugin-global-shortcut` cannot express "both Shift keys together", and
+no plugin was added for the chord path that isn't shipping. The tap runs only
+while `snapshotsEnabled` is on (App.tsx mirrors the settings keys into
+`snapshots_set_enabled`) and is killed on exit like every other child-owning
+module. A capture takes the frontmost layer-0 window — Emberyx included —
+through `CGWindowList` + `CGWindowListCreateImage`, plus an AX walk of that
+pid when "Include app text" is on (depth ≤ 4, ≤ 200 nodes, slow AX → image
+only). It lands as `snapshot-captured`, sits in `agentStore.pendingSnapshot`
+(one slot), and the focused composer consumes it: a thumb naming the app, and
+on send the image followed by a text block with the tree — never into the
+composer's text. Permissions are reported by name, never degraded around;
+Screen Recording gates the pixels, Accessibility the tree (and the tap).
+`Info.plist` beside `tauri.conf.json` carries the two usage strings.
+
 ### Process lifetime
 
 Tauri does not drop managed state on exit, so `lib.rs` explicitly calls

@@ -36,6 +36,7 @@ import type { AgentBackend } from "@/lib/agentBackend";
 import { describeTool } from "@/lib/toolDisplay";
 import { notifyNative } from "@/lib/notifications";
 import { loadSettings } from "@/lib/settings";
+import { snapshotTextBlock } from "@/lib/snapshotA11y";
 import { basename } from "@/lib/path";
 import { usePromptQueue } from "@/lib/promptQueue";
 
@@ -108,6 +109,10 @@ export interface ChatImage {
   mediaType: string;
   /** base64 payload without the data: URL prefix. */
   data: string;
+  /** SnapShots sidecar: what was captured and, when "Include app text" was
+   *  on, the formatted accessibility tree that rides next to the image on
+   *  send — never into the composer's text. */
+  snapshot?: { app: string; title: string; a11y?: string };
 }
 
 export type ChatStatus =
@@ -1773,10 +1778,18 @@ export function useAgentChat({
     const content = hasImages
       ? [
           ...(text.trim() ? [{ type: "text", text }] : []),
-          ...images.map((img) => ({
-            type: "image",
-            source: { type: "base64", media_type: img.mediaType, data: img.data },
-          })),
+          ...images.flatMap((img) => [
+            {
+              type: "image",
+              source: { type: "base64", media_type: img.mediaType, data: img.data },
+            },
+            // A snapshot's accessibility tree follows its image, so the agent
+            // reads labels instead of guessing from pixels. A plain pasted
+            // image carries nothing extra.
+            ...(img.snapshot
+              ? [{ type: "text", text: snapshotTextBlock(img.snapshot) }]
+              : []),
+          ]),
         ]
       : text;
     const line = JSON.stringify({

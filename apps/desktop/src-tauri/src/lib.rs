@@ -34,6 +34,7 @@ mod queue;
 mod search;
 mod skills;
 mod slash;
+mod snapshots;
 mod store;
 pub mod supervisor;
 mod t3_import;
@@ -82,6 +83,7 @@ pub fn run() {
         .manage(browser::BrowserManager::default())
         .manage(browser::PreviewUrl::default())
         .manage(draft::Drafter::default())
+        .manage(snapshots::SnapshotManager::default())
         .setup(|app| {
             // Attach the durable event log first: restore() migrates legacy
             // registry timelines into it.
@@ -294,6 +296,10 @@ pub fn run() {
             preview::preview_webview_bounds,
             preview::preview_webview_hide,
             browser::preview_set_url,
+            snapshots::snapshots_status,
+            snapshots::snapshots_request_permission,
+            snapshots::snapshots_set_enabled,
+            snapshots::snapshots_capture,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -321,6 +327,7 @@ pub fn run() {
             app_handle.state::<PtyManager>().kill_all();
             app_handle.state::<browser::BrowserManager>().kill_all();
             app_handle.state::<draft::Drafter>().kill_all();
+            app_handle.state::<snapshots::SnapshotManager>().kill_all();
             app_handle.state::<Supervisor>().kill_all();
         }
     });

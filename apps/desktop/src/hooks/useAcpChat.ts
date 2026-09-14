@@ -54,6 +54,7 @@ import {
   type AcpServerRequest,
 } from "@/lib/acp/transport";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
+import { snapshotTextBlock } from "@/lib/snapshotA11y";
 import { fetchThreadPage, type ProjectedMessageRow } from "@/lib/threadPage";
 import { threadTitleFrom } from "@/lib/threadTitle";
 import { useAgentStore } from "@/lib/agentStore";
@@ -826,7 +827,15 @@ export function useAcpChat({
         committedRef.current = attachCheckpoint(committedRef.current, point.id);
         publish();
       });
-      void acpPrompt(id, sessionId, text, images);
+      void acpPrompt(
+        id,
+        sessionId,
+        text,
+        images,
+        (images ?? []).map((img) =>
+          img.snapshot ? snapshotTextBlock(img.snapshot) : ""
+        )
+      );
     },
     [cwd, emberyxSessionId, publish, adoptThread, recordTimeline, resume, wake]
   );
@@ -856,7 +865,15 @@ export function useAcpChat({
       committedRef.current = attachCheckpoint(committedRef.current, point.id);
       publish();
     });
-    void acpPrompt(id, sessionId, held.text, held.images);
+    void acpPrompt(
+      id,
+      sessionId,
+      held.text,
+      held.images,
+      (held.images ?? []).map((img) =>
+        img.snapshot ? snapshotTextBlock(img.snapshot) : ""
+      )
+    );
   }, [ready, cwd, emberyxSessionId, publish, adoptThread, recordTimeline, resume]);
 
   // Name a fresh chat once its first turn settles. No ACP agent announces a

@@ -710,3 +710,29 @@ describe("useAcpChat session status", () => {
     );
   });
 });
+
+describe("useAcpChat snapshots", () => {
+  it("sends a snapshot's accessibility tree as a note beside its image", async () => {
+    const view = await mount();
+    await act(async () =>
+      view.result.current.send("look", [
+        {
+          id: "i1",
+          mediaType: "image/png",
+          data: "AAAA",
+          snapshot: { app: "Grok", title: "Chat", a11y: 'window "Chat" 0,0 100x100' },
+        },
+        { id: "i2", mediaType: "image/png", data: "BBBB" },
+      ])
+    );
+
+    const prompt = invoke.mock.calls.find(([name]) => name === "acp_prompt");
+    expect(prompt?.[1]).toMatchObject({
+      images: [
+        { mediaType: "image/png", data: "AAAA" },
+        { mediaType: "image/png", data: "BBBB" },
+      ],
+      notes: ['[Snapshot — Grok: Chat]\nwindow "Chat" 0,0 100x100', ""],
+    });
+  });
+});

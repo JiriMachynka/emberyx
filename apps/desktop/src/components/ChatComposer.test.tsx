@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { ChatComposer } from "@/components/ChatComposer";
 import { AGENT_BACKENDS, capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
+import { useAgentStore } from "@/lib/agentStore";
 import { codexKeys } from "@/lib/queries";
 import type { CodexModel } from "@/lib/codex/protocol";
 import type { ChatImage } from "@/hooks/useAgentChat";
@@ -172,5 +173,42 @@ describe("ChatComposer", () => {
     expect(menuChips().some((c) => c.includes("Work Account"))).toBe(false);
     // The rest of Claude's row is unaffected.
     expect(menuChips().some((c) => c.includes("Full access"))).toBe(true);
+  });
+
+  describe("SnapShots", () => {
+    const snapshotImage = (): ChatImage => ({
+      id: "snap1",
+      mediaType: "image/png",
+      data: "AAAA",
+      snapshot: { app: "Safari", title: "Start Page", a11y: 'window "Start Page" 0,0 100x100' },
+    });
+
+    beforeEach(() => {
+      useAgentStore.setState({ pendingSnapshot: null });
+    });
+
+    it("a pending snapshot lands as a thumb that names the app", async () => {
+      useAgentStore.setState({ pendingSnapshot: snapshotImage() });
+      await mount(propsFor("claude"));
+      expect(screen.getByText("Safari")).toBeTruthy();
+      expect(screen.getByTitle("Includes accessibility tree")).toBeTruthy();
+      // Consumed exactly once.
+      expect(useAgentStore.getState().pendingSnapshot).toBeNull();
+    });
+
+    it("a backgrounded composer leaves the capture in the slot", async () => {
+      useAgentStore.setState({ pendingSnapshot: snapshotImage() });
+      await mount({ ...propsFor("claude"), active: false });
+      expect(screen.queryByText("Safari")).toBeNull();
+      expect(useAgentStore.getState().pendingSnapshot).not.toBeNull();
+    });
+
+    it("an image-only snapshot turn is allowed", async () => {
+      useAgentStore.setState({ pendingSnapshot: snapshotImage() });
+      const sent: [string, ChatImage[]][] = [];
+      await mount(propsFor("claude", sent));
+      fireEvent.click(screen.getByTitle("Send"));
+      expect(sent).toEqual([["", [snapshotImage()]]]);
+    });
   });
 });

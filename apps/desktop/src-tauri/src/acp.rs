@@ -944,6 +944,9 @@ pub fn acp_prompt(
     session_id: String,
     text: String,
     images: Option<Vec<AcpImage>>,
+    // Per-image accessibility text ("" = none), aligned with `images` — a
+    // snapshot's tree becomes its own text block right after that image.
+    notes: Option<Vec<String>>,
 ) -> Result<()> {
     let handle = manager.handle(id)?;
     std::thread::spawn(move || {
@@ -951,12 +954,17 @@ pub fn acp_prompt(
         if !text.trim().is_empty() {
             prompt.push(json!({ "type": "text", "text": text }));
         }
-        for img in images.unwrap_or_default() {
+        let notes = notes.unwrap_or_default().into_iter();
+        let notes = notes.chain(std::iter::repeat(String::new()));
+        for (img, note) in images.unwrap_or_default().into_iter().zip(notes) {
             prompt.push(json!({
                 "type": "image",
                 "mimeType": img.media_type,
                 "data": img.data,
             }));
+            if !note.trim().is_empty() {
+                prompt.push(json!({ "type": "text", "text": note }));
+            }
         }
         let params = json!({
             "sessionId": session_id,

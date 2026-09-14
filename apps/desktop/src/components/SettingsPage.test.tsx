@@ -98,6 +98,7 @@ const LANDMARK: Record<string, string> = {
   mcp: "Servers",
   skills: "Skills",
   connections: "Keep agents running in the background",
+  snapshots: "Capture the frontmost window",
   sourceControl: "Commit message model",
   notifications: "Notify on errors",
   about: "Check for updates",

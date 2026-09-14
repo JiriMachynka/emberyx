@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- SnapShots: tauri-build merges this file (picked up beside
+         tauri.conf.json) into the bundled Info.plist. -->
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Emberyx captures the frontmost window when you press the SnapShots shortcut, so you can attach it to a chat.</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Emberyx reads the captured window's controls so the agent can see labels, not just pixels.</string>
+  </dict>
+</plist>

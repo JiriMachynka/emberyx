@@ -21,6 +21,7 @@ import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { ShortcutsSection } from "@/components/settings/ShortcutsSection";
 import { ProvidersSection } from "@/components/settings/ProvidersSection";
 import { ConnectionsSection } from "@/components/settings/ConnectionsSection";
+import { SnapshotsSection } from "@/components/settings/SnapshotsSection";
 import { SourceControlSection } from "@/components/settings/SourceControlSection";
 import { NotificationsSection } from "@/components/settings/NotificationsSection";
 import { AboutSection } from "@/components/settings/AboutSection";
@@ -298,6 +299,10 @@ export const SettingsPage = memo(function SettingsPage({
                 diagnosticsCopied={diagnosticsCopied}
                 copyDiagnostics={copyDiagnostics}
               />
+            )}
+
+            {tab === "snapshots" && (
+              <SnapshotsSection settings={settings} onUpdate={onUpdate} />
             )}
 
             {tab === "sourceControl" && (

@@ -195,6 +195,16 @@ export interface Settings {
   codexSandbox: CodexSandbox;
   /** Working-tree diffs hide whitespace-only changes. */
   diffIgnoreWhitespace: boolean;
+  /** Capture the frontmost window on a global shortcut and attach it to the
+   *  focused composer. macOS only; the trigger lives in Rust. */
+  snapshotsEnabled: boolean;
+  /** Which global trigger captures. Only "Shift+Shift" (both keys together)
+   *  ships today; the stored value is the preference a chord fallback would
+   *  read later. */
+  snapshotsShortcut: string;
+  /** Walk the captured window's accessibility tree and send it beside the
+   *  image, so the agent reads labels instead of guessing from pixels. */
+  snapshotsIncludeAppText: boolean;
   /** Model that drafts commit messages from the diff, as a one-shot `claude -p`
    *  call. "" turns the Generate button off. Claude ids only — the one-shot
    *  path is the Claude CLI, and offering a model it can't run would fail on
@@ -238,6 +248,9 @@ export const DEFAULT_SETTINGS: Settings = {
   claudeProfiles: [],
   codexSandbox: "",
   diffIgnoreWhitespace: false,
+  snapshotsEnabled: false,
+  snapshotsShortcut: "Shift+Shift",
+  snapshotsIncludeAppText: true,
   commitMessageModel: "claude-haiku-4-5",
   wordWrap: false,
 };

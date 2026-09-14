@@ -329,7 +329,11 @@ export const ChatPane = memo(function ChatPane({
     [activeBackend, activeModel, cwd, sessionId]
   );
 
-  const [preview, setPreview] = useState<string | null>(null);
+  // The lightbox: the image, and — for a snapshot — the accessibility tree
+  // under it. Null when closed.
+  const [preview, setPreview] = useState<{ url: string; a11y?: string } | null>(
+    null
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   // Prepend anchor: which virtual row owned the top of the viewport and how far
   // down it sat. After older pages commit, putting that row back at the same
@@ -489,7 +493,10 @@ export const ChatPane = memo(function ChatPane({
   const accountIssue = useAgentStore((s) => s.accountIssue);
 
   // Stable across renders so memoized rows don't re-render on every update.
-  const openPreview = useCallback((dataUrl: string) => setPreview(dataUrl), []);
+  const openPreview = useCallback(
+    (dataUrl: string, a11y?: string) => setPreview({ url: dataUrl, a11y }),
+    []
+  );
 
   const threadLink = useMemo(
     () => (resume ? { projectPath: cwd, threadId: resume } : null),
@@ -971,8 +978,8 @@ export const ChatPane = memo(function ChatPane({
                   onCompact={compact}
                   lastActivityAt={lastActivity}
                   onStop={stop}
-                  onRewind={rewind}
-                  onPreview={setPreview}
+                   onRewind={rewind}
+                   onPreview={openPreview}
                 />
                 </Profiler>
                 </div>
@@ -987,11 +994,20 @@ export const ChatPane = memo(function ChatPane({
         <DialogContent className="max-w-3xl border-0 bg-transparent p-0 shadow-none">
           <DialogTitle className="sr-only">Image preview</DialogTitle>
           {preview && (
-            <img
-              src={preview}
-              alt=""
-              className="max-h-[80vh] w-full rounded-lg object-contain"
-            />
+            <>
+              <img
+                src={preview.url}
+                alt=""
+                className="max-h-[80vh] w-full rounded-lg object-contain"
+              />
+              {/* A snapshot's tree, compact under the picture: the same text
+                  the agent receives, for a human to inspect first. */}
+              {preview.a11y && (
+                <pre className="mt-3 max-h-48 overflow-auto rounded-lg border border-border bg-card p-4 font-mono text-xs leading-5 text-muted-foreground">
+                  {preview.a11y}
+                </pre>
+              )}
+            </>
           )}
         </DialogContent>
       </Dialog>

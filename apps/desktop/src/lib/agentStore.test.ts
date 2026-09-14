@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useAgentStore } from "@/lib/agentStore";
+import type { ChatImage } from "@/hooks/useAgentChat";
 import type { Change } from "@/lib/changes";
 import type { Usage } from "@/lib/pricing";
 
@@ -218,5 +219,37 @@ describe("switchedBackends", () => {
     store().setSwitchedBackend("s3", "codex");
     store().setSwitchedBackend("s4", null);
     expect(store().switchedBackends).toBe(before);
+  });
+});
+
+describe("pendingSnapshot", () => {
+  const image = (): ChatImage => ({
+    id: crypto.randomUUID(),
+    mediaType: "image/png",
+    data: "AA",
+  });
+
+  beforeEach(() => {
+    useAgentStore.setState({ pendingSnapshot: null });
+  });
+
+  it("hands the capture to the first consumer and clears the slot", () => {
+    store().setPendingSnapshot(image());
+    expect(store().consumePendingSnapshot()).toMatchObject({
+      mediaType: "image/png",
+    });
+    expect(store().pendingSnapshot).toBeNull();
+  });
+
+  it("returns nothing when the slot is empty", () => {
+    expect(store().consumePendingSnapshot()).toBeNull();
+  });
+
+  // One slot: a capture while a previous one still waits replaces it.
+  it("keeps only the newest capture", () => {
+    store().setPendingSnapshot(image());
+    const second = image();
+    store().setPendingSnapshot(second);
+    expect(store().consumePendingSnapshot()).toBe(second);
   });
 });

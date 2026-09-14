@@ -9,6 +9,7 @@ import {
 import {
   ArrowUp,
   ImagePlus,
+  ScanText,
   Square,
   X,
 } from "lucide-react";
@@ -39,6 +40,7 @@ import {
 } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import type { PromptQueue } from "@/lib/promptQueue";
+import { useAgentStore } from "@/lib/agentStore";
 import type { ChatImage, ChatUsage } from "@/hooks/useAgentChat";
 import { imageSrc } from "@/components/chat/imageSrc";
 import { processImage } from "@/components/composer/processImage";
@@ -101,7 +103,9 @@ interface ChatComposerProps {
   onStop: () => void;
   /** Un-send the newest in-flight turn; returns its text/images to restore. */
   onRewind: () => { text: string; images?: ChatImage[] } | null;
-  onPreview: (dataUrl: string) => void;
+  /** Open the lightbox. The second argument carries a snapshot's
+   *  accessibility tree, which renders under the image. */
+  onPreview: (dataUrl: string, a11y?: string) => void;
 }
 
 /**
@@ -184,6 +188,18 @@ export const ChatComposer = memo(function ChatComposer({
   useEffect(() => {
     if (active) inputRef.current?.focus();
   }, [active]);
+
+  // SnapShots: the store's one-slot inbox lands on the focused composer.
+  // `consumePendingSnapshot` check-and-clears atomically, so a second mounted
+  // composer can't take the same capture, and a capture made while this pane
+  // was backgrounded is here when it becomes active again.
+  const pendingSnapshot = useAgentStore((s) => s.pendingSnapshot);
+  const consumePendingSnapshot = useAgentStore((s) => s.consumePendingSnapshot);
+  useEffect(() => {
+    if (!active || exited) return;
+    const snap = consumePendingSnapshot();
+    if (snap) setImages((prev) => [...prev, snap]);
+  }, [active, exited, pendingSnapshot, consumePendingSnapshot]);
 
   // A handed-off message lands here rather than being sent, so the user reads
   // it before committing. Anything already typed is kept above it.
@@ -443,11 +459,31 @@ export const ChatComposer = memo(function ChatComposer({
               >
                 <button
                   type="button"
-                  onClick={() => onPreview(imageSrc(img))}
+                  onClick={() => onPreview(imageSrc(img), img.snapshot?.a11y)}
                   className="block size-full"
+                  title={
+                    img.snapshot
+                      ? `${img.snapshot.app}${img.snapshot.title ? ` — ${img.snapshot.title}` : ""}`
+                      : undefined
+                  }
                 >
                   <img src={imageSrc(img)} alt="" className="size-full object-cover" />
                 </button>
+                {/* A snapshot names what was captured; the badge marks a tree
+                    waiting under the image in the lightbox. */}
+                {img.snapshot && (
+                  <span className="absolute inset-x-0 bottom-0 truncate bg-background/80 px-1 text-xs leading-4 text-foreground">
+                    {img.snapshot.app}
+                  </span>
+                )}
+                {img.snapshot?.a11y && (
+                  <span
+                    title="Includes accessibility tree"
+                    className="absolute left-1 top-1 rounded bg-background/80 p-0.5 text-foreground"
+                  >
+                    <ScanText className="size-3" />
+                  </span>
+                )}
                 {/* Always visible: a remove affordance that only appears on
                     hover is one a trackpad user has to go hunting for. */}
                 <button
