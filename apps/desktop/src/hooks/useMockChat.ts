@@ -20,6 +20,7 @@ import type {
   PendingAsk,
   PendingPermission,
 } from "@/hooks/useAgentChat";
+import { notifyPlanNothing } from "@/hooks/useAgentChat";
 import {
   MOCKUP_LIVE_ASSISTANT_ID,
   mockupAsk,
@@ -301,6 +302,8 @@ export function useMockChat() {
     revertTurn: async () => {},
     pendingPermission,
     respond,
+    pendingPlan: null,
+    answerPlan: notifyPlanNothing,
     pendingAsk,
     answerAsk,
     hasMore: false,

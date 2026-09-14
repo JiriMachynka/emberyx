@@ -15,6 +15,13 @@
  *   * `session/prompt` replies when the turn *ends*, which arrives here as the
  *     `turnEnded` event rather than as the result of sending. Grok also fires
  *     `_x.ai/session/prompt_complete` first; either one settles the turn.
+ *
+ * Grok's plan gate is a third blocked request: it intercepts its own
+ * `exit_plan_mode` and re-asks it as a vendor ext request (`_x.ai/
+ * exit_plan_mode` — `{sessionId, toolCallId, planContent}`, answered with
+ * `{outcome: approved|changes|abandoned, comments}`). Unanswered, Grok reads
+ * the plan approval as "client disconnected" and never leaves plan mode;
+ * `answerPlan` keeps that off the wire.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -66,8 +73,10 @@ import {
   type ChatStatus,
   type ChatUsage,
   type PendingAsk,
+  type PendingPlanApproval,
   type PendingPermission,
   type PermissionDecision,
+  type PlanOutcome,
   type ToolCall,
 } from "@/hooks/useAgentChat";
 
@@ -199,6 +208,11 @@ export function useAcpChat({
   const [exitReason, setExitReason] = useState<string | null>(null);
   const [pendingPermission, setPendingPermission] =
     useState<PendingPermission | null>(null);
+  /** A plan waiting for approve / request-changes / abandon. Grok blocks the
+   *  turn on the ext request until `answerPlan` answers it. */
+  const [pendingPlan, setPendingPlan] = useState<PendingPlanApproval | null>(null);
+  const pendingPlanRef = useRef<PendingPlanApproval | null>(null);
+  pendingPlanRef.current = pendingPlan;
   const [restartNonce, setRestartNonce] = useState(0);
   /** Set when the agent refused a model switch. The picker would otherwise go on
    *  showing the model you asked for while the session runs another one. */
@@ -494,6 +508,18 @@ export function useAcpChat({
         return;
       }
 
+      if (request.method === "_x.ai/exit_plan_mode") {
+        // Grok's plan-approval ext request. Same rule as every other blocked
+        // request: answered or explicitly refused — never silence, which Grok
+        // reads as a disconnected client and then leaves plan mode on.
+        setPendingPlan({
+          requestId: request.id,
+          plan: typeof params.planContent === "string" ? params.planContent : "",
+          toolUseId: typeof params.toolCallId === "string" ? params.toolCallId : "",
+        });
+        return;
+      }
+
       try {
         if (request.method === "fs/read_text_file") {
           const content = await invoke<string>("read_text_file", {
@@ -614,6 +640,7 @@ export function useAcpChat({
           break;
         case "exit": {
           clearPermissions(false);
+          setPendingPlan(null);
           // A turn the process died in the middle of is still over: committing
           // it stops the bubble rendering as live forever and lets its
           // checkpoint settle, which a bare status change never did.
@@ -897,6 +924,13 @@ export function useAcpChat({
     // that is what the user is stopping. An agent blocked in its permission
     // handler never processes `session/cancel`, so answer first, then cancel.
     clearPermissions(true);
+    // A plan approval blocks the same way. Refusing it keeps `answerPlan` from
+    // racing the cancel with an answer a dead request-id would ignore.
+    const plan = pendingPlanRef.current;
+    if (plan) {
+      void acpRespond(id, plan.requestId, null, "cancelled by the user");
+      setPendingPlan(null);
+    }
     void acpCancel(id, sessionId);
     // Settle the UI now. The agent's cancelled reply is a no-op once the
     // turn is already committed; waiting for it left the square button live
@@ -909,6 +943,7 @@ export function useAcpChat({
     // The prompt belongs to the process about to be killed: its request ids
     // mean nothing to the next one, which numbers its own from scratch.
     clearPermissions(false);
+    setPendingPlan(null);
     setExitReason(null);
     // A fresh session has not refused anything yet, and `session/new` picks the
     // model up again on its own.
@@ -942,6 +977,19 @@ export function useAcpChat({
     showHeadPermission();
   }, [showHeadPermission]);
 
+  /** Answer the plan-approval ext request. An unknown `outcome` string reads as
+   *  revise on Grok's side, which is the `changes` path — notes ride `comments`
+   *  even though the first reply just tells the agent to wait for them. */
+  const answerPlan = useCallback((outcome: PlanOutcome, comments: string) => {
+    const id = processRef.current;
+    const pending = pendingPlanRef.current;
+    if (!pending) return;
+    if (id !== null) {
+      void acpRespond(id, pending.requestId, { outcome, comments });
+    }
+    setPendingPlan(null);
+  }, []);
+
   return {
     messages,
     status,
@@ -972,6 +1020,8 @@ export function useAcpChat({
     revertTurn: revertNothing,
     pendingPermission,
     respond,
+    pendingPlan,
+    answerPlan,
     // ACP has no `ask_user`: that is an Emberyx MCP tool wired for Claude. The
     // pane only calls this while a question is showing, and none ever is.
     pendingAsk: null as PendingAsk | null,

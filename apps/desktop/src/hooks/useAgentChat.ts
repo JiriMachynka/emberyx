@@ -183,6 +183,18 @@ export interface PendingAsk {
   questions: AskQuestion[];
 }
 
+/** The three answers the plan gate accepts; an unknown one reads as revise. */
+export type PlanOutcome = "approved" | "changes" | "abandoned";
+
+/** A plan Grok wants approved before it keeps building. The call is blocked in
+ *  the backend until `answerPlan` sends the choice back. Raise only by Grok —
+ *  Claude and Codex turn their plan gates at never, hence the noop below. */
+export interface PendingPlanApproval {
+  requestId: number;
+  plan: string;
+  toolUseId: string;
+}
+
 /** One rolling window an account's quota is measured over. */
 export interface QuotaWindow {
   usedPercent: number;
@@ -1976,6 +1988,8 @@ export function useAgentChat({
     revertTurn,
     pendingPermission,
     respond,
+    pendingPlan: null,
+    answerPlan: notifyPlanNothing,
     pendingAsk,
     answerAsk,
     hasMore,
@@ -1983,6 +1997,10 @@ export function useAgentChat({
     loadOlder,
   };
 }
+
+/** The three chat hooks expose one shape to the pane; Claude and Codex never
+ *  raise the plan gate, so theirs is permanent absence. */
+export const notifyPlanNothing = (_outcome: PlanOutcome, _comments: string) => {};
 
 function attachToolResult(
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,

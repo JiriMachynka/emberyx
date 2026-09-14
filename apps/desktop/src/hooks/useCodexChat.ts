@@ -68,6 +68,7 @@ import {
   type PendingAsk,
   type PendingPermission,
   type PermissionDecision,
+  notifyPlanNothing,
 } from "@/hooks/useAgentChat";
 import { snapshotTextBlock } from "@/lib/snapshotA11y";
 
@@ -864,6 +865,8 @@ export function useCodexChat({
     revertTurn,
     pendingPermission,
     respond,
+    pendingPlan: null,
+    answerPlan: notifyPlanNothing,
     pendingAsk,
     answerAsk,
     hasMore: false,

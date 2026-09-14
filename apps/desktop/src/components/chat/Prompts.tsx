@@ -6,9 +6,10 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Check, MessageCircleQuestionMark, Wrench } from "lucide-react";
+import { Check, ListChecks, MessageCircleQuestionMark, Wrench } from "lucide-react";
 import { PermissionSummary } from "@/components/chat/ToolViews";
 import { cn } from "@/lib/utils";
+import type { PendingPlanApproval, PlanOutcome } from "@/hooks/useAgentChat";
 import type {
   PendingAsk,
   PendingPermission,
@@ -218,6 +219,126 @@ export function AskPrompt({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Grok's plan gate, in place of the TUI's approval dialog. The whole plan
+ *  scrolls; Approve lets it build, Request changes sends notes back for one
+ *  more planning pass, Abandon drops the plan outright. */
+export function PlanPrompt({
+  pending,
+  onAnswer,
+}: {
+  pending: PendingPlanApproval;
+  onAnswer: (outcome: PlanOutcome, comments: string) => void;
+}) {
+  const [mode, setMode] = useState<"choose" | "notes">("choose");
+  const [notes, setNotes] = useState("");
+
+  useEffect(() => {
+    setMode("choose");
+    setNotes("");
+  }, [pending.requestId]);
+
+  // Window-level keys, like its siblings. The notes textarea is the one state
+  // where keys belong to the text, so they are only bound while choosing.
+  useEffect(() => {
+    if (mode !== "choose") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        onAnswer("approved", "");
+      } else if (e.key === "2") {
+        e.preventDefault();
+        setMode("notes");
+      } else if (e.key === "3") {
+        e.preventDefault();
+        onAnswer("abandoned", "");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  return (
+    <div className="rounded-xl border border-border bg-card shadow-sm">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-sm">
+        <ListChecks className="size-3.5 text-primary" />
+        <span className="font-medium">Plan approval</span>
+        <span className="text-xs text-muted-foreground">
+          the agent is blocked until you answer
+        </span>
+        <span className="ml-auto text-[0.65rem] text-muted-foreground">
+          {mode === "notes" ? "type below, Enter sends" : "1 approve · 2 changes · 3 abandon"}
+        </span>
+      </div>
+      <pre className="max-h-56 overflow-y-auto whitespace-pre-wrap px-3 py-2 text-xs leading-relaxed">
+        {pending.plan || "The agent called exit_plan_mode without a plan file."}
+      </pre>
+      {mode === "choose" ? (
+        <div className="flex flex-col gap-1 p-3 pt-0">
+          {(
+            [
+              { key: "approved", label: "Approve and build", send: () => onAnswer("approved", "") },
+              { key: "changes", label: "Request changes", send: () => setMode("notes") },
+              {
+                key: "abandoned",
+                label: "Abandon the plan",
+                send: () => onAnswer("abandoned", ""),
+              },
+            ] as const
+          ).map((o, i) => (
+            <button
+              key={o.key}
+              type="button"
+              onClick={o.send}
+              className={cn(
+                "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted"
+              )}
+            >
+              <kbd className="grid size-5 shrink-0 place-items-center rounded border border-border bg-background font-mono text-xs">
+                {i + 1}
+              </kbd>
+              <span className={o.key === "abandoned" ? "text-red-400" : undefined}>{o.label}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="p-3 pt-0">
+          <textarea
+            autoFocus
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                onAnswer("changes", notes.trim() || "revise the plan");
+              }
+              if (e.key === "Escape") setMode("choose");
+            }}
+            rows={2}
+            placeholder="What should change?"
+            className="w-full resize-none rounded-lg border border-border bg-background p-2 text-sm outline-none focus:border-primary"
+          />
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              onClick={() => onAnswer("changes", notes.trim() || "revise the plan")}
+              className="rounded-lg bg-primary px-3 py-1 text-xs text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              Send notes ↵
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("choose")}
+              className="rounded-lg px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted"
+            >
+              Back
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

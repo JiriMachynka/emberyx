@@ -736,3 +736,68 @@ describe("useAcpChat snapshots", () => {
     });
   });
 });
+
+describe("useAcpChat plan-approval ext requests", () => {
+  const planRequest = (requestId: number) => {
+    channels[0]?.onmessage?.({
+      type: "request",
+      data: {
+        id: requestId,
+        method: "_x.ai/exit_plan_mode",
+        params: { sessionId: "s1", toolCallId: "t9", planContent: "# The plan" },
+      },
+    });
+  };
+
+  const planAnswered = () =>
+    invoke.mock.calls
+      .filter(([name]) => name === "acp_respond")
+      .map(([, args]) => args as { requestId: number; result?: unknown; error?: string });
+
+  it("surfaces the plan and closes the gate on approval", async () => {
+    const view = await mount();
+
+    await act(async () => planRequest(0));
+    expect(view.result.current.pendingPlan).toMatchObject({
+      requestId: 0,
+      plan: "# The plan",
+      toolUseId: "t9",
+    });
+
+    await act(async () => view.result.current.answerPlan("approved", ""));
+    expect(view.result.current.pendingPlan).toBeNull();
+    expect(planAnswered()).toHaveLength(1);
+    expect(planAnswered()[0]).toMatchObject({
+      requestId: 0,
+      result: { outcome: "approved", comments: "" },
+    });
+  });
+
+  it("closes the gate for a revision note and an abandonment too", async () => {
+    const view = await mount();
+
+    await act(async () => planRequest(0));
+    await act(async () => view.result.current.answerPlan("changes", "drop step 2"));
+    expect(planAnswered()).toHaveLength(1);
+    expect(planAnswered()[0]).toMatchObject({
+      requestId: 0,
+      result: { outcome: "changes", comments: "drop step 2" },
+    });
+
+    await act(async () => planRequest(1));
+    await act(async () => view.result.current.answerPlan("abandoned", ""));
+    expect(view.result.current.pendingPlan).toBeNull();
+    expect(planAnswered()[1]).toMatchObject({ requestId: 1, result: { outcome: "abandoned" } });
+  });
+
+  it("refuses rather than hangs when stop is clicked first", async () => {
+    const view = await mount();
+
+    await act(async () => planRequest(0));
+    await waitFor(() => expect(view.result.current.pendingPlan).toBeTruthy());
+
+    await act(async () => view.result.current.stop());
+    expect(view.result.current.pendingPlan).toBeNull();
+    expect(planAnswered()[0]).toMatchObject({ requestId: 0, error: "cancelled by the user" });
+  });
+});

@@ -64,7 +64,7 @@ import { cn } from "@/lib/utils";
 import { modelFitsBackend } from "@/lib/modelCatalog";
 import { getCustomModels } from "@/lib/modelFavorites";
 import { groupTurns } from "@/components/chat/turns";
-import { AskPrompt, PermissionPrompt } from "@/components/chat/Prompts";
+import { AskPrompt, PlanPrompt, PermissionPrompt } from "@/components/chat/Prompts";
 import { WorkingFooter } from "@/components/chat/WorkingFooter";
 import { AccountNotice, QuotaNotice } from "@/components/chat/Notices";
 import { TasksCard } from "@/components/chat/TasksCard";
@@ -234,6 +234,8 @@ export const ChatPane = memo(function ChatPane({
     modelError,
     pendingPermission,
     respond,
+    pendingPlan,
+    answerPlan,
     pendingAsk,
     answerAsk,
     hasMore,
@@ -929,7 +931,9 @@ export const ChatPane = memo(function ChatPane({
               {/* A prompt replaces the composer rather than stacking above it —
                   two focusable surfaces competing for the same keys is what made
                   picking an option unreliable. Permission wins if both are live. */}
-              {pendingPermission ? (
+              {pendingPlan ? (
+                <PlanPrompt pending={pendingPlan} onAnswer={answerPlan} />
+              ) : pendingPermission ? (
                 <PermissionPrompt pending={pendingPermission} onDecide={respond} />
               ) : pendingAsk ? (
                 <AskPrompt pending={pendingAsk} onAnswer={answerAsk} />
