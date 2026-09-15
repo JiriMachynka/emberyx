@@ -834,7 +834,10 @@ mod tests {
         match spawn {
             Request::ProcSpawn { spec } => {
                 assert_eq!(spec.proc_id, "p1");
-                assert_eq!(spec.argv, vec!["codex".to_string(), "app-server".to_string()]);
+                assert_eq!(
+                    spec.argv,
+                    vec!["codex".to_string(), "app-server".to_string()]
+                );
                 assert!(spec.shell_env);
                 assert!(!spec.pty);
             }
@@ -855,7 +858,11 @@ mod tests {
             serde_json::from_str(r#"{"op":"procResize","procId":"p1","cols":80,"rows":24}"#)
                 .unwrap();
         match resize {
-            Request::ProcResize { proc_id, cols, rows } => {
+            Request::ProcResize {
+                proc_id,
+                cols,
+                rows,
+            } => {
                 assert_eq!((proc_id.as_str(), cols, rows), ("p1", 80, 24));
             }
             other => panic!("expected ProcResize, got {other:?}"),
@@ -897,8 +904,10 @@ mod tests {
     fn a_health_reply_from_before_the_protocol_field_reads_as_oldest() {
         // An old daemon's Health JSON has no `protocol` field; serde default
         // must turn that into "older than everything", not a parse error.
-        let health: Health =
-            serde_json::from_str(r#"{"ok":true,"version":"0.2.34","pid":1,"uptimeMs":0,"agentCount":0,"eventCount":0}"#).unwrap();
+        let health: Health = serde_json::from_str(
+            r#"{"ok":true,"version":"0.2.34","pid":1,"uptimeMs":0,"agentCount":0,"eventCount":0}"#,
+        )
+        .unwrap();
         assert_eq!(health.protocol, 0);
         assert!(health.protocol < PROTOCOL_PROCS);
     }

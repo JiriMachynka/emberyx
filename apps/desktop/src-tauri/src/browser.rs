@@ -7,14 +7,15 @@
 //!
 //! CDP is spoken by hand here, the way `ask.rs` speaks MCP by hand. The
 //! alternative (`chromiumoxide`) would pull in tokio, reqwest and ~60k lines of
-//! generated bindings for the four commands actually used, into a Rust side
-//! that is otherwise deliberately synchronous.
+//! generated bindings for the handful of commands actually used, into a Rust
+//! side that is otherwise deliberately synchronous.
 //!
 //! Nothing is bundled. If Chrome is not installed the tools say so by name,
 //! like `Daemon::ensure()` does for `emberyxd` — a browser tool that silently
 //! reports "no console errors" because it never had a browser is worse than one
 //! that refuses.
 
+use std::collections::{HashMap, HashSet};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -61,9 +62,18 @@ fn browser_candidates(home: Option<&Path>) -> Vec<PathBuf> {
 /// agent's context window.
 const VIEWPORT: (u32, u32) = (1280, 800);
 
+/// Phone-sized layout. Device scale stays 1× so a mobile screenshot does not
+/// cost four times the tokens of a desktop one — width is what changes layout.
+const VIEWPORT_MOBILE: (u32, u32) = (390, 844);
+
 /// A full-page capture past this is clipped. Some dev pages are infinite
 /// scrollers, and a 20k-pixel-tall PNG helps nobody.
 const MAX_FULL_PAGE_HEIGHT: u32 = 4000;
+
+const MAX_AX_DEPTH: usize = 24;
+const MAX_AX_NODES: usize = 400;
+const MAX_AX_CHARS: usize = 24_000;
+const MAX_WAIT_MS: u64 = 15_000;
 
 /// How long a navigation waits for the load event before giving up and
 /// capturing whatever is on screen. A half-rendered page is still evidence.
@@ -97,9 +107,51 @@ pub struct Look {
     /// Base64 PNG, exactly as CDP returns it — MCP's `ImageContent.data` wants
     /// base64, so it is never decoded on the way through.
     pub screenshot: Option<String>,
+    /// Playwright-shaped YAML of the accessibility tree, when asked for.
+    pub ax: Option<String>,
     pub console: Vec<String>,
     pub final_url: String,
     pub status: String,
+    pub width: u32,
+    pub height: u32,
+    pub wait_for: Option<String>,
+    pub wait_for_found: bool,
+}
+
+/// Knobs for one look. Defaults match the original screenshot tool: desktop
+/// viewport, 400ms settle, no selector, no tree.
+pub struct LookOpts {
+    pub full_page: bool,
+    pub wait_ms: u64,
+    pub wait_for: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub mobile: bool,
+    pub want_shot: bool,
+    pub want_ax: bool,
+}
+
+impl Default for LookOpts {
+    fn default() -> Self {
+        Self {
+            full_page: false,
+            wait_ms: 400,
+            wait_for: None,
+            width: None,
+            height: None,
+            mobile: false,
+            want_shot: false,
+            want_ax: false,
+        }
+    }
+}
+
+fn resolve_viewport(width: Option<u32>, height: Option<u32>, mobile: bool) -> (u32, u32) {
+    let (dw, dh) = if mobile { VIEWPORT_MOBILE } else { VIEWPORT };
+    (
+        width.unwrap_or(dw).clamp(320, 1920),
+        height.unwrap_or(dh).clamp(480, MAX_FULL_PAGE_HEIGHT),
+    )
 }
 
 /// Only loopback. This is a browser the agent drives; it is not a web fetcher,
@@ -210,7 +262,7 @@ impl BrowserManager {
     /// Navigate a fresh tab, watch it load, and report what happened. A tab per
     /// call rather than a reused one: state from a previous look (scroll, a
     /// dialog, a logged console) would silently colour the next one.
-    pub fn look(&self, url: &str, full_page: bool, wait_ms: u64, want_shot: bool) -> Result<Look> {
+    pub fn look(&self, url: &str, opts: LookOpts) -> Result<Look> {
         if !is_local_url(url) {
             return Err(format!(
                 "browser: {url} is not a local address. This browser only opens your dev server."
@@ -219,41 +271,59 @@ impl BrowserManager {
         }
         let port = self.port()?;
         let target = new_target(port)?;
-        let result = self.look_in(&target, url, full_page, wait_ms, want_shot);
+        let result = self.look_in(&target, url, &opts);
         close_target(port, &target.id);
         result
     }
 
-    fn look_in(
-        &self,
-        target: &Target,
-        url: &str,
-        full_page: bool,
-        wait_ms: u64,
-        want_shot: bool,
-    ) -> Result<Look> {
+    fn look_in(&self, target: &Target, url: &str, opts: &LookOpts) -> Result<Look> {
+        let (width, height) = resolve_viewport(opts.width, opts.height, opts.mobile);
+        let wait_ms = opts.wait_ms.clamp(0, MAX_WAIT_MS);
+
         let mut cdp = Cdp::connect(&target.ws_url)?;
         cdp.call("Page.enable", json!({}))?;
         cdp.call("Runtime.enable", json!({}))?;
         cdp.call("Log.enable", json!({}))?;
+        if opts.wait_for.is_some() {
+            let _ = cdp.call("DOM.enable", json!({}));
+        }
+        if opts.want_ax {
+            let _ = cdp.call("Accessibility.enable", json!({}));
+        }
         cdp.call(
             "Emulation.setDeviceMetricsOverride",
             json!({
-                "width": VIEWPORT.0,
-                "height": VIEWPORT.1,
+                "width": width,
+                "height": height,
                 "deviceScaleFactor": 1,
-                "mobile": false,
+                "mobile": opts.mobile,
             }),
         )?;
 
         cdp.call("Page.navigate", json!({ "url": url }))?;
         let loaded = cdp.wait_for_load(LOAD_TIMEOUT)?;
-        // Settle time for a client-rendered app: the load event fires before
-        // React has painted anything, so a screenshot taken on it is blank.
-        cdp.drain(Duration::from_millis(wait_ms.clamp(0, 10_000)));
 
-        let screenshot = if want_shot {
-            Some(self.capture(&mut cdp, full_page)?)
+        let wait_for_found = if let Some(selector) = opts.wait_for.as_deref() {
+            // Client-rendered UI often misses the load event. waitMs is the
+            // timeout for the selector, not extra settle on top of it.
+            let found = wait_for_selector(&mut cdp, selector, Duration::from_millis(wait_ms))?;
+            cdp.drain(Duration::from_millis(100));
+            found
+        } else {
+            // Settle time for a client-rendered app: the load event fires
+            // before React has painted anything, so a screenshot taken on it
+            // is blank.
+            cdp.drain(Duration::from_millis(wait_ms));
+            false
+        };
+
+        let screenshot = if opts.want_shot {
+            Some(self.capture(&mut cdp, opts.full_page, width, height)?)
+        } else {
+            None
+        };
+        let ax = if opts.want_ax {
+            Some(capture_ax(&mut cdp)?)
         } else {
             None
         };
@@ -265,6 +335,7 @@ impl BrowserManager {
 
         Ok(Look {
             screenshot,
+            ax,
             console: cdp.console,
             final_url,
             status: if loaded {
@@ -275,17 +346,21 @@ impl BrowserManager {
                     LOAD_TIMEOUT.as_secs()
                 )
             },
+            width,
+            height,
+            wait_for: opts.wait_for.clone(),
+            wait_for_found,
         })
     }
 
-    fn capture(&self, cdp: &mut Cdp, full_page: bool) -> Result<String> {
+    fn capture(&self, cdp: &mut Cdp, full_page: bool, width: u32, height: u32) -> Result<String> {
         let params = if full_page {
             let metrics = cdp.call("Page.getLayoutMetrics", json!({}))?;
             let content = &metrics["cssContentSize"];
-            let width = content["width"].as_f64().unwrap_or(VIEWPORT.0 as f64);
+            let width = content["width"].as_f64().unwrap_or(width as f64);
             let height = content["height"]
                 .as_f64()
-                .unwrap_or(VIEWPORT.1 as f64)
+                .unwrap_or(height as f64)
                 .min(MAX_FULL_PAGE_HEIGHT as f64);
             json!({
                 "format": "png",
@@ -496,6 +571,305 @@ fn describe_remote_object(arg: &Value) -> String {
         .to_string()
 }
 
+fn wait_for_selector(cdp: &mut Cdp, selector: &str, timeout: Duration) -> Result<bool> {
+    let deadline = Instant::now() + timeout;
+    let mut last_err: Option<String> = None;
+    while Instant::now() < deadline {
+        match selector_present(cdp, selector) {
+            Ok(true) => return Ok(true),
+            Ok(false) => last_err = None,
+            Err(e) => {
+                let message = e.to_string();
+                // A replaced document is "not found yet", not a bad selector.
+                if message.contains("Could not find node") || message.contains("No node") {
+                    last_err = None;
+                } else {
+                    last_err = Some(message);
+                }
+            }
+        }
+        cdp.drain(Duration::from_millis(80));
+    }
+    if let Some(message) = last_err {
+        return Err(message.into());
+    }
+    Ok(false)
+}
+
+fn selector_present(cdp: &mut Cdp, selector: &str) -> Result<bool> {
+    let doc = cdp.call("DOM.getDocument", json!({ "depth": 0 }))?;
+    let root_id = doc["root"]["nodeId"].as_u64().unwrap_or(0);
+    if root_id == 0 {
+        return Ok(false);
+    }
+    let found = cdp.call(
+        "DOM.querySelector",
+        json!({ "nodeId": root_id, "selector": selector }),
+    )?;
+    Ok(found["nodeId"].as_u64().unwrap_or(0) != 0)
+}
+
+fn capture_ax(cdp: &mut Cdp) -> Result<String> {
+    let tree = match cdp.call(
+        "Accessibility.getFullAXTree",
+        json!({ "depth": MAX_AX_DEPTH as u64 }),
+    ) {
+        Ok(v) => v,
+        Err(_) => cdp.call("Accessibility.getFullAXTree", json!({}))?,
+    };
+    let nodes = tree["nodes"].as_array().cloned().unwrap_or_default();
+    Ok(format_ax_tree(&nodes))
+}
+
+struct AxNode {
+    role: String,
+    name: String,
+    value: String,
+    ignored: bool,
+    attrs: Vec<(String, String)>,
+    child_ids: Vec<String>,
+}
+
+fn ax_id(value: &Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| value.as_u64().map(|n| n.to_string()))
+        .or_else(|| value.as_i64().map(|n| n.to_string()))
+}
+
+fn ax_scalar(value: &Value) -> String {
+    let inner = if value.get("type").is_some() {
+        &value["value"]
+    } else {
+        value
+    };
+    if let Some(text) = inner.as_str() {
+        return text.to_string();
+    }
+    if let Some(flag) = inner.as_bool() {
+        return flag.to_string();
+    }
+    if let Some(n) = inner.as_i64() {
+        return n.to_string();
+    }
+    if let Some(n) = inner.as_f64() {
+        return n.to_string();
+    }
+    String::new()
+}
+
+fn ax_attrs(properties: &Value) -> Vec<(String, String)> {
+    let mut attrs = Vec::new();
+    let Some(list) = properties.as_array() else {
+        return attrs;
+    };
+    for property in list {
+        let name = property["name"].as_str().unwrap_or("");
+        let key = match name {
+            "disabled" | "required" | "readonly" | "selected" | "expanded" | "modal" | "busy"
+            | "invalid" | "checked" | "pressed" | "level" => name,
+            "focused" => "active",
+            _ => continue,
+        };
+        let raw = ax_scalar(&property["value"]);
+        let lower = raw.to_ascii_lowercase();
+        if lower.is_empty() || lower == "false" || lower == "undefined" || lower == "none" {
+            continue;
+        }
+        attrs.push((key.to_string(), raw));
+    }
+    attrs
+}
+
+fn parse_ax_node(raw: &Value) -> Option<(String, AxNode)> {
+    let id = ax_id(&raw["nodeId"])?;
+    let mut role = ax_scalar(&raw["role"]).to_ascii_lowercase();
+    if role == "statictext" {
+        role = "text".into();
+    } else if role == "image" {
+        role = "img".into();
+    }
+    let child_ids = raw["childIds"]
+        .as_array()
+        .map(|list| list.iter().filter_map(ax_id).collect())
+        .unwrap_or_default();
+    Some((
+        id,
+        AxNode {
+            role,
+            name: ax_scalar(&raw["name"]),
+            value: ax_scalar(&raw["value"]),
+            ignored: raw["ignored"].as_bool().unwrap_or(false),
+            attrs: ax_attrs(&raw["properties"]),
+            child_ids,
+        },
+    ))
+}
+
+fn should_flatten(role: &str, name: &str) -> bool {
+    matches!(
+        role,
+        "rootwebarea"
+            | "webarea"
+            | "document"
+            | "inlinetextbox"
+            | "linebreak"
+            | "none"
+            | "presentation"
+            | "ignored"
+    ) || ((role == "generic" || role == "group") && name.is_empty())
+}
+
+fn quote_name(s: &str) -> String {
+    let collapsed: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let truncated = if collapsed.chars().count() > 120 {
+        format!("{}...", collapsed.chars().take(117).collect::<String>())
+    } else {
+        collapsed
+    };
+    serde_json::to_string(&truncated).unwrap_or_else(|_| "\"\"".into())
+}
+
+fn node_line(node: &AxNode) -> String {
+    if node.role == "text" {
+        return format!("text: {}", quote_name(&node.name));
+    }
+    let mut line = node.role.clone();
+    if !node.name.is_empty() {
+        line.push(' ');
+        line.push_str(&quote_name(&node.name));
+    }
+    for (key, value) in &node.attrs {
+        if value == "true" {
+            line.push_str(&format!(" [{key}]"));
+        } else {
+            line.push_str(&format!(" [{key}={value}]"));
+        }
+    }
+    if !node.value.is_empty() && node.value != node.name && node.child_ids.is_empty() {
+        line.push_str(": ");
+        line.push_str(&quote_name(&node.value));
+    }
+    line
+}
+
+fn ax_root_id(by_id: &HashMap<String, AxNode>) -> Option<String> {
+    if let Some((id, _)) = by_id
+        .iter()
+        .find(|(_, node)| matches!(node.role.as_str(), "rootwebarea" | "webarea"))
+    {
+        return Some(id.clone());
+    }
+    let mut children = HashSet::new();
+    for node in by_id.values() {
+        for id in &node.child_ids {
+            children.insert(id.as_str());
+        }
+    }
+    by_id
+        .keys()
+        .find(|id| !children.contains(id.as_str()))
+        .cloned()
+}
+
+fn format_ax_tree(nodes: &[Value]) -> String {
+    let mut by_id = HashMap::new();
+    for raw in nodes {
+        if let Some((id, node)) = parse_ax_node(raw) {
+            by_id.insert(id, node);
+        }
+    }
+    if by_id.is_empty() {
+        return "(empty accessibility tree)".into();
+    }
+    let root = ax_root_id(&by_id).unwrap_or_default();
+    let mut out = String::new();
+    let mut emitted = 0;
+    let mut stack = HashSet::new();
+    write_ax(&by_id, &root, 0, None, &mut out, &mut emitted, &mut stack);
+    if out.is_empty() {
+        return "(empty accessibility tree)".into();
+    }
+    if emitted >= MAX_AX_NODES || out.len() >= MAX_AX_CHARS {
+        out.push_str("\n… truncated");
+    }
+    out
+}
+
+fn write_ax(
+    by_id: &HashMap<String, AxNode>,
+    id: &str,
+    depth: usize,
+    parent_name: Option<&str>,
+    out: &mut String,
+    emitted: &mut usize,
+    stack: &mut HashSet<String>,
+) {
+    if *emitted >= MAX_AX_NODES || out.len() >= MAX_AX_CHARS {
+        return;
+    }
+    if !stack.insert(id.to_string()) {
+        return;
+    }
+    let Some(node) = by_id.get(id) else {
+        stack.remove(id);
+        return;
+    };
+
+    if node.role == "text" && node.name.is_empty() {
+        for child in &node.child_ids {
+            write_ax(by_id, child, depth, parent_name, out, emitted, stack);
+        }
+        stack.remove(id);
+        return;
+    }
+    if parent_name == Some(node.name.as_str()) && node.role == "text" {
+        stack.remove(id);
+        return;
+    }
+
+    let flatten = (node.ignored || should_flatten(&node.role, &node.name)) && depth <= MAX_AX_DEPTH;
+    if flatten {
+        let next_parent = if node.name.is_empty() {
+            parent_name
+        } else {
+            Some(node.name.as_str())
+        };
+        for child in &node.child_ids {
+            write_ax(by_id, child, depth, next_parent, out, emitted, stack);
+        }
+        stack.remove(id);
+        return;
+    }
+
+    let mut child_buf = String::new();
+    if depth < MAX_AX_DEPTH {
+        for child in &node.child_ids {
+            write_ax(
+                by_id,
+                child,
+                depth + 1,
+                Some(node.name.as_str()),
+                &mut child_buf,
+                emitted,
+                stack,
+            );
+        }
+    }
+    *emitted += 1;
+    out.push_str(&"  ".repeat(depth));
+    out.push_str("- ");
+    out.push_str(&node_line(node));
+    if child_buf.is_empty() {
+        out.push('\n');
+    } else {
+        out.push_str(":\n");
+        out.push_str(&child_buf);
+    }
+    stack.remove(id);
+}
+
 /// The address the dock preview is showing, pushed down when it changes.
 #[tauri::command]
 pub fn preview_set_url(state: tauri::State<'_, PreviewUrl>, url: Option<String>) -> Result<()> {
@@ -653,7 +1027,16 @@ mod tests {
         let manager = BrowserManager::default();
         let url =
             std::env::var("EMBERYX_PROBE_URL").unwrap_or_else(|_| "http://localhost:8391/".into());
-        let look = manager.look(&url, false, 600, true).expect("look failed");
+        let look = manager
+            .look(
+                &url,
+                LookOpts {
+                    wait_ms: 600,
+                    want_shot: true,
+                    ..LookOpts::default()
+                },
+            )
+            .expect("look failed");
         manager.kill_all();
 
         let shot = look.screenshot.expect("no screenshot");
@@ -676,6 +1059,146 @@ mod tests {
             "missing 404: {joined}"
         );
         assert_eq!(look.status, "loaded");
+    }
+
+    /// Self-contained: serves a known page rather than depending on a probe
+    /// URL. Ignored for the same reason as `browser_sees_a_real_page`.
+    #[test]
+    #[ignore]
+    fn browser_sees_an_accessibility_tree() {
+        let html = r#"<!doctype html>
+<html><body>
+  <h1>Probe heading</h1>
+  <button disabled>Do the thing</button>
+  <a href="/docs">Docs</a>
+</body></html>"#;
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind probe");
+        let port = match server.server_addr() {
+            tiny_http::ListenAddr::IP(addr) => addr.port(),
+            #[allow(unreachable_patterns)]
+            _ => panic!("probe server: no IP address"),
+        };
+        std::thread::spawn(move || {
+            for req in server.incoming_requests().take(8) {
+                if req.url() == "/favicon.ico" {
+                    let _ = req.respond(tiny_http::Response::empty(404));
+                    continue;
+                }
+                let response = tiny_http::Response::from_string(html).with_header(
+                    tiny_http::Header::from_bytes(
+                        &b"Content-Type"[..],
+                        &b"text/html; charset=utf-8"[..],
+                    )
+                    .unwrap(),
+                );
+                let _ = req.respond(response);
+            }
+        });
+
+        let manager = BrowserManager::default();
+        let url = format!("http://127.0.0.1:{port}/");
+        let look = manager
+            .look(
+                &url,
+                LookOpts {
+                    want_ax: true,
+                    wait_for: Some("button".into()),
+                    wait_ms: 2000,
+                    ..LookOpts::default()
+                },
+            )
+            .expect("look failed");
+        manager.kill_all();
+
+        assert!(look.wait_for_found, "button should have been on the page");
+        let ax = look.ax.expect("no ax tree");
+        assert!(ax.contains("heading"), "missing heading: {ax}");
+        assert!(ax.contains("Probe heading"), "missing heading name: {ax}");
+        assert!(ax.contains("button"), "missing button: {ax}");
+        assert!(ax.contains("disabled"), "missing disabled: {ax}");
+        assert!(ax.contains("link"), "missing link: {ax}");
+    }
+
+    fn ax_value(kind: &str, value: Value) -> Value {
+        json!({ "type": kind, "value": value })
+    }
+
+    fn ax_node(
+        id: &str,
+        role: &str,
+        name: &str,
+        children: &[&str],
+        properties: Value,
+        ignored: bool,
+    ) -> Value {
+        json!({
+            "nodeId": id,
+            "ignored": ignored,
+            "role": ax_value("role", json!(role)),
+            "name": ax_value("computedString", json!(name)),
+            "childIds": children,
+            "properties": properties,
+        })
+    }
+
+    #[test]
+    fn ax_tree_renders_roles_names_and_states() {
+        let nodes = [
+            ax_node("1", "RootWebArea", "Page", &["2", "3"], json!([]), false),
+            ax_node(
+                "2",
+                "heading",
+                "Probe heading",
+                &[],
+                json!([{ "name": "level", "value": ax_value("integer", json!(1)) }]),
+                false,
+            ),
+            ax_node(
+                "3",
+                "button",
+                "Do the thing",
+                &[],
+                json!([{ "name": "disabled", "value": ax_value("boolean", json!(true)) }]),
+                false,
+            ),
+        ];
+        let tree = format_ax_tree(&nodes);
+        assert_eq!(
+            tree,
+            "- heading \"Probe heading\" [level=1]\n- button \"Do the thing\" [disabled]\n"
+        );
+    }
+
+    #[test]
+    fn unnamed_generic_wrappers_are_flattened() {
+        let nodes = [
+            ax_node("1", "generic", "", &["2"], json!([]), false),
+            ax_node("2", "link", "Docs", &[], json!([]), false),
+        ];
+        assert_eq!(format_ax_tree(&nodes), "- link \"Docs\"\n");
+    }
+
+    #[test]
+    fn ignored_nodes_and_repeating_text_are_dropped() {
+        let nodes = [
+            ax_node("1", "button", "Save", &["2", "3"], json!([]), false),
+            ax_node("2", "StaticText", "Save", &[], json!([]), false),
+            ax_node("3", "generic", "", &[], json!([]), true),
+        ];
+        assert_eq!(format_ax_tree(&nodes), "- button \"Save\"\n");
+    }
+
+    #[test]
+    fn empty_ax_payload_says_so() {
+        assert_eq!(format_ax_tree(&[]), "(empty accessibility tree)");
+    }
+
+    #[test]
+    fn mobile_viewport_defaults_and_clamps() {
+        assert_eq!(resolve_viewport(None, None, false), (1280, 800));
+        assert_eq!(resolve_viewport(None, None, true), (390, 844));
+        assert_eq!(resolve_viewport(Some(10), Some(10_000), false), (320, 4000));
+        assert_eq!(resolve_viewport(Some(2400), Some(900), true), (1920, 900));
     }
 
     /// A `Cdp` with no socket behind it. `absorb` never touches the socket, so

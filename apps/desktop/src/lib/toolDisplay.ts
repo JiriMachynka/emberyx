@@ -29,7 +29,8 @@ export type ToolBodyPart =
   | { kind: "text"; label?: string; text: string }
   | { kind: "diff"; label?: string; before: string; after: string; lang: string | null }
   | { kind: "fields"; rows: FieldRow[] }
-  | { kind: "todos"; items: TodoItem[] };
+  | { kind: "todos"; items: TodoItem[] }
+  | { kind: "image"; src: string };
 
 export interface ToolDisplay {
   icon: ToolIcon;
@@ -311,6 +312,24 @@ export function describeTool(name: string, input: unknown): ToolDisplay {
       };
     }
 
+    case "mcp__emberyx__preview_screenshot":
+    case "mcp__emberyx__preview_console":
+    case "mcp__emberyx__preview_snapshot": {
+      const label = name.endsWith("screenshot")
+        ? "Screenshot"
+        : name.endsWith("console")
+          ? "Console"
+          : "Snapshot";
+      return {
+        icon: "read",
+        label,
+        title: str(i.url) ?? str(i.waitFor),
+        meta: i.mobile === true ? "mobile" : undefined,
+        mono: true,
+        body: genericBody(input, ["url"]),
+      };
+    }
+
     default: {
       const { title, key, mono } = argTitle(i);
       const skip = key ? [key] : [];
@@ -389,21 +408,72 @@ export const detectResult = (result: string): { code: string; lang: string | nul
   return { code: result, lang: null };
 };
 
+const RASTER_MIME = /^image\/(png|jpe?g|gif|webp)$/i;
+
+/** A data URL for an MCP or Anthropic image block. `null` if the shape is
+ *  not a raster we can put in an `<img>`. */
+const imageSrcFromBlock = (block: Record<string, unknown>): string | null => {
+  if (typeof block.url === "string" && block.url.startsWith("data:image/")) {
+    return block.url;
+  }
+  const source = rec(block.source);
+  const data =
+    (typeof block.data === "string" && block.data) ||
+    (typeof source.data === "string" && source.data) ||
+    "";
+  if (!data) return null;
+  const mimeRaw =
+    (typeof block.mimeType === "string" && block.mimeType) ||
+    (typeof block.mime_type === "string" && block.mime_type) ||
+    (typeof source.media_type === "string" && source.media_type) ||
+    "image/png";
+  if (!RASTER_MIME.test(mimeRaw)) return null;
+  return `data:${mimeRaw};base64,${data}`;
+};
+
+/** MCP / Claude tool results arrive as a content-block array. All-text arrays
+ *  keep the existing unwrap-to-mono path; an image in the mix becomes an
+ *  `<img>` plus the text, not a JSON dump of the base64. */
+const contentBlockParts = (parsed: unknown): ToolBodyPart[] | null => {
+  if (!Array.isArray(parsed) || parsed.length === 0) return null;
+  const parts: ToolBodyPart[] = [];
+  let sawImage = false;
+  for (const item of parsed) {
+    const block = rec(item);
+    if (block.type === "text" && typeof block.text === "string") {
+      if (block.text.trim()) parts.push({ kind: "text", text: block.text });
+      continue;
+    }
+    if (block.type === "image") {
+      const src = imageSrcFromBlock(block);
+      if (!src) return null;
+      parts.push({ kind: "image", src });
+      sawImage = true;
+      continue;
+    }
+    return null;
+  }
+  return sawImage ? parts : null;
+};
+
 /** Turn a tool result into display chunks. A JSON *object* result becomes the
  *  same key/value / prose / nested-JSON layout as inputs — so MCP and tool
- *  results read as fields, not a raw blob. Everything else (plain text, file
- *  contents, JSON arrays / content-blocks) keeps its mono code rendering. */
+ *  results read as fields, not a raw blob. Image content-blocks render as
+ *  pictures. Everything else (plain text, file contents, JSON arrays) keeps
+ *  its mono code rendering. */
 export function describeResult(result: string): ToolBodyPart[] {
   const trimmed = result.trim();
-  if (trimmed.startsWith("{")) {
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
       const parsed: unknown = JSON.parse(trimmed);
+      const fromBlocks = contentBlockParts(parsed);
+      if (fromBlocks) return fromBlocks;
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         const body = genericBody(parsed);
         if (body.length > 0) return body;
       }
     } catch {
-      // not an object — fall through
+      // not JSON — fall through
     }
   }
   const { code, lang } = detectResult(trimmed);

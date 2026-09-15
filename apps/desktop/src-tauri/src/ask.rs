@@ -160,6 +160,46 @@ fn tool_definition() -> Value {
     })
 }
 
+/// Shared by the three preview tools so a new wait/viewport knob lands once.
+fn preview_shared_properties() -> Value {
+    json!({
+        "url": {
+            "type": "string",
+            "description": "Local dev server address. Defaults to the user's current preview."
+        },
+        "waitMs": {
+            "type": "number",
+            "description": "Settle time after load, in ms. When waitFor is set, this is the timeout for that selector (default 5000); otherwise default 400."
+        },
+        "waitFor": {
+            "type": "string",
+            "description": "CSS selector to wait for after load, for client-rendered UI that appears after the load event."
+        },
+        "mobile": {
+            "type": "boolean",
+            "description": "Phone viewport (390×844) instead of desktop (1280×800). Layout only; screenshots stay 1× so they fit in context."
+        },
+        "width": {
+            "type": "number",
+            "description": "Viewport width in CSS pixels (320–1920)."
+        },
+        "height": {
+            "type": "number",
+            "description": "Viewport height in CSS pixels (480–4000)."
+        }
+    })
+}
+
+fn with_preview_props(extra: Value) -> Value {
+    let mut props = preview_shared_properties();
+    if let (Some(base), Some(more)) = (props.as_object_mut(), extra.as_object()) {
+        for (key, value) in more {
+            base.insert(key.clone(), value.clone());
+        }
+    }
+    props
+}
+
 /// The agent's own headless browser, pointed at the dev server. Not the dock
 /// preview — that is a cross-origin iframe the app cannot photograph or read.
 fn screenshot_tool() -> Value {
@@ -168,23 +208,17 @@ fn screenshot_tool() -> Value {
         "description": "Take a screenshot of the running dev server so you can \
     see what your UI change actually looks like. Defaults to the address the user \
     is previewing, or the first dev server that answers. Local addresses only. Use \
-    it after a visual change instead of describing what you think you rendered.",
+    it after a visual change instead of describing what you think you rendered. \
+    Prefer preview_snapshot when the question is structure (a heading, a disabled \
+    button, an open dialog) rather than colour or spacing.",
         "inputSchema": {
             "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "Local dev server address. Defaults to the user's current preview."
-                },
+            "properties": with_preview_props(json!({
                 "fullPage": {
                     "type": "boolean",
                     "description": "Capture the whole scrollable page instead of one viewport."
-                },
-                "waitMs": {
-                    "type": "number",
-                    "description": "Extra settle time after load, for client-rendered apps. Default 400."
                 }
-            }
+            }))
         }
     })
 }
@@ -198,16 +232,23 @@ fn console_tool() -> Value {
     Use it when a page misbehaves, before guessing at the cause from the source.",
         "inputSchema": {
             "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "Local dev server address. Defaults to the user's current preview."
-                },
-                "waitMs": {
-                    "type": "number",
-                    "description": "How long to keep listening after load. Default 400."
-                }
-            }
+            "properties": with_preview_props(json!({}))
+        }
+    })
+}
+
+/// Cheap structure: roles, names, states. Not a picture.
+fn snapshot_tool() -> Value {
+    json!({
+        "name": "preview_snapshot",
+        "description": "Read the accessibility tree of the running dev server — \
+    roles, names, and states, in the same YAML shape as Playwright's aria snapshot. \
+    Prefer this over a screenshot when you need to know what is on the page. Use \
+    preview_screenshot when colour, spacing, or overflow is the question. Local \
+    addresses only.",
+        "inputSchema": {
+            "type": "object",
+            "properties": with_preview_props(json!({}))
         }
     })
 }
@@ -341,6 +382,7 @@ fn serve(mut req: tiny_http::Request, app: &AppHandle, token: &str) {
             tool_definition(),
             screenshot_tool(),
             console_tool(),
+            snapshot_tool(),
         ] })),
         "tools/call" => call_tool(app, &url, &rpc["params"]),
         other => Err(format!("unknown method: {other}")),
@@ -404,20 +446,33 @@ fn parse_questions(args: &Value) -> std::result::Result<Vec<AskQuestion>, String
 fn call_tool(app: &AppHandle, url: &str, params: &Value) -> std::result::Result<Value, String> {
     match params["name"].as_str() {
         Some("ask_user") => ask_user(app, url, params),
-        Some("preview_screenshot") => look_at_preview(app, &params["arguments"], true),
-        Some("preview_console") => look_at_preview(app, &params["arguments"], false),
+        Some("preview_screenshot") => look_at_preview(app, &params["arguments"], true, false),
+        Some("preview_console") => look_at_preview(app, &params["arguments"], false, false),
+        Some("preview_snapshot") => look_at_preview(app, &params["arguments"], false, true),
         _ => Err(format!("unknown tool: {}", params["name"])),
     }
 }
 
-/// Both browser tools are one trip through the page; they differ only in
-/// whether the picture comes back. Keeping them as two tools rather than one
-/// with a flag is for the agent's sake — "read the console" should not have to
-/// spend a screenshot's worth of context to do it.
+fn json_u32(value: &Value) -> Option<u32> {
+    if let Some(n) = value.as_u64() {
+        return u32::try_from(n).ok().filter(|&n| n > 0);
+    }
+    let n = value.as_f64()?;
+    if !n.is_finite() || n <= 0.0 {
+        return None;
+    }
+    u32::try_from(n.round() as u64).ok().filter(|&n| n > 0)
+}
+
+/// The three browser tools are one trip through the page; they differ in
+/// whether the picture or the accessibility tree comes back. Keeping them as
+/// separate tools is for the agent's sake — "read the console" should not
+/// have to spend a screenshot's worth of context to do it.
 fn look_at_preview(
     app: &AppHandle,
     args: &Value,
     want_shot: bool,
+    want_ax: bool,
 ) -> std::result::Result<Value, String> {
     let url = match args["url"].as_str().filter(|u| !u.is_empty()) {
         Some(url) => url.to_string(),
@@ -427,12 +482,32 @@ Start your dev server, or pass `url`."
                 .to_string()
         })?,
     };
-    let full_page = args["fullPage"].as_bool().unwrap_or(false);
-    let wait_ms = args["waitMs"].as_u64().unwrap_or(400);
+    let wait_for = args["waitFor"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let wait_ms = args["waitMs"]
+        .as_u64()
+        .or_else(|| {
+            args["waitMs"]
+                .as_f64()
+                .and_then(|n| (n.is_finite() && n >= 0.0).then_some(n.round() as u64))
+        })
+        .unwrap_or(if wait_for.is_some() { 5000 } else { 400 });
+    let opts = crate::browser::LookOpts {
+        full_page: args["fullPage"].as_bool().unwrap_or(false),
+        wait_ms,
+        wait_for,
+        width: json_u32(&args["width"]),
+        height: json_u32(&args["height"]),
+        mobile: args["mobile"].as_bool().unwrap_or(false),
+        want_shot,
+        want_ax,
+    };
 
     let look = app
         .state::<crate::browser::BrowserManager>()
-        .look(&url, full_page, wait_ms, want_shot)
+        .look(&url, opts)
         .map_err(|e| e.to_string())?;
 
     let console = if look.console.is_empty() {
@@ -440,7 +515,26 @@ Start your dev server, or pass `url`."
     } else {
         look.console.join("\n")
     };
-    let summary = format!("{} — {}\n\n{console}", look.final_url, look.status);
+    let mut summary = format!(
+        "{} — {} · {}×{}",
+        look.final_url, look.status, look.width, look.height
+    );
+    if let Some(selector) = &look.wait_for {
+        summary.push_str(&format!(
+            "\nwaitFor `{selector}` — {}",
+            if look.wait_for_found {
+                "found"
+            } else {
+                "not found"
+            }
+        ));
+    }
+    summary.push_str("\n\n");
+    summary.push_str(&console);
+    if let Some(ax) = &look.ax {
+        summary.push_str("\n\n");
+        summary.push_str(ax);
+    }
 
     let mut content = Vec::new();
     // Image first: a client that truncates content shows the picture, which is
@@ -565,6 +659,33 @@ mod tests {
         assert_eq!(entry["type"], "http");
         assert_eq!(entry["url"], "http://127.0.0.1:9999/mcp?session=s7");
         assert_eq!(entry["headers"]["X-Emberyx-Token"], "tok");
+    }
+
+    #[test]
+    fn snapshot_tool_is_listed_with_shared_preview_knobs() {
+        let shot = screenshot_tool();
+        let snap = snapshot_tool();
+        let console = console_tool();
+        assert_eq!(snap["name"], "preview_snapshot");
+        for tool in [&shot, &snap, &console] {
+            let props = &tool["inputSchema"]["properties"];
+            assert!(props.get("waitFor").is_some(), "{}", tool["name"]);
+            assert!(props.get("mobile").is_some(), "{}", tool["name"]);
+            assert!(props.get("width").is_some(), "{}", tool["name"]);
+            assert!(props.get("height").is_some(), "{}", tool["name"]);
+        }
+        assert!(shot["inputSchema"]["properties"].get("fullPage").is_some());
+        assert!(snap["inputSchema"]["properties"].get("fullPage").is_none());
+    }
+
+    #[test]
+    fn json_u32_accepts_ints_and_floats_and_drops_junk() {
+        assert_eq!(json_u32(&json!(390)), Some(390));
+        assert_eq!(json_u32(&json!(390.4)), Some(390));
+        assert_eq!(json_u32(&json!(0)), None);
+        assert_eq!(json_u32(&json!(-1)), None);
+        assert_eq!(json_u32(&json!("390")), None);
+        assert_eq!(json_u32(&json!(null)), None);
     }
 
     #[test]

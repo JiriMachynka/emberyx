@@ -307,10 +307,7 @@ impl Drain {
             if now >= deadline {
                 return;
             }
-            let (next, _timeout) = self
-                .done
-                .wait_timeout(state, deadline - now)
-                .unwrap();
+            let (next, _timeout) = self.done.wait_timeout(state, deadline - now).unwrap();
             state = next;
         }
     }
@@ -397,9 +394,7 @@ impl Inner {
         if persistent {
             let daemon = daemon.ok_or("persistent codex needs the daemon")?;
             let proc_id = session_id.ok_or("persistent codex needs a session id")?;
-            return self.spawn_daemonized(
-                proc_id, cwd, command, extra_args, env, daemon, on_event,
-            );
+            return self.spawn_daemonized(proc_id, cwd, command, extra_args, env, daemon, on_event);
         }
         let mut cmd = Command::new(command.as_deref().unwrap_or("codex"));
         cmd.arg("app-server")
@@ -492,7 +487,10 @@ impl Inner {
         daemon: Arc<Daemon>,
         on_event: Channel<CodexEvent>,
     ) -> Result<SpawnResult> {
-        let mut argv = vec![command.unwrap_or_else(|| "codex".into()), "app-server".into()];
+        let mut argv = vec![
+            command.unwrap_or_else(|| "codex".into()),
+            "app-server".into(),
+        ];
         argv.extend(extra_args);
         let spec = ProcSpec {
             proc_id,
@@ -824,11 +822,7 @@ enum Chunk {
 /// local pipe reader and the daemon frame reassembler: responses resolve their
 /// waiter and stop here, requests are tracked so `codex_respond` can validate
 /// them, notifications ride on.
-fn route_line(
-    pending: &Pending,
-    open: &Mutex<HashSet<i64>>,
-    line: &str,
-) -> Option<CodexEvent> {
+fn route_line(pending: &Pending, open: &Mutex<HashSet<i64>>, line: &str) -> Option<CodexEvent> {
     match classify(line) {
         Frame::Response { id, result } => {
             pending.resolve(id, Ok(result));

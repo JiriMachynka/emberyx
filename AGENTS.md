@@ -587,10 +587,10 @@ turbo / pnpm / npm workspaces).
 
 - `ask.rs` — a `tiny_http` listener, **rejecting any request without the
   matching `x-emberyx-token`**. It is a local MCP server exposing `ask_user`,
-  `preview_screenshot` and `preview_console`, wired in via `--mcp-config` plus
-  a pre-allowed `--allowedTools` list. `ask_user` renders the interactive option picker in the
+  `preview_screenshot`, `preview_console` and `preview_snapshot`, wired in via
+  `--mcp-config` plus a pre-allowed `--allowedTools` list. `ask_user` renders the interactive option picker in the
   chat pane; answers resolve a pending channel keyed by request id, with a
-  timeout. The two browser tools are read-only and go through `browser.rs`.
+  timeout. The browser tools are read-only and go through `browser.rs`.
 
 `browser.rs` is the agent's own headless Chrome. The dock preview is a
 cross-origin `<iframe>` — the app can neither photograph it nor read its
@@ -600,10 +600,12 @@ speaks MCP by hand: `chromiumoxide` would pull tokio, reqwest and ~60k generated
 lines in for four commands, into a Rust side that is otherwise synchronous.
 Chrome is found, never bundled, and its absence is reported by name rather than
 degraded around. Loopback URLs only — this is a dev-server viewer, not a web
-fetcher. Its child is killed in `RunEvent::Exit` like every other spawner. The
-live path is covered by an `#[ignore]`d test (`cargo test -- --ignored
-browser_sees`); CI has no browser, and a test that passes without one is worse
-than none.
+fetcher. A look can wait for a CSS selector, switch to a phone viewport
+(layout only; screenshots stay 1×), and return a Playwright-shaped
+accessibility tree (`preview_snapshot`) instead of a PNG. Its child is killed
+in `RunEvent::Exit` like every other spawner. The live path is covered by
+`#[ignore]`d tests (`cargo test -- --ignored browser_sees`); CI has no
+browser, and a test that passes without one is worse than none.
 
 **The native preview is a spike, not the default.** With
 `localStorage["emberyx.preview.native"] = "1"`, the preview tab becomes a

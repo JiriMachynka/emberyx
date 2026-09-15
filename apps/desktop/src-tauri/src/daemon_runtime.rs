@@ -196,10 +196,7 @@ impl Runtime {
                 }
             }
         }
-        self.procs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clear();
+        self.procs.lock().unwrap_or_else(|e| e.into_inner()).clear();
         self.streams
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -266,9 +263,21 @@ impl Runtime {
         stream.child = Some(opened.child);
         drop(procs);
 
-        pump_bytes(opened.terminal, proc_id.clone(), ProcIo::Out, Arc::clone(&self.procs), true);
+        pump_bytes(
+            opened.terminal,
+            proc_id.clone(),
+            ProcIo::Out,
+            Arc::clone(&self.procs),
+            true,
+        );
         if let Some(stderr) = opened.extra {
-            pump_bytes(stderr, proc_id.clone(), ProcIo::Err, Arc::clone(&self.procs), false);
+            pump_bytes(
+                stderr,
+                proc_id.clone(),
+                ProcIo::Err,
+                Arc::clone(&self.procs),
+                false,
+            );
         }
         let procs = self.procs.lock().unwrap_or_else(|e| e.into_inner());
         let stream = procs.get(&proc_id).ok_or("proc vanished")?;
@@ -322,9 +331,7 @@ impl Runtime {
                     pixel_height: 0,
                 })
                 .map_err(|e| e.to_string()),
-            Some(ProcChild::Pipe { .. }) | None => {
-                Err(format!("proc {proc_id} is not a pty"))
-            }
+            Some(ProcChild::Pipe { .. }) | None => Err(format!("proc {proc_id} is not a pty")),
         }
     }
 
@@ -396,9 +403,7 @@ impl ProcChild {
     /// are the same act from the caller's point of view.
     fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
         match self {
-            ProcChild::Pipe { stdin, .. } => {
-                stdin.write_all(data).and_then(|_| stdin.flush())
-            }
+            ProcChild::Pipe { stdin, .. } => stdin.write_all(data).and_then(|_| stdin.flush()),
             ProcChild::Pty { session, .. } => session
                 .writer
                 .write_all(data)
@@ -438,13 +443,7 @@ struct ProcStream {
 }
 
 impl ProcStream {
-    fn push(
-        &mut self,
-        proc_id: &str,
-        data: Option<String>,
-        io: ProcIo,
-        exit: Option<ProcExit>,
-    ) {
+    fn push(&mut self, proc_id: &str, data: Option<String>, io: ProcIo, exit: Option<ProcExit>) {
         self.next_frame_id += 1;
         let frame = ProcFrame {
             frame_id: self.next_frame_id,
@@ -774,13 +773,14 @@ mod tests {
         );
 
         // Reattaching a live child reports it instead of starting a second one.
-        let again = runtime.proc_spawn(ProcSpec {
-            proc_id: "cat".into(),
-            argv: vec!["/bin/cat".into()],
-            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
-            ..Default::default()
-        })
-        .unwrap();
+        let again = runtime
+            .proc_spawn(ProcSpec {
+                proc_id: "cat".into(),
+                argv: vec!["/bin/cat".into()],
+                cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+                ..Default::default()
+            })
+            .unwrap();
         assert!(again.reattached);
 
         runtime.proc_resize("cat", 80, 24).unwrap_err();
@@ -840,11 +840,9 @@ mod tests {
             .unwrap();
         let engine = base64::engine::general_purpose::STANDARD;
         assert!(
-            wait_for(|| data_frames(&runtime, "pty")
-                .iter()
-                .any(|data| engine
-                    .decode(data)
-                    .is_ok_and(|b| String::from_utf8_lossy(&b).contains("ptyhi")))),
+            wait_for(|| data_frames(&runtime, "pty").iter().any(|data| engine
+                .decode(data)
+                .is_ok_and(|b| String::from_utf8_lossy(&b).contains("ptyhi")))),
             "pty output never came back"
         );
         runtime.proc_resize("pty", 100, 30).unwrap();

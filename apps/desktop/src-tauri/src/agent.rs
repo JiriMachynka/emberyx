@@ -162,9 +162,10 @@ impl AgentManager {
             cmd.arg("--settings").arg(s);
         }
         // Emberyx's own MCP server: ask_user, plus the browser tools that look
-        // at the dev server. Pre-allowed so using them doesn't first raise a
-        // permission prompt — the browser is read-only and local-only, so there
-        // is nothing here for the user to adjudicate.
+        // at the dev server (screenshot, console, accessibility tree). Pre-allowed
+        // so using them doesn't first raise a permission prompt — the browser is
+        // read-only and local-only, so there is nothing here for the user to
+        // adjudicate.
         if let Some(config) = &mcp_config {
             cmd.arg("--mcp-config")
                 .arg(config)
@@ -172,7 +173,8 @@ impl AgentManager {
                 .arg(
                     "mcp__emberyx__ask_user,\
 mcp__emberyx__preview_screenshot,\
-mcp__emberyx__preview_console",
+mcp__emberyx__preview_console,\
+mcp__emberyx__preview_snapshot",
                 );
         }
 

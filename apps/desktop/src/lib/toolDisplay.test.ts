@@ -148,6 +148,22 @@ describe("describeTool", () => {
     expect(d.title).toBe("pick one");
   });
 
+  it("labels the preview tools by what they return", () => {
+    const shot = describeTool("mcp__emberyx__preview_screenshot", {
+      url: "http://localhost:5173",
+      mobile: true,
+    });
+    expect(shot.label).toBe("Screenshot");
+    expect(shot.title).toBe("http://localhost:5173");
+    expect(shot.meta).toBe("mobile");
+    expect(shot.icon).toBe("read");
+
+    const snap = describeTool("mcp__emberyx__preview_snapshot", { waitFor: "dialog" });
+    expect(snap.label).toBe("Snapshot");
+    expect(snap.title).toBe("dialog");
+    expect(snap.meta).toBeUndefined();
+  });
+
   it("splits unknown tool input into fields and prose instead of raw json", () => {
     const d = describeTool("Mystery", {
       mode: "fast",
@@ -244,6 +260,34 @@ describe("describeResult", () => {
 
   it("returns nothing for an empty result", () => {
     expect(describeResult("   ")).toEqual([]);
+  });
+
+  it("renders MCP image blocks as pictures, not a json dump", () => {
+    const raw = JSON.stringify([
+      { type: "image", data: "AAAA", mimeType: "image/png" },
+      { type: "text", text: "http://localhost:5173 — loaded" },
+    ]);
+    expect(describeResult(raw)).toEqual([
+      { kind: "image", src: "data:image/png;base64,AAAA" },
+      { kind: "text", text: "http://localhost:5173 — loaded" },
+    ]);
+  });
+
+  it("accepts Anthropic source.base64 image blocks", () => {
+    const raw = JSON.stringify([
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "BBBB" },
+      },
+    ]);
+    expect(describeResult(raw)).toEqual([
+      { kind: "image", src: "data:image/png;base64,BBBB" },
+    ]);
+  });
+
+  it("keeps an all-text content-block array as mono code", () => {
+    const raw = JSON.stringify([{ type: "text", text: "hello" }]);
+    expect(describeResult(raw)).toEqual([{ kind: "code", code: "hello", lang: null }]);
   });
 });
 

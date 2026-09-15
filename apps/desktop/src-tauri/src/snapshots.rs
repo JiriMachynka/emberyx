@@ -31,8 +31,8 @@ mod platform {
     use std::thread::JoinHandle;
     use std::time::{Duration, Instant};
 
-    use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
     use tauri::{AppHandle, Emitter, Manager};
 
     use super::{A11yNode, SnapshotCapture, SnapshotsStatus};
@@ -74,7 +74,11 @@ mod platform {
         ) -> CFURLRef;
         fn CFRelease(cf: CFTypeRef);
         fn CFRunLoopGetCurrent() -> CFRunLoopRef;
-        fn CFRunLoopAddSource(loop_ref: CFRunLoopRef, source: CFRunLoopSourceRef, mode: CFStringRef);
+        fn CFRunLoopAddSource(
+            loop_ref: CFRunLoopRef,
+            source: CFRunLoopSourceRef,
+            mode: CFStringRef,
+        );
         fn CFRunLoopRemoveSource(
             loop_ref: CFRunLoopRef,
             source: CFRunLoopSourceRef,
@@ -394,7 +398,12 @@ mod platform {
             return None;
         }
         let mut out: f64 = 0.0;
-        if CFNumberGetValue(value, K_CF_NUMBER_FLOAT64, &mut out as *mut f64 as *mut c_void) != 0 {
+        if CFNumberGetValue(
+            value,
+            K_CF_NUMBER_FLOAT64,
+            &mut out as *mut f64 as *mut c_void,
+        ) != 0
+        {
             Some(out)
         } else {
             None
@@ -436,7 +445,10 @@ mod platform {
                     layer: dict_number(dict, key("kCGWindowLayer")).unwrap_or(0.0) as i64,
                     bounds: CGRect {
                         origin: CGPoint { x, y },
-                        size: CGSize { width: w, height: h },
+                        size: CGSize {
+                            width: w,
+                            height: h,
+                        },
                     },
                     owner: dict_string(dict, key("kCGWindowOwnerName")),
                     name: dict_string(dict, key("kCGWindowName")),
@@ -453,7 +465,14 @@ mod platform {
     /// Known limit: the flip uses the *main* display's height, so bounds for a
     /// window on a secondary display arranged above or below it are off — the
     /// agent still gets the right shape and relative layout, just shifted.
-    fn to_window_space(x: f64, y: f64, w: f64, h: f64, win: CGRect, screen_h: f64) -> (f64, f64, f64, f64) {
+    fn to_window_space(
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        win: CGRect,
+        screen_h: f64,
+    ) -> (f64, f64, f64, f64) {
         let top_left_y = screen_h - y - h;
         (x - win.origin.x, top_left_y - win.origin.y, w, h)
     }
@@ -492,10 +511,21 @@ mod platform {
 
     unsafe fn ax_frame(element: AXUIElementRef, win: CGRect) -> (f64, f64, f64, f64) {
         let mut position = CGPoint { x: 0.0, y: 0.0 };
-        let mut size = CGSize { width: 0.0, height: 0.0 };
+        let mut size = CGSize {
+            width: 0.0,
+            height: 0.0,
+        };
         for (attribute, the_type, out) in [
-            (key("AXPosition"), K_AX_VALUE_TYPE_POINT, &mut position as *mut CGPoint as *mut c_void),
-            (key("AXSize"), K_AX_VALUE_TYPE_SIZE, &mut size as *mut CGSize as *mut c_void),
+            (
+                key("AXPosition"),
+                K_AX_VALUE_TYPE_POINT,
+                &mut position as *mut CGPoint as *mut c_void,
+            ),
+            (
+                key("AXSize"),
+                K_AX_VALUE_TYPE_SIZE,
+                &mut size as *mut CGSize as *mut c_void,
+            ),
         ] {
             let mut value: CFTypeRef = ptr::null();
             if AXUIElementCopyAttributeValue(element, attribute, &mut value) == K_AX_ERROR_SUCCESS
@@ -506,10 +536,21 @@ mod platform {
             }
         }
         let screen_h = CGDisplayPixelsHigh(CGMainDisplayID()) as f64;
-        to_window_space(position.x, position.y, size.width, size.height, win, screen_h)
+        to_window_space(
+            position.x,
+            position.y,
+            size.width,
+            size.height,
+            win,
+            screen_h,
+        )
     }
 
-    unsafe fn ax_walk(element: AXUIElementRef, level: usize, budget: &mut AxBudget) -> Option<A11yNode> {
+    unsafe fn ax_walk(
+        element: AXUIElementRef,
+        level: usize,
+        budget: &mut AxBudget,
+    ) -> Option<A11yNode> {
         if element.is_null()
             || level > AX_MAX_DEPTH
             || budget.nodes >= AX_MAX_NODES
@@ -519,8 +560,8 @@ mod platform {
         }
         budget.nodes += 1;
         let role = ax_string(element, key("AXRole"))?;
-        let name = ax_string(element, key("AXTitle"))
-            .or_else(|| ax_string(element, key("AXDescription")));
+        let name =
+            ax_string(element, key("AXTitle")).or_else(|| ax_string(element, key("AXDescription")));
         let value = ax_string(element, key("AXValue"));
         let (x, y, w, h) = ax_frame(element, budget.win);
 
@@ -539,7 +580,16 @@ mod platform {
             }
             CFRelease(list);
         }
-        Some(A11yNode { role, name, value, x, y, w, h, children })
+        Some(A11yNode {
+            role,
+            name,
+            value,
+            x,
+            y,
+            w,
+            h,
+            children,
+        })
     }
 
     unsafe fn ax_tree(pid: i32, win: CGRect) -> Option<A11yNode> {
@@ -548,8 +598,7 @@ mod platform {
             return None;
         }
         AXUIElementSetMessagingTimeout(app, 2.0);
-        let window = ax_copy_element(app, key("AXFocusedWindow"))
-            .or_else(|| ax_first_window(app));
+        let window = ax_copy_element(app, key("AXFocusedWindow")).or_else(|| ax_first_window(app));
         let tree = window.and_then(|w| {
             let mut budget = AxBudget {
                 nodes: 0,
@@ -565,7 +614,10 @@ mod platform {
         tree
     }
 
-    unsafe fn ax_copy_element(element: AXUIElementRef, attribute: CFStringRef) -> Option<AXUIElementRef> {
+    unsafe fn ax_copy_element(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+    ) -> Option<AXUIElementRef> {
         let mut value: CFTypeRef = ptr::null();
         if AXUIElementCopyAttributeValue(element, attribute, &mut value) != K_AX_ERROR_SUCCESS
             || value.is_null()
@@ -631,8 +683,10 @@ mod platform {
         ));
         let result = (|| {
             let c_path = CString::new(path.as_os_str().to_string_lossy().as_bytes()).ok()?;
-            let cf_path = CFStringCreateWithCString(ptr::null(), c_path.as_ptr(), K_CF_STRING_ENCODING_UTF8);
-            let url = CFURLCreateWithFileSystemPath(ptr::null(), cf_path, K_CF_URL_POSIX_PATH_STYLE, 0);
+            let cf_path =
+                CFStringCreateWithCString(ptr::null(), c_path.as_ptr(), K_CF_STRING_ENCODING_UTF8);
+            let url =
+                CFURLCreateWithFileSystemPath(ptr::null(), cf_path, K_CF_URL_POSIX_PATH_STYLE, 0);
             let dest = CGImageDestinationCreateWithURL(url, key("public.png"), 1, ptr::null());
             let ok = if dest.is_null() {
                 false
@@ -858,7 +912,8 @@ mod platform {
                 let _ = msg1_uint(
                     running,
                     sel(b"activateWithOptions:\0"),
-                    NS_APPLICATION_ACTIVATE_ALL_WINDOWS | NS_APPLICATION_ACTIVATE_IGNORING_OTHER_APPS,
+                    NS_APPLICATION_ACTIVATE_ALL_WINDOWS
+                        | NS_APPLICATION_ACTIVATE_IGNORING_OTHER_APPS,
                 );
             }
         }
@@ -935,8 +990,7 @@ mod platform {
             alive,
             context,
         });
-        let (tx, rx) =
-            std::sync::mpsc::channel::<std::result::Result<(), String>>();
+        let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
         let thread_state = Arc::clone(&state);
         let spawned = std::thread::Builder::new()
             .name("emberyx-snapshots".into())
@@ -949,7 +1003,11 @@ mod platform {
             }
         };
         match rx.recv() {
-            Ok(Ok(())) => Ok(RunningTap { state, include_text, handle: Some(handle) }),
+            Ok(Ok(())) => Ok(RunningTap {
+                state,
+                include_text,
+                handle: Some(handle),
+            }),
             Ok(Err(e)) => Err(e.into()),
             Err(_) => Err(err!("snapshots: the tap thread died before it reported")),
         }
@@ -1112,7 +1170,12 @@ mod platform {
         Ok(())
     }
 
-    pub fn set_enabled(app: &AppHandle, manager: &SnapshotManager, enabled: bool, include_text: bool) -> Result<()> {
+    pub fn set_enabled(
+        app: &AppHandle,
+        manager: &SnapshotManager,
+        enabled: bool,
+        include_text: bool,
+    ) -> Result<()> {
         manager.set_enabled(app.clone(), enabled, include_text)
     }
 
@@ -1148,7 +1211,10 @@ mod platform {
                 row(3, 0, "Safari"),
                 row(4, 0, "Finder"),
             ];
-            assert_eq!(pick_frontmost(&rows).unwrap().owner.as_deref(), Some("Safari"));
+            assert_eq!(
+                pick_frontmost(&rows).unwrap().owner.as_deref(),
+                Some("Safari")
+            );
         }
 
         // Pressing the shortcut while Emberyx is frontmost captures Emberyx —
@@ -1156,7 +1222,10 @@ mod platform {
         #[test]
         fn emberyx_is_a_legitimate_target() {
             let rows = vec![row(1, 24, "SystemUIServer"), row(2, 0, "emberyx")];
-            assert_eq!(pick_frontmost(&rows).unwrap().owner.as_deref(), Some("emberyx"));
+            assert_eq!(
+                pick_frontmost(&rows).unwrap().owner.as_deref(),
+                Some("emberyx")
+            );
         }
 
         #[test]
@@ -1185,13 +1254,18 @@ mod platform {
                 row_sized(1, 3, "Brave Browser", 1470.0, 827.0),
                 row_sized(2, 0, "Emberyx", 1920.0, 1080.0),
             ];
-            assert_eq!(pick_frontmost(&rows).unwrap().owner.as_deref(), Some("Brave Browser"));
+            assert_eq!(
+                pick_frontmost(&rows).unwrap().owner.as_deref(),
+                Some("Brave Browser")
+            );
         }
 
         #[test]
         fn both_shift_keys_down_is_the_trigger() {
             assert!(both_shifts_down(SHIFT_LEFT | SHIFT_RIGHT));
-            assert!(both_shifts_down(SHIFT_LEFT | SHIFT_RIGHT | 0x0002_0000 | 0x0010_0010));
+            assert!(both_shifts_down(
+                SHIFT_LEFT | SHIFT_RIGHT | 0x0002_0000 | 0x0010_0010
+            ));
         }
 
         // One shift alone — the everyday capital letter — must never fire.
@@ -1217,7 +1291,9 @@ mod platform {
         #[test]
         fn permission_panes_are_named_kinds() {
             assert!(permission_pane("screen").unwrap().contains("ScreenCapture"));
-            assert!(permission_pane("accessibility").unwrap().contains("Accessibility"));
+            assert!(permission_pane("accessibility")
+                .unwrap()
+                .contains("Accessibility"));
             assert!(permission_pane("input").unwrap().contains("ListenEvent"));
             assert!(permission_pane("camera").is_err());
         }
@@ -1226,7 +1302,10 @@ mod platform {
         fn ax_frames_land_in_window_space() {
             let win = CGRect {
                 origin: CGPoint { x: 100.0, y: 200.0 },
-                size: CGSize { width: 800.0, height: 600.0 },
+                size: CGSize {
+                    width: 800.0,
+                    height: 600.0,
+                },
             };
             // AX says the element sits at screen (150, 500) with height 40.
             // Top-left origin: y = 1080 - 500 - 40 = 540, minus the window's

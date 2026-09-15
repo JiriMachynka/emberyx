@@ -171,10 +171,8 @@ fn serve(
         // from the runtime. Generic procs count too — they are real children.
         if matches!(request, Request::Health) {
             let (response, _) = state.lock().unwrap().handle(request);
-            let response = with_live_count(
-                response,
-                runtime.live().len() + runtime.proc_live().len(),
-            );
+            let response =
+                with_live_count(response, runtime.live().len() + runtime.proc_live().len());
             if serde_json::to_writer(&mut writer, &response).is_err()
                 || writer.write_all(b"\n").is_err()
             {

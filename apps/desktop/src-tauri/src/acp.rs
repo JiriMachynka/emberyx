@@ -1122,6 +1122,9 @@ mod tests {
         let mut splitter = LineSplitter::default();
         assert!(splitter.push(br#"{"jsonrpc":"2.0","meth"#).is_empty());
         let lines = splitter.push(b"od\":\"session/update\"}\n");
-        assert_eq!(lines, vec![r#"{"jsonrpc":"2.0","method":"session/update"}"#]);
+        assert_eq!(
+            lines,
+            vec![r#"{"jsonrpc":"2.0","method":"session/update"}"#]
+        );
     }
 }

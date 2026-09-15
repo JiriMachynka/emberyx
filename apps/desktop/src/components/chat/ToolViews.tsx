@@ -8,6 +8,7 @@
 import { Fragment, memo, useMemo, useState } from "react";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { Disclosure, DisclosureChevron } from "@/components/chat/Disclosure";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useTailScroll } from "@/hooks/useTailScroll";
 import { isFileReference } from "@/lib/fileRef";
 import {
@@ -111,6 +112,32 @@ export const ToolDiff = memo(function ToolDiff({
   );
 });
 
+/** The page the agent photographed. Capped inline; click opens a lightbox. */
+const ToolImage = ({ src }: { src: string }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="block w-full overflow-hidden rounded-lg border border-border bg-background"
+      >
+        <img src={src} alt="" className="max-h-80 w-full object-contain object-top" />
+      </button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-3xl border-0 bg-transparent p-0 shadow-none">
+          <DialogTitle className="sr-only">Screenshot</DialogTitle>
+          <img
+            src={src}
+            alt=""
+            className="max-h-[80vh] w-full rounded-lg object-contain"
+          />
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+};
+
 const ToolText = ({ text, streaming }: { text: string; streaming: boolean }) => {
   const tail = useTailScroll<HTMLDivElement>(streaming, text);
   return (
@@ -190,6 +217,10 @@ export function ToolBody({
         <ToolText text={part.text} streaming={streaming} />
       </div>
     );
+  }
+
+  if (part.kind === "image") {
+    return <ToolImage src={part.src} />;
   }
 
   return (
