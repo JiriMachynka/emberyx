@@ -9,7 +9,7 @@
 
 import { isFileReference } from "@/lib/fileRef";
 import type { ToolIcon } from "@/lib/toolDisplay";
-import type { ActivityItem, ActivityKind } from "@/types";
+import type { ActivityFileEdit, ActivityItem, ActivityKind } from "@/types";
 
 const ICON: Record<ActivityKind, ToolIcon> = {
   reasoning: "tool",
@@ -71,6 +71,123 @@ export const isMonoActivity = (activity: ActivityItem): boolean =>
   activity.kind === "fileList";
 
 const looksLikeGlob = (value: string): boolean => /[*?]/.test(value);
+
+interface FileToolInput {
+  file_path?: unknown;
+  path?: unknown;
+  content?: unknown;
+  old_string?: unknown;
+  new_string?: unknown;
+  edits?: unknown;
+  changes?: unknown;
+  oldText?: unknown;
+  newText?: unknown;
+}
+
+interface ChangeVerb {
+  type?: unknown;
+  path?: unknown;
+  oldText?: unknown;
+  newText?: unknown;
+}
+
+const asText = (value: unknown): string | null =>
+  typeof value === "string" ? value : null;
+
+/**
+ * What one file-change activity did to each of its paths.
+ *
+ * Codex reports the verb itself (`add`/`update`/`delete`), so it wins when it
+ * is there. Claude's tools name their own kind: a Write creates, an Edit or
+ * MultiEdit modifies — except an Edit with an empty `old_string`, which appends
+ * to a fresh file and reads as created. A still-running row has no parsed input
+ * at all (its arguments are withheld until the block closes), so the verb comes
+ * from the tool name and `after` stays null until the code actually lands.
+ */
+export const fileEditsFor = (
+  activity: ActivityItem
+): Map<string, ActivityFileEdit> => {
+  const out = new Map<string, ActivityFileEdit>();
+  if (activity.kind !== "fileChange") return out;
+  let input: FileToolInput | undefined;
+  if (activity.arguments != null) {
+    try {
+      input = JSON.parse(activity.arguments) as FileToolInput;
+    } catch {
+      input = undefined;
+    }
+  }
+  if (input != null && Array.isArray(input.changes)) {
+    for (const raw of input.changes) {
+      if (typeof raw !== "object" || raw == null) continue;
+      const change = raw as ChangeVerb & { kind?: unknown };
+      const path = typeof change.path === "string" ? change.path : null;
+      if (!path) continue;
+      const kind =
+        typeof change.kind === "object" && change.kind != null
+          ? (change.kind as ChangeVerb)
+          : null;
+      const verb = typeof kind?.type === "string" ? kind.type : null;
+      const state =
+        verb === "add" ? "created" : verb === "delete" ? "deleted" : "modified";
+      out.set(path, {
+        state,
+        before: asText(change.oldText) ?? "",
+        after: asText(change.newText) ?? "",
+      });
+    }
+    if (out.size > 0) return out;
+  }
+  const path =
+    (input != null
+      ? asText(input.file_path) ?? asText(input.path)
+      : null) ??
+    // Without a parsed input the path is wherever the normalizer put it.
+    (activity.displayTarget && !looksLikeGlob(activity.displayTarget)
+      ? activity.displayTarget
+      : null);
+  if (!path) return out;
+  let state: ActivityFileEdit["state"];
+  let before: string | null = null;
+  let after: string | null = null;
+  if (input != null && Array.isArray(input.edits)) {
+    const edits = input.edits;
+    state = "modified";
+    if (edits.length === 1 && typeof edits[0] === "object" && edits[0] != null) {
+      const e = edits[0] as FileToolInput;
+      before = asText(e.old_string);
+      after = asText(e.new_string);
+    }
+  } else if (
+    input != null &&
+    (asText(input.old_string) != null || asText(input.new_string) != null)
+  ) {
+    // A single Edit keeps its own old/new pair at the top level.
+    state = "modified";
+    before = asText(input.old_string);
+    after = asText(input.new_string);
+  } else if (input != null && asText(input.content) != null) {
+    state = "created";
+    after = asText(input.content);
+  } else {
+    // Half-streamed or withheld: the tool's name is the only state there is.
+    const title = activity.title.toLowerCase();
+    state = /delete|remove/.test(title)
+      ? "deleted"
+      : /write|create/.test(title)
+        ? "created"
+        : /edit|replace|patch|notebook/.test(title)
+          ? "modified"
+          // A write whose shape arrived with nothing to show: still a change.
+          : "modified";
+  }
+  // An append-style Edit (empty old_string) creates rather than modifies.
+  if (state === "modified" && before === "" && (after?.length ?? 0) > 0) {
+    state = "created";
+  }
+  out.set(path, { state, before, after });
+  return out;
+};
 
 /** File reads, edits, and directory listings — the work that belongs in a
  *  folder tree rather than a stack of path-titled cards. A glob is a search

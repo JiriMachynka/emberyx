@@ -262,6 +262,16 @@ export interface ActivityFileChange {
   deletions?: number;
 }
 
+/** One file a change activity describes, as an exact state plus the code the
+ *  edit moved — what the live file tree shows while the turn runs. The code
+ *  stays null until the tool input arrives (a running Write/Edit holds its
+ *  arguments until the block closes) — never an empty string for unknown. */
+export interface ActivityFileEdit {
+  state: "created" | "modified" | "deleted";
+  before: string | null;
+  after: string | null;
+}
+
 /** One unit of agent work, normalized in Rust and ready to render. Mirrors
  *  `ActivityItem`; `displayTarget` and friends are computed once on arrival,
  *  so the renderer never reparses a tool input on a frame. */

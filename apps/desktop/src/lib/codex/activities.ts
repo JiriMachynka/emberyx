@@ -12,6 +12,7 @@
  */
 
 import { buildActivityRow, kindForToolName } from "@/lib/activities";
+import { splitUnifiedDiff } from "@/lib/codex/adapter";
 import type { ActivityFileChange, ActivityItem, ActivityKind } from "@/types";
 import type { CodexItem } from "./protocol";
 
@@ -77,7 +78,15 @@ const inputFor = (item: CodexItem): unknown => {
     case "commandExecution":
       return { command: item.command };
     case "fileChange":
-      return { changes: item.changes };
+      // Each change flattened to its verb and the text around it — the same
+      // shape the live file tree reads, and a body describeTool can render.
+      return {
+        changes: item.changes.map((change) => ({
+          path: change.path,
+          kind: { type: change.kind.type },
+          ...splitUnifiedDiff(change.diff),
+        })),
+      };
     case "plan":
       return { plan: item.text };
     case "mcpToolCall":

@@ -202,6 +202,7 @@ export function ActivityList({
             <ActivityFileTree
               key={`files:${group.activities[0].id}`}
               activities={group.activities}
+              live={live}
             />
           );
         }

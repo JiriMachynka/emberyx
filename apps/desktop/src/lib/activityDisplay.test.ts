@@ -8,6 +8,7 @@ import {
   labelForActivity,
   metaForActivity,
   pathsForActivity,
+  fileEditsFor,
   isEmptyThought,
   titleForActivity,
   visibleActivities,
@@ -59,8 +60,7 @@ describe("titleForActivity", () => {
   });
 });
 
-describe("metaForActivity", () => {
-  it("says how many files and how many lines when the provider counted", () => {
+describe("metaForActivity", () => {  it("says how many files and how many lines when the provider counted", () => {
     const item = row({
       kind: "fileChange",
       fileChanges: [
@@ -194,5 +194,74 @@ describe("groupActivities", () => {
     expect(groups.map((g) => g.type)).toEqual(["reasoning", "single", "reasoning"]);
     expect(groups[0].type === "reasoning" && groups[0].activities).toEqual([t1, t2]);
     expect(groups[2].type === "reasoning" && groups[2].activities).toEqual([t3]);
+  });
+});
+
+describe("fileEditsFor", () => {
+  it("names the exact state Codex reports, per file", () => {
+    const item = row({
+      kind: "fileChange",
+      arguments: JSON.stringify({
+        changes: [
+          { path: "new.ts", kind: { type: "add" }, oldText: "", newText: "a" },
+          { path: "upd.ts", kind: { type: "update" }, oldText: "b", newText: "c" },
+          { path: "gone.ts", kind: { type: "delete" }, oldText: "d", newText: "" },
+        ],
+      }),
+    });
+    expect(fileEditsFor(item).get("gone.ts")).toEqual({
+      state: "deleted",
+      before: "d",
+      after: "",
+    });
+  });
+
+  it("reads a Write as created and an Edit as modified, with both texts", () => {
+    const written = row({
+      kind: "fileChange",
+      arguments: JSON.stringify({ file_path: "src/a.ts", content: "const a = 1;\n" }),
+    });
+    expect(fileEditsFor(written).get("src/a.ts")).toEqual({
+      state: "created",
+      before: null,
+      after: "const a = 1;\n",
+    });
+    const edited = row({
+      kind: "fileChange",
+      arguments: JSON.stringify({
+        file_path: "src/b.ts",
+        old_string: "old",
+        new_string: "new",
+      }),
+    });
+    expect(fileEditsFor(edited).get("src/b.ts")).toEqual({
+      state: "modified",
+      before: "old",
+      after: "new",
+    });
+  });
+
+  it("reads an append-style Edit with an empty old_string as created", () => {
+    const appended = row({
+      kind: "fileChange",
+      arguments: JSON.stringify({ file_path: "log.ts", old_string: "", new_string: "tail" }),
+    });
+    expect(fileEditsFor(appended).get("log.ts")?.state).toBe("created");
+  });
+
+  it("keeps the verb from the tool name while the input is still streaming", () => {
+    const running = row({ kind: "fileChange", title: "Edit", displayTarget: "src/c.ts" });
+    const edit = fileEditsFor(running).get("src/c.ts");
+    expect(edit?.state).toBe("modified");
+    // No input yet — no modified code to pretend to have.
+    expect(edit?.before).toBeNull();
+    expect(edit?.after).toBeNull();
+  });
+
+  it("reads only files that were touched", () => {
+    expect(fileEditsFor(row({ kind: "command" })).size).toBe(0);
+    expect(
+      fileEditsFor(row({ kind: "fileRead", displayTarget: "src/d.ts" })).size
+    ).toBe(0);
   });
 });
