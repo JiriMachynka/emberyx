@@ -69,6 +69,11 @@ export const gitKeys = {
   workingDiff: (path: string, staged: boolean, ignoreWhitespace: boolean) =>
     ["git", "workingDiff", path, staged, ignoreWhitespace] as const,
   branch: (path: string) => ["git", "branch", path] as const,
+  /** Branch query key carrying the HEAD snapshot a poll noticed — the one
+   *  `useGitBranch` reads, while per-key *inline* branches (useBranchMap)
+   *  stay on the locator without it. */
+  snapshotBranch: (path: string, head: string) =>
+    ["git", "branch", path, head] as const,
   remoteHost: (path: string) => ["git", "remoteHost", path] as const,
   branches: (path: string) => ["git", "branches", path] as const,
   mergedBranches: (path: string) => ["git", "mergedBranches", path] as const,
@@ -281,12 +286,28 @@ export const useGitCommitDiff = (
     staleTime: Infinity,
   });
 
-export const useGitBranch = (path: string) =>
-  useQuery({
-    queryKey: gitKeys.branch(path),
+/**
+ * The branch this repo's HEAD is on. A branch moved outside the app (the
+ * terminal, an editor) should appear in the composer without a user round
+ * trip, so a poll of the repo's HEAD file precedes the real query: HEAD
+ * snapshot sits in the key, and once a checkout rewrites it the branch query
+ * is a different cache entry and refetches on its own. The probe spawns no
+ * process — it reads one file.
+ */
+export const useGitBranch = (path: string) => {
+  const snapshot = useQuery({
+    queryKey: ["git", "branchHead", path] as const,
+    queryFn: () => invoke<string>("git_head_ref", { path }),
+    refetchInterval: 2_000,
+    staleTime: Infinity,
+    retry: false,
+  });
+  return useQuery({
+    queryKey: gitKeys.snapshotBranch(path, snapshot.data ?? ""),
     // Throws when the dir isn't a repo / has no commits — data stays undefined.
     queryFn: () => invoke<GitBranch>("git_branch", { path }),
   });
+};
 
 export type GitRemoteHost = "github" | "gitlab" | "other";
 

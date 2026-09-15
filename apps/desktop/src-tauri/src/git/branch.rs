@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::fs;
 
 use super::{git, run_git};
 use crate::error::{Error, Result};
@@ -49,6 +50,51 @@ pub fn git_branch(path: String) -> Result<GitBranch> {
         ahead,
         behind,
     })
+}
+
+/// The raw bytes of the repo's HEAD file — a change sentinel for a branch that
+/// moved outside the app. A checkout rewrites HEAD and nothing else this
+/// command touches, and it reads one file instead of spawning git, so the
+/// composer can notice a branch switch made in a terminal or an editor within
+/// a poll cycle.
+pub fn git_head_ref(path: String) -> Result<String> {
+    // The project root is usually the repo root, but a project sitting in a
+    // subdirectory must not report "not a repo" — the real git_branch runs
+    // `git` and walks up itself. Walk up here too.
+    let mut cur = std::path::PathBuf::from(&path);
+    loop {
+        let dot_git = cur.join(".git");
+        let parent = cur.parent().map(|p| p.to_path_buf());
+        let meta = fs::symlink_metadata(&dot_git);
+        match meta {
+            Ok(meta) if meta.is_dir() => {
+                return fs::read_to_string(dot_git.join("HEAD"))
+                    .map(|s| s.trim().to_string())
+                    .map_err(|e| Error::new(format!("read HEAD failed: {e}")));
+            }
+            Ok(meta) if meta.is_file() => {
+                // A linked worktree: ".git" is a file naming its gitdir, and
+                // this worktree's own HEAD (what `git checkout` rewrites)
+                // lives there, not in the common dir.
+                let line = fs::read_to_string(&dot_git)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                let dir = line
+                    .strip_prefix("gitdir:")
+                    .map(|d| std::path::PathBuf::from(d.trim().to_string()))
+                    .unwrap_or(dot_git);
+                return fs::read_to_string(dir.join("HEAD"))
+                    .map(|s| s.trim().to_string())
+                    .map_err(|e| Error::new(format!("read HEAD failed: {e}")));
+            }
+            _ => {}
+        }
+        cur = match parent {
+            Some(p) => p,
+            None => return Err(Error::new("Not a git repository.")),
+        };
+    }
 }
 
 /// Local branch names.
@@ -204,6 +250,23 @@ mod tests {
         git_checkout(repo.path(), "main".into(), false).unwrap();
         git_branch_delete(repo.path(), "feature".into()).unwrap();
         assert_eq!(git_branches(repo.path()).unwrap(), vec!["main"]);
+    }
+
+    #[test]
+    fn head_ref_moves_when_the_branch_changes_and_walks_up() {
+        let repo = Repo::new("head_ref");
+        repo.write("a.txt", "one\n");
+        repo.commit("init");
+
+        let before = git_head_ref(repo.path()).unwrap();
+        git_checkout(repo.path(), "feature".into(), true).unwrap();
+        let after = git_head_ref(repo.path()).unwrap();
+        assert_ne!(before, after);
+
+        // A project rooted at a subdirectory still finds the repo.
+        let nested = repo.path().to_string() + "/sub";
+        std::fs::create_dir_all(&nested).unwrap();
+        assert_eq!(git_head_ref(nested).unwrap(), after);
     }
 
     #[test]

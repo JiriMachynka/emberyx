@@ -158,6 +158,7 @@ pub mod cmd {
         git_commit_diff(path: String, sha: String, file: String) -> String;
         git_pickaxe(path: String, file: String, term: String) -> Vec<String>;
         git_branch(path: String) -> GitBranch;
+        git_head_ref(path: String) -> String;
         git_branches(path: String) -> Vec<String>;
         git_default_branch(path: String) -> Option<String>;
         git_merged_branches(path: String) -> Vec<String>;

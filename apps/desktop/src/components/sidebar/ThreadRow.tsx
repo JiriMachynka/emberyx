@@ -98,7 +98,7 @@ export const ThreadRow = memo(function ThreadRow({
           className={cn(
             "group/row relative w-full min-w-0 overflow-hidden rounded-lg transition-colors",
             open
-              ? "surface-raised bg-primary/15 text-foreground ring-1 ring-inset ring-primary/25"
+              ? "bg-primary/5 text-foreground ring-1 ring-inset ring-primary/20"
               : "bg-card/40 hover:bg-secondary/40"
           )}
           onMouseEnter={enter}
