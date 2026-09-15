@@ -108,7 +108,9 @@ export const TasksCard = memo(function TasksCard({
           )}
         </div>
       )}
-      {expanded && (
+      {/* The grid wrapper eases the list open and shut (see .task-list-clip):
+          it always renders, so the animation has both ends to move between. */}
+      <div className="task-list-clip" data-open={expanded}>
       <ul className="flex flex-col px-3 pb-2">
         {items.map((item, i) => {
           const t = timings.get(i);
@@ -144,7 +146,7 @@ export const TasksCard = memo(function TasksCard({
           );
         })}
       </ul>
-      )}
+      </div>
     </div>
   );
 });

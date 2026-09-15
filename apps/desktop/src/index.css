@@ -308,6 +308,31 @@
   }
 }
 
+/* TasksCard's expand/collapse: grid-template-rows animates 0fr↔1fr so the card
+   eases open and closed at its own content height — no max-height guess that
+   clips long task lists. */
+.task-list-clip {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition:
+    grid-template-rows 200ms ease-out,
+    opacity 160ms ease-out;
+  opacity: 0;
+}
+.task-list-clip[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.task-list-clip > * {
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-list-clip {
+    transition: none;
+  }
+}
+
 /* Code blocks: one grey surface for header + code. Stay unlayered so later
    utilities cannot beat these rules. */
 .chat-md .md-fence {
