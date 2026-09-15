@@ -1118,18 +1118,18 @@ describe("useAgentChat queueing", () => {
     expect(sentLines()).toHaveLength(1);
     expect(result.current.status).toBe("thinking");
 
-    // Typed mid-run: shown immediately, but not on the wire yet.
+    // Typed mid-run: held in the queue, not in the transcript, not on the wire.
     act(() => result.current.send("second"));
     expect(sentLines()).toHaveLength(1);
     expect(result.current.queued).toBe(1);
-    expect(result.current.messages.map((m) => m.text)).toEqual(["first", "second"]);
+    expect(result.current.messages.map((m) => m.text)).toEqual(["first"]);
 
     emit({ type: "result", subtype: "success", usage: {} });
 
     await waitFor(() => expect(sentLines()).toHaveLength(2));
     expect(sentLines()[1].message.content).toBe("second");
     expect(result.current.queued).toBe(0);
-    // The queued turn is not duplicated into the transcript when it goes out.
+    // The queued turn joins the transcript only when it actually goes out.
     expect(result.current.messages.map((m) => m.text)).toEqual(["first", "second"]);
   });
 
@@ -1140,6 +1140,7 @@ describe("useAgentChat queueing", () => {
     act(() => result.current.send("second"));
     act(() => result.current.send("third"));
     expect(result.current.queued).toBe(2);
+    expect(result.current.messages.map((m) => m.text)).toEqual(["first"]);
 
     emit({ type: "result", subtype: "success", usage: {} });
     await waitFor(() => expect(sentLines()).toHaveLength(2));

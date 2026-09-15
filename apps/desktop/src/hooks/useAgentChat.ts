@@ -629,7 +629,9 @@ export function useAgentChat({
   // A turn accepted before the process existed. Delivered by the effect below
   // the moment the spawn lands; further turns queue normally, since the status
   // is already busy by then.
-  const pendingSendRef = useRef<{ text: string; images?: ChatImage[] } | null>(
+  const pendingSendRef = useRef<
+    { text: string; raw: string; images?: ChatImage[] } | null
+  >(
     null
   );
   // Bumped by `restart` to re-run the spawn effect for the same target.
@@ -710,9 +712,13 @@ export function useAgentChat({
   // Turns typed while the agent was busy. The queue itself is owned by the Rust
   // supervisor (survives restarts, pauses when blocked); React keeps a mirror so
   // rewind can drop the newest queued item synchronously. Each entry carries the
-  // runtime queueId once the enqueue round-trip lands.
+  // runtime queueId once the enqueue round-trip lands. `raw` is the text before
+  // a keep-going wrap, so pulling a queued turn back into the composer restores
+  // what the user typed, not the wrapper around it.
   const [queued, setQueued] = useState(0);
-  const queueRef = useRef<{ queueId: string | null; text: string; images?: ChatImage[] }[]>([]);
+  const queueRef = useRef<
+    { queueId: string | null; text: string; raw: string; images?: ChatImage[] }[]
+  >([]);
   // Mirror of status for reads inside callbacks without stale closures.
   const statusRef = useRef<ChatStatus>("idle");
   statusRef.current = status;
@@ -727,12 +733,10 @@ export function useAgentChat({
     for (let i = 0; i < runtime.length; i++) {
       const p = runtime[i];
       const existing = queueRef.current[i];
-      queueRef.current[i] = {
-        queueId: p.queueId,
-        text: p.text,
-        images: parseAttachments(p.attachments),
-      };
-      if (existing && existing.text === p.text) queueRef.current[i].queueId = p.queueId;
+      queueRef.current[i] =
+        existing && existing.text === p.text
+          ? { queueId: p.queueId, text: p.text, raw: existing.raw, images: parseAttachments(p.attachments) }
+          : { queueId: p.queueId, text: p.text, raw: p.text, images: parseAttachments(p.attachments) };
     }
     queueRef.current.length = runtime.length;
     setQueued(runtime.length);
@@ -1699,19 +1703,27 @@ export function useAgentChat({
     flushPending();
     const msgs = messagesRef.current;
     const idx = msgs.map((m) => m.role).lastIndexOf("user");
-    if (idx === -1) return null;
-    const restored = { text: msgs[idx].text, images: msgs[idx].images };
 
     if (queueRef.current.length > 0) {
       // Newest turn never left the queue — drop it from the runtime queue,
       // leave the active run. The count drops optimistically; the runtime's
-      // next list reconcile is the source of truth.
+      // next list reconcile is the source of truth. Its text was never in the
+      // transcript, so nothing to cut there.
       const newest = queueRef.current.pop();
       setQueued((n) => Math.max(0, n - 1));
       if (newest && newest.queueId) void promptQueue.remove(newest.queueId);
-      setMessages(msgs.slice(0, idx));
-      return restored;
+      return { text: newest?.raw ?? "", images: newest?.images };
     }
+    // The turn waiting for the spawn lives in the composer, not the chat:
+    // rewind is declining to send it, and no interrupt can take it back.
+    if (pendingSendRef.current) {
+      const held = pendingSendRef.current;
+      pendingSendRef.current = null;
+      interrupt();
+      return { text: held.raw, images: held.images };
+    }
+    if (idx === -1) return null;
+    const restored = { text: msgs[idx].text, images: msgs[idx].images };
 
     const draft = draftRef.current;
     const produced =
@@ -1820,9 +1832,11 @@ export function useAgentChat({
     applyStatus("thinking");
   }, []);
 
-  /** Put a turn on the wire. Callers must have checked the agent is free. */
+  /** Put a turn on the wire. Callers must have checked the agent is free —
+   *  a queued turn only reaches the transcript here, on delivery, so what is
+   *  queued stays in the composer's queue, not the chat. */
   const deliver = useCallback(
-    (text: string, images?: ChatImage[]) => {
+    (text: string, images?: ChatImage[], displayText?: string) => {
     const id = idRef.current;
     const hasImages = !!images && images.length > 0;
     if (id === null) return;
@@ -1853,6 +1867,18 @@ export function useAgentChat({
           ]),
         ]
       : text;
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: localId(),
+        role: "user",
+        text: displayText ?? text,
+        thinking: "",
+        tools: [],
+        streaming: false,
+        images: hasImages ? images : undefined,
+      },
+    ]);
     const line = JSON.stringify({
       type: "user",
       message: { role: "user", content },
@@ -1863,9 +1889,9 @@ export function useAgentChat({
   );
 
   /**
-   * Accept a turn at any time. While the agent is working the message is shown
-   * in the transcript straight away and held until the run finishes, so typing
-   * never has to wait for the agent.
+   * Accept a turn at any time. While the agent is working the message is held
+   * in the queue — visible in the composer's queue menu, not the transcript —
+   * and delivered when the run finishes.
    */
   const send = useCallback(
     (text: string, images?: ChatImage[]) => {
@@ -1877,18 +1903,6 @@ export function useAgentChat({
       // From here on the session has been used: a death is worth reporting, not
       // silently retrying.
       usedRef.current = true;
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: localId(),
-          role: "user",
-          text,
-          thinking: "",
-          tools: [],
-          streaming: false,
-          images: hasImages ? images : undefined,
-        },
-      ]);
       if (!firstMsgRef.current && text.trim()) firstMsgRef.current = text;
       let wire = text;
       const flag = keepGoingRef.current;
@@ -1899,10 +1913,10 @@ export function useAgentChat({
         onKeepGoingTurnRef.current?.(next);
       }
       if (id === null && !pendingSendRef.current) {
-        // No process yet — this is the turn that wakes the pane. Hold it (the
-        // transcript already shows it) and go busy, so anything sent while the
-        // spawn is in flight takes the queue path below instead of racing it.
-        pendingSendRef.current = { text: wire, images };
+        // No process yet — this is the turn that wakes the pane. Hold it and go
+        // busy, so anything sent while the spawn is in flight takes the queue
+        // path below instead of racing it.
+        pendingSendRef.current = { text: wire, raw: text, images };
         applyStatus("thinking");
         wake();
         return;
@@ -1913,11 +1927,11 @@ export function useAgentChat({
         // round-trip resolves; until then the entry is identifiable by text.
         const attachments = hasImages ? JSON.stringify(images) : undefined;
         setQueued((n) => n + 1);
-        queueRef.current.push({ queueId: null, text: wire, images });
+        queueRef.current.push({ queueId: null, text: wire, raw: text, images });
         void promptQueue.enqueue(wire, attachments, emberyxSessionId);
         return;
       }
-      deliver(wire, images);
+      deliver(wire, images, text);
     },
     [deliver, promptQueue, emberyxSessionId, enabled, wake]
   );
@@ -1928,7 +1942,7 @@ export function useAgentChat({
     const held = pendingSendRef.current;
     if (!held) return;
     pendingSendRef.current = null;
-    deliver(held.text, held.images);
+    deliver(held.text, held.images, held.raw);
   }, [ready, deliver]);
 
   const compact = useCallback(() => {
@@ -1959,11 +1973,14 @@ export function useAgentChat({
         .runNext()
         .then((next) => {
           if (cancelled || !next) return;
+          // Deliver with the text the user typed — the runtime stores the
+          // keep-going wrapper, not the message that was shown queued.
+          const raw = queueRef.current[0]?.raw;
           // Shift the mirror in step with the runtime pop so rewind never sees a
           // stale head.
           queueRef.current.shift();
           setQueued((n) => Math.max(0, n - 1));
-          deliver(next.text, parseAttachments(next.attachments));
+          deliver(next.text, parseAttachments(next.attachments), raw);
         })
         .catch((e) => console.error("[emberyx] queue drain failed", e))
         .finally(() => {
