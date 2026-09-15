@@ -28,7 +28,6 @@ import {
   DOCK_KINDS,
   EMPTY_DOCK,
   closeTab,
-  closeTabs,
   isShowing,
   hideDock,
   openTab,
@@ -119,9 +118,6 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [cloneSource, setCloneSource] = useState<CloneSource | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
-  // Every right-hand surface is a tab of one dock, so a diff and a terminal are
-  // a click apart instead of mutually exclusive asides.
-  const [dock, setDock] = useState<DockState>(EMPTY_DOCK);
   const [usageOpen, setUsageOpen] = useState(false);
   // Settings and usage cover the workspace column rather than replacing it.
   const overlayOpen = settingsOpen || usageOpen;
@@ -147,19 +143,6 @@ function App() {
   const [editorMounted, setEditorMounted] = useState(false);
   const [sidebarCollapsed, setCollapsed] = useState<boolean>(getSidebarCollapsed);
 
-  const dockActive = dock.active;
-  const showTab = (kind: DockKind) => setDock((s) => openTab(s, kind));
-  const hideTab = (kind: DockKind) => setDock((s) => closeTab(s, kind));
-  const flipTab = (kind: DockKind) => setDock((s) => toggleTab(s, kind));
-  // The dock's own toggle reveals the chooser when nothing is open, and
-  // otherwise hides the panel without dropping the tabs that were showing.
-  const toggleDock = () =>
-    setDock((s) => (s.open ? hideDock(s) : showDock(s)));
-
-  // Clicking a file in the chat brings the Files tab forward; the editor pane
-  // itself picks the file up from the same request.
-  useEffect(() => onOpenFileRequest(() => showTab("files")), []);
-
   function toggleSidebar() {
     setCollapsed((c) => {
       setSidebarCollapsed(!c);
@@ -179,6 +162,39 @@ function App() {
     revealed,
     recents,
   } = ws;
+
+  // The dock's state is per project. Switching to a thread in another project
+  // swaps in what was open there instead of closing everything, so switching
+  // back restores this project's dock. A project with no entry starts closed.
+  const [dockByProject, setDockByProject] = useState<Record<string, DockState>>({});
+  const dock =
+    (activeProjectId ? dockByProject[activeProjectId] : undefined) ?? EMPTY_DOCK;
+  const updateDock = (updater: (s: DockState) => DockState) => {
+    if (!activeProjectId) return;
+    setDockByProject((m) => ({
+      ...m,
+      [activeProjectId]: updater(m[activeProjectId] ?? EMPTY_DOCK),
+    }));
+  };
+
+  // Every right-hand surface is a tab of one dock, so a diff and a terminal are
+  // a click apart instead of mutually exclusive asides.
+  const dockActive = dock.active;
+  const showTab = (kind: DockKind) => updateDock((s) => openTab(s, kind));
+  const hideTab = (kind: DockKind) => updateDock((s) => closeTab(s, kind));
+  const flipTab = (kind: DockKind) => updateDock((s) => toggleTab(s, kind));
+  // The dock's own toggle reveals the chooser when nothing is open, and
+  // otherwise hides the panel without dropping the tabs that were showing.
+  const toggleDock = () =>
+    updateDock((s) => (s.open ? hideDock(s) : showDock(s)));
+
+  // Clicking a file in the chat brings the Files tab forward; the editor pane
+  // itself picks the file up from the same request.
+  useEffect(() => onOpenFileRequest(() => showTab("files")), []);
+
+  // Clicking a file in the chat brings the Files tab forward; the editor pane
+  // itself picks the file up from the same request.
+  useEffect(() => onOpenFileRequest(() => showTab("files")), []);
 
   // A transcript card's "Review" scopes the diff tab to that turn's delta. The
   // request lives in the agent store so any mounted pane can raise it; only the
@@ -263,11 +279,30 @@ function App() {
     };
   }, []);
 
-  // Project-scoped panels close when switching projects, so a panel opened
-  // for one project doesn't linger empty over the next. Output stays — it
-  // already retargets to the new project's servers.
+  // Project-scoped panels used to close when switching projects so they
+  // couldn't linger empty over the next; the per-project state above covers
+  // that. Output is the one exception carried across: it retargets to the new
+  // project's servers, so a dock that was showing it keeps showing it.
+  const prevProjectRef = useRef<string | null>(null);
   useEffect(() => {
-    setDock((s) => closeTabs(s, DOCK_KINDS.filter((k) => k !== "dev")));
+    const prev = prevProjectRef.current;
+    prevProjectRef.current = activeProjectId;
+    if (!activeProjectId || !prev || prev === activeProjectId) return;
+    setDockByProject((m) => {
+      const from = m[prev];
+      if (!from?.tabs.includes("dev")) return m;
+      const to = m[activeProjectId] ?? EMPTY_DOCK;
+      if (to.tabs.includes("dev")) return m;
+      const devActive = from.active === "dev";
+      return {
+        ...m,
+        [activeProjectId]: {
+          tabs: [...to.tabs, "dev"],
+          active: devActive ? "dev" : to.active,
+          open: devActive ? true : to.open,
+        },
+      };
+    });
   }, [activeProjectId]);
 
   // Which service the active project's remote is on. The review panel speaks
@@ -557,7 +592,15 @@ function App() {
             setUsageOpen(false);
             ws.setActiveProjectId(id);
           }}
-          onCloseProject={ws.closeProjectById}
+          onCloseProject={async (id) => {
+            const closed = await ws.closeProjectById(id);
+            if (closed)
+              setDockByProject((m) => {
+                const next = { ...m };
+                delete next[id];
+                return next;
+              });
+          }}
           onPickProject={ws.pickProject}
           onSelectSession={(projectId, id) => {
             markSwitch(id);
@@ -714,7 +757,7 @@ function App() {
             onSelect={showTab}
             onClose={hideTab}
             onAdd={showTab}
-            onHide={() => setDock(hideDock)}
+            onHide={() => updateDock(hideDock)}
             titles={{
               preview: "Browser",
               mrs: remoteHost === "github" ? "Pull request" : "Merge request",
@@ -839,7 +882,7 @@ function App() {
         onDelete={projectActions.removeAction}
       />
 
-      <Toaster theme="dark" position="bottom-right" richColors closeButton />
+      <Toaster theme="dark" position="top-right" richColors closeButton />
     </div>
   );
 }

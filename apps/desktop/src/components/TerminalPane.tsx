@@ -83,10 +83,23 @@ export function TerminalPane({
       void resizeLog(sessionId, term.cols, term.rows);
       fit.observeResize();
 
-      // Replay first, then live: subscribing before the replay would interleave
-      // a chunk into the middle of the history it already contains.
+      // The backlog can be megabytes, and writing it whole freezes the window
+      // on remount (a thread switch re-enters here) — so it streams through
+      // write's callback chain instead, a chunk at a time. Writes queue in
+      // call order, so live chunks queued behind it still land after the
+      // history — replay stays first without blocking the frame.
       const backlog = rawLog(sessionId);
-      if (backlog.length > 0) term.write(backlog);
+      const CHUNK = 64 * 1024;
+      let written = 0;
+      const drain = () => {
+        const slice = backlog.slice(written, written + CHUNK);
+        if (slice.length > 0)
+          term.write(slice, () => {
+            written += slice.length;
+            drain();
+          });
+      };
+      drain();
       // One write per frame, not per chunk: a build's output arrives as
       // hundreds of small chunks and each write is a wasm call plus a repaint.
       unsubscribe = subscribeRaw(sessionId, (chunk) => {

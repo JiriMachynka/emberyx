@@ -19,6 +19,7 @@ import {
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
 import { isStaged, isUnstaged } from "@/lib/gitStatus";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   menuActions,
   needsMessage,
@@ -52,6 +53,18 @@ const ACTION_ICON: Record<GitActionKind, typeof GitCommitVertical> = {
   openPr: GitPullRequest,
   pull: ArrowDown,
 };
+
+/** A commit message's first line — the body is draft context, not toast copy. */
+const subjectOf = (message: string) => message.trim().split("\n")[0] ?? "";
+
+/** The "Read more…" action, only when there is a page to read. */
+const readMore = (url: string | null) =>
+  url
+    ? {
+        label: "Read more…",
+        onClick: () => void openUrl(url),
+      }
+    : undefined;
 
 interface GitCommitMenuProps {
   projectPath: string;
@@ -197,7 +210,15 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
       toast.warning("Committed, but not pushed", { description: out.message });
       return false;
     }
-    if (out.pushed) toast.success(`Pushed to ${out.branch}`, { description: message });
+    if (out.pushed) {
+      const url = await invoke<string | null>("git_head_commit_url", {
+        path: projectPath,
+      }).catch(() => null);
+      toast.success(`Pushed to ${out.branch}`, {
+        description: subjectOf(message),
+        action: readMore(url),
+      });
+    }
     return out.pushed;
   }
 
@@ -224,7 +245,10 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
       body: rest.join("\n").trim(),
       base: defaultBranchQuery.data ?? null,
     });
-    toast.success(`Opened ${noun}`, { description: url });
+    toast.success(`Opened ${noun}`, {
+      description: subjectOf(message),
+      action: readMore(url),
+    });
   }
 
   async function run(action: { kind: GitActionKind; label: string }) {
@@ -261,7 +285,13 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
       }
       if (kind === "commit") {
         await invoke<string>("git_commit", { path: projectPath, message });
-        toast.success("Committed", { description: message });
+        const url = await invoke<string | null>("git_head_commit_url", {
+          path: projectPath,
+        }).catch(() => null);
+        toast.success("Committed", {
+          description: subjectOf(message),
+          action: readMore(url),
+        });
       } else if (kind === "commitPush" || kind === "commitPushPr") {
         pushed = await commitAndPush(message);
       } else if (kind === "push" || kind === "pushPr") {

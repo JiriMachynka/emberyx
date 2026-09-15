@@ -260,6 +260,7 @@ pub fn run() {
             git::git_merge_continue,
             git::git_merge_state,
             git::cmd::git_remote_host,
+            git::cmd::git_head_commit_url,
             git::git_clone,
             forge_cli::forge_cli_status,
             forge_cli::forge_clone,

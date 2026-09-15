@@ -165,6 +165,7 @@ pub mod cmd {
         git_repo_root(path: String) -> GitRepoRoot;
         git_stash_list(path: String) -> Vec<GitStash>;
         git_remote_host(path: String) -> String;
+        git_head_commit_url(path: String) -> Option<String>;
 
         [WRITES] git_stage(path: String, files: Vec<String>) -> String;
         [WRITES] git_unstage(path: String, files: Vec<String>) -> String;

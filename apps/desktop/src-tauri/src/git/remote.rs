@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{failure, git};
+use super::{failure, git, run_git};
 use crate::error::{blocking, Error, Result};
 
 /// Parent exists (created if needed) and `dest` is missing or an empty
@@ -98,6 +98,52 @@ pub fn git_remote_host(path: String) -> Result<String> {
     Ok(kind.into())
 }
 
+/// Web base URL for a git remote (`https://github.com/owner/repo`) — the
+/// remote without its scheme, credentials, port and `.git` suffix. scp-form
+/// remotes become https, which is what a browser link needs.
+fn remote_web_base(raw: &str) -> Option<String> {
+    let s = raw.trim().trim_end_matches('/');
+    let (authority, path) = match s.find("://") {
+        Some(i) => {
+            let after = &s[i + 3..];
+            let cut = after.find('/')?;
+            (&after[..cut], &after[cut..])
+        }
+        None => {
+            let cut = s.find(':')?;
+            (&s[..cut], &s[cut + 1..])
+        }
+    };
+    let host = authority.rsplit('@').next()?.split(':').next()?;
+    let path = path.trim_start_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    (!host.is_empty() && !path.is_empty()).then(|| format!("https://{host}/{path}"))
+}
+
+/// The hosted web page for the repo's HEAD commit, when the origin remote is
+/// on Github or Gitlab. Another host has no known page shape — no link beats
+/// a wrong link.
+pub(crate) fn head_commit_web_url(path: &str) -> Option<String> {
+    let sha = run_git(path, &["rev-parse", "HEAD"]).ok()?;
+    let raw = remote_url(path)?;
+    let base = remote_web_base(&raw)?;
+    let host = parse_remote_host(&raw)?;
+    if !host.contains("github") && !host.contains("gitlab") {
+        return None;
+    }
+    // Gitlab keeps its repository pages under a `-/` prefix; Github does not.
+    let sep = if host.contains("gitlab") {
+        "/-/commit/"
+    } else {
+        "/commit/"
+    };
+    Some(format!("{base}{sep}{sha}"))
+}
+
+pub fn git_head_commit_url(path: String) -> Result<Option<String>> {
+    Ok(head_commit_web_url(&path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +208,53 @@ mod tests {
             Some("gitlab.example.com")
         );
         assert_eq!(parse_remote_host(""), None);
+    }
+
+    #[test]
+    fn remote_web_base_strips_scheme_creds_port_and_git_suffix() {
+        assert_eq!(
+            remote_web_base("https://github.com/owner/repo.git").as_deref(),
+            Some("https://github.com/owner/repo")
+        );
+        // scp-form.
+        assert_eq!(
+            remote_web_base("git@github.com:owner/repo.git").as_deref(),
+            Some("https://github.com/owner/repo")
+        );
+        // Credentials and port survive in the host parse.
+        assert_eq!(
+            remote_web_base("https://user@gitlab.com:443/group/sub/repo.git").as_deref(),
+            Some("https://gitlab.com/group/sub/repo")
+        );
+        // No .git suffix is fine.
+        assert_eq!(
+            remote_web_base("https://github.com/owner/repo").as_deref(),
+            Some("https://github.com/owner/repo")
+        );
+        assert_eq!(remote_web_base(""), None);
+    }
+
+    #[test]
+    fn head_commit_web_url_uses_the_forges_own_page_shape() {
+        let repo = Repo::new("head_commit_url");
+        repo.write("a.txt", "hi");
+        repo.commit("init");
+        repo.run(&["remote", "add", "origin", "https://github.com/owner/repo.git"]);
+        let sha = repo.run(&["rev-parse", "HEAD"]);
+        assert_eq!(
+            head_commit_web_url(repo.path().as_str()),
+            Some(format!("https://github.com/owner/repo/commit/{sha}"))
+        );
+        repo.run(&["remote", "set-url", "origin", "git@gitlab.com:g/r.git"]);
+        assert_eq!(
+            head_commit_web_url(repo.path().as_str()),
+            Some(format!("https://gitlab.com/g/r/-/commit/{sha}"))
+        );
+        // An unknown host gets no link rather than a guessed one.
+        repo.run(&["remote", "set-url", "origin", "git@example.com:o/r.git"]);
+        assert_eq!(head_commit_web_url(repo.path().as_str()), None);
+        // No remote at all.
+        repo.run(&["remote", "remove", "origin"]);
+        assert_eq!(head_commit_web_url(repo.path().as_str()), None);
     }
 }
