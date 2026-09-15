@@ -125,6 +125,9 @@ describe("threadRowProvider", () => {
   it("prefers the recorded provider over the session's borrowed backend", () => {
     expect(threadRowProvider(undefined, "grok", "claude")).toBe("grok");
     expect(threadRowProvider(undefined, "kilo", undefined)).toBe("kilo");
+    // Cursor is no longer a live backend, but threads already on disk keep
+    // the stamp rather than being relabelled as whoever opens them.
+    expect(threadRowProvider(undefined, "cursor", "claude")).toBe("cursor");
   });
 
   it("falls back to the session, then to Claude", () => {

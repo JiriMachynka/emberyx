@@ -1,6 +1,6 @@
 //! Provider registry and install detection.
 //!
-//! Emberyx drives six agent CLIs behind a common driver seam. This module owns
+//! Emberyx drives five agent CLIs behind a common driver seam. This module owns
 //! provider identity and *detection* (is the binary installed, what version);
 //! actual process spawning stays in each transport manager until the daemon
 //! migration. The frontend calls `provider_status` once and keys controls off
@@ -16,7 +16,6 @@ use serde::Serialize;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Provider {
     Claude,
-    Cursor,
     Codex,
     Grok,
     Opencode,
@@ -27,7 +26,6 @@ impl Provider {
     pub fn id(self) -> &'static str {
         match self {
             Provider::Claude => "claude",
-            Provider::Cursor => "cursor",
             Provider::Codex => "codex",
             Provider::Grok => "grok",
             Provider::Opencode => "opencode",
@@ -38,7 +36,6 @@ impl Provider {
     pub fn label(self) -> &'static str {
         match self {
             Provider::Claude => "Claude",
-            Provider::Cursor => "Cursor",
             Provider::Codex => "Codex",
             Provider::Grok => "Grok",
             Provider::Opencode => "OpenCode",
@@ -46,13 +43,11 @@ impl Provider {
         }
     }
 
-    /// The binary that announces the provider on PATH. Cursor's ACP server is
-    /// `cursor-agent`, not the `cursor` editor binary. Detection is by PATH
+    /// The binary that announces the provider on PATH. Detection is by PATH
     /// lookup only — no HOME-specific shims, which vary per machine.
     pub fn binary(self) -> &'static str {
         match self {
             Provider::Claude => "claude",
-            Provider::Cursor => "cursor-agent",
             Provider::Codex => "codex",
             Provider::Grok => "grok",
             Provider::Opencode => "opencode",
@@ -60,10 +55,9 @@ impl Provider {
         }
     }
 
-    pub fn all() -> [Provider; 6] {
+    pub fn all() -> [Provider; 5] {
         [
             Provider::Claude,
-            Provider::Cursor,
             Provider::Codex,
             Provider::Grok,
             Provider::Opencode,
@@ -175,7 +169,7 @@ fn probe(
 ///
 /// Async on purpose: probing runs a `--version` subprocess per provider, and a
 /// non-async command runs on the main thread — which on macOS is the webview's
-/// thread, so six node startups would freeze the window while Settings opens.
+/// thread, so five node startups would freeze the window while Settings opens.
 #[tauri::command]
 pub async fn provider_status(commands: Option<HashMap<String, String>>) -> Vec<ProviderStatus> {
     let commands = commands.unwrap_or_default();
@@ -254,14 +248,11 @@ mod tests {
     }
 
     #[test]
-    fn provider_status_reports_all_six() {
+    fn provider_status_reports_all_five() {
         let rows = probe_all(&HashMap::new());
-        assert_eq!(rows.len(), 6);
+        assert_eq!(rows.len(), 5);
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(
-            ids,
-            ["claude", "cursor", "codex", "grok", "opencode", "kilo"]
-        );
+        assert_eq!(ids, ["claude", "codex", "grok", "opencode", "kilo"]);
     }
 
     #[test]

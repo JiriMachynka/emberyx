@@ -110,6 +110,19 @@ describe("the meta store", () => {
     localStorage.setItem("emberyx.threadMeta", "{not json");
     expect(getThreadMeta(key)).toEqual({});
   });
+
+  it("round-trips a keep-going flag and clears it", () => {
+    const keepGoing = {
+      startedAt: 1,
+      turns: 3,
+      maxTurns: 20,
+      maxUsd: 5,
+    };
+    setThreadMeta(key, { keepGoing });
+    expect(getThreadMeta(key).keepGoing).toEqual(keepGoing);
+    setThreadMeta(key, { keepGoing: undefined });
+    expect(getThreadMeta(key)).toEqual({});
+  });
 });
 
 describe("snoozeUntil", () => {

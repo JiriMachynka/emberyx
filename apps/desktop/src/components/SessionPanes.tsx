@@ -30,6 +30,7 @@ interface SessionPanesProps {
   onTitled: (session: Session, title: string) => void;
   /** A fresh chat named its thread — list it before its transcript exists. */
   onThreadStarted: (session: Session, threadId: string, firstMessage: string) => void;
+  onOpenWorktree?: (path: string, repoRoot: string, branch: string) => void;
 }
 
 /**
@@ -54,6 +55,7 @@ export function SessionPanes({
   onOpenProject,
   onTitled,
   onThreadStarted,
+  onOpenWorktree,
 }: SessionPanesProps) {
   const chats = useMemo(() => sessions.filter((s) => s.kind !== "dev"), [sessions]);
   // Only these sessions' statuses decide what stays mounted. Subscribing to the
@@ -94,6 +96,7 @@ export function SessionPanes({
             onOpenProject={onOpenProject}
             onTitled={onTitled}
             onThreadStarted={onThreadStarted}
+            onOpenWorktree={onOpenWorktree}
           />
         ))}
     </>
@@ -117,6 +120,7 @@ function SessionPaneRow({
   onOpenProject,
   onTitled,
   onThreadStarted,
+  onOpenWorktree,
 }: {
   session: Session;
   activeId: string | null;
@@ -131,6 +135,7 @@ function SessionPaneRow({
   onOpenProject: (path: string) => void;
   onTitled: (session: Session, title: string) => void;
   onThreadStarted: (session: Session, threadId: string, firstMessage: string) => void;
+  onOpenWorktree?: (path: string, repoRoot: string, branch: string) => void;
 }) {
   const active = session.id === activeId;
   // `session` is a new object whenever the workspace list rebuilds. Pin the
@@ -180,6 +185,7 @@ function SessionPaneRow({
           onOpenProject={onOpenProject}
           onTitled={handleTitled}
           onThreadStarted={handleThreadStarted}
+          onOpenWorktree={onOpenWorktree}
         />
         </Profiler>
         </PaneErrorBoundary>

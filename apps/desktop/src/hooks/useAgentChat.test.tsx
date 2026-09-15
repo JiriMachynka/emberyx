@@ -3,6 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import { useAgentStore } from "@/lib/agentStore";
 import type { MessageActivities } from "@/lib/threadPage";
+import {
+  ASK_REJECT,
+  CONTINUE_PROMPT,
+  startKeepGoing,
+} from "@/lib/keepGoing";
 
 /** Events pushed by the stubbed Channel into the hook, per test. */
 type Emit = (event: Record<string, unknown>) => void;
@@ -1603,3 +1608,120 @@ describe("useAgentChat snapshots", () => {
     ]);
   });
 });
+
+describe("useAgentChat keep going", () => {
+  const flag = (over: Partial<ReturnType<typeof startKeepGoing>> = {}) =>
+    startKeepGoing(1_000_000, over);
+
+  it("rejects ask_user instead of opening the picker", async () => {
+    const { result } = await mount({ keepGoing: flag() });
+    act(() =>
+      listeners.forEach((fn) =>
+        fn({
+          session: "emberyx-1",
+          id: "ask-1",
+          questions: [
+            {
+              question: "Which one?",
+              header: "Pick",
+              options: [{ label: "A", description: "first" }],
+              multiSelect: false,
+            },
+          ],
+        })
+      )
+    );
+    expect(result.current.pendingAsk).toBeNull();
+    expect(sentTo("answer_ask")).toEqual([
+      ["answer_ask", { id: "ask-1", answer: ASK_REJECT }],
+    ]);
+  });
+
+  it("wraps the originating send once and keeps the transcript clean", async () => {
+    const onKeepGoingTurn = vi.fn();
+    const { result } = await mount({
+      keepGoing: flag(),
+      onKeepGoingTurn,
+    });
+    act(() => result.current.send("fix the flaky test"));
+    expect(result.current.messages[0].text).toBe("fix the flaky test");
+    expect(sentLines()[0].message.content).toContain("You are unattended");
+    expect(onKeepGoingTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ wrapped: true, turns: 0 })
+    );
+  });
+
+  it("does not wrap a later send after the originating one", async () => {
+    const { result } = await mount({
+      keepGoing: { ...flag(), wrapped: true },
+    });
+    act(() => result.current.send("and this"));
+    expect(sentLines()[0].message.content).toBe("and this");
+  });
+
+  it("injects one continue on idle and does not double-enqueue", async () => {
+    const onKeepGoingTurn = vi.fn();
+    const { result, emit } = await mount({
+      keepGoing: { ...flag(), wrapped: true },
+      onKeepGoingTurn,
+    });
+    act(() => result.current.send("go"));
+    textTurn(emit, "working on it");
+    emit({ type: "result", subtype: "success", usage: {} });
+
+    await waitFor(() =>
+      expect(sentLines().some((l) => l.message?.content === CONTINUE_PROMPT)).toBe(
+        true
+      )
+    );
+    expect(
+      sentLines().filter((l) => l.message?.content === CONTINUE_PROMPT)
+    ).toHaveLength(1);
+    expect(onKeepGoingTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ turns: 1 })
+    );
+  });
+
+  it("stops continuing once the turn cap is spent", async () => {
+    const keepGoing = { ...flag({ maxTurns: 1 }), wrapped: true };
+    const { result, emit } = await mount({
+      keepGoing,
+      onKeepGoingTurn: (next: ReturnType<typeof startKeepGoing>) =>
+        Object.assign(keepGoing, next),
+    });
+    act(() => result.current.send("go"));
+    textTurn(emit, "working");
+    emit({ type: "result", subtype: "success", usage: {} });
+    await waitFor(() =>
+      expect(sentLines().some((l) => l.message?.content === CONTINUE_PROMPT)).toBe(
+        true
+      )
+    );
+    emit({ type: "result", subtype: "success", usage: {} });
+    await act(async () => {});
+    expect(
+      sentLines().filter((l) => l.message?.content === CONTINUE_PROMPT)
+    ).toHaveLength(1);
+  });
+
+  it("stops on a DONE cue and does not inject a continue", async () => {
+    const onKeepGoingStop = vi.fn();
+    const { result, emit } = await mount({
+      keepGoing: { ...flag(), wrapped: true },
+      onKeepGoingStop,
+    });
+    act(() => result.current.send("go"));
+    textTurn(emit, "shipped\nDONE");
+    emit({ type: "result", subtype: "success", usage: {} });
+    await act(async () => {});
+    expect(
+      sentLines().some((l) => l.message?.content === CONTINUE_PROMPT)
+    ).toBe(false);
+    expect(onKeepGoingStop).toHaveBeenCalled();
+    // The idle that carried the DONE cue was reported sticky-working so LRU
+    // would not unmount the pane between continues. Clearing the flag has to
+    // put the sidebar back to idle, or the row stays "working" forever.
+    expect(useAgentStore.getState().statuses["emberyx-1"]).toBe("idle");
+  });
+});
+

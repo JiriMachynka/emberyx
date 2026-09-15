@@ -13,7 +13,7 @@
 
 import type { ChatMessage } from "@/hooks/useAgentChat";
 import type { AgentBackend } from "@/lib/agentBackend";
-import { PROVIDERS, type Provider } from "@/lib/providers";
+import { isProvider, type Provider } from "@/lib/providers";
 
 /**
  * The provider a thread's sidebar row names. A pane that switched in place is
@@ -27,7 +27,7 @@ export const threadRowProvider = (
   recorded: string | null | undefined,
   session: AgentBackend | undefined
 ): Provider =>
-  switched ?? PROVIDERS.find((p) => p === recorded) ?? session ?? "claude";
+  switched ?? (isProvider(recorded) ? recorded : undefined) ?? session ?? "claude";
 
 /** A marker in the transcript where the thread changed hands. */
 export interface ProviderSwitchMark {

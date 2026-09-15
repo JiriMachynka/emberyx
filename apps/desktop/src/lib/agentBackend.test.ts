@@ -52,7 +52,7 @@ describe("capabilitiesOf", () => {
   // ACP threads are the event log's record, not the provider's: listing is on,
   // and everything that would promise the CLI can resume one stays off.
   it("lists ACP threads from the event log, with no CLI resume", () => {
-    for (const backend of ["opencode", "grok", "cursor"] as const) {
+    for (const backend of ["opencode", "grok"] as const) {
       const caps = capabilitiesOf(backend);
       expect(caps.threads).toBe(true);
       expect(caps.conversationRewind).toBe(false);
@@ -81,8 +81,6 @@ describe("resolveLoginCommand", () => {
     expect(resolveLoginCommand("codex")).toBe("codex login");
     expect(resolveLoginCommand("opencode")).toBe("opencode auth login");
     expect(resolveLoginCommand("grok")).toBe("grok login");
-    // The ACP server is `cursor-agent`, not the editor binary.
-    expect(resolveLoginCommand("cursor")).toBe("cursor-agent login");
   });
 
   it("lets a configured wrapper or absolute path stand in for the binary", () => {
@@ -132,8 +130,7 @@ describe("CLAUDE_EFFORTS", () => {
 });
 
 describe("isAcpBackend", () => {
-  it("is the ACP transport, including Cursor", () => {
-    expect(isAcpBackend("cursor")).toBe(true);
+  it("is the ACP transport", () => {
     expect(isAcpBackend("grok")).toBe(true);
     expect(isAcpBackend("opencode")).toBe(true);
     expect(isAcpBackend("claude")).toBe(false);
@@ -145,7 +142,7 @@ describe("isAgentBackend", () => {
   it("accepts the known backends and nothing else", () => {
     expect(isAgentBackend("claude")).toBe(true);
     expect(isAgentBackend("codex")).toBe(true);
-    expect(isAgentBackend("cursor")).toBe(true);
+    expect(isAgentBackend("cursor")).toBe(false);
     expect(isAgentBackend("gemini")).toBe(false);
     expect(isAgentBackend(undefined)).toBe(false);
     // Object.prototype keys must not pass the `in` test.

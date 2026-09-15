@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { ChatComposer } from "@/components/ChatComposer";
 import { AGENT_BACKENDS, capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
@@ -166,6 +166,29 @@ describe("ChatComposer", () => {
       profile: caps.launchProfiles,
       contextMeter: caps.usage,
     });
+  });
+
+  it("turning Keep going on forces full access", async () => {
+    const onAccessChange = vi.fn();
+    const onKeepGoingChange = vi.fn();
+    await mount({
+      ...propsFor("claude"),
+      access: "ask",
+      onAccessChange,
+      onKeepGoingChange,
+    });
+    const trigger = screen
+      .getAllByRole("button")
+      .find((b) => (b.textContent ?? "").includes("Keep going"));
+    expect(trigger).toBeTruthy();
+    fireEvent.pointerDown(trigger!, { button: 0 });
+    fireEvent.pointerUp(trigger!, { button: 0 });
+    fireEvent.click(screen.getByRole("menuitem", { name: "Start" }));
+    await waitFor(() => expect(onAccessChange).toHaveBeenCalledWith("full"));
+    expect(onKeepGoingChange).toHaveBeenCalled();
+    expect(onKeepGoingChange.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ maxTurns: 20, turns: 0 })
+    );
   });
 
   it("the profile chip needs profiles to pick between", async () => {

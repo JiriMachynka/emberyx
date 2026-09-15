@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
+import { capabilitiesOf, isAgentBackend, type AgentBackend } from "@/lib/agentBackend";
 import { getProjectConfigs, setProjectBackend } from "@/lib/projectConfig";
 import type { Project } from "@/types";
 
@@ -14,7 +14,8 @@ export function useAgentBackend(
 ) {
   const [configs, setConfigs] = useState(getProjectConfigs);
 
-  const pinned = activeProject ? configs[activeProject.path]?.backend : undefined;
+  const stored = activeProject ? configs[activeProject.path]?.backend : undefined;
+  const pinned = isAgentBackend(stored) ? stored : undefined;
   const backend = pinned ?? fallback;
 
   const setBackend = (next: AgentBackend | null) => {

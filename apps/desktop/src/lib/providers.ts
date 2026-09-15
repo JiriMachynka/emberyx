@@ -9,7 +9,9 @@
  * disagreed with the live one: it called Grok and OpenCode permission-less
  * while `useAcpChat` was answering their permission requests. A provider with
  * no driver, like Kilo, has no capabilities to state — `providerToBackend`
- * returns null and there is nothing to gate.
+ * returns null and there is nothing to gate. Cursor stays in the type so
+ * threads and usage already on disk still deserialize; it is not detected
+ * and cannot start a chat.
  */
 
 import type { AgentBackend } from "@/lib/agentBackend";
@@ -24,7 +26,6 @@ export type Provider =
 
 export const PROVIDERS: readonly Provider[] = [
   "claude",
-  "cursor",
   "codex",
   "grok",
   "opencode",
@@ -39,6 +40,10 @@ export const PROVIDER_LABEL: Record<Provider, string> = {
   opencode: "OpenCode",
   kilo: "Kilo",
 };
+
+export const isProvider = (value: unknown): value is Provider =>
+  typeof value === "string" &&
+  Object.prototype.hasOwnProperty.call(PROVIDER_LABEL, value);
 
 /** Install + version probe result, mirrored from `providers.rs`. */
 export interface ProviderStatus {
@@ -60,8 +65,6 @@ export const providerToBackend = (provider: Provider): AgentBackend | null => {
       return "opencode";
     case "grok":
       return "grok";
-    case "cursor":
-      return "cursor";
     default:
       return null;
   }

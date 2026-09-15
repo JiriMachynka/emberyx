@@ -44,7 +44,6 @@ const BUILTIN_COMMANDS: Record<AgentBackend, SlashCommand[]> = {
   codex: [],
   opencode: [],
   grok: [],
-  cursor: [],
 };
 
 /** The backend's own built-ins, or nothing when its CLI has no command sigil

@@ -14,6 +14,7 @@ import { useCodexChat } from "@/hooks/useCodexChat";
 import { useAcpChat } from "@/hooks/useAcpChat";
 import { useMockChat } from "@/hooks/useMockChat";
 import type { CodexSandbox, PermissionMode } from "@/lib/settings";
+import type { KeepGoing } from "@/lib/keepGoing";
 
 interface Options {
   cwd: string;
@@ -44,6 +45,9 @@ interface Options {
   onTitled?: (title: string) => void;
   /** False while this pane is mounted but hidden. Token paints skip React. */
   visible?: boolean;
+  keepGoing?: KeepGoing | null;
+  onKeepGoingTurn?: (next: KeepGoing) => void;
+  onKeepGoingStop?: () => void;
 }
 
 export function useChatSession(options: Options) {

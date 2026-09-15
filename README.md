@@ -1,7 +1,7 @@
 # Emberyx
 
 Desktop command center for conversations with AI coding agents. Open your
-projects and drive Claude Code, Codex, OpenCode, Grok or Cursor from chat
+projects and drive Claude Code, Codex, OpenCode, or Grok from chat
 threads, structured tool cards,
 approvals, agent status, delegation, git diffs, and project views. Integrated
 terminals remain an optional advanced surface for process execution and

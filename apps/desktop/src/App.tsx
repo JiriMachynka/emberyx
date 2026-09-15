@@ -661,6 +661,7 @@ function App() {
              onOpenProject={(path) => void ws.openProjectAt(path, { fresh: true })}
              onTitled={onTitled}
              onThreadStarted={onThreadStarted}
+             onOpenWorktree={openWorktreeAndRun}
             />
             </TimedRegion>
             {/* The editor is an overlay, not a tab: it covers the active pane

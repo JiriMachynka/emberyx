@@ -101,7 +101,7 @@ interface UsagePanelProps {
 /**
  * Cross-project spend across every provider that keeps a readable history
  * on disk (Claude and Codex JSONL, Grok `usage.json`, OpenCode and Kilo
- * sqlite). Costs are estimates — never billed. Cursor logs no tokens.
+ * sqlite). Costs are estimates — never billed.
  */
 export function UsagePanel({ onBack }: UsagePanelProps) {
   const [days, setDays] = useState(30);

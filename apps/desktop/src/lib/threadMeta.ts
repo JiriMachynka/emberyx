@@ -11,6 +11,7 @@
  */
 
 import type { LinkedPr } from "@/lib/forge";
+import type { KeepGoing } from "@/lib/keepGoing";
 
 const KEY = "emberyx.threadMeta";
 
@@ -35,6 +36,9 @@ export interface ThreadMeta {
   linkedPr?: LinkedPr;
   /** Named Claude profile this thread was last spawned with. */
   claudeProfileId?: string;
+  /** Unattended continue loop for this thread. Absent = off. An expired cap
+   *  still stores the object; `isKeepGoingOn` is what reads it as off. */
+  keepGoing?: KeepGoing;
 }
 
 type Store = Record<string, ThreadMeta>;

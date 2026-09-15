@@ -6,9 +6,6 @@
 //! subcommand differs per provider (`opencode acp`, `grok agent stdio`), so it
 //! is looked up rather than assumed.
 //!
-//! Cursor speaks ACP as `cursor-agent acp` (verified against the installed
-//! CLI). A stale comment here once claimed it had only `--print` stream-json.
-//!
 //! Framing and request correlation are shared with `codex.rs` (`classify`,
 //! `Frame`, `Pending`) — it is the same NDJSON JSON-RPC on the wire, and having
 //! two copies of the out-of-order response handling is how they drift.
@@ -228,14 +225,13 @@ impl AcpManager {
 
 /// The command that serves ACP for a provider id, as (binary, args). The
 /// subcommand is per-provider and not guessable — verified against the
-/// installed CLIs: `opencode acp`, `grok agent stdio`, and `cursor-agent acp`
-/// all answer an ACP `initialize` with `protocolVersion: 1`. Unknown ids are
-/// refused rather than passed through, because this value reaches `Command::new`.
+/// installed CLIs: `opencode acp` and `grok agent stdio` both answer an ACP
+/// `initialize` with `protocolVersion: 1`. Unknown ids are refused rather
+/// than passed through, because this value reaches `Command::new`.
 pub fn acp_command(provider: &str) -> Result<(&'static str, &'static [&'static str])> {
     match provider {
         "opencode" => Ok(("opencode", &["acp"])),
         "grok" => Ok(("grok", &["agent", "stdio"])),
-        "cursor" => Ok(("cursor-agent", &["acp"])),
         other => Err(crate::err!("{other} does not speak ACP")),
     }
 }
@@ -319,7 +315,7 @@ impl Inner {
 
         self.start_reader(id, stdout, &handle, on_event.clone());
 
-        let mut initialize_params = json!({
+        let initialize_params = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "clientCapabilities": {
                 // Claimed because `acp_respond` can answer both; claiming
@@ -331,11 +327,6 @@ impl Inner {
                 "version": env!("CARGO_PKG_VERSION"),
             },
         });
-        // Cursor only returns its model catalog on session/new when this
-        // opt-in is present; without it the picker has nothing to list.
-        if provider == "cursor" {
-            initialize_params["_meta"] = json!({ "parameterizedModelPicker": true });
-        }
         // A failed initialize must not leave the child running: the id never
         // reaches the frontend, so nothing else can ever kill it. The realistic
         // case is the 120s timeout against an agent that started but is not
@@ -431,7 +422,7 @@ impl Inner {
             });
         }
 
-        let mut initialize_params = json!({
+        let initialize_params = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "clientCapabilities": {
                 "fs": { "readTextFile": true, "writeTextFile": true },
@@ -441,9 +432,6 @@ impl Inner {
                 "version": env!("CARGO_PKG_VERSION"),
             },
         });
-        if provider == "cursor" {
-            initialize_params["_meta"] = json!({ "parameterizedModelPicker": true });
-        }
         let handle = Handle {
             stdin: StdinRoute::Daemon(Arc::clone(&daemon), proc_handle),
             next_request_id,
@@ -1045,17 +1033,13 @@ mod tests {
 
     #[test]
     fn serves_each_provider_with_the_subcommand_it_actually_answers_on() {
-        // Not the same word for each: `opencode acp` vs `grok agent stdio`
-        // vs `cursor-agent acp`.
+        // Not the same word for each: `opencode acp` vs `grok agent stdio`.
         assert_eq!(acp_command("opencode").unwrap(), ("opencode", &["acp"][..]));
         assert_eq!(
             acp_command("grok").unwrap(),
             ("grok", &["agent", "stdio"][..])
         );
-        assert_eq!(
-            acp_command("cursor").unwrap(),
-            ("cursor-agent", &["acp"][..])
-        );
+        assert!(acp_command("cursor").is_err());
     }
 
     #[test]

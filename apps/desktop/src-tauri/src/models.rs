@@ -1,6 +1,7 @@
 //! Provider-neutral conversation models.
 //!
-//! Every agent transport (Claude, Codex, Cursor, Grok, OpenCode, Kilo) is
+//! Every agent transport (Claude, Codex, Grok, OpenCode, Kilo, and historical
+//! Cursor) is
 //! mapped into these shapes so the frontend and the daemon talk one language
 //! regardless of which CLI is behind a thread. A thread stays provider-neutral
 //! at the visual layer while each *turn* records which provider and model
@@ -20,6 +21,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     Claude,
+    /// No longer a live backend. Kept so stored threads and usage still deserialize.
     Cursor,
     Codex,
     Grok,

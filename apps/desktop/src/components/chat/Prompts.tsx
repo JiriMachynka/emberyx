@@ -7,6 +7,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Check, ListChecks, MessageCircleQuestionMark, Wrench } from "lucide-react";
+import { Markdown } from "@/components/Markdown";
 import { PermissionSummary } from "@/components/chat/ToolViews";
 import { cn } from "@/lib/utils";
 import type { PendingPlanApproval, PlanOutcome } from "@/hooks/useAgentChat";
@@ -223,15 +224,38 @@ export function AskPrompt({
   );
 }
 
+const PLAN_ACTIONS = [
+  {
+    key: "approved",
+    label: "Approve and build",
+    btn: "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30",
+    kbd: "border-emerald-500/60 bg-emerald-500 text-emerald-950",
+  },
+  {
+    key: "changes",
+    label: "Request changes",
+    btn: "bg-amber-500/20 text-amber-300 hover:bg-amber-500/30",
+    kbd: "border-amber-500/60 bg-amber-500 text-amber-950",
+  },
+  {
+    key: "abandoned",
+    label: "Abandon the plan",
+    btn: "bg-red-500/20 text-red-300 hover:bg-red-500/30",
+    kbd: "border-red-500/60 bg-red-500 text-red-50",
+  },
+] as const;
+
 /** Grok's plan gate, in place of the TUI's approval dialog. The whole plan
  *  scrolls; Approve lets it build, Request changes sends notes back for one
  *  more planning pass, Abandon drops the plan outright. */
 export function PlanPrompt({
   pending,
   onAnswer,
+  fontSize,
 }: {
   pending: PendingPlanApproval;
   onAnswer: (outcome: PlanOutcome, comments: string) => void;
+  fontSize: number;
 }) {
   const [mode, setMode] = useState<"choose" | "notes">("choose");
   const [notes, setNotes] = useState("");
@@ -246,7 +270,7 @@ export function PlanPrompt({
   useEffect(() => {
     if (mode !== "choose") return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Enter") {
+      if (e.key === "Enter" || e.key === "1") {
         e.preventDefault();
         onAnswer("approved", "");
       } else if (e.key === "2") {
@@ -273,34 +297,39 @@ export function PlanPrompt({
           {mode === "notes" ? "type below, Enter sends" : "1 approve · 2 changes · 3 abandon"}
         </span>
       </div>
-      <pre className="max-h-56 overflow-y-auto whitespace-pre-wrap px-3 py-2 text-xs leading-relaxed">
-        {pending.plan || "The agent called exit_plan_mode without a plan file."}
-      </pre>
+      <div className="max-h-[min(28rem,45vh)] overflow-y-auto px-3 py-2">
+        {pending.plan ? (
+          <Markdown text={pending.plan} fontSize={fontSize} />
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            The agent called exit_plan_mode without a plan file.
+          </p>
+        )}
+      </div>
       {mode === "choose" ? (
-        <div className="flex flex-col gap-1 p-3 pt-0">
-          {(
-            [
-              { key: "approved", label: "Approve and build", send: () => onAnswer("approved", "") },
-              { key: "changes", label: "Request changes", send: () => setMode("notes") },
-              {
-                key: "abandoned",
-                label: "Abandon the plan",
-                send: () => onAnswer("abandoned", ""),
-              },
-            ] as const
-          ).map((o, i) => (
+        <div className="flex flex-col gap-1.5 p-3 pt-1">
+          {PLAN_ACTIONS.map((o, i) => (
             <button
               key={o.key}
               type="button"
-              onClick={o.send}
+              onClick={() => {
+                if (o.key === "changes") setMode("notes");
+                else onAnswer(o.key, "");
+              }}
               className={cn(
-                "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted"
+                "flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors active:scale-[0.97] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                o.btn
               )}
             >
-              <kbd className="grid size-5 shrink-0 place-items-center rounded border border-border bg-background font-mono text-xs">
+              <kbd
+                className={cn(
+                  "grid size-5 shrink-0 place-items-center rounded border font-mono text-xs",
+                  o.kbd
+                )}
+              >
                 {i + 1}
               </kbd>
-              <span className={o.key === "abandoned" ? "text-red-400" : undefined}>{o.label}</span>
+              <span>{o.label}</span>
             </button>
           ))}
         </div>
@@ -325,7 +354,7 @@ export function PlanPrompt({
             <button
               type="button"
               onClick={() => onAnswer("changes", notes.trim() || "revise the plan")}
-              className="rounded-lg bg-primary px-3 py-1 text-xs text-primary-foreground transition-colors hover:bg-primary/90"
+              className="rounded-lg bg-primary px-3 py-1 text-xs text-primary-foreground transition-colors hover:bg-primary/90 active:scale-[0.97]"
             >
               Send notes ↵
             </button>

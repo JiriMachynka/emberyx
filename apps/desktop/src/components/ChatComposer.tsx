@@ -24,6 +24,7 @@ import {
   type AgentBackend,
 } from "@/lib/agentBackend";
 import type { AccessLevel, ClaudeProfile } from "@/lib/settings";
+import type { KeepGoing } from "@/lib/keepGoing";
 import { applyMention, mentionAt, type Mention } from "@/lib/mentions";
 import {
   compactDisabledReason,
@@ -88,6 +89,10 @@ interface ChatComposerProps {
   onClaudeProfileChange?: (id: string | null) => void;
   /** Runtime-owned prompt queue for reorder/edit/delete/pause/run-next. */
   queue?: PromptQueue | null;
+  keepGoing?: KeepGoing;
+  onKeepGoingChange?: (next: KeepGoing | undefined) => void;
+  onKeepGoingStop?: () => void;
+  onOpenWorktree?: (path: string, repoRoot: string, branch: string) => void;
   /** Text handed to this chat from elsewhere, to drop into the box unsent. */
   draft?: string;
   onDraftConsumed: () => void;
@@ -135,6 +140,10 @@ export const ChatComposer = memo(function ChatComposer({
   claudeProfileId = null,
   onClaudeProfileChange,
   queue,
+  keepGoing,
+  onKeepGoingChange,
+  onKeepGoingStop,
+  onOpenWorktree,
   draft,
   onDraftConsumed,
   onTyping,
@@ -641,6 +650,10 @@ export const ChatComposer = memo(function ChatComposer({
             claudeProfileId={claudeProfileId}
             onClaudeProfileChange={onClaudeProfileChange}
             queue={queue}
+            keepGoing={keepGoing}
+            onKeepGoingChange={onKeepGoingChange}
+            onKeepGoingStop={onKeepGoingStop}
+            onOpenWorktree={onOpenWorktree}
           />
           <div className="flex shrink-0 items-center gap-1.5">
             {capabilitiesOf(backend).usage && usage.quota && (

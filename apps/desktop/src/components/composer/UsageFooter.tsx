@@ -29,6 +29,8 @@ import type { ChatUsage } from "@/hooks/useAgentChat";
 import { chipTrigger } from "@/components/composer/chipStyles";
 import { fmtTokens, resolveContextWindow } from "@/components/composer/ContextMeter";
 import { QueueChip } from "@/components/composer/QueueChip";
+import { KeepGoingChip } from "@/components/composer/KeepGoingChip";
+import type { KeepGoing } from "@/lib/keepGoing";
 
 interface EffortPickerProps {
   /** Selected model, which for Codex decides the levels on offer. */
@@ -196,6 +198,10 @@ interface UsageFooterProps {
   onClaudeProfileChange?: (id: string | null) => void;
   /** Runtime-owned prompt queue; null when the backend has none (Codex steers). */
   queue?: PromptQueue | null;
+  keepGoing?: KeepGoing;
+  onKeepGoingChange?: (next: KeepGoing | undefined) => void;
+  onKeepGoingStop?: () => void;
+  onOpenWorktree?: (path: string, repoRoot: string, branch: string) => void;
 }
 
 /** Token/cost telemetry restated on every message_delta. Split out so that
@@ -217,6 +223,10 @@ export const UsageFooter = memo(function UsageFooter({
   claudeProfileId,
   onClaudeProfileChange,
   queue,
+  keepGoing,
+  onKeepGoingChange,
+  onKeepGoingStop,
+  onOpenWorktree,
 }: UsageFooterProps) {
   return (
     <div className="flex min-w-max flex-nowrap items-center gap-3 text-xs text-muted-foreground">
@@ -247,6 +257,18 @@ export const UsageFooter = memo(function UsageFooter({
       )}
       {capabilitiesOf(backend).permissions && (
         <AccessChip access={access} onChange={onAccessChange} />
+      )}
+      {/* Continue-on-idle lives in the Claude hook; askUser is the same gate. */}
+      {onKeepGoingChange && capabilitiesOf(backend).askUser && (
+        <KeepGoingChip
+          flag={keepGoing}
+          usage={usage}
+          cwd={cwd}
+          onChange={onKeepGoingChange}
+          onStop={onKeepGoingStop ?? (() => {})}
+          onAccessFull={() => onAccessChange("full")}
+          onOpenWorktree={onOpenWorktree}
+        />
       )}
       {backend === "claude" && claudeProfiles.length > 0 && (
         <ClaudeProfileChip

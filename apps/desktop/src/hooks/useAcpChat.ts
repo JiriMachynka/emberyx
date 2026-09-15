@@ -1,5 +1,5 @@
 /**
- * Drives one ACP agent process (OpenCode, Grok, Cursor) and exposes the same rendered
+ * Drives one ACP agent process (OpenCode, Grok) and exposes the same rendered
  * chat model `useAgentChat` does, so the pane consumes any backend without
  * branching.
  *
@@ -151,7 +151,7 @@ const messagesFromPage = (rows: ProjectedMessageRow[]): ChatMessage[] => {
 interface Options {
   cwd: string;
   emberyxSessionId: string;
-  /** Provider id — the ACP binary to drive (`opencode`, `grok`, `cursor`). */
+  /** Provider id — the ACP binary to drive (`opencode`, `grok`). */
   provider: string;
   /** ACP session id to resume; omit to open a fresh one. */
   resume?: string;

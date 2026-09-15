@@ -53,6 +53,11 @@ import {
 } from "@/lib/settings";
 import { launchFor } from "@/lib/settings";
 import { getThreadMeta, setThreadMeta, threadMetaKey } from "@/lib/threadMeta";
+import {
+  formatKeepGoingLabel,
+  isKeepGoingOn,
+  type KeepGoing,
+} from "@/lib/keepGoing";
 import { lastActivityAt } from "@/lib/compact";
 import { ThreadLinkProvider } from "@/components/PrLink";
 import { PaneVisibleProvider } from "@/components/chat/PaneVisible";
@@ -118,6 +123,7 @@ interface ChatPaneProps {
   /** A fresh chat has named its thread and been given a first message. Fires
    *  once, so the sidebar lists the thread before its transcript exists. */
   onThreadStarted?: (threadId: string, firstMessage: string) => void;
+  onOpenWorktree?: (path: string, repoRoot: string, branch: string) => void;
 }
 
 /** How close to the top counts as "show me the previous page". */
@@ -155,6 +161,7 @@ export const ChatPane = memo(function ChatPane({
   onOpenProject,
   onTitled,
   onThreadStarted,
+  onOpenWorktree,
 }: ChatPaneProps) {
   // Seed from the global default but keep the running model local so switching
   // it respawns only this pane, not every mounted chat. The stored default is
@@ -187,10 +194,14 @@ export const ChatPane = memo(function ChatPane({
   const [access, setAccess] = useState(() =>
     accessLevelFrom(permissionMode, skipPermissions)
   );
+  const [keepGoing, setKeepGoing] = useState<KeepGoing | undefined>(() =>
+    resume ? getThreadMeta(threadMetaKey(cwd, resume)).keepGoing : undefined
+  );
   const changeAccess = useCallback(
     (level: AccessLevel) => {
       setAccess(level);
       onAccessChange(level);
+      if (level !== "full") setKeepGoing(undefined);
     },
     [onAccessChange]
   );
@@ -256,7 +267,24 @@ export const ChatPane = memo(function ChatPane({
     codexSandbox,
     onTitled,
     visible: active,
+    keepGoing,
+    onKeepGoingTurn: setKeepGoing,
+    onKeepGoingStop: () => setKeepGoing(undefined),
   });
+  useEffect(() => {
+    const id = threadId ?? resume;
+    if (!id) return;
+    setThreadMeta(threadMetaKey(cwd, id), { keepGoing });
+  }, [cwd, keepGoing, resume, threadId]);
+  const keepGoingOn = isKeepGoingOn(keepGoing, usage);
+  const stopKeepGoing = useCallback(() => {
+    setKeepGoing(undefined);
+    stop();
+  }, [stop]);
+  useEffect(() => {
+    if (!keepGoingOn || !pendingPlan) return;
+    answerPlan("approved", "");
+  }, [keepGoingOn, pendingPlan, answerPlan]);
   // Register a fresh thread with the sidebar the moment it has both an id and a
   // first message. Without this the row only appears once the turn ends and the
   // transcript scan finds it on disk — a thread you are already talking to is
@@ -337,6 +365,11 @@ export const ChatPane = memo(function ChatPane({
     null
   );
   const scrollRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  // Composer overlay sits on the transcript; this is the gutter that keeps the
+  // last turn from ending under it. Starts at the old `pb-64` so the first
+  // paint matches, then tracks the real dock (a plan card is much taller).
+  const [dockH, setDockH] = useState(256);
   // Prepend anchor: which virtual row owned the top of the viewport and how far
   // down it sat. After older pages commit, putting that row back at the same
   // offset keeps the view pixel-fixed (see chatVirtual.anchorCorrection).
@@ -487,6 +520,19 @@ export const ChatPane = memo(function ChatPane({
     ro.observe(content);
     return () => ro.disconnect();
   }, [active]);
+
+  useLayoutEffect(() => {
+    const el = dockRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const apply = () => {
+      const next = Math.ceil(el.getBoundingClientRect().height);
+      setDockH((prev) => (prev === next ? prev : next));
+    };
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    apply();
+    return () => ro.disconnect();
+  }, [pendingPlan, pendingPermission, pendingAsk, status, messages.length]);
 
   const busy = status === "thinking" || status === "streaming" || status === "tool";
   // Both are dead ends for this session — `error` used to render nothing and
@@ -796,7 +842,10 @@ export const ChatPane = memo(function ChatPane({
             so both are bounded by `.chat-content-width` and the same px-5. A
             narrower cap here left the answer text ending well short of the
             input it belongs to. */}
-        <div className="mx-auto min-h-full w-full px-5 pb-64 pt-10">
+        <div
+          className="mx-auto min-h-full w-full px-5 pt-10"
+          style={{ paddingBottom: dockH }}
+        >
           <div className="relative w-full" style={{ height: rowVirt.getTotalSize() }}>
             {rowVirt.getVirtualItems().map((vItem) => {
               const slot = slots[vItem.index];
@@ -869,7 +918,8 @@ export const ChatPane = memo(function ChatPane({
         <button
           type="button"
           onClick={scrollToEnd}
-          className="absolute bottom-52 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border/70 bg-card/95 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur transition-colors hover:text-foreground"
+          className="absolute left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border/70 bg-card/95 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur transition-colors hover:text-foreground"
+          style={{ bottom: dockH + 8 }}
         >
           <ChevronDown className="size-3.5" />
           Scroll to end
@@ -877,6 +927,7 @@ export const ChatPane = memo(function ChatPane({
       )}
 
       <div
+        ref={dockRef}
         className={cn(
           "absolute inset-x-0 z-10 shrink-0 px-5 pb-5 pt-3",
           thread.length === 0
@@ -932,7 +983,11 @@ export const ChatPane = memo(function ChatPane({
                   two focusable surfaces competing for the same keys is what made
                   picking an option unreliable. Permission wins if both are live. */}
               {pendingPlan ? (
-                <PlanPrompt pending={pendingPlan} onAnswer={answerPlan} />
+                <PlanPrompt
+                  pending={pendingPlan}
+                  onAnswer={answerPlan}
+                  fontSize={fontSize}
+                />
               ) : pendingPermission ? (
                 <PermissionPrompt pending={pendingPermission} onDecide={respond} />
               ) : pendingAsk ? (
@@ -953,6 +1008,18 @@ export const ChatPane = memo(function ChatPane({
                     </div>
                   )}
                   <div className="relative z-10">
+                {keepGoingOn && keepGoing && (
+                  <div className="mb-2 flex items-center justify-between rounded-lg border border-border/60 bg-card px-3 py-1.5 text-xs">
+                    <span>{formatKeepGoingLabel(keepGoing, usage.costUsd, persistent)}</span>
+                    <button
+                      type="button"
+                      onClick={stopKeepGoing}
+                      className="rounded-md px-2 py-0.5 text-xs font-medium text-foreground transition-colors hover:bg-white/[0.04]"
+                    >
+                      Stop
+                    </button>
+                  </div>
+                )}
                 <Profiler id="Composer" onRender={onRender}>
                 <ChatComposer
                   cwd={cwd}
@@ -975,13 +1042,17 @@ export const ChatPane = memo(function ChatPane({
                   claudeProfileId={claudeProfileId}
                   onClaudeProfileChange={changeClaudeProfile}
                   queue={queue}
+                  keepGoing={keepGoing}
+                  onKeepGoingChange={setKeepGoing}
+                  onKeepGoingStop={stopKeepGoing}
+                  onOpenWorktree={onOpenWorktree}
                   draft={draft}
                   onDraftConsumed={consumeDraft}
                   onTyping={wake}
                   onSend={send}
                   onCompact={compact}
                   lastActivityAt={lastActivity}
-                  onStop={stop}
+                  onStop={stopKeepGoing}
                    onRewind={rewind}
                    onPreview={openPreview}
                 />

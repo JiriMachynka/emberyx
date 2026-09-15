@@ -13,7 +13,7 @@
  * detection.
  */
 
-export type AgentBackend = "claude" | "codex" | "opencode" | "grok" | "cursor";
+export type AgentBackend = "claude" | "codex" | "opencode" | "grok";
 
 export interface AgentCapabilities {
   /** Past conversations can be listed (`list_threads` / the event log's store
@@ -80,7 +80,6 @@ export const AGENT_BACKENDS: readonly AgentBackend[] = [
   "codex",
   "opencode",
   "grok",
-  "cursor",
 ];
 
 export const BACKEND_LABEL: Record<AgentBackend, string> = {
@@ -88,7 +87,6 @@ export const BACKEND_LABEL: Record<AgentBackend, string> = {
   codex: "Codex",
   opencode: "OpenCode",
   grok: "Grok",
-  cursor: "Cursor",
 };
 
 /** Character that opens a command in the composer. Codex invokes its skills as
@@ -98,10 +96,9 @@ export const COMMAND_SIGIL: Record<AgentBackend, string> = {
   codex: "$",
   opencode: "/",
   grok: "/",
-  cursor: "/",
 };
 
-/** The driver a backend's chat runs through. Five backends, three transports —
+/** The driver a backend's chat runs through. Four backends, three transports —
  *  so "is it Codex" and "is it ACP" are one lookup rather than a chain of name
  *  tests that each have to be extended when a backend is added. */
 export type AgentTransport = "claude" | "codex" | "acp";
@@ -111,7 +108,6 @@ export const BACKEND_TRANSPORT: Record<AgentBackend, AgentTransport> = {
   codex: "codex",
   opencode: "acp",
   grok: "acp",
-  cursor: "acp",
 };
 
 export const transportOf = (backend: AgentBackend): AgentTransport =>
@@ -128,7 +124,6 @@ export const CONTEXT_FLOOR: Record<AgentBackend, number> = {
   codex: 0,
   opencode: 0,
   grok: 0,
-  cursor: 0,
 };
 
 /** `--effort` levels Claude accepts. Fixed by the CLI rather than discovered,
@@ -253,31 +248,6 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     configDirOverride: false,
     threadScanSpawnsChild: false,
     loginCommand: ["grok", "login"],
-  },
-  // Cursor ACP (`cursor-agent acp`). Same transport as Grok: prompts, streamed
-  // updates, permission requests, and a model catalog on `session/new` once
-  // the parameterized picker opt-in is advertised. No native turn truncation.
-  cursor: {
-    // Same story as OpenCode: the event log is the thread store.
-    threads: true,
-    usage: false,
-    hookStatus: false,
-    permissions: true,
-    askUser: false,
-    slashCommands: false,
-    subagents: false,
-    modelPicker: true,
-    reasoningEffort: false,
-    steering: false,
-    compact: false,
-    conversationRewind: false,
-    accountIssues: false,
-    sessionModelCatalog: true,
-    launchProfiles: false,
-    configDirOverride: false,
-    threadScanSpawnsChild: false,
-    // The ACP server is `cursor-agent`, and so is the login flow.
-    loginCommand: ["cursor-agent", "login"],
   },
 };
 

@@ -1,9 +1,9 @@
 # Emberyx — agent guide
 
 Tauri v2 desktop app: a chat-first command center for coding agents across
-several projects. Five backends over three transports: Claude Code (`claude`,
-stream-json), OpenAI Codex (`codex`, app-server JSON-RPC), and OpenCode, Grok
-and Cursor over ACP. Rust core + React 19 frontend, in a bun/turbo monorepo.
+several projects. Four backends over three transports: Claude Code (`claude`,
+stream-json), OpenAI Codex (`codex`, app-server JSON-RPC), and OpenCode and
+Grok over ACP. Rust core + React 19 frontend, in a bun/turbo monorepo.
 
 **The global Nuxt/Vue stack defaults do not apply here.** This is React 19 +
 Vite + Tailwind 4 + shadcn/ui (new-york, lucide icons). No tRPC, no Drizzle, no
@@ -24,7 +24,7 @@ apps/desktop/          the app
       agentBackend.ts  backend + capability flags
       agentStore.ts    selector store for local chat telemetry
       codex/           Codex protocol types, decoders, normalizing adapter
-      acp/             ACP transport + adapter (OpenCode, Grok, Cursor)
+      acp/             ACP transport + adapter (OpenCode, Grok)
       handoff.ts       context package for an in-place provider switch
       timeline.ts      durable thread timeline + reconnect backfill
       ide.ts           external editor argv, per editor
@@ -105,7 +105,7 @@ Easy to conflate — they share almost nothing.
    process per session, JSON-RPC 2.0 over newline-delimited stdio. Frames are
    normalized by `lib/codex/adapter.ts` into the same message model, driven by
    `useCodexChat`. `useChatSession` picks the transport by session backend.
-   **ACP chat sessions** (`acp.rs`) — OpenCode, Grok and Cursor speak the Agent
+   **ACP chat sessions** (`acp.rs`) — OpenCode and Grok speak the Agent
    Client Protocol over stdio; `lib/acp/` adapts it and `useAcpChat` drives it.
 
 4. **Supervisor registry** (`supervisor/`) — the chat-first orchestration
@@ -335,7 +335,7 @@ change), and OpenCode/Kilo SQLite. Codex's `total_token_usage` restarts on
 resume and its token-count events are sometimes written twice, so each request
 is counted once from `last_token_usage`, skipping a repeated running total;
 Codex and Grok count reasoning inside output and cache inside input, while
-OpenCode counts both separately. Cursor keeps no token counts;
+OpenCode counts both separately.
 `UsageSummary.counted` drives the footer that names who is and isn't counted.
 Cost is always an estimate, never billed: Claude/Codex from the local rate
 table, Grok/OpenCode/Kilo as the agent recorded it (`reportsOwnCost`). A row
@@ -473,7 +473,7 @@ accumulates for the turn instead of vanishing as each read settles.
 ### Backends and capabilities
 
 `lib/agentBackend.ts` owns `AgentBackend` (`"claude" | "codex" | "opencode" |
-"grok" | "cursor"`), `BACKEND_TRANSPORT` (five backends, three transports) and
+"grok"`), `BACKEND_TRANSPORT` (four backends, three transports) and
 one `AgentCapabilities` row per backend — the only capability table. Resolution: per-project pin →
 global default → `"claude"`. **Never reintroduce a `startsWith("claude")`
 test** — gate on a capability instead, or Claude-shaped data (pricing,
