@@ -35,6 +35,11 @@ export interface SkillAddSpec {
 /** Same charset as the backend — it becomes a folder name everywhere. */
 export const isValidSkillName = isValidMcpName;
 
+/** New skills start selected for every harness. Claude's folder is also read
+ *  by OpenCode, Grok and Kilo, but Codex does not — the only default that is
+ *  live everywhere without a later copy is all of them. */
+export const DEFAULT_SKILL_HARNESSES: McpHarness[] = [...MCP_HARNESS_ORDER];
+
 /** Every harness this skill is live in, canonical order, deduped. */
 export const readersOf = (skill: SkillInfo): McpHarness[] => {
   const seen = new Set<McpHarness>();

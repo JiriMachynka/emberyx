@@ -191,7 +191,8 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     loginCommand: ["codex", "login"],
   },
   // Driven over ACP. The protocol carries prompts, streamed updates, tool calls
-  // and permission requests — and nothing else here, so the rest stay off until
+  // and permission requests. Slash commands are listed from the CLI's own skill
+  // folders rather than from ACP, so that picker is on; the rest stay off until
   // each has a driver rather than showing Claude's data under an ACP session.
   opencode: {
     // Threads are Emberyx's own record: this pane appends settled turns to the
@@ -204,7 +205,10 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     permissions: true,
     // `ask_user` is an Emberyx MCP tool, wired for Claude only.
     askUser: false,
-    slashCommands: false,
+    // Skills and custom commands live in the same folders the CLI reads;
+    // the composer lists them and inserts `/name`, which OpenCode registers
+    // as a slash command for every discovered skill.
+    slashCommands: true,
     subagents: false,
     // The catalog arrives with `session/new`; switching is a `session/set_model`
     // round trip.
@@ -232,7 +236,8 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     hookStatus: false,
     permissions: true,
     askUser: false,
-    slashCommands: false,
+    // User-invocable skills show up as `/name`, same as the Grok TUI.
+    slashCommands: true,
     subagents: false,
     modelPicker: true,
     // Grok reports `supportsReasoningEffort` and offers levels under its

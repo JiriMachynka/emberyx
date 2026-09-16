@@ -865,21 +865,35 @@ pub fn acp_detach(manager: tauri::State<'_, AcpManager>, id: u32) -> Result<()> 
     manager.detach(id)
 }
 
+/// MCP servers + the headless-preview rule for one ACP session. Empty
+/// `emberyx_session` keeps the array empty so a throwaway model probe does
+/// not connect a browser it will never use.
+fn session_mcp(ask: &crate::ask::AskServer, cwd: &str, emberyx_session: Option<&str>) -> Value {
+    let mcp_servers = match emberyx_session.filter(|s| !s.is_empty()) {
+        Some(session) => ask.acp_mcp_servers(session),
+        None => json!([]),
+    };
+    json!({
+        "cwd": cwd,
+        "mcpServers": mcp_servers,
+        "_meta": { "rules": crate::ask::PREVIEW_RULES },
+    })
+}
+
 /// Open a conversation. The reply carries the session id *and* `configOptions`
 /// — the model catalog the picker is built from.
 #[tauri::command]
 pub async fn acp_session_new(
     manager: tauri::State<'_, AcpManager>,
+    ask: tauri::State<'_, crate::ask::AskServer>,
     id: u32,
     cwd: String,
+    session: Option<String>,
 ) -> Result<Value> {
+    let params = session_mcp(&ask, &cwd, session.as_deref());
     let handle = manager.handle(id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        request(
-            &handle,
-            "session/new",
-            json!({ "cwd": cwd, "mcpServers": [] }),
-        )
+        request(&handle, "session/new", params)
     })
     .await
     .map_err(|e| crate::err!("session/new join failed: {e}"))?
@@ -890,17 +904,17 @@ pub async fn acp_session_new(
 #[tauri::command]
 pub async fn acp_session_load(
     manager: tauri::State<'_, AcpManager>,
+    ask: tauri::State<'_, crate::ask::AskServer>,
     id: u32,
     session_id: String,
     cwd: String,
+    session: Option<String>,
 ) -> Result<Value> {
+    let mut params = session_mcp(&ask, &cwd, session.as_deref());
+    params["sessionId"] = json!(session_id);
     let handle = manager.handle(id)?;
     tauri::async_runtime::spawn_blocking(move || {
-        request(
-            &handle,
-            "session/load",
-            json!({ "sessionId": session_id, "cwd": cwd, "mcpServers": [] }),
-        )
+        request(&handle, "session/load", params)
     })
     .await
     .map_err(|e| crate::err!("session/load join failed: {e}"))?
@@ -1126,5 +1140,22 @@ mod tests {
             lines,
             vec![r#"{"jsonrpc":"2.0","method":"session/update"}"#]
         );
+    }
+
+    #[test]
+    fn session_mcp_attaches_emberyx_when_a_chat_session_is_named() {
+        let ask = crate::ask::AskServer::for_test(9999, "tok");
+        let with = session_mcp(&ask, "/repo", Some("emberyx-1"));
+        assert_eq!(with["cwd"], "/repo");
+        assert_eq!(with["mcpServers"][0]["name"], "emberyx");
+        assert_eq!(
+            with["mcpServers"][0]["url"],
+            "http://127.0.0.1:9999/mcp?session=emberyx-1"
+        );
+        assert!(with["_meta"]["rules"].as_str().unwrap().contains("headless"));
+
+        let probe = session_mcp(&ask, "/repo", None);
+        assert_eq!(probe["mcpServers"], json!([]));
+        assert!(probe["_meta"]["rules"].as_str().unwrap().contains("headless"));
     }
 }

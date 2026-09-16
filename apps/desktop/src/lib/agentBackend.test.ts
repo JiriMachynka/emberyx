@@ -58,6 +58,7 @@ describe("capabilitiesOf", () => {
       expect(caps.conversationRewind).toBe(false);
       expect(caps.usage).toBe(false);
       expect(caps.sessionModelCatalog).toBe(true);
+      expect(caps.slashCommands).toBe(true);
     }
   });
 

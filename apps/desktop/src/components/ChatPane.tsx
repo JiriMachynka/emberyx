@@ -998,7 +998,7 @@ export const ChatPane = memo(function ChatPane({
                       above it — the extra bottom padding is what the composer
                       covers, so the two read as one surface. */}
                   {liveTodos && !tasksHidden && (
-                    <div className="relative z-0 -mb-4">
+                    <div className="chat-composer-shelf relative z-0 -mb-4">
                       <TasksCard
                         items={liveTodos.items}
                         planKey={liveTodos.planKey}

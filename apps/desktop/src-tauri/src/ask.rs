@@ -55,7 +55,23 @@ pub struct AskServer {
     pending: Mutex<HashMap<String, Sender<String>>>,
 }
 
+/// Appended to ACP `session/new` `_meta.rules` so Grok (and any other agent
+/// that honours it) uses the headless preview tools instead of opening a
+/// visible browser to "check the changes".
+pub const PREVIEW_RULES: &str = "When you need to see the running app, use the \
+emberyx MCP tools preview_snapshot (structure: headings, buttons, dialogs), \
+preview_screenshot (colour, spacing, overflow), and preview_console (errors). \
+They drive a headless Chrome against the local dev server. Do not open a \
+visible browser window, and do not `open` the preview URL, to check UI changes.";
+
 impl AskServer {
+    fn mcp_url(&self, session: &str) -> String {
+        format!(
+            "http://127.0.0.1:{}/mcp?session={}",
+            self.port, session
+        )
+    }
+
     /// The `--mcp-config` payload for one agent. The session id rides in the
     /// URL so a question lands in the pane whose agent asked it.
     pub fn mcp_config(&self, session: &str) -> String {
@@ -63,15 +79,33 @@ impl AskServer {
             "mcpServers": {
                 "emberyx": {
                     "type": "http",
-                    "url": format!(
-                        "http://127.0.0.1:{}/mcp?session={}",
-                        self.port, session
-                    ),
+                    "url": self.mcp_url(session),
                     "headers": { "X-Emberyx-Token": self.token },
                 }
             }
         })
         .to_string()
+    }
+
+    /// ACP `session/new` / `session/load` `mcpServers` array. HTTP, with the
+    /// token as a header list — the shape the protocol requires, not Claude's
+    /// object-of-headers `--mcp-config`.
+    pub fn acp_mcp_servers(&self, session: &str) -> Value {
+        json!([{
+            "type": "http",
+            "name": "emberyx",
+            "url": self.mcp_url(session),
+            "headers": [{ "name": "X-Emberyx-Token", "value": self.token }],
+        }])
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(port: u16, token: &str) -> Self {
+        Self {
+            port,
+            token: token.into(),
+            pending: Mutex::new(HashMap::new()),
+        }
     }
 }
 
@@ -649,16 +683,25 @@ mod tests {
 
     #[test]
     fn mcp_config_carries_port_session_and_token() {
-        let server = AskServer {
-            port: 9999,
-            token: "tok".into(),
-            pending: Mutex::new(HashMap::new()),
-        };
+        let server = AskServer::for_test(9999, "tok");
         let config: Value = serde_json::from_str(&server.mcp_config("s7")).unwrap();
         let entry = &config["mcpServers"]["emberyx"];
         assert_eq!(entry["type"], "http");
         assert_eq!(entry["url"], "http://127.0.0.1:9999/mcp?session=s7");
         assert_eq!(entry["headers"]["X-Emberyx-Token"], "tok");
+    }
+
+    #[test]
+    fn acp_mcp_servers_is_the_protocol_array_with_header_list() {
+        let server = AskServer::for_test(9999, "tok");
+        let servers = server.acp_mcp_servers("s7");
+        assert_eq!(servers[0]["type"], "http");
+        assert_eq!(servers[0]["name"], "emberyx");
+        assert_eq!(servers[0]["url"], "http://127.0.0.1:9999/mcp?session=s7");
+        assert_eq!(servers[0]["headers"][0]["name"], "X-Emberyx-Token");
+        assert_eq!(servers[0]["headers"][0]["value"], "tok");
+        assert!(PREVIEW_RULES.contains("preview_snapshot"));
+        assert!(PREVIEW_RULES.contains("Do not open a visible browser"));
     }
 
     #[test]

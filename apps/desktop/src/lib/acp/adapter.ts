@@ -325,6 +325,16 @@ export function readPermission(
  *  `delete` still ask. */
 const AUTO_EDIT_KINDS = new Set(["read", "edit"]);
 
+/** Emberyx's own MCP tools: read-only, local-only, already pre-allowed for
+ *  Claude via `--allowedTools`. ACP has no spawn-time allow-list, so the
+ *  client answers these without a prompt at every access level. */
+const EMBERXY_TOOLS =
+  /(?:ask_user|preview_screenshot|preview_console|preview_snapshot)/;
+
+const isEmberyxTool = (permission: AcpPermission): boolean =>
+  EMBERXY_TOOLS.test(permission.title) ||
+  EMBERXY_TOOLS.test(permission.description ?? "");
+
 /**
  * The option that answers a permission request without prompting, or `null` to
  * ask the user. ACP has no spawn-time bypass the way Claude's
@@ -339,6 +349,12 @@ export const autoPermission = (
   permission: AcpPermission,
   access: AccessLevel
 ): string | null => {
+  if (isEmberyxTool(permission)) {
+    const pick =
+      permission.options.find((o) => o.kind === "allow_always") ??
+      permission.options.find((o) => o.kind === "allow_once");
+    return pick?.optionId ?? null;
+  }
   if (access === "ask") return null;
   if (access === "acceptEdits" && !AUTO_EDIT_KINDS.has(permission.toolKind ?? ""))
     return null;

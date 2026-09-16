@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
-import { ChatComposer } from "@/components/ChatComposer";
+import { ChatComposer, clampComposerHeight } from "@/components/ChatComposer";
 import { AGENT_BACKENDS, capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
 import { useAgentStore } from "@/lib/agentStore";
 import { codexKeys } from "@/lib/queries";
@@ -90,6 +90,14 @@ afterEach(() => {
   localStorage.clear();
 });
 
+describe("clampComposerHeight", () => {
+  it("floors a 0px measure so a hidden pane cannot collapse the box", () => {
+    expect(clampComposerHeight(0, 44)).toBe(44);
+    expect(clampComposerHeight(60, 44)).toBe(60);
+    expect(clampComposerHeight(200, 44)).toBe(160);
+  });
+});
+
 describe("ChatComposer", () => {
   it.each(["claude", "codex", "grok"] as const)(
     "mounts for %s with the model picker and a live input",
@@ -101,6 +109,12 @@ describe("ChatComposer", () => {
       expect(document.querySelector("button[aria-haspopup=dialog]")).not.toBeNull();
     }
   );
+
+  it("keeps a usable height even when scrollHeight measures as 0", async () => {
+    await mount(propsFor("grok"));
+    const h = parseFloat(textarea().style.height || "0");
+    expect(h).toBeGreaterThan(0);
+  });
 
   it("↵ sends the typed text and clears the box", async () => {
     const sent: [string, ChatImage[]][] = [];

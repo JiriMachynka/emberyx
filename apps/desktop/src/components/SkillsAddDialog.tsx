@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useProviderStatus, useSkillAdd } from "@/lib/queries";
-import { isValidSkillName } from "@/lib/skills";
+import { DEFAULT_SKILL_HARNESSES, isValidSkillName } from "@/lib/skills";
 import {
   MCP_HARNESS_LABEL,
   MCP_HARNESS_ORDER,
@@ -30,7 +30,9 @@ export function SkillsAddDialog({ open, onOpenChange }: SkillsAddDialogProps) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [body, setBody] = useState("");
-  const [targets, setTargets] = useState<McpHarness[]>(["claude"]);
+  const [targets, setTargets] = useState<McpHarness[]>([
+    ...DEFAULT_SKILL_HARNESSES,
+  ]);
   const providers = useProviderStatus().data ?? [];
   const addSkill = useSkillAdd();
 
@@ -39,7 +41,7 @@ export function SkillsAddDialog({ open, onOpenChange }: SkillsAddDialogProps) {
     setName("");
     setDescription("");
     setBody("");
-    setTargets(["claude"]);
+    setTargets([...DEFAULT_SKILL_HARNESSES]);
   }, [open]);
 
   const installed = new Set(
@@ -83,7 +85,8 @@ export function SkillsAddDialog({ open, onOpenChange }: SkillsAddDialogProps) {
           <DialogTitle>Create a skill</DialogTitle>
           <DialogDescription>
             Written as a SKILL.md folder into each selected harness's skill
-            folder. A copy can be added to more harnesses later from the list.
+            folder. Every harness starts selected so the skill is live
+            everywhere.
           </DialogDescription>
         </DialogHeader>
 
@@ -142,6 +145,7 @@ export function SkillsAddDialog({ open, onOpenChange }: SkillsAddDialogProps) {
                         ? undefined
                         : `${MCP_HARNESS_LABEL[harness]} isn't installed — the folder is written anyway`
                     }
+                    aria-pressed={selected}
                     onClick={() =>
                       setTargets((prev) =>
                         prev.includes(harness)

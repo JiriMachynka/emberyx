@@ -864,7 +864,7 @@ export const slashKeys = {
 };
 
 /** The commands a project offers, in whichever form the backend has them:
- *  Claude's command files (project + user + plugin), scanned in Rust, or
+ *  Claude / OpenCode / Grok skill and command folders, scanned in Rust, or
  *  Codex's skills, listed by the app-server. Fetched on the first sigil typed
  *  and kept for the session — both rarely change mid-session, and the menu
  *  refetches when a chat pane remounts. */
@@ -878,7 +878,7 @@ export const useSlashCommands = (
     queryFn: () =>
       backend === "codex"
         ? listCodexSkills(cwd)
-        : invoke<SlashCommand[]>("slash_commands", { cwd }),
+        : invoke<SlashCommand[]>("slash_commands", { cwd, backend }),
     enabled,
     staleTime: 5 * 60 * 1000,
   });

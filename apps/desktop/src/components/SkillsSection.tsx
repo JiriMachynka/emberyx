@@ -53,6 +53,15 @@ export function SkillsSection() {
 
   const list = skills.data ?? [];
   const copies = list.reduce((sum, s) => sum + s.sources.length, 0);
+  const incomplete = list.filter((skill) => missingFrom(skill).length > 0);
+
+  const copyMissing = (skill: SkillInfo) => {
+    const skillDir = skill.sources[0]?.skillDir;
+    if (!skillDir) return;
+    for (const harness of missingFrom(skill)) {
+      copySkill.mutate({ skillDir, harness });
+    }
+  };
 
   const mutationError =
     addSkill.error ?? copySkill.error ?? removeSkill.error;
@@ -76,10 +85,22 @@ export function SkillsSection() {
                 {list.length} skill{list.length === 1 ? "" : "s"} · {copies}{" "}
                 {copies === 1 ? "copy" : "copies"}
               </p>
-              <Button size="sm" onClick={() => setAddOpen(true)}>
-                <Plus className="size-3.5" />
-                Create a skill
-              </Button>
+              <span className="flex shrink-0 items-center gap-2">
+                {incomplete.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={copySkill.isPending}
+                    onClick={() => incomplete.forEach(copyMissing)}
+                  >
+                    Copy missing to every harness
+                  </Button>
+                )}
+                <Button size="sm" onClick={() => setAddOpen(true)}>
+                  <Plus className="size-3.5" />
+                  Create a skill
+                </Button>
+              </span>
             </div>
 
             <div className="grid gap-1.5">
@@ -218,7 +239,7 @@ export function SkillsSection() {
               <p className="text-sm font-medium">No skills installed</p>
               <p className="mx-auto max-w-sm text-xs text-muted-foreground">
                 Skills are reusable instruction folders your agents load when a
-                task matches. Create one, and copy it to more harnesses later.
+                task matches. A new one starts available to every harness.
               </p>
             </div>
             <Button size="sm" onClick={() => setAddOpen(true)}>

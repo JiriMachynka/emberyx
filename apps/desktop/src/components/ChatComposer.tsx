@@ -50,6 +50,24 @@ import { ContextMeter } from "@/components/composer/ContextMeter";
 import { QuotaChip } from "@/components/composer/QuotaChip";
 import { UsageFooter } from "@/components/composer/UsageFooter";
 
+/** Floor so a measure taken while the pane is `display: none` (scrollHeight
+ *  0) cannot collapse the box. Cap matches `max-h-40`. */
+export const clampComposerHeight = (
+  scrollHeight: number,
+  minLine: number,
+  cap = 160
+) => Math.min(Math.max(scrollHeight, minLine), cap);
+
+/** One line of padding + text, from the textarea's computed box. */
+const minComposerLine = (el: HTMLTextAreaElement): number => {
+  const cs = getComputedStyle(el);
+  const lh = parseFloat(cs.lineHeight);
+  const line = Number.isFinite(lh) && lh > 0 ? lh : 24;
+  const pad =
+    (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+  return pad + line;
+};
+
 /** Suggestions shown for an `@` file reference. */
 const MENTION_LIMIT = 8;
 
@@ -226,12 +244,15 @@ export const ChatComposer = memo(function ChatComposer({
   // Layout effect, not effect: the height is measured and written before the
   // browser paints, so the composer never shows a frame at its unmeasured
   // height on mount.
+  // Hidden keep-alive panes are `display: none`; measuring then writes 0px
+  // and the box stays collapsed when the tab is shown, because `input` did
+  // not change. Skip while hidden, remeasure on show, and again if the
+  // composer width changes (resize, sidebar).
   useLayoutEffect(() => {
     const el = inputRef.current;
-    if (!el) return;
-    // First pass runs inline; only a burst of keystrokes needs coalescing.
-    const size = () => {
-      if (input.length <= lengthRef.current) {
+    if (!el || !active) return;
+    const size = (force = false) => {
+      if (force || input.length <= lengthRef.current) {
         // Measuring needs the height released, but `auto` is a jump the
         // transition would then animate *from* — so the reset happens with
         // transitions off and is flushed before they come back.
@@ -241,7 +262,7 @@ export const ChatComposer = memo(function ChatComposer({
         el.style.transition = "";
       }
       lengthRef.current = input.length;
-      const next = `${Math.min(el.scrollHeight, 160)}px`;
+      const next = `${clampComposerHeight(el.scrollHeight, minComposerLine(el))}px`;
       if (next !== heightRef.current || el.style.height === "auto") {
         heightRef.current = next;
         el.style.height = next;
@@ -249,12 +270,30 @@ export const ChatComposer = memo(function ChatComposer({
     };
     if (heightRef.current === "") {
       size();
-      return;
+    } else {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = requestAnimationFrame(() => size());
     }
-    cancelAnimationFrame(frameRef.current);
-    frameRef.current = requestAnimationFrame(size);
-    return () => cancelAnimationFrame(frameRef.current);
-  }, [input]);
+    // Width only: observing height would loop, because this write changes it.
+    // A keep-alive pane going from `display: none` to visible is a width
+    // change (0 → laid out), which is the case that used to leave 0px.
+    let lastW = el.offsetWidth;
+    const ro =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => {
+            const w = el.offsetWidth;
+            if (w === lastW) return;
+            lastW = w;
+            if (w === 0) return;
+            size(true);
+          })
+        : null;
+    ro?.observe(el);
+    return () => {
+      cancelAnimationFrame(frameRef.current);
+      ro?.disconnect();
+    };
+  }, [input, active]);
 
   const closeMenus = () => {
     setMention(null);
@@ -452,7 +491,7 @@ export const ChatComposer = memo(function ChatComposer({
           // Rounded all the way round: the session strip tucks *under* this
           // surface rather than squaring its bottom corners, the same trick
           // TasksCard uses above the composer.
-          "chat-composer-surface relative z-10 overflow-hidden rounded-xl border transition-colors",
+          "chat-composer-surface relative z-10 flex flex-col overflow-hidden rounded-xl border transition-colors",
           "focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/50",
           // A drop target, but never louder than focus — dragging used to draw
           // the stronger ring of the two.
@@ -594,7 +633,7 @@ export const ChatComposer = memo(function ChatComposer({
           // padding + text with no slack under the placeholder. The shadcn
           // base ships `min-h-16`, which is where the old blank strip came
           // from. It still grows to max-h-40 and then scrolls.
-          className="block max-h-40 min-h-0 resize-none overscroll-contain overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent px-5 pb-2 pt-3 text-base leading-6 shadow-none transition-[height] duration-150 ease-out placeholder:text-muted-foreground/80 focus-visible:ring-0 motion-reduce:transition-none"
+          className="block w-full max-h-40 min-h-0 shrink-0 resize-none overscroll-contain overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent px-5 pb-2 pt-3 text-base leading-6 shadow-none transition-[height] duration-150 ease-out placeholder:text-muted-foreground/80 focus-visible:ring-0 motion-reduce:transition-none"
         />
           {resumeOffer && (
             <div className="flex flex-col gap-2 border-t border-border px-4 py-2">
@@ -633,7 +672,7 @@ export const ChatComposer = memo(function ChatComposer({
           {/* Wraps rather than scrolling sideways: chips that slid out of view
               inside the input were discoverable only by scrolling a toolbar
               nobody knows scrolls. */}
-          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-2 pb-4 pl-2.5 pr-5 pt-2">
+          <div className="flex w-full min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-2 pb-4 pl-2.5 pr-5 pt-2">
           <UsageFooter
             queued={queued}
             backend={backend}
@@ -717,7 +756,7 @@ export const ChatComposer = memo(function ChatComposer({
         // rounded bottom edge: the negative margin is covered by the composer's
         // own opaque surface, so the two read as one object without the input
         // giving up its corners.
-        <div className="relative z-0 -mt-3 mx-auto flex w-[95%] items-center gap-3 rounded-b-xl border border-border/60 bg-card/40 px-2 pb-1 pt-4">
+        <div className="chat-composer-shelf relative z-0 -mt-3 flex items-center gap-3 rounded-b-xl border border-border/60 bg-card/40 px-2 pb-1 pt-4">
           <BranchChip cwd={cwd} busy={busy} compact />
           {capabilitiesOf(backend).usage && (
             <ContextMeter

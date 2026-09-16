@@ -67,6 +67,15 @@ const mount = async (extra: Record<string, unknown> = {}) => {
 };
 
 describe("useAcpChat lifecycle", () => {
+  it("hands the chat session to session/new so the headless browser MCP can route", async () => {
+    await mount();
+    const opened = invoke.mock.calls.find(([name]) => name === "acp_session_new");
+    expect(opened?.[1]).toMatchObject({
+      cwd: "/repo",
+      session: "emberyx-1",
+    });
+  });
+
   it("spawns nothing for a fresh thread until the pane is woken", async () => {
     const view = renderHook(() => useAcpChat(options));
     expect(

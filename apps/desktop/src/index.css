@@ -161,6 +161,14 @@
 
   /* The composer is a distinct working surface rather than another generic
      card, matching the focused treatment used by the chat reference. */
+  /* Shared by the live Tasks card above the input and the branch/context
+     strip under it: a centred shelf slightly narrower than the composer,
+     so the two read as one object without matching its full width. */
+  .chat-composer-shelf {
+    width: 95%;
+    margin-inline: auto;
+  }
+
   .chat-composer-surface {
     background-color: var(--composer);
     border-color: oklch(1 0 0 / 6%);

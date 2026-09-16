@@ -22,6 +22,43 @@ use crate::error::Result;
 use crate::mcp::Harness;
 use crate::paths::home_dir;
 
+/// Project-scope skill folders this harness reads, in scan order. Shared
+/// trees (`.claude/skills`, `.agents/skills`) appear under several harnesses
+/// the same way the user-scope ones do.
+fn project_skill_dirs(harness: Harness, cwd: &Path) -> Vec<PathBuf> {
+    let claude = cwd.join(".claude").join("skills");
+    let agents = cwd.join(".agents").join("skills");
+    match harness {
+        Harness::Claude => vec![claude],
+        Harness::Codex => vec![cwd.join(".codex").join("skills"), agents],
+        Harness::Opencode => vec![cwd.join(".opencode").join("skills"), claude, agents],
+        Harness::Grok => vec![cwd.join(".grok").join("skills"), claude, agents],
+        Harness::Kilo => vec![
+            cwd.join(".kilo").join("skills"),
+            cwd.join(".kilocode").join("skills"),
+            claude,
+            agents,
+        ],
+    }
+}
+
+/// Skill folders this harness reads, project first then user, tagged with
+/// source so a slash listing can say where a name came from.
+pub(crate) fn skill_dirs(
+    harness: Harness,
+    home: Option<&Path>,
+    cwd: &Path,
+) -> Vec<(PathBuf, &'static str)> {
+    let mut out: Vec<(PathBuf, &'static str)> = project_skill_dirs(harness, cwd)
+        .into_iter()
+        .map(|dir| (dir, "project"))
+        .collect();
+    if let Some(home) = home {
+        out.extend(read_dirs(harness, home).into_iter().map(|dir| (dir, "user")));
+    }
+    out
+}
+
 /// User-scope directories each harness reads skills from, in scan order.
 /// The shared roots appear under several harnesses — that is the point.
 fn read_dirs(harness: Harness, home: &Path) -> Vec<PathBuf> {

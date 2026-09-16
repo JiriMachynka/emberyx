@@ -359,4 +359,15 @@ describe("autoPermission", () => {
     const opts = [{ optionId: "no", kind: "reject_always" }];
     expect(autoPermission(request("edit", opts), "full")).toBeNull();
   });
+
+  it("always allows Emberyx's headless preview tools, even at ask", () => {
+    const preview = {
+      requestId: 1,
+      title: "mcp__emberyx__preview_snapshot",
+      toolKind: "other",
+      options: both.map((o) => ({ ...o, name: o.optionId })),
+    };
+    expect(autoPermission(preview, "ask")).toBe("always");
+    expect(autoPermission(preview, "acceptEdits")).toBe("always");
+  });
 });

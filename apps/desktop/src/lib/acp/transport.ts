@@ -113,15 +113,29 @@ const probeLaunch = (provider: string): SpawnLaunch => {
   return { command, args, env };
 };
 
-export const acpSessionNew = (id: number, cwd: string): Promise<AcpSessionResult> =>
-  invoke<AcpSessionResult>("acp_session_new", { id, cwd });
+export const acpSessionNew = (
+  id: number,
+  cwd: string,
+  session?: string
+): Promise<AcpSessionResult> =>
+  invoke<AcpSessionResult>("acp_session_new", {
+    id,
+    cwd,
+    session: session ?? null,
+  });
 
 export const acpSessionLoad = (
   id: number,
   sessionId: string,
-  cwd: string
+  cwd: string,
+  session?: string
 ): Promise<AcpSessionResult> =>
-  invoke<AcpSessionResult>("acp_session_load", { id, sessionId, cwd });
+  invoke<AcpSessionResult>("acp_session_load", {
+    id,
+    sessionId,
+    cwd,
+    session: session ?? null,
+  });
 
 export const acpPrompt = (
   id: number,

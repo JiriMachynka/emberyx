@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { missingFrom, readersOf, isValidSkillName, type SkillInfo } from "./skills";
+import {
+  DEFAULT_SKILL_HARNESSES,
+  missingFrom,
+  readersOf,
+  isValidSkillName,
+  type SkillInfo,
+} from "./skills";
 
 const skill: SkillInfo = {
   name: "deploy",
@@ -40,5 +46,17 @@ describe("isValidSkillName", () => {
   it("rejects names that cannot be folders", () => {
     expect(isValidSkillName("deploy-staging")).toBe(true);
     expect(isValidSkillName("has space")).toBe(false);
+  });
+});
+
+describe("DEFAULT_SKILL_HARNESSES", () => {
+  it("covers every harness so a new skill is live everywhere", () => {
+    expect(DEFAULT_SKILL_HARNESSES).toEqual([
+      "claude",
+      "codex",
+      "opencode",
+      "grok",
+      "kilo",
+    ]);
   });
 });

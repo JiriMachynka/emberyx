@@ -706,10 +706,10 @@ export function useAcpChat({
         // Even an id this provider issued can go stale — the agent prunes its own
         // session store, and a load failure must cost the history, not the chat.
         const session = canLoad
-          ? await acpSessionLoad(spawned.id, resume, cwd).catch(() =>
-              acpSessionNew(spawned.id, cwd)
+          ? await acpSessionLoad(spawned.id, resume, cwd, emberyxSessionId).catch(
+              () => acpSessionNew(spawned.id, cwd, emberyxSessionId)
             )
-          : await acpSessionNew(spawned.id, cwd);
+          : await acpSessionNew(spawned.id, cwd, emberyxSessionId);
         if (disposed) {
           void acpKill(spawned.id);
           return;

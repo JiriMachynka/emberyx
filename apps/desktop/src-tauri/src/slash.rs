@@ -3,11 +3,13 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::error::Result;
+use crate::mcp::Harness;
 use crate::paths::home_dir;
+use crate::skills::skill_dirs;
 
-/// A slash command the chat composer can offer, as Claude Code resolves them:
-/// project commands, personal commands, and commands/skills from installed
-/// plugins (which are namespaced `plugin:name`).
+/// A slash command the chat composer can offer. Claude, OpenCode, Grok and
+/// Kilo resolve these from skill/command folders; Codex lists its skills over
+/// the app-server instead. Plugin commands are namespaced `plugin:name`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SlashCommand {
@@ -75,9 +77,16 @@ fn frontmatter_description(text: &str) -> String {
     frontmatter_field(text, "description")
 }
 
-/// Collect `*.md` command files under `dir`. Files in subdirectories become
-/// namespaced commands (`dir/name.md` → `dir:name`), matching Claude Code.
-fn collect_commands(dir: &Path, source: &str, prefix: &str, out: &mut Vec<SlashCommand>) {
+/// Collect `*.md` command files under `dir`. Nested files become namespaced
+/// commands (`dir/name.md` → `dir{sep}name`). Claude and Grok use `:`;
+/// OpenCode uses `/`.
+fn collect_commands(
+    dir: &Path,
+    source: &str,
+    prefix: &str,
+    sep: &str,
+    out: &mut Vec<SlashCommand>,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -87,7 +96,7 @@ fn collect_commands(dir: &Path, source: &str, prefix: &str, out: &mut Vec<SlashC
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            collect_commands(&path, source, &format!("{prefix}{name}:"), out);
+            collect_commands(&path, source, &format!("{prefix}{name}{sep}"), sep, out);
             continue;
         }
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
@@ -156,37 +165,121 @@ fn installed_plugins(home: &Path) -> Vec<(String, PathBuf)> {
         .collect()
 }
 
-/// Every slash command available in `cwd`, project first, then personal, then
-/// plugin-provided ones.
+/// Every slash command available in `cwd` for `backend`. `backend` omitted
+/// or unknown falls back to Claude's trees — the original scan. Codex's live
+/// listing goes through the app-server; this file scan is only a fallback.
 #[tauri::command]
-pub async fn slash_commands(cwd: String) -> Result<Vec<SlashCommand>> {
-    Ok(tauri::async_runtime::spawn_blocking(move || scan(&cwd))
+pub async fn slash_commands(cwd: String, backend: Option<String>) -> Result<Vec<SlashCommand>> {
+    Ok(tauri::async_runtime::spawn_blocking(move || scan(&cwd, backend.as_deref()))
         .await
         .map_err(|e| e.to_string())?)
 }
 
-fn scan(cwd: &str) -> Vec<SlashCommand> {
+fn scan(cwd: &str, backend: Option<&str>) -> Vec<SlashCommand> {
+    scan_at(Path::new(cwd), backend, home_dir().as_deref())
+}
+
+fn scan_at(cwd: &Path, backend: Option<&str>, home: Option<&Path>) -> Vec<SlashCommand> {
+    let harness = backend.and_then(Harness::from_id).unwrap_or(Harness::Claude);
+    match harness {
+        Harness::Claude => scan_claude(cwd, home),
+        other => scan_harness(other, cwd, home),
+    }
+}
+
+/// Same name from two sources: the earlier (more specific) one wins.
+fn dedup(mut out: Vec<SlashCommand>) -> Vec<SlashCommand> {
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|c| seen.insert(c.name.clone()));
+    out
+}
+
+fn scan_claude(cwd: &Path, home: Option<&Path>) -> Vec<SlashCommand> {
     let mut out = vec![];
-    let project = Path::new(cwd).join(".claude");
-    collect_commands(&project.join("commands"), "project", "", &mut out);
-    collect_skills(&project.join("skills"), "project", "", &mut out);
-
-    if let Some(home) = home_dir() {
-        let user = home.join(".claude");
-        collect_commands(&user.join("commands"), "user", "", &mut out);
-        collect_skills(&user.join("skills"), "user", "", &mut out);
-
+    collect_commands(
+        &cwd.join(".claude").join("commands"),
+        "project",
+        "",
+        ":",
+        &mut out,
+    );
+    for (dir, source) in skill_dirs(Harness::Claude, home, cwd) {
+        collect_skills(&dir, source, "", &mut out);
+    }
+    if let Some(home) = home {
+        collect_commands(
+            &home.join(".claude").join("commands"),
+            "user",
+            "",
+            ":",
+            &mut out,
+        );
         // Plugin commands and skills are invoked namespaced: `/plugin:name`.
-        for (plugin, path) in installed_plugins(&home) {
+        for (plugin, path) in installed_plugins(home) {
             let prefix = format!("{plugin}:");
-            collect_commands(&path.join("commands"), &plugin, &prefix, &mut out);
+            collect_commands(&path.join("commands"), &plugin, &prefix, ":", &mut out);
             collect_skills(&path.join("skills"), &plugin, &prefix, &mut out);
         }
     }
+    dedup(out)
+}
 
-    // Same name from two sources: the earlier (more specific) one wins.
-    let mut seen = std::collections::HashSet::new();
-    out.retain(|c| seen.insert(c.name.clone()));
+/// Skills (and, where the CLI has them, command files) for a non-Claude
+/// harness. Project trees first, then the user homes `skills.rs` already
+/// documents as overlapping on purpose.
+fn scan_harness(harness: Harness, cwd: &Path, home: Option<&Path>) -> Vec<SlashCommand> {
+    let mut out = vec![];
+    for (dir, source) in skill_dirs(harness, home, cwd) {
+        collect_skills(&dir, source, "", &mut out);
+    }
+    for (dir, source, sep) in command_dirs(harness, cwd, home) {
+        collect_commands(&dir, source, "", sep, &mut out);
+    }
+    dedup(out)
+}
+
+/// Command-file trees, matching each CLI's own layout. Skills live in
+/// `skill_dirs`; this is only the `commands/` markdown the `/` menu also
+/// offers. Codex has no file-scan command tree here — its listing is the
+/// app-server.
+fn command_dirs(
+    harness: Harness,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> Vec<(PathBuf, &'static str, &'static str)> {
+    let mut out = Vec::new();
+    match harness {
+        Harness::Claude | Harness::Codex => {}
+        Harness::Opencode => {
+            out.push((cwd.join(".opencode").join("commands"), "project", "/"));
+            if let Some(home) = home {
+                out.push((
+                    home.join(".config/opencode").join("commands"),
+                    "user",
+                    "/",
+                ));
+            }
+        }
+        Harness::Grok => {
+            for (dir, source) in [
+                (cwd.join(".grok").join("commands"), "project"),
+                (cwd.join(".claude").join("commands"), "project"),
+                (cwd.join(".agents").join("commands"), "project"),
+            ] {
+                out.push((dir, source, ":"));
+            }
+            if let Some(home) = home {
+                for dir in [
+                    home.join(".grok").join("commands"),
+                    home.join(".claude").join("commands"),
+                    home.join(".agents").join("commands"),
+                ] {
+                    out.push((dir, "user", ":"));
+                }
+            }
+        }
+        Harness::Kilo => {}
+    }
     out
 }
 
@@ -233,7 +326,7 @@ mod tests {
         .unwrap();
         std::fs::write(commands.join("git/sync.md"), "no frontmatter").unwrap();
 
-        let found = scan(&root.to_string_lossy());
+        let found = scan(&root.to_string_lossy(), None);
         let mut names: Vec<&str> = found
             .iter()
             .filter(|c| c.source == "project")
@@ -246,5 +339,128 @@ mod tests {
         assert_eq!(review.description, "Review the diff");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn write_skill(root: &Path, folder: &str, name: &str, description: &str) {
+        let dir = root.join(folder);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n\nBody.\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn opencode_lists_project_and_user_skills_and_slash_commands() {
+        let home = std::env::temp_dir().join(format!(
+            "emberyx-slash-opencode-{}-{}",
+            std::process::id(),
+            "home"
+        ));
+        let cwd = std::env::temp_dir().join(format!(
+            "emberyx-slash-opencode-{}-{}",
+            std::process::id(),
+            "cwd"
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&cwd);
+
+        write_skill(
+            &cwd.join(".opencode").join("skills"),
+            "ship",
+            "ship",
+            "Ship from the repo",
+        );
+        write_skill(
+            &home.join(".config/opencode").join("skills"),
+            "review",
+            "review",
+            "Review from user home",
+        );
+        let commands = cwd.join(".opencode").join("commands");
+        std::fs::create_dir_all(commands.join("team")).unwrap();
+        std::fs::write(commands.join("team").join("sync.md"), "---\ndescription: Sync\n---\n")
+            .unwrap();
+
+        let found = scan_at(&cwd, Some("opencode"), Some(&home));
+        let names: Vec<&str> = found.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"ship"));
+        assert!(names.contains(&"review"));
+        assert!(names.contains(&"team/sync"));
+        assert_eq!(
+            found.iter().find(|c| c.name == "ship").unwrap().source,
+            "project"
+        );
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn grok_and_kilo_read_their_own_trees() {
+        let home = std::env::temp_dir().join(format!(
+            "emberyx-slash-gk-{}-{}",
+            std::process::id(),
+            "home"
+        ));
+        let cwd = std::env::temp_dir().join(format!(
+            "emberyx-slash-gk-{}-{}",
+            std::process::id(),
+            "cwd"
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&cwd);
+
+        write_skill(&cwd.join(".grok").join("skills"), "commit", "commit", "Grok commit");
+        write_skill(&home.join(".kilo").join("skills"), "deploy", "deploy", "Kilo deploy");
+
+        let grok = scan_at(&cwd, Some("grok"), Some(&home));
+        assert!(grok.iter().any(|c| c.name == "commit"));
+        assert!(!grok.iter().any(|c| c.name == "deploy"));
+
+        let kilo = scan_at(&cwd, Some("kilo"), Some(&home));
+        assert!(kilo.iter().any(|c| c.name == "deploy"));
+        assert!(!kilo.iter().any(|c| c.name == "commit"));
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn project_skill_wins_over_the_user_copy() {
+        let home = std::env::temp_dir().join(format!(
+            "emberyx-slash-dedup-{}-{}",
+            std::process::id(),
+            "home"
+        ));
+        let cwd = std::env::temp_dir().join(format!(
+            "emberyx-slash-dedup-{}-{}",
+            std::process::id(),
+            "cwd"
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&cwd);
+
+        write_skill(
+            &cwd.join(".grok").join("skills"),
+            "commit",
+            "commit",
+            "Project",
+        );
+        write_skill(
+            &home.join(".grok").join("skills"),
+            "commit",
+            "commit",
+            "User",
+        );
+
+        let found = scan_at(&cwd, Some("grok"), Some(&home));
+        let commit = found.iter().find(|c| c.name == "commit").unwrap();
+        assert_eq!(commit.source, "project");
+        assert_eq!(commit.description, "Project");
+
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&cwd);
     }
 }
