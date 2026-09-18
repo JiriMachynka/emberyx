@@ -141,12 +141,12 @@ function CommitRow({
   expanded,
   onToggle,
 }: {
-  row: GraphRow;
+  row: GraphRow<GraphCommit>;
   path: string | null;
   expanded: boolean;
   onToggle: () => void;
 }) {
-  const c = row.commit as unknown as GraphCommit;
+  const c = row.commit;
   const badges = refBadges(c.refs);
   const isMerge = c.parents.length > 1;
   return (
@@ -334,7 +334,7 @@ export function GraphPane({ path, active, onBack }: GraphPaneProps) {
   // on each append is pure and cheap even at 50k rows.
   const { rows } = useMemo(() => {
     let state: LayoutState | undefined;
-    const rows: GraphRow[] = [];
+    const rows: GraphRow<GraphCommit>[] = [];
     for (const page of pages) {
       const res = layoutGraph(page, state);
       rows.push(...res.rows);
@@ -378,7 +378,7 @@ export function GraphPane({ path, active, onBack }: GraphPaneProps) {
   const filtered = useMemo(() => {
     if (!query) return null;
     return rows.filter((r) => {
-      const c = r.commit as unknown as GraphCommit;
+      const c = r.commit;
       return (
         c.subject.toLowerCase().includes(query) ||
         c.author.toLowerCase().includes(query) ||
@@ -437,7 +437,7 @@ export function GraphPane({ path, active, onBack }: GraphPaneProps) {
         {filtered ? (
           <div className="pb-2">
             {filtered.map((r) => {
-              const c = r.commit as unknown as GraphCommit;
+              const c = r.commit;
               const isOpen = expanded.has(c.sha);
               return (
                 <div key={c.sha} className="border-b border-border/50">

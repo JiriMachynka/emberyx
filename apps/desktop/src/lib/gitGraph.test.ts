@@ -85,6 +85,28 @@ describe("layoutGraph", () => {
     expect(second.rows).toEqual(whole.rows.slice(2));
   });
 
+  it("passes the full commit through so the renderer keeps subject and refs", () => {
+    const full = [
+      {
+        sha: "M",
+        parents: ["S", "T"],
+        subject: "merge the side branch",
+        refs: ["HEAD -> main", "tag: v1", "origin/main"],
+        author: "Jiri",
+        shortSha: "M",
+        relativeDate: "2 days ago",
+      },
+      { sha: "S", parents: [], subject: "side", refs: [], author: "J", shortSha: "S", relativeDate: "3 days ago" },
+    ];
+    const { rows } = layoutGraph(full);
+    // The layout only reads sha and parents, but the row must keep the whole
+    // commit — CommitRow renders `refs` (refBadges), `subject`, `author`, etc.
+    expect(rows[0].commit).toBe(full[0]);
+    expect(rows[1].commit).toBe(full[1]);
+    expect(rows[0].commit.refs).toEqual(["HEAD -> main", "tag: v1", "origin/main"]);
+    expect(rows[0].commit.subject).toBe("merge the side branch");
+  });
+
   it("hands a root commit a lane it did not expect", () => {
     const { rows } = layoutGraph([c("root")]);
     const root = rows[0];

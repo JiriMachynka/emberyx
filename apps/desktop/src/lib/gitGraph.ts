@@ -26,11 +26,12 @@
  * lines continue seamlessly past the page boundary.
  */
 
-export interface GraphRow {
-  commit: {
-    sha: string;
-    parents: string[];
-  };
+export interface GraphRow<
+  C extends { sha: string; parents: string[] } = { sha: string; parents: string[] },
+> {
+  /** The commit that row renders, passed through whole so callers keep its
+   *  subject, author and refs — the layout only ever reads sha and parents. */
+  commit: C;
   /** Total lane columns this row's graph spans. */
   columns: number;
   /** Column the commit dot sits in. */
@@ -60,12 +61,14 @@ export interface LayoutState {
   lanes: (string | null)[];
 }
 
-export function layoutGraph(
-  commits: { sha: string; parents: string[] }[],
+export function layoutGraph<
+  C extends { sha: string; parents: string[] },
+>(
+  commits: C[],
   prev?: LayoutState
-): { rows: GraphRow[]; state: LayoutState } {
+): { rows: GraphRow<C>[]; state: LayoutState } {
   const lanes: (string | null)[] = prev ? [...prev.lanes] : [];
-  const rows: GraphRow[] = [];
+  const rows: GraphRow<C>[] = [];
 
   for (const commit of commits) {
     const prevLanes = lanes.slice();
@@ -134,7 +137,7 @@ export function layoutGraph(
       }
     }
 
-    rows.push({ commit: { sha: s, parents: commit.parents }, columns, dot, cells, edges });
+    rows.push({ commit, columns, dot, cells, edges });
   }
 
   return { rows, state: { lanes } };
