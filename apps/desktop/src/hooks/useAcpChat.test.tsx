@@ -153,6 +153,101 @@ describe("useAcpChat model switching", () => {
   });
 });
 
+describe("useAcpChat Jev cascade", () => {
+  const OPENCODE_SESSION = {
+    sessionId: "s1",
+    configOptions: [
+      {
+        id: "model",
+        category: "model",
+        currentValue: "opencode/big-pickle",
+        options: [
+          { value: "gitlab/duo-chat-gpt-5-4-nano", name: "GitLab Duo/Nano" },
+          { value: "gitlab/duo-chat-fable-5-1", name: "GitLab Duo/Fable 5.1" },
+          {
+            value: "opencode-go/deepseek-v4-flash",
+            name: "OpenCode Go/DeepSeek V4 Flash",
+          },
+          { value: "opencode-go/qwen3.7-max", name: "OpenCode Go/Qwen3.7 Max" },
+        ],
+      },
+    ],
+  };
+
+  const jevPrep = () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "acp_spawn") {
+        return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
+      }
+      if (command === "acp_session_new") return Promise.resolve(OPENCODE_SESSION);
+      if (command === "skills_list") return Promise.resolve([]);
+      if (command === "typesafe_turn_prep") {
+        return Promise.resolve({ skill: null, depth: 2, injection: false });
+      }
+      return Promise.resolve(null);
+    });
+  };
+
+  it("keeps a model the user pinned, even when Jev wants a larger one", async () => {
+    jevPrep();
+    const view = await mount({
+      provider: "opencode",
+      model: "opencode-go/deepseek-v4-flash",
+    });
+    await waitFor(() =>
+      expect(view.result.current.usage.model).toBe("opencode-go/deepseek-v4-flash")
+    );
+    await act(async () => view.result.current.send("fix the failing test"));
+    await waitFor(() =>
+      expect(invoke.mock.calls.some(([name]) => name === "acp_prompt")).toBe(true)
+    );
+
+    const switched = setModelCalls().map(
+      ([, args]) => (args as { params: { modelId: string } }).params.modelId
+    );
+    expect(switched).toEqual(["opencode-go/deepseek-v4-flash"]);
+  });
+
+  it("still upshifts the agent's own default, without leaving the vendor", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "acp_spawn") {
+        return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
+      }
+      if (command === "acp_session_new") {
+        return Promise.resolve({
+          ...OPENCODE_SESSION,
+          configOptions: [
+            {
+              ...OPENCODE_SESSION.configOptions[0],
+              currentValue: "opencode-go/deepseek-v4-flash",
+            },
+          ],
+        });
+      }
+      if (command === "skills_list") return Promise.resolve([]);
+      if (command === "typesafe_turn_prep") {
+        return Promise.resolve({ skill: null, depth: 2, injection: false });
+      }
+      return Promise.resolve(null);
+    });
+
+    const view = await mount({ provider: "opencode", model: "" });
+    await waitFor(() =>
+      expect(view.result.current.usage.model).toBe("opencode-go/deepseek-v4-flash")
+    );
+    await act(async () => view.result.current.send("fix the failing test"));
+    await waitFor(() =>
+      expect(invoke.mock.calls.some(([name]) => name === "acp_prompt")).toBe(true)
+    );
+
+    const switched = setModelCalls().map(
+      ([, args]) => (args as { params: { modelId: string } }).params.modelId
+    );
+    expect(switched).toEqual(["opencode-go/qwen3.7-max"]);
+    expect(switched.some((id) => id.startsWith("gitlab/"))).toBe(false);
+  });
+});
+
 describe("useAcpChat thread registration", () => {
   it("publishes the session id the provider issued", async () => {
     const view = await mount();

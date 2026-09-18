@@ -20,6 +20,29 @@ describe("largerModel", () => {
   it("does nothing when the catalog has only small ids", () => {
     expect(largerModel("haiku", [{ value: "haiku" }, { value: "flash" }])).toBeNull();
   });
+
+  it("does not jump from OpenCode Go flash to GitLab Duo", () => {
+    const mixed = [
+      { value: "gitlab/duo-chat-gpt-5-4-nano" },
+      { value: "gitlab/duo-chat-fable-5-1" },
+      { value: "opencode-go/deepseek-v4-flash" },
+      { value: "opencode-go/qwen3.7-max" },
+      { value: "opencode/big-pickle" },
+    ];
+    expect(largerModel("opencode-go/deepseek-v4-flash", mixed)).toBe(
+      "opencode-go/qwen3.7-max"
+    );
+  });
+
+  it("stays on a flash model when that vendor has no larger sibling", () => {
+    expect(
+      largerModel("opencode-go/deepseek-v4-flash", [
+        { value: "gitlab/duo-chat-fable-5-1" },
+        { value: "opencode-go/deepseek-v4-flash" },
+        { value: "opencode-go/glm-5.3-flash" },
+      ])
+    ).toBeNull();
+  });
 });
 
 describe("skillWireText", () => {

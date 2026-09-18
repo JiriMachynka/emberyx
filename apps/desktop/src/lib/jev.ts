@@ -8,6 +8,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { checkpointTurnPatch } from "@/lib/checkpoints";
+import { modelVendorKey } from "@/lib/modelCatalog";
 import { loadSettings } from "@/lib/settings";
 
 export const jevEnabled = (): boolean => loadSettings().jevAutoApprove;
@@ -28,13 +29,22 @@ const SMALL = /haiku|fast|flash|mini|lite|small|nano/i;
 
 export const isSmallModel = (id: string): boolean => SMALL.test(id);
 
-/** First catalog entry that is not a small/fast id, other than `current`. */
+/** First same-vendor catalog entry that is not a small/fast id.
+ *
+ *  OpenCode's ACP catalog is every provider you hold a credential for, so the
+ *  first non-small id is often a GitLab Duo model sitting in front of the
+ *  OpenCode Go flash the user actually picked. A bump that changes vendor is
+ *  not an upshift — it is a different product. */
 export const largerModel = (
   current: string,
   catalog: readonly { value: string }[]
 ): string | null => {
   if (!current || !isSmallModel(current)) return null;
-  const next = catalog.find((entry) => entry.value !== current && !isSmallModel(entry.value));
+  const vendor = modelVendorKey(current);
+  const next = catalog.find((entry) => {
+    if (entry.value === current || isSmallModel(entry.value)) return false;
+    return modelVendorKey(entry.value) === vendor;
+  });
   return next?.value ?? null;
 };
 

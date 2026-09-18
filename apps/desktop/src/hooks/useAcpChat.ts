@@ -934,8 +934,11 @@ export function useAcpChat({
           if (prep) {
             wire = skillWireText(text, prep.skill);
             if (prep.injection) notes = notes.map(() => "");
+            // A pick in the chip is a pin. Cascade only when the agent is
+            // still on its own default (`model` === ""), so a DeepSeek Flash
+            // the user chose is not swapped for a "larger" sibling.
             const bump =
-              prep.depth != null && prep.depth >= 1.5
+              !model && prep.depth != null && prep.depth >= 1.5
                 ? largerModel(modelRef.current, usageRef.current.models ?? [])
                 : null;
             if (bump) {
@@ -950,7 +953,7 @@ export function useAcpChat({
       }
       await acpPrompt(id, sessionId, wire, images, notes);
     },
-    [provider]
+    [provider, model]
   );
 
   const send = useCallback(
