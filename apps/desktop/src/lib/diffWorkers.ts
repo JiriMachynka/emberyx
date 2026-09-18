@@ -15,24 +15,7 @@
 import DiffWorkerUrl from "@pierre/diffs/worker/worker.js?worker&url";
 import type { SupportedLanguages } from "@pierre/diffs";
 import { DIFF_THEME } from "@/lib/diffView";
-
-/** Languages the workers preload. Anything else resolves on demand — this is
- *  the set a diff in this repo actually hits most turns. */
-const DIFF_LANGUAGES: SupportedLanguages[] = [
-  "text",
-  "typescript",
-  "tsx",
-  "javascript",
-  "jsx",
-  "json",
-  "rust",
-  "toml",
-  "yaml",
-  "css",
-  "html",
-  "markdown",
-  "shell",
-];
+import { PRELOAD_LANGUAGES } from "@/lib/pierreShiki";
 
 let failed = false;
 const listeners = new Set<() => void>();
@@ -67,7 +50,7 @@ export const diffPoolOptions = {
 };
 
 export const diffHighlighterOptions = {
-  langs: DIFF_LANGUAGES,
+  langs: [...PRELOAD_LANGUAGES] as SupportedLanguages[],
   lineDiffType: "word-alt" as const,
   theme: DIFF_THEME,
 };

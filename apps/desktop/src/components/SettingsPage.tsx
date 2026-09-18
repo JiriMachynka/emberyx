@@ -20,6 +20,7 @@ import { GeneralSection } from "@/components/settings/GeneralSection";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
 import { ShortcutsSection } from "@/components/settings/ShortcutsSection";
 import { ProvidersSection } from "@/components/settings/ProvidersSection";
+import { JevSection } from "@/components/settings/JevSection";
 import { ConnectionsSection } from "@/components/settings/ConnectionsSection";
 import { SnapshotsSection } from "@/components/settings/SnapshotsSection";
 import { SourceControlSection } from "@/components/settings/SourceControlSection";
@@ -283,6 +284,10 @@ export const SettingsPage = memo(function SettingsPage({
                 customDraft={customDraft}
                 setCustomDraft={setCustomDraft}
               />
+            )}
+
+            {tab === "jev" && (
+              <JevSection settings={settings} onUpdate={onUpdate} />
             )}
 
             {tab === "mcp" && <McpSection />}

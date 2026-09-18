@@ -108,6 +108,8 @@ interface ChatPaneProps {
   onEffortChange: (effort: string) => void;
   /** Persist a new default when the user switches this pane's access level. */
   onAccessChange: (level: AccessLevel) => void;
+  jevAutoApprove: boolean;
+  onJevAutoApproveChange: (v: boolean) => void;
   /** Per-backend launch overrides; the active backend's is resolved here. */
   providerLaunch: Settings["providerLaunch"];
   /** Extra named Claude setups, shown in the composer when any exist. */
@@ -152,6 +154,8 @@ export const ChatPane = memo(function ChatPane({
   effort,
   onEffortChange,
   onAccessChange,
+  jevAutoApprove,
+  onJevAutoApproveChange,
   providerLaunch,
   claudeProfiles,
   codexSandbox,
@@ -1037,6 +1041,8 @@ export const ChatPane = memo(function ChatPane({
                   onEffortChange={changeEffort}
                   access={access}
                   onAccessChange={changeAccess}
+                  jevAutoApprove={jevAutoApprove}
+                  onJevAutoApproveChange={onJevAutoApproveChange}
                   onSwitchBackend={switchBackend}
                   claudeProfiles={claudeProfiles}
                   claudeProfileId={claudeProfileId}

@@ -38,13 +38,18 @@ import {
   emptyTurn,
   endTurn,
   grokTurnStop,
+  jevAllowOnce,
   permissionOutcome,
   readPermission,
   type AcpPermission,
   type AcpTurn,
 } from "@/lib/acp/adapter";
 import type { AcpSessionUpdate } from "@/lib/acp/protocol";
-import { accessLevelFrom, type PermissionMode } from "@/lib/settings";
+import {
+  accessLevelFrom,
+  loadSettings,
+  type PermissionMode,
+} from "@/lib/settings";
 import {
   acpCancel,
   acpDetach,
@@ -61,6 +66,17 @@ import {
   type AcpServerRequest,
 } from "@/lib/acp/transport";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
+import {
+  jevEnabled,
+  largerModel,
+  scoreDiffRisk,
+  skillWireText,
+  withJevReview,
+  type JevSkill,
+  type JevTurnPrep,
+} from "@/lib/jev";
+import { readersOf, type SkillInfo } from "@/lib/skills";
+import type { McpHarness } from "@/lib/mcp";
 import { snapshotTextBlock } from "@/lib/snapshotA11y";
 import { fetchThreadPage, type ProjectedMessageRow } from "@/lib/threadPage";
 import { threadTitleFrom } from "@/lib/threadTitle";
@@ -195,6 +211,8 @@ export function useAcpChat({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
+  const usageRef = useRef(usage);
+  usageRef.current = usage;
   const [ready, setReady] = useState(false);
   // Stay asleep until the user types or sends, so switching onto a fresh ACP
   // chat does not wait on spawn to paint the empty screen — unless the agent
@@ -272,6 +290,9 @@ export function useAcpChat({
   // Tool calls this client approved on the user's behalf, so the row can say so
   // rather than looking like the agent was never gated at all.
   const autoApprovedRef = useRef(new Set<string>());
+  /** Bumped when queued permissions are dropped (stop, restart, process
+   *  death) so an in-flight Jev call cannot answer a request that is gone. */
+  const permissionGenRef = useRef(0);
   /** The last session id this provider handed us, which is the only id it can
    *  be asked to load back. Survives a restart of the child within this pane;
    *  nothing outside it stores an ACP session id. */
@@ -384,6 +405,7 @@ export function useAcpChat({
    */
   const clearPermissions = useCallback(
     (answer: boolean) => {
+      permissionGenRef.current += 1;
       const id = processRef.current;
       const queued = permissionQueueRef.current;
       permissionQueueRef.current = [];
@@ -475,9 +497,16 @@ export function useAcpChat({
       // Freeze this turn's file delta at its settle, so edits made between
       // turns land in no turn's card. Best-effort.
       const settledId = lastCheckpointIdRef.current;
-      if (settledId) void settleTurnCheckpoint(cwd, settledId);
+      if (settledId) {
+        void (async () => {
+          await settleTurnCheckpoint(cwd, settledId);
+          if (!(await scoreDiffRisk(cwd, emberyxSessionId, settledId))) return;
+          committedRef.current = withJevReview(committedRef.current, settledId);
+          publish();
+        })();
+      }
     },
-    [publish, cwd, recordTimeline, resume]
+    [publish, cwd, recordTimeline, resume, emberyxSessionId]
   );
 
   /**
@@ -502,6 +531,36 @@ export function useAcpChat({
           if (permission.toolCallId) autoApprovedRef.current.add(permission.toolCallId);
           await acpRespond(id, request.id, permissionOutcome(auto));
           return;
+        }
+        const once = jevAllowOnce(permission);
+        if (once && loadSettings().jevAutoApprove) {
+          const gen = permissionGenRef.current;
+          let judged: string | null = null;
+          try {
+            judged = await invoke<string | null>("typesafe_judge", {
+              title: permission.title,
+              description: permission.description ?? null,
+              toolKind: permission.toolKind ?? null,
+              allowOnceId: once,
+            });
+          } catch {
+            // Fail open to the prompt — a down TypeSafe must not stall the turn.
+          }
+          if (permissionGenRef.current !== gen) {
+            // Stop/restart dropped this request while Jev was in flight.
+            // An agent blocked in its permission handler never reads cancel,
+            // so answer it rather than leave it on the wire.
+            if (processRef.current === id) {
+              await acpRespond(id, request.id, permissionOutcome(null));
+            }
+            return;
+          }
+          if (processRef.current !== id) return;
+          if (judged) {
+            if (permission.toolCallId) autoApprovedRef.current.add(permission.toolCallId);
+            await acpRespond(id, request.id, permissionOutcome(judged));
+            return;
+          }
         }
         permissionQueueRef.current = [...permissionQueueRef.current, permission];
         showHeadPermission();
@@ -807,6 +866,57 @@ export function useAcpChat({
       .catch((e) => setModelError(`${provider} refused ${model}: ${String(e)}`));
   }, [enabled, ready, model, provider]);
 
+  const promptTurn = useCallback(
+    async (
+      id: number,
+      sessionId: string,
+      text: string,
+      images?: ChatImage[]
+    ) => {
+      let wire = text;
+      let notes = (images ?? []).map((img) =>
+        img.snapshot ? snapshotTextBlock(img.snapshot) : ""
+      );
+      if (jevEnabled()) {
+        try {
+          const harness: McpHarness | null =
+            provider === "grok" || provider === "opencode" ? provider : null;
+          const listed = harness
+            ? ((await invoke<SkillInfo[]>("skills_list")) ?? [])
+            : [];
+          const skills: JevSkill[] = listed
+            .filter((skill) => harness && readersOf(skill).includes(harness))
+            .map((skill) => ({
+              name: skill.name,
+              description: skill.description,
+            }));
+          const prep = await invoke<JevTurnPrep | null>("typesafe_turn_prep", {
+            prompt: text,
+            skills,
+            snapshot: notes.filter(Boolean).join("\n") || null,
+          });
+          if (prep) {
+            wire = skillWireText(text, prep.skill);
+            if (prep.injection) notes = notes.map(() => "");
+            const bump =
+              prep.depth != null && prep.depth >= 1.5
+                ? largerModel(modelRef.current, usageRef.current.models ?? [])
+                : null;
+            if (bump) {
+              await acpSetModel(id, sessionId, bump);
+              modelRef.current = bump;
+              setUsage((u) => ({ ...u, model: bump }));
+            }
+          }
+        } catch {
+          // Fail-open: send the user's text as typed.
+        }
+      }
+      await acpPrompt(id, sessionId, wire, images, notes);
+    },
+    [provider]
+  );
+
   const send = useCallback(
     (text: string, images?: ChatImage[]) => {
       const id = processRef.current;
@@ -854,17 +964,9 @@ export function useAcpChat({
         committedRef.current = attachCheckpoint(committedRef.current, point.id);
         publish();
       });
-      void acpPrompt(
-        id,
-        sessionId,
-        text,
-        images,
-        (images ?? []).map((img) =>
-          img.snapshot ? snapshotTextBlock(img.snapshot) : ""
-        )
-      );
+      void promptTurn(id, sessionId, text, images);
     },
-    [cwd, emberyxSessionId, publish, adoptThread, recordTimeline, resume, wake]
+    [cwd, emberyxSessionId, publish, adoptThread, recordTimeline, resume, wake, promptTurn]
   );
 
   // The turn that woke the pane goes on the wire as soon as the spawn lands.
@@ -892,16 +994,8 @@ export function useAcpChat({
       committedRef.current = attachCheckpoint(committedRef.current, point.id);
       publish();
     });
-    void acpPrompt(
-      id,
-      sessionId,
-      held.text,
-      held.images,
-      (held.images ?? []).map((img) =>
-        img.snapshot ? snapshotTextBlock(img.snapshot) : ""
-      )
-    );
-  }, [ready, cwd, emberyxSessionId, publish, adoptThread, recordTimeline, resume]);
+    void promptTurn(id, sessionId, held.text, held.images);
+  }, [ready, cwd, emberyxSessionId, publish, adoptThread, recordTimeline, resume, promptTurn]);
 
   // Name a fresh chat once its first turn settles. No ACP agent announces a
   // title, so the name is derived here rather than awaited — without it the

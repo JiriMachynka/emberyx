@@ -22,6 +22,7 @@ interface SessionPanesProps {
   /** Persist a new default reasoning effort when a chat pane switches it. */
   onEffortChange: (effort: string) => void;
   onAccessChange: (level: AccessLevel) => void;
+  onJevAutoApproveChange: (v: boolean) => void;
   projects: Project[];
   recentProjects: string[];
   onSelectProject: (projectId: string) => void;
@@ -49,6 +50,7 @@ export function SessionPanes({
   onBackendChange,
   onEffortChange,
   onAccessChange,
+  onJevAutoApproveChange,
   projects,
   recentProjects,
   onSelectProject,
@@ -90,6 +92,7 @@ export function SessionPanes({
              onBackendChange={onBackendChange}
              onEffortChange={onEffortChange}
             onAccessChange={onAccessChange}
+            onJevAutoApproveChange={onJevAutoApproveChange}
             projects={projects}
             recentProjects={recentProjects}
             onSelectProject={onSelectProject}
@@ -114,6 +117,7 @@ function SessionPaneRow({
   onBackendChange,
   onEffortChange,
   onAccessChange,
+  onJevAutoApproveChange,
   projects,
   recentProjects,
   onSelectProject,
@@ -129,6 +133,7 @@ function SessionPaneRow({
   onBackendChange: (backend: AgentBackend) => void;
   onEffortChange: (effort: string) => void;
   onAccessChange: (level: AccessLevel) => void;
+  onJevAutoApproveChange: (v: boolean) => void;
   projects: Project[];
   recentProjects: string[];
   onSelectProject: (projectId: string) => void;
@@ -176,6 +181,8 @@ function SessionPaneRow({
            effort={settings.effort}
           onEffortChange={onEffortChange}
           onAccessChange={onAccessChange}
+          jevAutoApprove={settings.jevAutoApprove}
+          onJevAutoApproveChange={onJevAutoApproveChange}
           providerLaunch={settings.providerLaunch}
           claudeProfiles={settings.claudeProfiles}
           codexSandbox={settings.codexSandbox}

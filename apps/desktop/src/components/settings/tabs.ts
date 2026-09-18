@@ -8,6 +8,7 @@ import {
   Palette,
   Plug,
   Puzzle,
+  Scale,
   SlidersHorizontal,
   Sparkles,
 } from "lucide-react";
@@ -21,6 +22,7 @@ export type Tab =
   | "appearance"
   | "shortcuts"
   | "providers"
+  | "jev"
   | "mcp"
   | "skills"
   | "connections"
@@ -82,8 +84,21 @@ export const TABS: TabMeta[] = [
     id: "providers",
     label: "Providers",
     icon: Boxes,
-    keys: ["agentBackend", "agentCommand", "providerLaunch", "claudeProfiles", "codexSandbox"],
+    keys: [
+      "agentBackend",
+      "agentCommand",
+      "providerLaunch",
+      "claudeProfiles",
+      "codexSandbox",
+    ],
     finds: "claude codex backend cli command installed version sandbox launch binary args model list hidden custom config dir env profile",
+  },
+  {
+    id: "jev",
+    label: "Jev",
+    icon: Scale,
+    keys: ["jevAutoApprove"],
+    finds: "jev typesafe type safe auto-approve permission judge skill diff screen cascade",
   },
   {
     id: "mcp",

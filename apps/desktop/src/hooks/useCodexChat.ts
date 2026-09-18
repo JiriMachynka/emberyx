@@ -51,6 +51,7 @@ import {
 } from "@/lib/codex/transport";
 import { classifyFailure } from "@/lib/accountState";
 import { useAgentStore } from "@/lib/agentStore";
+import { scoreDiffRisk, withJevReview } from "@/lib/jev";
 import { settleTurnCheckpoint } from "@/lib/queries";
 import { registerAgent, setAgentLifecycle } from "@/lib/agentRegistry";
 import { nextChangeId } from "@/lib/changes";
@@ -395,7 +396,18 @@ export function useCodexChat({
         // Freeze this turn's file delta at its settle, so edits made between
         // turns land in no turn's card. Best-effort.
         const settledId = lastCheckpointIdRef.current;
-        if (settledId) void settleTurnCheckpoint(cwd, settledId);
+        if (settledId) {
+          void (async () => {
+            await settleTurnCheckpoint(cwd, settledId);
+            if (!(await scoreDiffRisk(cwd, emberyxSessionId, settledId))) return;
+            const cur = stateRef.current;
+            stateRef.current = {
+              ...cur,
+              messages: withJevReview(cur.messages, settledId),
+            };
+            publish();
+          })();
+        }
       }
       for (const c of changes) {
         addChange({
@@ -411,7 +423,7 @@ export function useCodexChat({
       for (const event of subagents) applySubagent(event);
       if (sessionStatus) setSessionStatus(emberyxSessionId, sessionStatus);
     },
-    [addChange, applySubagent, emberyxSessionId, setSessionStatus, cwd]
+    [addChange, applySubagent, emberyxSessionId, setSessionStatus, cwd, publish]
   );
 
   const handleRequest = useCallback(

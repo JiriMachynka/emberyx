@@ -49,6 +49,7 @@ const setModelCalls = () =>
 
 beforeEach(() => {
   channels.length = 0;
+  localStorage.clear();
   invoke.mockReset();
   invoke.mockImplementation((command: string) => {
     if (command === "acp_spawn") {
@@ -419,6 +420,133 @@ describe("useAcpChat permission requests", () => {
     expect(answered().map((a) => a.requestId)).toEqual([3, 4]);
     expect(answered()[0].result).toEqual({ outcome: { outcome: "cancelled" } });
     expect(view.result.current.pendingPermission).toBeNull();
+  });
+
+  const judgeCalls = () =>
+    invoke.mock.calls.filter(([name]) => name === "typesafe_judge");
+
+  it("auto-answers when Jev returns allow_once", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "acp_spawn") {
+        return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
+      }
+      if (command === "acp_session_new") return Promise.resolve(SESSION);
+      if (command === "typesafe_judge") return Promise.resolve("yes");
+      return Promise.resolve(null);
+    });
+    const view = await mount();
+    await act(async () => ask(3, "Run tests"));
+    await waitFor(() => expect(answered()).toHaveLength(1));
+    expect(answered()[0]).toMatchObject({
+      requestId: 3,
+      result: { outcome: { outcome: "selected", optionId: "yes" } },
+    });
+    expect(view.result.current.pendingPermission).toBeNull();
+  });
+
+  it("still prompts when Jev declines", async () => {
+    const view = await mount();
+    await act(async () => ask(3, "Run tests"));
+    await waitFor(() =>
+      expect(view.result.current.pendingPermission?.toolName).toBe("Run tests")
+    );
+    expect(answered()).toEqual([]);
+  });
+
+  it("still prompts when Jev throws", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "acp_spawn") {
+        return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
+      }
+      if (command === "acp_session_new") return Promise.resolve(SESSION);
+      if (command === "typesafe_judge") return Promise.reject(new Error("down"));
+      return Promise.resolve(null);
+    });
+    const view = await mount();
+    await act(async () => ask(3, "Run tests"));
+    await waitFor(() =>
+      expect(view.result.current.pendingPermission?.toolName).toBe("Run tests")
+    );
+    expect(answered()).toEqual([]);
+  });
+
+  it("does not call Jev for a delete", async () => {
+    const view = await mount();
+    await act(async () => {
+      channels[0]?.onmessage?.({
+        type: "request",
+        data: {
+          id: 3,
+          method: "session/request_permission",
+          params: {
+            toolCall: { toolCallId: "t3", title: "Delete file", kind: "delete" },
+            options: OPTIONS,
+          },
+        },
+      });
+    });
+    await waitFor(() =>
+      expect(view.result.current.pendingPermission?.toolName).toBe("Delete file")
+    );
+    expect(judgeCalls()).toHaveLength(0);
+  });
+
+  it("does not call Jev when the access level already answered", async () => {
+    const view = await mount({ skipPermissions: true });
+    await act(async () => ask(3, "Run tests"));
+    await waitFor(() => expect(answered()).toHaveLength(1));
+    expect(judgeCalls()).toHaveLength(0);
+    expect(view.result.current.pendingPermission).toBeNull();
+  });
+
+  it("prefixes a skill hint on send when Jev names one", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "acp_spawn") {
+        return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
+      }
+      if (command === "acp_session_new") return Promise.resolve(SESSION);
+      if (command === "skills_list") {
+        return Promise.resolve([
+          {
+            name: "fe-design",
+            description: "Lock a token brief",
+            differs: false,
+            sources: [{ skillDir: "/s", harnesses: ["grok"] }],
+          },
+        ]);
+      }
+      if (command === "typesafe_turn_prep") {
+        return Promise.resolve({ skill: "fe-design", depth: 0.2, injection: false });
+      }
+      return Promise.resolve(null);
+    });
+    const view = await mount();
+    await act(async () => view.result.current.send("make it look better"));
+    await waitFor(() =>
+      expect(
+        invoke.mock.calls.some(
+          ([name, args]) =>
+            name === "acp_prompt" &&
+            typeof (args as { text?: string }).text === "string" &&
+            (args as { text: string }).text.includes("fe-design")
+        )
+      ).toBe(true)
+    );
+    expect(view.result.current.messages[0]?.text).toBe("make it look better");
+  });
+
+  it("skips Jev when auto-approve is off", async () => {
+    localStorage.setItem(
+      "emberyx.settings",
+      JSON.stringify({ jevAutoApprove: false })
+    );
+    const view = await mount();
+    await act(async () => ask(3, "Run tests"));
+    await waitFor(() =>
+      expect(view.result.current.pendingPermission?.toolName).toBe("Run tests")
+    );
+    expect(judgeCalls()).toHaveLength(0);
+    localStorage.clear();
   });
 
   it("goes idle as soon as stop is clicked, not when the agent replies", async () => {

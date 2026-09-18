@@ -122,7 +122,7 @@ export const ActivityRow = memo(function ActivityRow({
         {activity.autoApproved && (
           <span
             className="shrink-0 text-muted-foreground/70"
-            title="Approved by Emberyx because this session runs at full access"
+            title="Approved without a prompt"
           >
             auto-approved
           </span>

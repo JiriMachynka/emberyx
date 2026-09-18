@@ -246,6 +246,10 @@ function App() {
     (level: AccessLevel) => modelChangeRef.current(accessLevelToSettings(level)),
     []
   );
+  const onJevAutoApproveChange = useCallback(
+    (jevAutoApprove: boolean) => modelChangeRef.current({ jevAutoApprove }),
+    []
+  );
   const titledRef = useRef<(session: Session, title: string) => void>(() => {});
   titledRef.current = (session, title) => {
     ws.renameSession(session.id, title);
@@ -698,6 +702,7 @@ function App() {
                onBackendChange={onBackendChange}
               onEffortChange={onEffortChange}
              onAccessChange={onAccessChange}
+             onJevAutoApproveChange={onJevAutoApproveChange}
              projects={projects}
              recentProjects={recents}
              onSelectProject={ws.newAgentIn}

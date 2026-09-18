@@ -128,6 +128,7 @@ export const TurnRow = memo(
             threadId={chat.sessionId}
             fromId={user.checkpointId}
             openEnded={newest}
+            review={user.jevReview}
           />
         )}
       </>

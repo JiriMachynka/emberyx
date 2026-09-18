@@ -210,6 +210,10 @@ describe("access level", () => {
     expect(accessLevelFrom("bypassPermissions", false)).toBe("full");
   });
 
+  it("defaults TypeSafe auto-approve on", () => {
+    expect(loadSettings().jevAutoApprove).toBe(true);
+  });
+
   it("shows the shipped default as full access", () => {
     // The app ships with the skip flag on, so the composer must open on "Full
     // access" — the chip is the only place this is visible now, and a chip that

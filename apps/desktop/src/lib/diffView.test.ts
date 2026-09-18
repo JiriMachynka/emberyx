@@ -6,8 +6,9 @@ describe("DIFF_THEME", () => {
     // Pierre paints with light-dark(--token-light, --token-dark). A single
     // "vesper" string only populated the dark slot, so a light OS appearance
     // left every token the same inherited color.
-    expect(DIFF_THEME.dark).toBe("vesper");
-    expect(DIFF_THEME.light).toBe("vesper");
+    expect(DIFF_THEME.dark).toBe("vesper-dark");
+    expect(DIFF_THEME.light).toBe("vesper-light");
+    expect(DIFF_THEME.dark).not.toBe(DIFF_THEME.light);
   });
 });
 
@@ -15,6 +16,9 @@ describe("themeForSurface", () => {
   it("lifts the dim greys and hands the background to the box", async () => {
     const { default: theme } = await import("@shikijs/themes/vesper");
     const patched = themeForSurface(theme);
+    expect(patched.name).toBe("vesper");
+    const renamed = themeForSurface(theme, "vesper-dark");
+    expect(renamed.name).toBe("vesper-dark");
     expect(patched.colors?.["editor.background"]).toBe("transparent");
     const greys = new Map(
       patched.tokenColors?.map((rule) => [

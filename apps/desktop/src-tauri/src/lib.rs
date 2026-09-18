@@ -40,6 +40,7 @@ pub mod supervisor;
 mod t3_import;
 mod threads;
 pub mod time;
+mod typesafe;
 mod usage;
 mod workspace;
 
@@ -222,6 +223,7 @@ pub fn run() {
             git::cmd::git_commit_diff,
             git::cmd::git_pickaxe,
             git::cmd::git_branch,
+            git::cmd::git_head_ref,
             git::cmd::git_branches,
             git::cmd::git_merged_branches,
             git::cmd::git_default_branch,
@@ -301,6 +303,13 @@ pub fn run() {
             snapshots::snapshots_request_permission,
             snapshots::snapshots_set_enabled,
             snapshots::snapshots_capture,
+            typesafe::cmd::typesafe_key_set,
+            typesafe::cmd::typesafe_key_clear,
+            typesafe::cmd::typesafe_key_present,
+            typesafe::cmd::typesafe_judge,
+            typesafe::cmd::typesafe_turn_prep,
+            typesafe::cmd::typesafe_diff_risk,
+            typesafe::cmd::typesafe_screen,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

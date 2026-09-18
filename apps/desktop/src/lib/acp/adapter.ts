@@ -364,6 +364,13 @@ export const autoPermission = (
   return pick?.optionId ?? null;
 };
 
+/** The only option Jev is allowed to pick: allow once, never always, and
+ *  never a delete. `null` means the prompt stays. */
+export const jevAllowOnce = (permission: AcpPermission): string | null => {
+  if (permission.toolKind === "delete") return null;
+  return permission.options.find((o) => o.kind === "allow_once")?.optionId ?? null;
+};
+
 /** The reply body for a chosen option, or for backing out. */
 export const permissionOutcome = (optionId: string | null) =>
   optionId === null

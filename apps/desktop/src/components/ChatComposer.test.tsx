@@ -205,6 +205,38 @@ describe("ChatComposer", () => {
     );
   });
 
+  it("lets OpenCode and Grok turn Jev auto-approve off from the access chip", async () => {
+    const onJevAutoApproveChange = vi.fn();
+    await mount({
+      ...propsFor("grok"),
+      jevAutoApprove: true,
+      onJevAutoApproveChange,
+    });
+    const trigger = screen
+      .getAllByRole("button")
+      .find((b) => (b.textContent ?? "").includes("Full access"));
+    expect(trigger).toBeTruthy();
+    fireEvent.pointerDown(trigger!, { button: 0 });
+    fireEvent.pointerUp(trigger!, { button: 0 });
+    fireEvent.click(screen.getByRole("menuitem", { name: /Jev judgments/ }));
+    expect(onJevAutoApproveChange).toHaveBeenCalledWith(false);
+  });
+
+  it("does not offer Jev auto-approve on Claude", async () => {
+    await mount({
+      ...propsFor("claude"),
+      onJevAutoApproveChange: vi.fn(),
+    });
+    const trigger = screen
+      .getAllByRole("button")
+      .find((b) => (b.textContent ?? "").includes("Full access"));
+    fireEvent.pointerDown(trigger!, { button: 0 });
+    fireEvent.pointerUp(trigger!, { button: 0 });
+    expect(
+      screen.queryByRole("menuitem", { name: /Jev judgments/ })
+    ).toBeNull();
+  });
+
   it("the profile chip needs profiles to pick between", async () => {
     await mount({ ...propsFor("claude"), claudeProfiles: [] });
     expect(menuChips().some((c) => c.includes("Work Account"))).toBe(false);

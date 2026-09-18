@@ -146,6 +146,10 @@ export const bundledLanguages: Record<string, LanguageLoader> = {
   ),
 };
 
+/** Every grammar (and alias) the workers must preload. Pierre cannot resolve
+ *  a language inside a worker, so a name missing here paints as plain text. */
+export const PRELOAD_LANGUAGES = ["text", ...Object.keys(bundledLanguages)] as const;
+
 /** pierre never asks for a bundled theme — it registers Vesper itself, through
  *  `registerCustomTheme` in lib/diffView.ts. */
 export const bundledThemes = {};

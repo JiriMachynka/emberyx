@@ -99,6 +99,8 @@ interface ChatComposerProps {
   /** Full access = `--dangerously-skip-permissions`; off = Supervised. */
   access: AccessLevel;
   onAccessChange: (v: AccessLevel) => void;
+  jevAutoApprove?: boolean;
+  onJevAutoApproveChange?: (v: boolean) => void;
   /** Move the thread to another provider in place. */
   onSwitchBackend: (backend: AgentBackend) => void;
   /** Extra named Claude setups. Empty = the default Claude only. */
@@ -153,6 +155,8 @@ export const ChatComposer = memo(function ChatComposer({
   onEffortChange,
   access,
   onAccessChange,
+  jevAutoApprove,
+  onJevAutoApproveChange,
   onSwitchBackend,
   claudeProfiles = [],
   claudeProfileId = null,
@@ -684,6 +688,8 @@ export const ChatComposer = memo(function ChatComposer({
             onEffortChange={onEffortChange}
             access={access}
             onAccessChange={onAccessChange}
+            jevAutoApprove={jevAutoApprove}
+            onJevAutoApproveChange={onJevAutoApproveChange}
             onSwitchBackend={onSwitchBackend}
             claudeProfiles={claudeProfiles}
             claudeProfileId={claudeProfileId}

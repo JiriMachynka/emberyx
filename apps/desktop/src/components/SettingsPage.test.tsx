@@ -23,6 +23,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "mcp_list" || cmd === "skills_list") return Promise.resolve([]);
     // The T3 import row hides itself unless a store exists.
     if (cmd === "t3_import_available") return Promise.resolve(false);
+    if (cmd === "typesafe_key_present") return Promise.resolve(false);
     return Promise.resolve(null);
   },
 }));
@@ -95,6 +96,7 @@ const LANDMARK: Record<string, string> = {
   appearance: "Chat font",
   shortcuts: "Reset all shortcuts",
   providers: "Default backend",
+  jev: "Jev judgments",
   mcp: "Servers",
   skills: "Skills",
   connections: "Keep agents running in the background",
@@ -173,6 +175,7 @@ describe("SettingsPage", () => {
       ["daemon", "Connections"],
       ["scrollback", "Appearance"],
       ["sandbox", "Providers"],
+      ["typesafe", "Jev"],
       ["rebind", "Keyboard Shortcuts"],
       ["sound", "Notifications"],
       ["settle", "General"],
@@ -265,6 +268,15 @@ describe("SettingsPage", () => {
       await openTab(host, "Providers");
       fireEvent.change(controlFor("Agent command", "input"), { target: { value: "codex" } });
       expect(patches).toEqual([{ agentCommand: "codex" }]);
+    });
+
+    it("Jev: the judgments switch is there even with no key saved", async () => {
+      const { host, patches } = await mount();
+      await openTab(host, "Jev");
+      fireEvent.click(
+        screen.getByRole("switch", { name: /Jev judgments/ })
+      );
+      expect(patches).toEqual([{ jevAutoApprove: false }]);
     });
 
     it("Connections: the persistent-agents switch", async () => {

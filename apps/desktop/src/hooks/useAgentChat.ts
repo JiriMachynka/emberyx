@@ -5,6 +5,7 @@ import { useAgentStore, type SubagentActivity } from "@/lib/agentStore";
 import { registerAgent, setAgentLifecycle } from "@/lib/agentRegistry";
 import { askQuestions, fetchPendingAsk } from "@/lib/approvals";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
+import { scoreDiffRisk, withJevReview } from "@/lib/jev";
 import { settleTurnCheckpoint } from "@/lib/queries";
 import {
   cancelStreamPublish,
@@ -99,6 +100,8 @@ export interface ChatMessage {
   /** User messages only: the working-tree snapshot taken before this turn was
    *  sent, so its file changes can be reverted on their own. */
   checkpointId?: string;
+  /** User messages only: Jev scored this turn's file delta as worth a look. */
+  jevReview?: boolean;
   /** Who produced this turn. Stamped by the pane when a thread changes hands,
    *  so a provider switch never relabels what came before it. */
   provider?: Provider;
@@ -1288,7 +1291,14 @@ export function useAgentChat({
         // turn's checkpoint, so edits made between turns land in no turn's
         // card. Best-effort; a missed settle only widens the range.
         const settledId = lastCheckpointIdRef.current;
-        if (settledId) void settleTurnCheckpoint(cwd, settledId);
+        if (settledId) {
+          void (async () => {
+            await settleTurnCheckpoint(cwd, settledId);
+            if (await scoreDiffRisk(cwd, emberyxSessionId, settledId)) {
+              setMessages((prev) => withJevReview(prev, settledId));
+            }
+          })();
+        }
         return;
       }
     },

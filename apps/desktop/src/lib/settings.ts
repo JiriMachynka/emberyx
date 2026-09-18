@@ -212,6 +212,9 @@ export interface Settings {
   commitMessageModel: string;
   /** Wrap long lines in the built-in editor. */
   wordWrap: boolean;
+  /** Let TypeSafe Jev auto-answer low-risk ACP permission prompts. Independent
+   *  of whether a key is saved — a key without this still prompts. */
+  jevAutoApprove: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -253,6 +256,7 @@ export const DEFAULT_SETTINGS: Settings = {
   snapshotsIncludeAppText: true,
   commitMessageModel: "claude-haiku-4-5",
   wordWrap: false,
+  jevAutoApprove: true,
 };
 
 const KEY = "emberyx.settings";

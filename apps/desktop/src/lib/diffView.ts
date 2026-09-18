@@ -20,7 +20,10 @@ import type { ThemeRegistrationAny } from "shiki/core";
  * (comment < keyword < plain) survives the lighter background, and hands
  * the background to the box itself.
  */
-export const themeForSurface = (theme: ThemeRegistrationAny): ThemeRegistrationAny => {
+export const themeForSurface = (
+  theme: ThemeRegistrationAny,
+  name = theme.name
+): ThemeRegistrationAny => {
   const lift: Record<string, string> = {
     "#8b8b8b94": "#8f8f8f",
     "#a0a0a0": "#b0b0b0",
@@ -31,6 +34,7 @@ export const themeForSurface = (theme: ThemeRegistrationAny): ThemeRegistrationA
   };
   return {
     ...theme,
+    name,
     colors: { ...theme.colors, "editor.background": "transparent" },
     tokenColors: (theme.tokenColors ?? []).map((rule) =>
       typeof rule === "object" && rule.settings
@@ -40,18 +44,19 @@ export const themeForSurface = (theme: ThemeRegistrationAny): ThemeRegistrationA
   };
 };
 
-registerCustomTheme("vesper", async () => {
+const loadVesper = async (name: string) => {
   const { default: theme } = await import("@shikijs/themes/vesper");
-  return { default: themeForSurface(theme) };
-});
+  return { default: themeForSurface(theme, name) };
+};
 
-/**
- * Pierre paints tokens with `light-dark(--token-light, --token-dark)`. A
- * single `"vesper"` string only fills the dark slot, so a Mac in light
- * appearance (dark app, light OS) inherits one color and the highlighter
- * looks like it never ran. Both slots are Vesper: the app is dark either way.
- */
-export const DIFF_THEME = { dark: "vesper", light: "vesper" } as const;
+// Distinct names so Pierre fills both `--diffs-token-light` and
+// `--diffs-token-dark`. The same string in both slots collapsed to one
+// variable, and a light OS appearance then painted every token with the
+// fallback ink — highlighter looked like it never ran.
+registerCustomTheme("vesper-dark", () => loadVesper("vesper-dark"));
+registerCustomTheme("vesper-light", () => loadVesper("vesper-light"));
+
+export const DIFF_THEME = { dark: "vesper-dark", light: "vesper-light" } as const;
 
 /**
  * Options for the working-tree surface: every changed file in one scroll, so

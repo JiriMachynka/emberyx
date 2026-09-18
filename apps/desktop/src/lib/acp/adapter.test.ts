@@ -4,6 +4,7 @@ import {
   autoPermission,
   blockText,
   emptyTurn,
+  jevAllowOnce,
   endTurn,
   grokTurnStop,
   permissionOutcome,
@@ -369,5 +370,37 @@ describe("autoPermission", () => {
     };
     expect(autoPermission(preview, "ask")).toBe("always");
     expect(autoPermission(preview, "acceptEdits")).toBe("always");
+  });
+});
+
+describe("jevAllowOnce", () => {
+  const request = (kind: string | undefined, options: { optionId: string; kind: string }[]) => ({
+    requestId: 1,
+    title: "t",
+    ...(kind ? { toolKind: kind } : {}),
+    options: options.map((o) => ({ ...o, name: o.optionId })),
+  });
+
+  it("picks allow_once and ignores allow_always", () => {
+    expect(
+      jevAllowOnce(
+        request("execute", [
+          { optionId: "always", kind: "allow_always" },
+          { optionId: "once", kind: "allow_once" },
+        ])
+      )
+    ).toBe("once");
+  });
+
+  it("refuses delete, even when allow_once is offered", () => {
+    expect(
+      jevAllowOnce(request("delete", [{ optionId: "once", kind: "allow_once" }]))
+    ).toBeNull();
+  });
+
+  it("asks when the agent offers no allow_once", () => {
+    expect(
+      jevAllowOnce(request("execute", [{ optionId: "always", kind: "allow_always" }]))
+    ).toBeNull();
   });
 });
