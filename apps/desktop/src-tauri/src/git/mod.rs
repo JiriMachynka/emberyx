@@ -9,6 +9,7 @@ use crate::error::{Error, Result};
 mod branch;
 mod changes;
 mod commit;
+mod graph;
 mod log;
 mod merge;
 mod remote;
@@ -20,6 +21,7 @@ mod worktree;
 pub use branch::*;
 pub use changes::*;
 pub use commit::*;
+pub use graph::*;
 pub use log::*;
 pub use merge::*;
 pub use remote::*;
@@ -167,6 +169,10 @@ pub mod cmd {
         git_stash_list(path: String) -> Vec<GitStash>;
         git_remote_host(path: String) -> String;
         git_head_commit_url(path: String) -> Option<String>;
+        git_graph_page(path: String, limit: u32, skip: u32) -> Vec<GraphCommit>;
+        git_graph_refs(path: String) -> Vec<GraphRef>;
+        git_commit_detail(path: String, sha: String) -> CommitDetail;
+        git_commit_patch(path: String, sha: String) -> String;
 
         [WRITES] git_stage(path: String, files: Vec<String>) -> String;
         [WRITES] git_unstage(path: String, files: Vec<String>) -> String;

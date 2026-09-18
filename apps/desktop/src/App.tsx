@@ -79,6 +79,9 @@ const SettingsPage = lazy(() =>
 const UsagePanel = lazy(() =>
   import("@/components/UsagePanel").then((m) => ({ default: m.UsagePanel }))
 );
+const GraphPane = lazy(() =>
+  import("@/components/GraphPane").then((m) => ({ default: m.GraphPane }))
+);
 const MergeRequestsPanel = lazy(() =>
   import("@/components/MergeRequestsPanel").then((m) => ({
     default: m.MergeRequestsPanel,
@@ -121,6 +124,14 @@ function App() {
   const [usageOpen, setUsageOpen] = useState(false);
   // Settings and usage cover the workspace column rather than replacing it.
   const overlayOpen = settingsOpen || usageOpen;
+  // The commit-history graph is a full-window surface like Settings: it stays
+  // mounted after its first open and is merely hidden, so the lanes, scroll
+  // position and any expanded commit survive closing it.
+  const [graphOpen, setGraphOpen] = useState(false);
+  const graphMountedRef = useRef(false);
+  if (graphOpen) graphMountedRef.current = true;
+  const graphMounted = graphMountedRef.current;
+  const closeGraph = useCallback(() => setGraphOpen(false), []);
   // Settings stays mounted after its first open and is merely hidden, like the
   // editor above: remounting re-ran its effects, rebuilt ~1300 lines of JSX and
   // repainted the covered workspace from scratch on every toggle, which is what
@@ -431,7 +442,19 @@ function App() {
       const target = tabs[next];
       if (target) ws.activateSession(target.projectId, target.id);
     },
+    onOpenGraph: () => {
+      if (!activeProject) return;
+      setUsageOpen(false);
+      setGraphOpen((v) => !v);
+    },
   });
+  // The palette action opens the graph (idempotent, unlike the shortcut which
+  // toggles), so a re-pick from ⌘K lands you on the same surface.
+  const openGraph = useCallback(() => {
+    if (!activeProject) return;
+    setUsageOpen(false);
+    setGraphOpen(true);
+  }, [activeProject]);
   useSnapshots(settings);
   useLaunchUpdateCheck();
   usePricingRefresh();
@@ -816,6 +839,23 @@ function App() {
             </Suspense>
           </div>
         )}
+
+        {graphMounted && (
+          <div
+            className={cn(
+              "absolute inset-0 z-20 flex-col bg-background",
+              graphOpen ? "flex" : "hidden"
+            )}
+          >
+            <Suspense fallback={null}>
+              <GraphPane
+                path={activeProjectPath}
+                active={graphOpen}
+                onBack={closeGraph}
+              />
+            </Suspense>
+          </div>
+        )}
       </div>
 
       <CommandPalette
@@ -863,6 +903,7 @@ function App() {
         }}
         onOpenNotifications={toggleNotifications}
         onOpenSlash={() => setSlashOpen(true)}
+        onOpenGraph={openGraph}
       />
 
       <CloneDialog

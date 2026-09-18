@@ -8,6 +8,7 @@ import {
   FileDiff,
   FlaskConical,
   FolderOpen,
+  GitBranch,
   History,
   Link,
   MessageSquare,
@@ -45,6 +46,7 @@ interface CommandPaletteProps {
   onOpenUsage: () => void;
   onOpenNotifications: () => void;
   onOpenSlash: () => void;
+  onOpenGraph: () => void;
 }
 
 /** ⌘K launcher: fuzzy-search open sessions + recent threads, or run a quick
@@ -72,6 +74,7 @@ export function CommandPalette({
   onOpenUsage,
   onOpenNotifications,
   onOpenSlash,
+  onOpenGraph,
 }: CommandPaletteProps) {
   const run = (fn: () => void) => {
     onOpenChange(false);
@@ -183,6 +186,15 @@ export function CommandPalette({
                   <FileDiff className="size-4 text-muted-foreground" />
                   Toggle changes
                 </Item>
+                {activeProject && (
+                  <Item
+                    value="action commit history graph"
+                    onSelect={() => run(onOpenGraph)}
+                  >
+                    <GitBranch className="size-4 text-muted-foreground" />
+                    Commit history
+                  </Item>
+                )}
                 <Item value="action search in project" onSelect={() => run(onSearch)}>
                   <Search className="size-4 text-muted-foreground" />
                   Search in project

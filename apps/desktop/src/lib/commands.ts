@@ -20,6 +20,7 @@ export const COMMAND_IDS = [
   "tab.prev",
   "tab.close",
   "settings.open",
+  "graph.open",
 ] as const;
 
 export type CommandId = (typeof COMMAND_IDS)[number];
@@ -91,5 +92,11 @@ export const COMMANDS: readonly CommandDef[] = [
     label: "Settings",
     defaultKey: "mod+,",
     rebindable: false,
+  },
+  {
+    id: "graph.open",
+    label: "Show commit history",
+    defaultKey: "mod+g",
+    rebindable: true,
   },
 ];

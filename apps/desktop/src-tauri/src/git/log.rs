@@ -121,7 +121,7 @@ pub struct GitLogEntry {
 
 /// Parse the `-z` `--name-status` payload: NUL-separated tokens where a status
 /// code is followed by one path (two, for renames/copies).
-fn parse_name_status(rest: &str) -> Vec<GitCommitFile> {
+pub(super) fn parse_name_status(rest: &str) -> Vec<GitCommitFile> {
     let toks: Vec<&str> = rest.split('\0').filter(|t| !t.trim().is_empty()).collect();
     let mut files = Vec::new();
     let mut i = 0;

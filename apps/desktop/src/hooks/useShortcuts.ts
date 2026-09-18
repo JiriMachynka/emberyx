@@ -20,6 +20,7 @@ export function useShortcuts(handlers: {
   onCloseTab: () => void;
   onSelectTab: (index: number) => void;
   onCycleTab: (direction: 1 | -1) => void;
+  onOpenGraph: () => void;
 }) {
   const ref = useRef(handlers);
   ref.current = handlers;
@@ -49,6 +50,7 @@ export function useShortcuts(handlers: {
       "project.search": () => ref.current.onSearch(),
       "tab.next": () => ref.current.onCycleTab(1),
       "tab.prev": () => ref.current.onCycleTab(-1),
+      "graph.open": () => ref.current.onOpenGraph(),
       // Menu-owned; listed for exhaustiveness, never matched here.
       "tab.close": () => ref.current.onCloseTab(),
       "settings.open": () => {},

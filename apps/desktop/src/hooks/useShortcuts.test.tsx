@@ -17,6 +17,7 @@ const handlers = () => ({
   onCloseTab: vi.fn(),
   onSelectTab: vi.fn(),
   onCycleTab: vi.fn(),
+  onOpenGraph: vi.fn(),
 });
 
 const press = (

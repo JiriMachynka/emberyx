@@ -16,6 +16,9 @@ import type {
   GitRepoRoot,
   GitStash,
   GitWorktree,
+  GraphCommit,
+  GraphRef,
+  CommitDetail,
   SearchFile,
   SlashCommand,
   UsageSummary,
@@ -94,6 +97,13 @@ export const gitKeys = {
   commitDiff: (path: string, sha: string, file: string) =>
     ["git", "commitDiff", path, sha, file] as const,
   defaultBranch: (path: string) => ["git", "defaultBranch", path] as const,
+  graphPage: (path: string, limit: number, skip: number) =>
+    ["git", "graph", path, limit, skip] as const,
+  graphRefs: (path: string) => ["git", "graphRefs", path] as const,
+  commitDetail: (path: string, sha: string) =>
+    ["git", "commitDetail", path, sha] as const,
+  commitPatch: (path: string, sha: string) =>
+    ["git", "commitPatch", path, sha] as const,
 };
 
 export const useGitChanges = (path: string, enabled = true) =>
@@ -501,6 +511,48 @@ export const useGitConflicts = (path: string) =>
   });
 
 /** Whether MERGE_HEAD exists — i.e. a merge is waiting to be finished. */
+/** One page of the history graph, across all refs, newest first. `skip` is the
+ *  number already loaded, so pages extend the graph rather than re-reading it.
+ *  The whole graph is a single fetch per page; growth is the surface's job. */
+export const useGraphPage = (path: string, limit: number, skip: number) =>
+  useQuery({
+    queryKey: gitKeys.graphPage(path, limit, skip),
+    queryFn: () => invoke<GraphCommit[]>("git_graph_page", { path, limit, skip }),
+    enabled: limit > 0,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+
+/** Every branch, tag, and remote ref, resolved to its commit — the graph's
+ *  ref legend. A checkout never changes which refs exist, so it is cached. */
+export const useGraphRefs = (path: string, enabled = true) =>
+  useQuery({
+    queryKey: gitKeys.graphRefs(path),
+    queryFn: () => invoke<GraphRef[]>("git_graph_refs", { path }),
+    enabled,
+    staleTime: 30_000,
+  });
+
+/** The full detail for one commit (message, attributions, changed files).
+ *  Immutable for a sha, so it is cached for good. */
+export const useCommitDetail = (path: string, sha: string | null) =>
+  useQuery({
+    queryKey: gitKeys.commitDetail(path, sha ?? ""),
+    queryFn: () => invoke<CommitDetail>("git_commit_detail", { path, sha }),
+    enabled: !!sha,
+    staleTime: Infinity,
+  });
+
+/** The whole multi-file patch one commit introduced. Immutable for a sha. */
+export const useCommitPatch = (path: string, sha: string | null) =>
+  useQuery({
+    queryKey: gitKeys.commitPatch(path, sha ?? ""),
+    queryFn: () => invoke<string>("git_commit_patch", { path, sha }),
+    enabled: !!sha,
+    staleTime: Infinity,
+  });
+
+/** Whether a merge is waiting to be finished. */
 export const useGitMergeState = (path: string) =>
   useQuery({
     queryKey: gitKeys.mergeState(path),

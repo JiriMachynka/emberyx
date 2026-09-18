@@ -183,6 +183,56 @@ export interface GitLogEntry {
   files: GitCommitFile[];
 }
 
+/** One commit on the full-window history graph, across every ref. */
+export interface GraphCommit {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  author: string;
+  /** Author date, ISO-8601 — real, for tooltips and stable sorting. */
+  authorDate: string;
+  /** Author date relative to now, e.g. "3 days ago". */
+  relativeDate: string;
+  parents: string[];
+  /** Ref decorations, e.g. ["HEAD -> main", "tag: v1", "origin/main"]. */
+  refs: string[];
+}
+
+/** A branch, tag, or remote ref resolved to the commit it points at. */
+export interface GraphRef {
+  /** Full refname, e.g. "refs/heads/main". */
+  name: string;
+  /** Short name, e.g. "main", "v1", "origin/main". */
+  shortName: string;
+  kind: "branch" | "tag" | "remote";
+  /** The commit sha the ref (peeled for annotated tags) targets. */
+  targetSha: string;
+  isHead: boolean;
+  /** Tracking branch short name, when configured. */
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+}
+
+/** An author or committer attribution line. */
+export interface CommitAttribution {
+  name: string;
+  email: string;
+  /** ISO-8601. */
+  date: string;
+}
+
+/** The full, rendered detail for one commit. */
+export interface CommitDetail {
+  sha: string;
+  subject: string;
+  body: string;
+  author: CommitAttribution;
+  committer: CommitAttribution;
+  parents: string[];
+  files: GitCommitFile[];
+}
+
 /** One day of token usage for a project/model pair. */
 export interface UsageRow {
   date: string;
