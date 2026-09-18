@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { useCodexChat } from "@/hooks/useCodexChat";
 
 const channels: { onmessage?: (ev: unknown) => void }[] = [];
@@ -242,13 +243,46 @@ describe("useCodexChat notifications", () => {
     await frame();
     expect(result.current.status).toBe("retrying");
 
+    // A turn the server gave up on leaves the app-server alive, so the pane
+    // announces it and stays sendable rather than dead-ending.
     notify("error", {
       error: { message: "we gave up", codexErrorInfo: "serverOverloaded" },
       willRetry: false,
     });
     await frame();
-    expect(result.current.status).toBe("error");
-    expect(result.current.exitReason).toBe("we gave up");
+    expect(result.current.status).toBe("idle");
+    expect(result.current.exitReason).toBeNull();
+
+    act(() => result.current.send("try again"));
+    expect(sentTo("codex_turn_start")).toHaveLength(1);
+  });
+
+  it("stays sendable when a turn completes as failed", async () => {
+    const { result, notify } = await mount();
+    notify("turn/started", { turn: { id: "u1" } });
+    notify("turn/completed", { turn: { id: "u1", status: "failed" } });
+    await frame();
+    expect(result.current.status).toBe("idle");
+    expect(result.current.exitReason).toBeNull();
+  });
+
+  it("announces one failure when an error and a failed completion both land", async () => {
+    const spy = vi.spyOn(toast, "error");
+    try {
+      const { notify } = await mount();
+      notify("turn/started", { turn: { id: "u1" } });
+      notify("error", {
+        error: { message: "we gave up", codexErrorInfo: "serverOverloaded" },
+        willRetry: false,
+      });
+      notify("turn/completed", { turn: { id: "u1", status: "failed" } });
+      await frame();
+      // The `error` names the reason; the `turn/completed` that closes the same
+      // turn must not repeat it.
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

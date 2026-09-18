@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { toast } from "sonner";
 import { useAgentStore, type SubagentActivity } from "@/lib/agentStore";
 import { registerAgent, setAgentLifecycle } from "@/lib/agentRegistry";
 import { askQuestions, fetchPendingAsk } from "@/lib/approvals";
@@ -1245,14 +1246,19 @@ export function useAgentChat({
           typeof subtype === "string" &&
           subtype.startsWith("error") &&
           !interruptedRef.current;
-        applyStatus(failed ? "error" : "idle");
         // Only the failure is announced here; the Stop hook covers success.
         if (failed) {
           const detail = typeof msg.result === "string" ? msg.result : "";
           const issue = classifyFailure(detail, "result", backend);
           if (issue) {
+            // An account-level failure is a dead end until the credential or
+            // quota is fixed, so keep the notice and the restart affordance.
             announceIssue(issue);
+            applyStatus("error");
           } else {
+            // A failed turn is not a dead session — the CLI is still alive and
+            // takes the next turn — so announce it and stay writable.
+            applyStatus("idle");
             const project = basename(cwd);
             const title = `${project} — error`;
             const body = "The agent run ended with an error";
@@ -1267,8 +1273,10 @@ export function useAgentChat({
               });
             }
             void notifyNative(settings, "error", title, body);
+            toast.error("Turn failed", { description: detail || undefined });
           }
         } else {
+          applyStatus("idle");
           // A completed turn is the only proof the account works again.
           clearAccountIssue();
         }

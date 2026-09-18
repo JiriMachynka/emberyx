@@ -481,7 +481,10 @@ export function applyCodexNotification(
     case "turn/completed": {
       const turn = decodeTurn(params);
       if (!turn) return none(state);
-      return none(endTurn(state, turn.status === "failed" ? "error" : "idle"));
+      // A failed turn is not a dead session — the app-server is still up and
+      // takes the next turn. The hook announces the failure; the pane stays
+      // sendable. Only a process that exits is terminal.
+      return none(endTurn(state, "idle"));
     }
 
     case "error": {
@@ -489,8 +492,9 @@ export function applyCodexNotification(
       if (!err) return none(state);
       // Backpressure is retried by the server; say so instead of failing.
       if (err.willRetry) return none({ ...state, status: "retrying" });
+      // Same rule as a failed turn: announce it, stay writable.
       return none({
-        ...endTurn(state, "error"),
+        ...endTurn(state, "idle"),
         errorMessage: err.message,
       });
     }

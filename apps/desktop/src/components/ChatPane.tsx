@@ -539,8 +539,10 @@ export const ChatPane = memo(function ChatPane({
   }, [pendingPlan, pendingPermission, pendingAsk, status, messages.length]);
 
   const busy = status === "thinking" || status === "streaming" || status === "tool";
-  // Both are dead ends for this session — `error` used to render nothing and
-  // left the composer live with no agent behind it.
+  // Both are dead ends for this session: `error` is a spawn that never landed,
+  // `exited` is a process that died. A failed *turn* leaves the agent alive and
+  // stays idle — the transports announce it as a toast instead of parking the
+  // composer here.
   const terminal = status === "exited" || status === "error";
   const accountIssue = useAgentStore((s) => s.accountIssue);
 

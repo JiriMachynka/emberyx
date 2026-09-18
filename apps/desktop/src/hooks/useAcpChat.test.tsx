@@ -297,17 +297,34 @@ describe("useAcpChat thread durability", () => {
     expect(JSON.parse(appended()[4].payload)).toEqual({ stopReason: "idle" });
   });
 
-  it("records a failed turn as an error, not a completion", async () => {
+  it("keeps a failed turn writable while still recording the error", async () => {
     const view = await mount();
+    // A prompt that failed on the provider side — a model the account cannot
+    // reach — leaves the agent alive. The pane must not dead-end on it.
     await act(async () => {
       channels[0]?.onmessage?.({
         type: "turnFailed",
         data: { sessionId: "s1", message: "agent gave up" },
       });
     });
-    await waitFor(() => expect(view.result.current.status).toBe("error"));
+    await waitFor(() => expect(view.result.current.status).toBe("idle"));
+    expect(view.result.current.exitReason).toBeNull();
     const kinds = appended().map((e) => e.kind);
     expect(kinds[kinds.length - 1]).toBe("error");
+
+    // The next turn still goes on the wire.
+    await act(async () => view.result.current.send("try another model"));
+    expect(
+      invoke.mock.calls.filter(([name]) => name === "acp_prompt")
+    ).toHaveLength(1);
+  });
+
+  it("still parks a process that exited", async () => {
+    const view = await mount();
+    await act(async () => {
+      channels[0]?.onmessage?.({ type: "exit", data: 1 });
+    });
+    await waitFor(() => expect(view.result.current.status).toBe("exited"));
   });
 
   it("seeds history from the event log when reopening a thread", async () => {

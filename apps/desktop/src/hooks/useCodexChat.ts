@@ -235,6 +235,9 @@ export function useCodexChat({
   // The checkpoint this pane's newest turn is running under — set when the
   // send-time snapshot lands, read when the turn settles.
   const lastCheckpointIdRef = useRef<string | null>(null);
+  // The turn whose failure an `error` notification already announced, so the
+  // `turn/completed` that follows it does not toast the same failure twice.
+  const announcedFailureRef = useRef<string | null>(null);
   const onTitledRef = useRef(onTitled);
   onTitledRef.current = onTitled;
 
@@ -364,6 +367,9 @@ export function useCodexChat({
       if (method === "turn/completed" || method === "turn/failed") {
         interruptedRef.current = false;
       }
+      // The running turn id, read before the fold: a failure ends the turn and
+      // clears it, and the `error` notification names no turn of its own.
+      const runningTurn = stateRef.current.turnId;
       const { state, changes, subagents, sessionStatus } = applyCodexNotification(
         stateRef.current,
         method,
@@ -372,8 +378,25 @@ export function useCodexChat({
       stateRef.current = state;
       const p = isRecord(params) ? params : null;
       const turn = p && isRecord(p.turn) ? p.turn : null;
+      const turnId = turn && typeof turn.id === "string" ? turn.id : null;
+      // A failed turn leaves the app-server alive and the session sendable, so
+      // the error is announced here rather than parking the pane on "Session
+      // failed". Cleared so the generic exit banner never inherits it.
+      if (state.errorMessage) {
+        // Remember the turn so the `turn/completed` that closes it — which
+        // carries no reason — does not toast the same failure a second time.
+        announcedFailureRef.current = runningTurn;
+        toast.error("Turn failed", { description: state.errorMessage });
+        stateRef.current = { ...stateRef.current, errorMessage: null };
+      } else if (
+        method === "turn/completed" &&
+        turn?.status === "failed" &&
+        turnId !== announcedFailureRef.current
+      ) {
+        toast.error("Turn failed");
+      }
       const eventThreadId = p && typeof p.threadId === "string" ? p.threadId : threadRef.current;
-      const eventTurnId = turn && typeof turn.id === "string" ? turn.id : state.turnId;
+      const eventTurnId = turnId ?? state.turnId;
       const isSubagentTurn = !!(eventThreadId && state.agentThreads[eventThreadId]);
       if (method === "turn/started" && eventThreadId && eventTurnId && !isSubagentTurn) {
         void invoke("agent_attach_turn", {

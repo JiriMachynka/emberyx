@@ -26,6 +26,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import {
   cancelStreamPublish,
   scheduleStreamPublish,
@@ -453,12 +454,17 @@ export function useAcpChat({
     [cwd]
   );
 
-  /** Fold the streamed turn into the committed transcript. */
+  /** Fold the streamed turn into the committed transcript.
+   *
+   *  `sessionStatus` overrides what the stop reason implies for the *session*.
+   *  A failed prompt is a failed turn, not a dead session — the agent is still
+   *  up and sendable — so it commits as an error for the timeline while the
+   *  pane stays idle. Only a process that actually exited is terminal. */
   const commitTurn = useCallback(
-    (reason: string) => {
+    (reason: string, sessionStatus?: ChatStatus) => {
       const ended = endTurn(turnRef.current, reason);
       if (ended.message) committedRef.current = [...committedRef.current, ended.message];
-      turnRef.current = { message: null, status: ended.status };
+      turnRef.current = { message: null, status: sessionStatus ?? ended.status };
       // The rows carry the flag themselves once committed, so the ids are dead
       // weight past the turn that approved them.
       autoApprovedRef.current.clear();
@@ -691,8 +697,13 @@ export function useAcpChat({
             commitTurn("cancelled");
             break;
           }
-          setExitReason(ev.data.message);
-          commitTurn("refusal");
+          // A prompt that failed (a model the account cannot reach, a provider
+          // error) is not a dead session: the agent is still up and takes the
+          // next turn, possibly on another model. Announce it and stay
+          // writable — a process that really died arrives as `exit`, and that
+          // is what parks the pane on "Session failed".
+          toast.error("Turn failed", { description: ev.data.message });
+          commitTurn("refusal", "idle");
           break;
         case "stderr":
           stderr = (stderr + ev.data).slice(-STDERR_CAP);

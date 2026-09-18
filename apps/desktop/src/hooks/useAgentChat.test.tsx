@@ -555,10 +555,12 @@ describe("useAgentChat streaming", () => {
     expect(result.current.status).toBe("idle");
   });
 
-  it("flags an errored result", async () => {
+  it("keeps the session live on an errored result", async () => {
     const { result, emit } = await mount();
     emit({ type: "result", subtype: "error", usage: {} });
-    expect(result.current.status).toBe("error");
+    // A failed turn is not a dead session — the CLI is still sendable, so the
+    // pane stays idle and the failure is announced instead.
+    expect(result.current.status).toBe("idle");
   });
 
   it("records an error notification for an errored result", async () => {
@@ -1023,10 +1025,12 @@ describe("useAgentChat sending", () => {
   });
 
   // The CLI reports a stopped turn as `error_during_execution`. Reading that as
-  // a failure put the pane in its "Session failed / Restart session" dead end
-  // for a session that was still alive.
-  // Only the stopped turn is excused — the next one reports failures normally.
+  // a failure used to park the pane in its "Session failed / Restart session"
+  // dead end for a session that was still alive. Only the stopped turn is
+  // excused — the next one is reported (a notification), while the session
+  // stays live either way.
   it("reports a failure on the turn after a stop", async () => {
+    useAgentStore.setState({ notifications: [] });
     const { result, emit } = await mount();
     act(() => result.current.send("first"));
     act(() => result.current.stop());
@@ -1034,7 +1038,8 @@ describe("useAgentChat sending", () => {
     act(() => result.current.send("second"));
     emit({ type: "result", subtype: "error_max_turns", usage: {} });
 
-    expect(result.current.status).toBe("error");
+    expect(result.current.status).toBe("idle");
+    expect(useAgentStore.getState().notifications).toHaveLength(1);
   });
 
   it("does not fail the session when the stopped turn reports an error result", async () => {
@@ -1047,7 +1052,8 @@ describe("useAgentChat sending", () => {
   });
 
   // The stop only excuses the turn it aborted, not the next one.
-  it("still fails the session when a later turn errors on its own", async () => {
+  it("still reports a later turn that errors on its own", async () => {
+    useAgentStore.setState({ notifications: [] });
     const { result, emit } = await mount();
     act(() => result.current.send("work on it"));
     act(() => result.current.stop());
@@ -1055,7 +1061,8 @@ describe("useAgentChat sending", () => {
     act(() => result.current.send("try again"));
     emit({ type: "result", subtype: "error_during_execution", usage: {} });
 
-    expect(result.current.status).toBe("error");
+    expect(result.current.status).toBe("idle");
+    expect(useAgentStore.getState().notifications).toHaveLength(1);
   });
 });
 

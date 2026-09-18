@@ -511,6 +511,16 @@ JS side queues that event forever and the pane stays on "Responding…". Grok
 1.0.24 also fires `_x.ai/session/prompt_complete` (and `turn_completed`)
 *before* it replies to `session/prompt` — either one settles the turn.
 
+A failed **turn** is not a dead **session**. A bad model, a provider
+rejection or a CLI-level error leaves the agent process up and sendable, so
+all three transports announce it as a toast (`Turn failed`) and leave the pane
+idle — the composer stays live. Only a spawn that never landed or a process
+that exited sets `error`/`exited`, which is what renders the banner and
+disables the composer. Account-level failures are the exception on Claude:
+those keep `error` so its `AccountNotice` shows, since the credential or quota
+must change before a retry means anything. Codex, OpenCode and Grok do not
+classify account failures (`accountIssues: false`) and toast instead.
+
 `codex app-server` is flagged experimental and has renamed its core methods
 once already. Generate types from the installed binary
 (`codex app-server generate-ts --out DIR`) — never hand-write them. After
