@@ -12,6 +12,10 @@ import {
   modelFitsBackend,
   modelRowLabels,
   opencodeOwnModels,
+  deniedVendor,
+  hiddenModelsNote,
+  isAccessDenied,
+  withoutUnavailable,
   orderByFavorites,
   searchModels,
   withModelPrefs,
@@ -397,5 +401,107 @@ describe("modelFitsBackend", () => {
     for (const m of CLAUDE_MODELS) {
       expect(modelFitsBackend(m.id, "codex", {})).toBe(false);
     }
+  });
+});
+
+describe("isAccessDenied", () => {
+  // The whole filter turns on this: a provider is only dropped when it said no
+  // in a way a retry cannot change.
+  it("reads a forbidden answer as denied", () => {
+    expect(isAccessDenied("Access denied to GitLab AI features")).toBe(true);
+    expect(isAccessDenied("request failed with status 403")).toBe(true);
+    expect(isAccessDenied("403 Forbidden")).toBe(true);
+    expect(isAccessDenied("user is not authorized for this model")).toBe(true);
+  });
+
+  it("keeps a credential failure — a re-login fixes that, not a hidden list", () => {
+    expect(isAccessDenied("401 Unauthorized")).toBe(false);
+    expect(isAccessDenied("request failed with status 401")).toBe(false);
+  });
+
+  it("keeps anything it cannot read", () => {
+    expect(isAccessDenied("request timed out after 60s")).toBe(false);
+    expect(isAccessDenied("500 Internal Server Error")).toBe(false);
+    expect(isAccessDenied("socket hang up")).toBe(false);
+    expect(isAccessDenied("")).toBe(false);
+  });
+});
+
+describe("deniedVendor", () => {
+  it("names the vendor a forbidden turn should cost", () => {
+    expect(
+      deniedVendor("gitlab/duo-chat-gpt-5-6-luna", "Access denied to GitLab AI features")
+    ).toBe("gitlab");
+  });
+
+  it("names nobody on a failure that isn't access denied", () => {
+    expect(deniedVendor("gitlab/duo-chat-gpt-5-6-luna", "401 Unauthorized")).toBeUndefined();
+    expect(deniedVendor("gitlab/duo-chat-gpt-5-6-luna", "request timed out")).toBeUndefined();
+  });
+
+  it("names nobody when the model id carries no vendor", () => {
+    expect(deniedVendor("claude-opus-5", "403 Forbidden")).toBeUndefined();
+    expect(deniedVendor("", "403 Forbidden")).toBeUndefined();
+  });
+});
+
+describe("withoutUnavailable", () => {
+  const entries = acpModelEntries("opencode", [
+    { value: "opencode/glm-5.3-flash", label: "OpenCode Zen/GLM-5.3-Flash" },
+    { value: "gitlab/duo-chat-gpt-5-6-luna", label: "GitLab Duo/Agentic Chat (GPT-5.6 Luna)" },
+    { value: "gitlab/duo-chat-fable-5-1", label: "GitLab Duo/Agentic Chat (Fable 5.1)" },
+  ]);
+
+  it("drops every model of a provider that was refused", () => {
+    const filtered = withoutUnavailable(entries, { gitlab: "GitLab Duo" });
+    expect(filtered.entries.map((e) => e.id)).toEqual(["opencode/glm-5.3-flash"]);
+    expect(filtered.hidden).toBe(2);
+    expect(filtered.providers).toEqual(["GitLab Duo"]);
+  });
+
+  it("changes nothing when no provider was refused", () => {
+    const filtered = withoutUnavailable(entries, {});
+    expect(filtered.entries).toHaveLength(3);
+    expect(filtered.hidden).toBe(0);
+    expect(hiddenModelsNote(filtered)).toBeUndefined();
+  });
+
+  it("leaves models whose vendor was never refused alone", () => {
+    const filtered = withoutUnavailable(entries, { anthropic: "Anthropic" });
+    expect(filtered.entries).toHaveLength(3);
+    expect(filtered.hidden).toBe(0);
+  });
+
+  it("never drops a model whose id names no vendor", () => {
+    const claude = withoutUnavailable(CLAUDE_MODELS, { gitlab: "GitLab Duo" });
+    expect(claude.entries).toHaveLength(CLAUDE_MODELS.length);
+  });
+
+  it("hands the catalog back whole rather than emptying the picker", () => {
+    const onlyGitlab = entries.filter((e) => e.id.startsWith("gitlab/"));
+    const filtered = withoutUnavailable(onlyGitlab, { gitlab: "GitLab Duo" });
+    expect(filtered.entries).toEqual(onlyGitlab);
+    expect(filtered.hidden).toBe(0);
+    expect(filtered.providers).toEqual([]);
+  });
+});
+
+describe("hiddenModelsNote", () => {
+  it("counts the models and names who cost them", () => {
+    expect(
+      hiddenModelsNote({ entries: [], hidden: 12, providers: ["GitLab Duo"] })
+    ).toBe("12 models hidden — GitLab Duo unavailable");
+  });
+
+  it("agrees with itself on one", () => {
+    expect(
+      hiddenModelsNote({ entries: [], hidden: 1, providers: ["GitLab Duo"] })
+    ).toBe("1 model hidden — GitLab Duo unavailable");
+  });
+
+  it("lists every provider that was refused", () => {
+    expect(
+      hiddenModelsNote({ entries: [], hidden: 4, providers: ["GitLab Duo", "Anthropic"] })
+    ).toBe("4 models hidden — GitLab Duo, Anthropic unavailable");
   });
 });

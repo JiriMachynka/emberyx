@@ -9,10 +9,12 @@
  */
 
 import { isAgentBackend, type AgentBackend } from "@/lib/agentBackend";
+import type { UnavailableProviders } from "@/lib/modelCatalog";
 
 const KEY = "emberyx.modelFavorites";
 const HIDDEN_KEY = "emberyx.hiddenModels";
 const CUSTOM_KEY = "emberyx.customModels";
+const UNAVAILABLE_KEY = "emberyx.unavailableProviders";
 
 export function getFavorites(): string[] {
   try {
@@ -88,5 +90,43 @@ export function setCustomModels(
     localStorage.setItem(CUSTOM_KEY, JSON.stringify(next));
   } catch {
     // Blocked storage — same story as above.
+  }
+}
+
+/**
+ * Providers a turn was refused by, so the picker stops offering models that
+ * cannot run. Written by the chat transports when a turn comes back forbidden,
+ * read by the picker each time it opens, and cleared whole from its footer —
+ * "try them again" is one act, not a per-provider one.
+ */
+export function getUnavailableProviders(): UnavailableProviders {
+  try {
+    const raw = localStorage.getItem(UNAVAILABLE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    if (typeof parsed !== "object" || parsed === null) return {};
+    const out: UnavailableProviders = {};
+    for (const [key, label] of Object.entries(parsed)) {
+      if (typeof label === "string") out[key] = label;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function markProviderUnavailable(key: string, label: string): void {
+  try {
+    const next = { ...getUnavailableProviders(), [key]: label };
+    localStorage.setItem(UNAVAILABLE_KEY, JSON.stringify(next));
+  } catch {
+    // Blocked storage — the picker keeps offering them, as it does today.
+  }
+}
+
+export function clearUnavailableProviders(): void {
+  try {
+    localStorage.removeItem(UNAVAILABLE_KEY);
+  } catch {
+    // Same story.
   }
 }

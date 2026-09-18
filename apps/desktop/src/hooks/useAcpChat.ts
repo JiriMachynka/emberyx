@@ -81,6 +81,8 @@ import type { McpHarness } from "@/lib/mcp";
 import { snapshotTextBlock } from "@/lib/snapshotA11y";
 import { fetchThreadPage, type ProjectedMessageRow } from "@/lib/threadPage";
 import { threadTitleFrom } from "@/lib/threadTitle";
+import { deniedVendor, splitModelLabel } from "@/lib/modelCatalog";
+import { markProviderUnavailable } from "@/lib/modelFavorites";
 import { useAgentStore } from "@/lib/agentStore";
 import { settleTurnCheckpoint } from "@/lib/queries";
 import {
@@ -191,6 +193,28 @@ interface Options {
    *  refs keep accumulating and one flush lands when it is shown again. */
   visible?: boolean;
 }
+
+/**
+ * Remember a provider that answered a turn with "access denied".
+ *
+ * OpenCode offers every provider you hold a credential for, and a credential is
+ * not an entitlement — a `GITLAB_TOKEN` without a Duo seat lists a dozen Duo
+ * models that every turn 403s on. Nothing in the protocol distinguishes the two
+ * before a turn runs, so the refusal is the signal, and the picker drops that
+ * vendor's models from then on. The name shown is the vendor half of the
+ * catalog label ("GitLab Duo/Agentic Chat (…)"), falling back to the id's
+ * vendor key when the catalog never labelled the model.
+ */
+const rememberRefusal = (
+  model: string,
+  message: string,
+  models: ChatUsage["models"]
+) => {
+  const vendor = deniedVendor(model, message);
+  if (vendor === undefined) return;
+  const label = models?.find((m) => m.value === model)?.label;
+  markProviderUnavailable(vendor, (label && splitModelLabel(label).vendor) ?? vendor);
+};
 
 let nextMessageId = 0;
 const messageId = (prefix: string) => `acp-${prefix}-${(nextMessageId += 1)}`;
@@ -702,6 +726,7 @@ export function useAcpChat({
           // next turn, possibly on another model. Announce it and stay
           // writable — a process that really died arrives as `exit`, and that
           // is what parks the pane on "Session failed".
+          rememberRefusal(modelRef.current, ev.data.message, usageRef.current.models);
           toast.error("Turn failed", { description: ev.data.message });
           commitTurn("refusal", "idle");
           break;

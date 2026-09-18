@@ -13,13 +13,17 @@ import {
   opencodeOwnModels,
   orderByFavorites,
   searchModels,
+  hiddenModelsNote,
   withModelPrefs,
+  withoutUnavailable,
   type ModelEntry,
 } from "@/lib/modelCatalog";
 import {
+  clearUnavailableProviders,
   getCustomModels,
   getFavorites,
   getHiddenModels,
+  getUnavailableProviders,
   shortcutFor,
   toggleFavorite,
 } from "@/lib/modelFavorites";
@@ -96,6 +100,10 @@ export const ModelPicker = memo(function ModelPicker({
   // Read once per mount, like favourites — the Settings surface owns edits.
   const [hiddenModels] = useState(getHiddenModels);
   const [customModels] = useState(getCustomModels);
+  // Providers a turn was already refused by. Re-read every time the popover
+  // opens rather than once per mount: the picker lives in the composer for the
+  // pane's whole life, and the refusal lands mid-session.
+  const [unavailable, setUnavailable] = useState(getUnavailableProviders);
   const claudeModels = useClaudeModels();
 
   const installed = useProviderStatus().data ?? [];
@@ -145,13 +153,20 @@ export const ModelPicker = memo(function ModelPicker({
         installed.some((s) => s.id === "opencode" && s.installed))
   );
 
-  const all = useMemo<ModelEntry[]>(() => {
+  const catalog = useMemo(() => {
     const entries = [
       ...claudeModels,
       ...codexModelEntries(codexModels),
       ...acpModelEntries("grok", grokCatalog.data ?? []),
       ...acpModelEntries("opencode", opencodeOwnModels(opencodeCatalog.data ?? [])),
-      ...(sessionModels ?? []).map((entry) => ({
+      // The live session's catalog answers "what could this CLI call", the
+      // same question the cached one does — so it is narrowed the same way.
+      // Skipping that here is what put GitLab Duo back in the list the moment
+      // a chat was actually running on OpenCode.
+      ...(backend === "opencode"
+        ? opencodeOwnModels(sessionModels ?? [])
+        : (sessionModels ?? [])
+      ).map((entry) => ({
         id: entry.value,
         label: entry.label,
         provider: backend,
@@ -167,7 +182,10 @@ export const ModelPicker = memo(function ModelPicker({
       seen.add(e.id);
       return true;
     });
-    return withModelPrefs(deduped, hiddenModels, customModels);
+    return withoutUnavailable(
+      withModelPrefs(deduped, hiddenModels, customModels),
+      unavailable
+    );
   }, [
     backend,
     claudeModels,
@@ -177,7 +195,20 @@ export const ModelPicker = memo(function ModelPicker({
     sessionModels,
     hiddenModels,
     customModels,
+    unavailable,
   ]);
+  const all: ModelEntry[] = catalog.entries;
+  const hiddenNote = hiddenModelsNote(catalog);
+
+  // Take them back: forget every refusal and re-read the catalogs behind them.
+  // One act for the whole set — a refusal the user has fixed is fixed, and the
+  // next turn marks whatever is still refused.
+  const retryUnavailable = () => {
+    clearUnavailableProviders();
+    setUnavailable({});
+    void grokCatalog.refetch();
+    void opencodeCatalog.refetch();
+  };
 
   const shown = useMemo(() => {
     const scoped =
@@ -233,7 +264,10 @@ export const ModelPicker = memo(function ModelPicker({
         setOpen(next);
         // The chip names the live backend; snap the rail to match so a silent
         // picker switch doesn't leave the list on whoever was showing last.
-        if (next) setRail(isLiveProvider(backend) ? backend : FAVORITES);
+        if (next) {
+          setRail(isLiveProvider(backend) ? backend : FAVORITES);
+          setUnavailable(getUnavailableProviders());
+        }
       }}
     >
       <PopoverTrigger
@@ -368,6 +402,20 @@ export const ModelPicker = memo(function ModelPicker({
               </>
             )}
           </div>
+
+          {/* One line, under the list, only when something was dropped. No
+              disabled rows and no badges: a model that cannot run is not a
+              choice, and the count is what makes its absence legible. */}
+          {hiddenNote && (
+            <button
+              type="button"
+              onClick={retryUnavailable}
+              title="Offer these models again"
+              className="shrink-0 border-t px-3 py-2 text-left text-xs text-muted-foreground/70 transition-colors hover:text-foreground"
+            >
+              {hiddenNote}
+            </button>
+          )}
         </div>
       </PopoverContent>
     </Popover>

@@ -353,3 +353,89 @@ export const modelFitsBackend = (
   const claude = isClaudeId(model, custom.claude ?? []);
   return backend === "claude" ? claude : !claude;
 };
+
+/**
+ * Providers the picker has learned it cannot reach, keyed by the vendor half of
+ * a model id (`gitlab/duo-chat-fable-5` → `gitlab`) and valued by the name to
+ * show the user ("GitLab Duo").
+ *
+ * There is no catalog to ask. OpenCode already lists only providers you hold
+ * credentials for — `GITLAB_TOKEN` is a credential, a Duo seat is an
+ * entitlement, and neither the CLI, its ACP surface nor its server API tells
+ * the two apart. The only thing that knows is a turn that was refused, so that
+ * is what this records.
+ */
+export type UnavailableProviders = Record<string, string>;
+
+/** The vendor half of a model id. An id with no vendor (`claude-opus-5`)
+ *  belongs to the backend itself and can never be dropped by this. */
+export const modelVendorKey = (id: string): string | undefined => {
+  const at = id.indexOf("/");
+  return at > 0 ? id.slice(0, at).toLowerCase() : undefined;
+};
+
+const UNAUTHORIZED = /\b401\b|unauthori[sz]ed/i;
+const ACCESS_DENIED = /\b403\b|access denied|forbidden|not authori[sz]ed/i;
+
+/**
+ * Does a failed turn mean this provider will refuse every turn?
+ *
+ * Only a forbidden answer counts. A 401 is a credential missing or expired —
+ * the provider is reachable and a re-login fixes it, so its models stay. A 403
+ * is the account being told no while holding a credential the provider
+ * accepts, which no retry changes. Anything unreadable — a timeout, a 500, a
+ * socket error — keeps them too: an unrecognised failure is evidence of nothing.
+ */
+export const isAccessDenied = (message: string): boolean =>
+  !UNAUTHORIZED.test(message) && ACCESS_DENIED.test(message);
+
+/** The vendor a failed turn should cost, or undefined when the failure names no
+ *  vendor or does not read as access denied. */
+export const deniedVendor = (
+  model: string,
+  message: string
+): string | undefined =>
+  isAccessDenied(message) ? modelVendorKey(model) : undefined;
+
+export interface CatalogFilter {
+  entries: ModelEntry[];
+  /** How many entries the unavailable providers cost. */
+  hidden: number;
+  /** Display names of the providers that cost them. */
+  providers: string[];
+}
+
+/**
+ * Drop the models of providers already known to refuse.
+ *
+ * An empty picker is worse than a broken turn: when every entry names an
+ * unavailable provider the catalog is handed back whole and nothing is
+ * reported, so the user still has a list and the turn still fails in the open.
+ */
+export const withoutUnavailable = (
+  entries: ModelEntry[],
+  unavailable: UnavailableProviders
+): CatalogFilter => {
+  const intact: CatalogFilter = { entries, hidden: 0, providers: [] };
+  if (Object.keys(unavailable).length === 0) return intact;
+  const kept: ModelEntry[] = [];
+  const dropped = new Set<string>();
+  for (const entry of entries) {
+    const vendor = modelVendorKey(entry.id);
+    if (vendor !== undefined && vendor in unavailable) dropped.add(vendor);
+    else kept.push(entry);
+  }
+  if (kept.length === 0 || dropped.size === 0) return intact;
+  return {
+    entries: kept,
+    hidden: entries.length - kept.length,
+    providers: [...dropped].map((key) => unavailable[key] ?? key),
+  };
+};
+
+/** The one line the picker shows when models were dropped, or undefined when
+ *  none were. */
+export const hiddenModelsNote = (filter: CatalogFilter): string | undefined =>
+  filter.hidden === 0
+    ? undefined
+    : `${filter.hidden} model${filter.hidden === 1 ? "" : "s"} hidden — ${filter.providers.join(", ")} unavailable`;
