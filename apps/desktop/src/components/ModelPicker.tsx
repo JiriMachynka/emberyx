@@ -424,7 +424,7 @@ export const ModelPicker = memo(function ModelPicker({
 
 /** Trigger styling shared with the composer's other chips. */
 const TRIGGER =
-  "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-white/[0.04] hover:text-primary focus-visible:ring-1 focus-visible:ring-ring";
+  "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-accent hover:text-primary focus-visible:ring-1 focus-visible:ring-ring";
 
 function RailButton({
   active,

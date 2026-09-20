@@ -203,10 +203,6 @@ function App() {
   // itself picks the file up from the same request.
   useEffect(() => onOpenFileRequest(() => showTab("files")), []);
 
-  // Clicking a file in the chat brings the Files tab forward; the editor pane
-  // itself picks the file up from the same request.
-  useEffect(() => onOpenFileRequest(() => showTab("files")), []);
-
   // A transcript card's "Review" scopes the diff tab to that turn's delta. The
   // request lives in the agent store so any mounted pane can raise it; only the
   // active project's is consumed — a pane behind a project switch must not aim

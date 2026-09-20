@@ -7,7 +7,8 @@ import { GitCommitMenu } from "@/components/GitCommitMenu";
 import type { ProjectAction } from "@/lib/actions";
 import { basename } from "@/lib/path";
 import { glyphFor } from "@/lib/projectGlyph";
-import { useGitBranch, useGitChanges, useGitRemoteHost } from "@/lib/queries";
+import { gitStatusInterval, useGitBranch, useGitChanges, useGitRemoteHost } from "@/lib/queries";
+import { useAgentStore } from "@/lib/agentStore";
 import type { Project, Session } from "@/types";
 
 /** Fresh chats are labeled "chat" until a title exists; don't show that. */
@@ -54,9 +55,17 @@ export function ContextBar({
   onToggleDock,
 }: ContextBarProps) {
   const path = activeProject?.path ?? "";
+  const agentId = agent?.id;
+  const working = useAgentStore((s) =>
+    agentId ? s.statuses[agentId] === "working" : false
+  );
   const remoteHost = useGitRemoteHost(path).data;
   const branch = useGitBranch(path).data?.branch;
-  const changeCount = useGitChanges(path, path.length > 0).data?.length ?? 0;
+  const changeCount = useGitChanges(
+    path,
+    path.length > 0,
+    gitStatusInterval("badge", working)
+  ).data?.length ?? 0;
 
   const title =
     (agent?.resume &&
@@ -116,7 +125,7 @@ export function ContextBar({
             <GitGraph className="size-3.5" />
             <span className="max-w-28 truncate">{branch ?? "Git"}</span>
             {changeCount > 0 && (
-              <span className="rounded bg-amber-500/20 px-1 text-[10px] text-amber-400">
+              <span className="rounded bg-warning/20 px-1 text-[10px] tabular-nums text-warning">
                 {changeCount}
               </span>
             )}
@@ -137,7 +146,7 @@ export function ContextBar({
           >
             <Terminal className="size-3.5" />
             Output
-            <span className="rounded bg-emerald-500/20 px-1 text-[10px] text-emerald-400">
+            <span className="rounded bg-success/20 px-1 text-[10px] tabular-nums text-success">
               {devCount}
             </span>
           </Button>

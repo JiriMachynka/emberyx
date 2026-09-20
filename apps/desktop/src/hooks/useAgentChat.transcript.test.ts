@@ -3,7 +3,7 @@ import {
   attachTranscriptActivities,
   parseTranscript,
   parseTranscriptUsage,
-} from "@/hooks/useAgentChat";
+} from "@/lib/chatMessage";
 
 /** Build a transcript from JSONL records, the way Claude Code writes one. */
 const transcript = (...records: unknown[]) =>

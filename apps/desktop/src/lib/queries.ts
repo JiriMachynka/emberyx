@@ -106,14 +106,37 @@ export const gitKeys = {
     ["git", "commitPatch", path, sha] as const,
 };
 
-export const useGitChanges = (path: string, enabled = true) =>
+/**
+ * How often `git status --porcelain` may run.
+ *
+ * TanStack Query gives every observer its own timer. ContextBar, the commit
+ * menu and the diff tab all subscribed with a 2s interval, so an idle window
+ * spawned porcelain two or three times a tick. Only the surface that needs
+ * live updates owns an interval; everyone else reads the shared cache.
+ *
+ * `read` — cache subscriber, no timer.
+ * `watch` — the open diff tab, always 2s.
+ * `badge` — top-bar count: 2s while the agent is writing, 8s when idle.
+ */
+export const gitStatusInterval = (
+  role: "badge" | "watch" | "read",
+  working = false
+): number | false => {
+  if (role === "read") return false;
+  if (role === "watch" || working) return 2_000;
+  return 8_000;
+};
+
+export const useGitChanges = (
+  path: string,
+  enabled = true,
+  refetchInterval: number | false = false
+) =>
   useQuery({
     queryKey: gitKeys.changes(path),
     queryFn: () => invoke<GitFile[]>("git_changes", { path }),
     enabled: enabled && path.length > 0,
-    // Porcelain is cheap; the top-bar count has to move as the agent writes,
-    // not wait for a commit or a focus event.
-    refetchInterval: 2_000,
+    refetchInterval,
   });
 
 // Turn-review queries. The Rust side resolves each turn's range end (settle

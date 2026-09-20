@@ -316,7 +316,10 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        if (next) prefetch();
+        if (next) {
+          void changesQuery.refetch();
+          prefetch();
+        }
         else draftRef.current = null;
       }}
     >
@@ -333,7 +336,7 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
           )}
           Commit &amp; push
           {staged.length + unstaged.length > 0 && (
-            <span className="rounded bg-amber-500/20 px-1 text-[10px] text-amber-400">
+            <span className="rounded bg-warning/20 px-1 text-[10px] tabular-nums text-warning">
               {staged.length + unstaged.length}
             </span>
           )}

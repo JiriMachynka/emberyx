@@ -1,13 +1,7 @@
 import { Fragment, memo, Profiler, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { markPainted, onRender } from "@/lib/perf";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  Archive,
-  ChevronDown,
-  RotateCw,
-  TriangleAlert,
-} from "lucide-react";
-import { basename } from "@/lib/path";
+import { Archive, ChevronDown, RotateCw, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FileRefProject } from "@/components/FileRef";
 import type { AgentBackend } from "@/lib/agentBackend";
@@ -26,13 +20,6 @@ import {
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { ChatComposer } from "@/components/ChatComposer";
 import { draftForSwitch, handoffTurnsFrom } from "@/lib/handoff";
 import {
@@ -62,7 +49,6 @@ import { lastActivityAt } from "@/lib/compact";
 import { ThreadLinkProvider } from "@/components/PrLink";
 import { PaneVisibleProvider } from "@/components/chat/PaneVisible";
 import type { Project } from "@/types";
-import { projectLabel } from "@/lib/worktree";
 import { useAgentStore } from "@/lib/agentStore";
 import { rememberRowSizes, rowSize } from "@/lib/rowSizes";
 import { cn } from "@/lib/utils";
@@ -75,6 +61,7 @@ import { AccountNotice, QuotaNotice } from "@/components/chat/Notices";
 import { TasksCard } from "@/components/chat/TasksCard";
 import { TurnRow } from "@/components/chat/TurnRow";
 import { ProviderSwitchDivider } from "@/components/chat/ProviderSwitchDivider";
+import { NewThreadHeading } from "@/components/chat/NewThreadHeading";
 
 interface ChatPaneProps {
   sessionId: string;
@@ -766,51 +753,6 @@ export const ChatPane = memo(function ChatPane({
   const [tasksHidden, setTasksHidden] = useState(false);
   useEffect(() => setTasksHidden(false), [todosSig]);
 
-  // Built on demand, not per render: an empty thread is by definition not
-  // streaming, so eagerly constructing this set, filter and dropdown tree was
-  // work only ever done in the case that throws it away.
-  const renderNewThreadHeading = () => {
-    const openProjectPaths = new Set(projects.map((project) => project.path));
-    const recentOnly = recentProjects.filter(
-      (path) => !openProjectPaths.has(path)
-    );
-    return (
-    <h2 className="text-center text-3xl font-medium tracking-tight text-balance text-foreground">
-      What should we build in{" "}
-      <DropdownMenu>
-        <DropdownMenuTrigger className="ember-text inline-flex items-center gap-1 underline decoration-border underline-offset-4 outline-none transition-colors hover:decoration-foreground focus-visible:rounded focus-visible:ring-1 focus-visible:ring-ring">
-          {basename(cwd)}
-          <ChevronDown className="size-4 no-underline text-muted-foreground opacity-60" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="center">
-          {projects.map((project) => (
-            <DropdownMenuItem
-              key={project.id}
-              disabled={project.path === cwd}
-              onSelect={() => onSelectProject(project.id)}
-            >
-              {projectLabel(project)}
-            </DropdownMenuItem>
-          ))}
-          {recentOnly.length > 0 && projects.length > 0 && (
-            <DropdownMenuSeparator />
-          )}
-          {recentOnly.map((path) => (
-            <DropdownMenuItem
-              key={path}
-              onSelect={() => onOpenProject(path)}
-              title={path}
-            >
-              {basename(path)}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-      ?
-    </h2>
-    );
-  };
-
   return (
     <FileRefProject value={cwd}>
     {/* A fresh object here would defeat every consumer's memo — context does
@@ -867,7 +809,6 @@ export const ChatPane = memo(function ChatPane({
                   // A definite full-width box. The centred column below is only
                   // centred within this row, so a row left to size itself drifts
                   // and clips the answer text at the pane edge.
-                  className="will-change-transform"
                   style={{
                     position: "absolute",
                     top: 0,
@@ -883,7 +824,7 @@ export const ChatPane = memo(function ChatPane({
                           type="button"
                           disabled={loadingOlder}
                           onClick={loadEarlier}
-                          className="text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                          className="rounded-md px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
                         >
                           {loadingOlder ? "Loading…" : "Load earlier messages"}
                         </button>
@@ -952,7 +893,15 @@ export const ChatPane = memo(function ChatPane({
       >
         <div className="chat-content-width mx-auto">
           {thread.length === 0 && (
-            <div className="mb-8">{renderNewThreadHeading()}</div>
+            <div className="mb-8">
+              <NewThreadHeading
+                cwd={cwd}
+                projects={projects}
+                recentProjects={recentProjects}
+                onSelectProject={onSelectProject}
+                onOpenProject={onOpenProject}
+              />
+            </div>
           )}
           {terminal &&
             (accountIssue ? (
@@ -1029,7 +978,7 @@ export const ChatPane = memo(function ChatPane({
                     <button
                       type="button"
                       onClick={stopKeepGoing}
-                      className="rounded-md px-2 py-0.5 text-xs font-medium text-foreground transition-colors hover:bg-white/[0.04]"
+                      className="rounded-md px-2 py-0.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
                     >
                       Stop
                     </button>

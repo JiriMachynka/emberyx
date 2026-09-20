@@ -34,4 +34,27 @@ describe("themes", () => {
     expect(isThemeId(undefined)).toBe(false);
     expect(themeById(DEFAULT_THEME).id).toBe("ember");
   });
+
+  it("keeps the same lightness ramp across every theme", () => {
+    const lightness = (value: string) => value.match(/^oklch\(([\d.]+)/)?.[1];
+    const surfaces = [
+      "--background",
+      "--card",
+      "--popover",
+      "--sidebar",
+      "--canvas",
+      "--composer",
+      "--chat-canvas",
+      "--bubble",
+      "--work",
+    ] as const;
+    const ember = themeById("ember");
+    for (const theme of THEMES) {
+      for (const token of surfaces) {
+        expect(lightness(theme.tokens[token]), `${theme.id} ${token}`).toBe(
+          lightness(ember.tokens[token])
+        );
+      }
+    }
+  });
 });

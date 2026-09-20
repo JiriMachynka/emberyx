@@ -50,21 +50,31 @@ export type ThemeId =
   | "crimson"
   | "sandstone";
 
+const oklch = (l: number, c: number, h: number, alpha?: string) =>
+  alpha ? `oklch(${l} ${c} ${h} / ${alpha})` : `oklch(${l} ${c} ${h})`;
+
+/** Shared lightness ramp. Sidebar/canvas sit below the chat so the transcript
+ *  reads as its own room; bubbles sit a step above the chat canvas. */
+const surfaces = (c: number, h: number) =>
+  ({
+    "--background": oklch(0.14, c, h),
+    "--card": oklch(0.188, c, h),
+    "--popover": oklch(0.205, c, h),
+    "--sidebar": oklch(0.125, c, h),
+    "--canvas": oklch(0.11, c, h),
+    "--composer": oklch(0.205, c, h, "98%"),
+    "--chat-canvas": oklch(0.172, c, h),
+    "--bubble": oklch(0.228, c, h),
+    "--work": oklch(0.195, c, h),
+  }) as const;
+
 export const THEMES: Theme[] = [
   {
     id: "ember",
     label: "Ember",
     hint: "True-black neutral with the orange brand accent. The original.",
     tokens: {
-      "--background": "oklch(0.145 0 0)",
-      "--card": "oklch(0.17 0 0)",
-      "--popover": "oklch(0.185 0 0)",
-      "--sidebar": "oklch(0.13 0 0)",
-      "--canvas": "oklch(0.12 0 0)",
-      "--composer": "oklch(0.185 0 0 / 98%)",
-      "--chat-canvas": "oklch(0.16 0 0)",
-      "--bubble": "oklch(0.205 0 0)",
-      "--work": "oklch(0.19 0 0)",
+      ...surfaces(0, 0),
       "--primary": "oklch(0.73 0.163 52)",
       "--primary-foreground": "oklch(0.16 0.012 55)",
       "--ring": "oklch(0.73 0.163 52)",
@@ -78,15 +88,7 @@ export const THEMES: Theme[] = [
     label: "Graphite",
     hint: "Cool grey surfaces, ice-blue accent. The quietest of the five.",
     tokens: {
-      "--background": "oklch(0.145 0.006 235)",
-      "--card": "oklch(0.17 0.006 235)",
-      "--popover": "oklch(0.185 0.006 235)",
-      "--sidebar": "oklch(0.13 0.006 235)",
-      "--canvas": "oklch(0.12 0.006 235)",
-      "--composer": "oklch(0.185 0.006 235 / 98%)",
-      "--chat-canvas": "oklch(0.16 0.006 235)",
-      "--bubble": "oklch(0.205 0.006 235)",
-      "--work": "oklch(0.19 0.006 235)",
+      ...surfaces(0.006, 235),
       "--primary": "oklch(0.72 0.13 235)",
       "--primary-foreground": "oklch(0.16 0.02 235)",
       "--ring": "oklch(0.72 0.13 235)",
@@ -100,15 +102,7 @@ export const THEMES: Theme[] = [
     label: "Phosphor",
     hint: "Near-black with a green cast and a green accent. Terminal heritage.",
     tokens: {
-      "--background": "oklch(0.145 0.007 150)",
-      "--card": "oklch(0.17 0.007 150)",
-      "--popover": "oklch(0.185 0.007 150)",
-      "--sidebar": "oklch(0.13 0.007 150)",
-      "--canvas": "oklch(0.12 0.007 150)",
-      "--composer": "oklch(0.185 0.007 150 / 98%)",
-      "--chat-canvas": "oklch(0.16 0.007 150)",
-      "--bubble": "oklch(0.205 0.007 150)",
-      "--work": "oklch(0.19 0.007 150)",
+      ...surfaces(0.007, 150),
       "--primary": "oklch(0.75 0.15 150)",
       "--primary-foreground": "oklch(0.15 0.02 150)",
       "--ring": "oklch(0.75 0.15 150)",
@@ -122,15 +116,7 @@ export const THEMES: Theme[] = [
     label: "Crimson",
     hint: "Neutral black warmed a touch, with a hard red accent.",
     tokens: {
-      "--background": "oklch(0.145 0.006 15)",
-      "--card": "oklch(0.17 0.006 15)",
-      "--popover": "oklch(0.185 0.006 15)",
-      "--sidebar": "oklch(0.13 0.006 15)",
-      "--canvas": "oklch(0.12 0.006 15)",
-      "--composer": "oklch(0.185 0.006 15 / 98%)",
-      "--chat-canvas": "oklch(0.16 0.006 15)",
-      "--bubble": "oklch(0.205 0.006 15)",
-      "--work": "oklch(0.19 0.006 15)",
+      ...surfaces(0.006, 15),
       "--primary": "oklch(0.7 0.16 15)",
       "--primary-foreground": "oklch(0.16 0.03 15)",
       "--ring": "oklch(0.7 0.16 15)",
@@ -144,15 +130,7 @@ export const THEMES: Theme[] = [
     label: "Sandstone",
     hint: "Warm brown-black and a sand accent. Lowest glare for night work.",
     tokens: {
-      "--background": "oklch(0.145 0.011 85)",
-      "--card": "oklch(0.17 0.011 85)",
-      "--popover": "oklch(0.185 0.011 85)",
-      "--sidebar": "oklch(0.13 0.011 85)",
-      "--canvas": "oklch(0.12 0.011 85)",
-      "--composer": "oklch(0.185 0.011 85 / 98%)",
-      "--chat-canvas": "oklch(0.16 0.011 85)",
-      "--bubble": "oklch(0.205 0.011 85)",
-      "--work": "oklch(0.19 0.011 85)",
+      ...surfaces(0.011, 85),
       "--primary": "oklch(0.8 0.11 85)",
       "--primary-foreground": "oklch(0.18 0.03 85)",
       "--ring": "oklch(0.8 0.11 85)",

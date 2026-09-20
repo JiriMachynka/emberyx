@@ -27,6 +27,7 @@ import { basename } from "@/lib/path";
 import { parseDiff, hunkPatch } from "@/lib/hunks";
 import { highlightCached, langFromPath } from "@/lib/highlight";
 import {
+  gitStatusInterval,
   useGitChanges,
   useGitCommitDiff,
   useGitWorkingDiff,
@@ -156,7 +157,11 @@ export function ChangesPanel({
   // The index is the source of truth: a file shows up under
   // "Staged" when its index column is dirty and under "Changes" when its
   // worktree column is, so partly-staged files appear in both.
-  const gitQuery = useGitChanges(projectPath, active);
+  const gitQuery = useGitChanges(
+    projectPath,
+    active,
+    gitStatusInterval("watch")
+  );
   const gitFiles = useMemo(() => gitQuery.data ?? [], [gitQuery.data]);
   const stagedFiles = gitFiles.filter(isStaged);
   const unstagedFiles = gitFiles.filter(isUnstaged);

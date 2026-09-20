@@ -21,7 +21,7 @@ export function WorkingFooter({
         <span className="size-1 rounded-full bg-muted-foreground" />
       </span>
       {/* Same "this is live work" signal as a running tool row, not a new one. */}
-      <span className="tool-running-label">{label}</span>
+      <span className="tool-running-label tabular-nums">{label}</span>
     </div>
   );
 }

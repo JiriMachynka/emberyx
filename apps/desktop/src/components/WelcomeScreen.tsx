@@ -19,14 +19,14 @@ export function WelcomeScreen({
       <img
         src="/emberyx.png"
         alt="Emberyx"
-        className="ember-glow size-16 rounded-2xl"
+        className="ember-glow size-16 rounded-2xl outline outline-1 outline-white/10"
       />
       <div>
         <h1 className="ember-text text-xl font-semibold tracking-tight">
           Emberyx
         </h1>
         <p className="text-sm text-muted-foreground">
-          Launches your agent in an integrated terminal.
+          Chat cockpit for Claude, Codex, OpenCode, and Grok.
         </p>
       </div>
       <Button onClick={onPick}>

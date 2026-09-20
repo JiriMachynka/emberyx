@@ -6,13 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  ArrowUp,
-  ImagePlus,
-  ScanText,
-  Square,
-  X,
-} from "lucide-react";
+import { ArrowUp, ImagePlus, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MentionMenu } from "@/components/MentionMenu";
@@ -43,30 +37,18 @@ import { cn } from "@/lib/utils";
 import type { PromptQueue } from "@/lib/promptQueue";
 import { useAgentStore } from "@/lib/agentStore";
 import type { ChatImage, ChatUsage } from "@/hooks/useAgentChat";
-import { imageSrc } from "@/components/chat/imageSrc";
 import { processImage } from "@/components/composer/processImage";
 import { BranchChip } from "@/components/composer/BranchChip";
 import { ContextMeter } from "@/components/composer/ContextMeter";
 import { QuotaChip } from "@/components/composer/QuotaChip";
 import { UsageFooter } from "@/components/composer/UsageFooter";
+import { ImageStrip } from "@/components/composer/ImageStrip";
+import {
+  clampComposerHeight,
+  minComposerLine,
+} from "@/components/composer/height";
 
-/** Floor so a measure taken while the pane is `display: none` (scrollHeight
- *  0) cannot collapse the box. Cap matches `max-h-40`. */
-export const clampComposerHeight = (
-  scrollHeight: number,
-  minLine: number,
-  cap = 160
-) => Math.min(Math.max(scrollHeight, minLine), cap);
-
-/** One line of padding + text, from the textarea's computed box. */
-const minComposerLine = (el: HTMLTextAreaElement): number => {
-  const cs = getComputedStyle(el);
-  const lh = parseFloat(cs.lineHeight);
-  const line = Number.isFinite(lh) && lh > 0 ? lh : 24;
-  const pad =
-    (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
-  return pad + line;
-};
+export { clampComposerHeight };
 
 /** Suggestions shown for an `@` file reference. */
 const MENTION_LIMIT = 8;
@@ -202,7 +184,8 @@ export const ChatComposer = memo(function ChatComposer({
     [filesQuery.data, mention]
   );
 
-  const slashCommands = capabilitiesOf(backend).slashCommands;
+  const caps = capabilitiesOf(backend);
+  const slashCommands = caps.slashCommands;
   const sigil = COMMAND_SIGIL[backend];
   const commandsQuery = useSlashCommands(cwd, slashCommands && slash !== null, backend);
   const commandHits = useMemo(
@@ -331,12 +314,12 @@ export const ChatComposer = memo(function ChatComposer({
     closeMenus();
   };
 
-  const canCompact = capabilitiesOf(backend).compact && onCompact;
+  const canCompact = caps.compact && onCompact;
   // Read here too, so the strip under the input can stay out of the DOM
   // entirely for a project that is not a git repo. Same query key as the
   // chip's, so it costs a cache read rather than a second `git branch`.
   const branch = useGitBranch(cwd).data?.branch;
-  const hasStrip = !!branch || capabilitiesOf(backend).usage;
+  const hasStrip = !!branch || caps.usage;
   const compactBlocked = compactDisabledReason({
     busy,
     ready: ready && !exited,
@@ -502,56 +485,11 @@ export const ChatComposer = memo(function ChatComposer({
           dragging && "border-primary/50 bg-primary/5 ring-1 ring-primary/25"
         )}
       >
-        {images.length > 0 && (
-          <div className="flex flex-wrap gap-2 px-5 pt-4">
-            {images.map((img) => (
-              <div
-                key={img.id}
-                className="relative size-16 overflow-hidden rounded-lg border border-border"
-              >
-                <button
-                  type="button"
-                  onClick={() => onPreview(imageSrc(img), img.snapshot?.a11y)}
-                  className="block size-full"
-                  title={
-                    img.snapshot
-                      ? `${img.snapshot.app}${img.snapshot.title ? ` — ${img.snapshot.title}` : ""}`
-                      : undefined
-                  }
-                >
-                  <img src={imageSrc(img)} alt="" className="size-full object-cover" />
-                </button>
-                {/* A snapshot names what was captured; the badge marks a tree
-                    waiting under the image in the lightbox. */}
-                {img.snapshot && (
-                  <span className="absolute inset-x-0 bottom-0 truncate bg-background/80 px-1 text-xs leading-4 text-foreground">
-                    {img.snapshot.app}
-                  </span>
-                )}
-                {img.snapshot?.a11y && (
-                  <span
-                    title="Includes accessibility tree"
-                    className="absolute left-1 top-1 rounded bg-background/80 p-0.5 text-foreground"
-                  >
-                    <ScanText className="size-3" />
-                  </span>
-                )}
-                {/* Always visible: a remove affordance that only appears on
-                    hover is one a trackpad user has to go hunting for. */}
-                <button
-                  type="button"
-                  title="Remove"
-                  onClick={() =>
-                    setImages((prev) => prev.filter((i) => i.id !== img.id))
-                  }
-                  className="absolute right-1 top-1 rounded-full bg-background/70 p-0.5 text-foreground transition-colors hover:bg-background"
-                >
-                  <X className="size-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        <ImageStrip
+          images={images}
+          onPreview={onPreview}
+          onRemove={(id) => setImages((prev) => prev.filter((i) => i.id !== id))}
+        />
         <Textarea
           ref={inputRef}
           value={input}
@@ -701,7 +639,7 @@ export const ChatComposer = memo(function ChatComposer({
             onOpenWorktree={onOpenWorktree}
           />
           <div className="flex shrink-0 items-center gap-1.5">
-            {capabilitiesOf(backend).usage && usage.quota && (
+            {caps.usage && usage.quota && (
               <QuotaChip quota={usage.quota} />
             )}
             <input
@@ -764,7 +702,7 @@ export const ChatComposer = memo(function ChatComposer({
         // giving up its corners.
         <div className="chat-composer-shelf relative z-0 -mt-3 flex items-center gap-3 rounded-b-xl border border-border/60 bg-card/40 px-2 pb-1 pt-4">
           <BranchChip cwd={cwd} busy={busy} compact />
-          {capabilitiesOf(backend).usage && (
+          {caps.usage && (
             <ContextMeter
               contextTokens={usage.contextTokens}
               model={model}

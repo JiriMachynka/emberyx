@@ -72,7 +72,7 @@ export const STATUS_META: Record<
   },
   working: {
     label: "working",
-    text: "text-orange-400",
+    text: "text-primary",
     pulse: true,
   },
   waiting: {
