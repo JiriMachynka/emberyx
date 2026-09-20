@@ -110,7 +110,10 @@ export const useGitChanges = (path: string, enabled = true) =>
   useQuery({
     queryKey: gitKeys.changes(path),
     queryFn: () => invoke<GitFile[]>("git_changes", { path }),
-    enabled,
+    enabled: enabled && path.length > 0,
+    // Porcelain is cheap; the top-bar count has to move as the agent writes,
+    // not wait for a commit or a focus event.
+    refetchInterval: 2_000,
   });
 
 // Turn-review queries. The Rust side resolves each turn's range end (settle
@@ -311,11 +314,13 @@ export const useGitBranch = (path: string) => {
     refetchInterval: 2_000,
     staleTime: Infinity,
     retry: false,
+    enabled: path.length > 0,
   });
   return useQuery({
     queryKey: gitKeys.snapshotBranch(path, snapshot.data ?? ""),
     // Throws when the dir isn't a repo / has no commits — data stays undefined.
     queryFn: () => invoke<GitBranch>("git_branch", { path }),
+    enabled: path.length > 0,
   });
 };
 
@@ -337,6 +342,7 @@ export const useGitRemoteHost = (path: string) =>
     queryKey: gitKeys.remoteHost(path),
     queryFn: () => invoke<GitRemoteHost>("git_remote_host", { path }),
     staleTime: Infinity,
+    enabled: path.length > 0,
   });
 
 export const useGitBranches = (path: string, enabled: boolean) =>

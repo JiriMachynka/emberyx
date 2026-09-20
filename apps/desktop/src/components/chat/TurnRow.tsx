@@ -4,10 +4,15 @@ import { Markdown } from "@/components/Markdown";
 import { isTodoTool, lastTodos } from "@/lib/toolDisplay";
 import { isEmptyThought } from "@/lib/activityDisplay";
 import type { ChatMessage } from "@/hooks/useAgentChat";
-import { liveWorkLabel, summarizeWork } from "@/lib/workSummary";
+import { summarizeWork } from "@/lib/workSummary";
 import { useAgentStore } from "@/lib/agentStore";
 import { cn } from "@/lib/utils";
-import { isAgentTool, type Turn } from "@/components/chat/turns";
+import {
+  isAgentTool,
+  workLogHeaderVisible,
+  workLogOpen,
+  type Turn,
+} from "@/components/chat/turns";
 import { TasksCard } from "@/components/chat/TasksCard";
 import { ChangedFilesCard } from "@/components/chat/ChangedFilesCard";
 import { MessageWork } from "@/components/chat/MessageWork";
@@ -17,8 +22,9 @@ import {
   type ChatContext,
 } from "@/components/chat/MessageRow";
 
-/** One turn: the user bubble, then the work accordion (live header while the
- *  turn is running, a count once it settles) with the final answer below it. */
+/** One turn: the user bubble, then the work (thoughts as their own line,
+ *  tools in a panel) with the final answer below it. Settled work collapses
+ *  to a count. */
 export const TurnRow = memo(
   function TurnRow({
     turn,
@@ -89,8 +95,9 @@ export const TurnRow = memo(
             <div className="flex flex-col gap-2">
               {!live && turnTodos && <TasksCard items={turnTodos} planKey={turn.key} />}
               <TurnWork
-                label={turnWorkLabel(assistants, live)}
+                label={turnWorkLabel(assistants)}
                 live={live}
+                answering={Boolean(last?.text)}
                 agentsRunning={agentsRunning}
               >
                 {assistants.map((a, i) => (
@@ -115,9 +122,7 @@ export const TurnRow = memo(
                     fontSize={fontSize}
                     streaming={live && last.streaming}
                   />
-                  {!(live && last.streaming) && (
-                    <MessageActions text={last.text} />
-                  )}
+                  <MessageActions text={last.text} />
                 </div>
               )}
             </div>
@@ -144,24 +149,12 @@ export const TurnRow = memo(
     a.turn.assistants.every((m, i) => m === b.turn.assistants[i])
 );
 
-/** What one turn's work amounts to, in words. Live turns name the latest
- *  row ("Thinking") so the accordion header is the current state; settled
- *  turns fall back to a count, or a tool count for a replayed transcript
- *  that never carried an activity stream. */
-function turnWorkLabel(assistants: ChatMessage[], live: boolean): string | null {
+/** What one turn's work amounts to, in words. A count, not the live row —
+ *  "Thinking" and the running command already have their own rows. */
+function turnWorkLabel(assistants: ChatMessage[]): string | null {
   const rows = assistants.flatMap(
     (m) => m.activities?.filter((a) => !isTodoTool(a.title) && !isEmptyThought(a)) ?? []
   );
-  if (live) {
-    const liveLabel = liveWorkLabel(rows);
-    if (liveLabel) return liveLabel;
-    const running = assistants
-      .flatMap((m) => m.tools)
-      .filter((t) => t.result == null && !isTodoTool(t.name))
-      .pop();
-    if (running) return running.name;
-    if (assistants.some((m) => m.thinking)) return "Thinking";
-  }
   if (rows.length) return summarizeWork(rows);
   const tools = assistants.flatMap((m) => m.tools.filter((t) => !isTodoTool(t.name)));
   if (tools.length)
@@ -169,26 +162,40 @@ function turnWorkLabel(assistants: ChatMessage[], live: boolean): string | null 
   return assistants.some((m) => m.thinking) ? "Ran 1 thought" : null;
 }
 
-/** A turn's work: one line over the rows. Live turns name the latest row
- *  and stay open; settled turns collapse to a count. `null` means the user
- *  hasn't decided, so live / running subagents do. */
+/** A turn's work: one line over the rows. Live turns stay open until the
+ *  answer starts writing, then collapse so the answer isn't buried. Settled
+ *  turns start closed. `null` means the user hasn't decided. */
 function TurnWork({
   label,
   live,
+  answering,
   agentsRunning,
   children,
 }: {
   label: string | null;
   live?: boolean;
+  answering: boolean;
   agentsRunning: number;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState<boolean | null>(null);
-  const expanded = open ?? (live === true || agentsRunning > 0);
+  const expanded = workLogOpen({
+    live: live === true,
+    answering,
+    agentsRunning,
+    override: open,
+  });
+  const showHeader = workLogHeaderVisible({
+    live: live === true,
+    expanded,
+    agentsRunning,
+  });
   return (
     <div className="flex flex-col gap-2">
+      {showHeader && (
       <button
         type="button"
+        aria-expanded={expanded}
         onClick={() => setOpen(!expanded)}
         className={cn(
           "flex items-center gap-1.5 self-start text-xs font-medium transition-colors hover:text-foreground",
@@ -209,6 +216,7 @@ function TurnWork({
           className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
         />
       </button>
+      )}
       <div
         className="grid transition-[grid-template-rows] duration-200 ease-out"
         style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}

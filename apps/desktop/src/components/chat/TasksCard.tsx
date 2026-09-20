@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useLayoutEffect, useRef, useState } from "react";
 import { Check, ChevronDown, ListTodo, X } from "lucide-react";
 import { currentTodo, type TodoItem } from "@/lib/toolDisplay";
 import { recordTodoTimings, todoTimings } from "@/lib/todoTimings";
@@ -31,11 +31,18 @@ export const TasksCard = memo(function TasksCard({
   const [open, setOpen] = useState(!collapsible);
   const expanded = !collapsible || open;
   const done = items.filter((t) => t.status === "completed").length;
-  const current = collapsible ? currentTodo(items) : null;
+  const current = currentTodo(items);
+  const tracking = current != null && current.status !== "completed";
+  const currentRef = useRef<HTMLLIElement>(null);
+  useLayoutEffect(() => {
+    if (expanded && tracking) {
+      currentRef.current?.scrollIntoView({ block: "nearest" });
+    }
+  }, [expanded, tracking, current?.text, current?.status]);
   const header = (
     <>
       <ListTodo className="size-4 shrink-0 text-muted-foreground" />
-      {current && !expanded ? (
+      {collapsible && current ? (
         <span className="min-w-0 flex-1 truncate text-left">{current.text}</span>
       ) : (
         <span className="font-medium">Tasks</span>
@@ -111,20 +118,26 @@ export const TasksCard = memo(function TasksCard({
       {/* The grid wrapper eases the list open and shut (see .task-list-clip):
           it always renders, so the animation has both ends to move between. */}
       <div className="task-list-clip" data-open={expanded}>
-      <ul className="flex flex-col px-3 pb-2">
+      <ul className={cn("flex flex-col px-3 pb-2", collapsible && "max-h-48 overflow-y-auto")}>
         {items.map((item, i) => {
           const t = timings.get(i);
+          const isActive = tracking && item === current;
           const elapsed =
-            item.status === "in_progress"
+            item.status === "in_progress" || isActive
               ? "now"
               : item.status === "completed" && t?.endedAt != null
                 ? formatDuration(t.endedAt - t.startedAt)
                 : undefined;
           return (
-            <li key={`${i}:${item.text}`} className="flex items-start gap-2 py-1.5 text-sm">
+            <li
+              key={`${i}:${item.text}`}
+              ref={isActive ? currentRef : undefined}
+              aria-current={isActive ? "step" : undefined}
+              className="flex items-start gap-2 py-1.5 text-sm"
+            >
               {item.status === "completed" ? (
                 <Check className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              ) : item.status === "in_progress" ? (
+              ) : isActive ? (
                 <span className="mt-1.5 size-2 shrink-0 rounded-full bg-primary" />
               ) : (
                 <span className="mt-1.5 size-2 shrink-0 rounded-full border border-muted-foreground/40" />

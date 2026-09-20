@@ -3,7 +3,12 @@ import { addRecent, getRecents } from "@/lib/recents";
 import { getOpenProjects, saveOpenProjects } from "@/lib/openProjects";
 import { PANEL_MIN_WIDTH, getPanelWidth, setPanelWidth } from "@/lib/panels";
 import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
-import { cachedThreads, cacheThreads } from "@/lib/threadCache";
+import {
+  cachedThreads,
+  cacheThreads,
+  mergeLiveThreads,
+  resumableThreads,
+} from "@/lib/threadCache";
 import type { Thread } from "@/types";
 import {
   getProjectConfigs,
@@ -128,58 +133,109 @@ describe("sidebar collapse", () => {
 
 describe("thread cache", () => {
   it("starts empty", () => {
-    expect(cachedThreads("/a")).toEqual([]);
+    expect(cachedThreads("/a", "claude")).toEqual([]);
   });
 
-  it("round-trips a thread list per project path", () => {
+  it("round-trips a thread list per project path and backend", () => {
     const threads: Thread[] = [
       { id: "s1", title: "Fix the parser", modified: 100 },
       { id: "s2", title: "Ship the sidebar", modified: 200 },
     ];
-    cacheThreads("/a", threads);
-    expect(cachedThreads("/a")).toEqual(threads);
-    expect(cachedThreads("/b")).toEqual([]);
+    cacheThreads("/a", "claude", threads);
+    expect(cachedThreads("/a", "claude")).toEqual(threads);
+    expect(cachedThreads("/b", "claude")).toEqual([]);
+    expect(cachedThreads("/a", "opencode")).toEqual([]);
   });
 
   it("a later scan replaces the entry wholesale", () => {
-    cacheThreads("/a", [{ id: "s1", title: "old", modified: 100 }]);
-    cacheThreads("/a", [{ id: "s2", title: "new", modified: 200 }]);
-    expect(cachedThreads("/a")).toEqual([{ id: "s2", title: "new", modified: 200 }]);
+    cacheThreads("/a", "claude", [{ id: "s1", title: "old", modified: 100 }]);
+    cacheThreads("/a", "claude", [{ id: "s2", title: "new", modified: 200 }]);
+    expect(cachedThreads("/a", "claude")).toEqual([
+      { id: "s2", title: "new", modified: 200 },
+    ]);
+  });
+
+  it("does not replay another backend's cache after a restart", () => {
+    cacheThreads("/a", "opencode", [
+      { id: "oc1", title: "OpenCode thread", modified: 100, provider: "opencode" },
+    ]);
+    expect(cachedThreads("/a", "claude")).toEqual([]);
   });
 
   it("recovers from corrupt storage", () => {
     localStorage.setItem("emberyx.threadCache", "{not json");
-    expect(cachedThreads("/a")).toEqual([]);
+    expect(cachedThreads("/a", "claude")).toEqual([]);
   });
 
   it("recovers from a stored value of the wrong shape", () => {
-    localStorage.setItem("emberyx.threadCache", JSON.stringify({ "/a": "nope" }));
-    expect(cachedThreads("/a")).toEqual([]);
+    localStorage.setItem(
+      "emberyx.threadCache",
+      JSON.stringify({ "claude:/a": "nope" })
+    );
+    expect(cachedThreads("/a", "claude")).toEqual([]);
   });
 
   it("ignores a storage failure instead of throwing", () => {
     const spy = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
       throw new Error("quota");
     });
-    expect(() => cacheThreads("/a", [])).not.toThrow();
+    expect(() => cacheThreads("/a", "claude", [])).not.toThrow();
     spy.mockRestore();
   });
 
   it("does not replay a placeholder title from a previous listing", () => {
-    cacheThreads("/a", [
+    cacheThreads("/a", "claude", [
       { id: "s1", title: "Fix the parser", modified: 100 },
       { id: "s2", title: "Imported thread", modified: 200, imported: true },
     ]);
-    expect(cachedThreads("/a")).toEqual([
+    expect(cachedThreads("/a", "claude")).toEqual([
       { id: "s1", title: "Fix the parser", modified: 100 },
     ]);
     localStorage.setItem(
       "emberyx.threadCache",
       JSON.stringify({
-        "/a": [{ id: "s2", title: "Imported thread", modified: 200, imported: true }],
+        "claude:/a": [
+          { id: "s2", title: "Imported thread", modified: 200, imported: true },
+        ],
       })
     );
-    expect(cachedThreads("/a")).toEqual([]);
+    expect(cachedThreads("/a", "claude")).toEqual([]);
+  });
+});
+
+describe("resumableThreads", () => {
+  it("will not resume a scanned Claude transcript on OpenCode", () => {
+    const rows: Thread[] = [
+      { id: "c1", title: "Claude jsonl", modified: 200 },
+      { id: "o1", title: "OpenCode", modified: 100, provider: "opencode" },
+    ];
+    expect(resumableThreads(rows, "opencode").map((t) => t.id)).toEqual(["o1"]);
+    expect(resumableThreads(rows, "claude").map((t) => t.id)).toEqual(["c1"]);
+  });
+
+  it("skips imported history — there is no provider conversation to continue", () => {
+    expect(
+      resumableThreads(
+        [{ id: "i1", title: "Imported", modified: 1, imported: true }],
+        "claude"
+      )
+    ).toEqual([]);
+  });
+});
+
+describe("mergeLiveThreads", () => {
+  it("keeps a pane-registered thread the scan has not written yet", () => {
+    expect(
+      mergeLiveThreads(
+        [{ id: "disk", title: "on disk", modified: 1 }],
+        [{ id: "live", title: "just started", modified: 2 }]
+      ).map((t) => t.id)
+    ).toEqual(["live", "disk"]);
+  });
+
+  it("does not duplicate a live thread the scan already listed", () => {
+    const row = { id: "t1", title: "same", modified: 1 };
+    expect(mergeLiveThreads([row], [row])).toEqual([row]);
   });
 });
 

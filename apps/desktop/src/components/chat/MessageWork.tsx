@@ -84,10 +84,10 @@ export function MessageWork({
     );
   }
   if (!message.thinking && message.tools.length === 0) return null;
-  // No recorded order, so thinking stays above tools — but on the same one
-  // panel the streamed path uses, as hairline rows on it rather than boxes.
+  // No recorded order, so thinking stays above tools — and off the tool
+  // panel, same as the streamed path.
   return (
-    <div className="chat-work-panel flex flex-col divide-y divide-border/50 overflow-hidden rounded-xl border">
+    <div className="flex flex-col gap-2">
       {message.thinking && (
         <ThinkingBlock
           text={message.thinking}
@@ -96,7 +96,7 @@ export function MessageWork({
         />
       )}
       {message.tools.length > 0 && (
-        <ToolList tools={message.tools} live={live} framed={false} />
+        <ToolList tools={message.tools} live={live} />
       )}
     </div>
   );

@@ -7,7 +7,7 @@ import { GitCommitMenu } from "@/components/GitCommitMenu";
 import type { ProjectAction } from "@/lib/actions";
 import { basename } from "@/lib/path";
 import { glyphFor } from "@/lib/projectGlyph";
-import { useGitRemoteHost } from "@/lib/queries";
+import { useGitBranch, useGitChanges, useGitRemoteHost } from "@/lib/queries";
 import type { Project, Session } from "@/types";
 
 /** Fresh chats are labeled "chat" until a title exists; don't show that. */
@@ -53,7 +53,10 @@ export function ContextBar({
   dockOpen,
   onToggleDock,
 }: ContextBarProps) {
-  const remoteHost = useGitRemoteHost(activeProject?.path ?? "").data;
+  const path = activeProject?.path ?? "";
+  const remoteHost = useGitRemoteHost(path).data;
+  const branch = useGitBranch(path).data?.branch;
+  const changeCount = useGitChanges(path, path.length > 0).data?.length ?? 0;
 
   const title =
     (agent?.resume &&
@@ -104,10 +107,19 @@ export function ContextBar({
             variant={gitOpen ? "chromeActive" : "chrome"}
             size="sm"
             onClick={onToggleGit}
-            title="Branch actions and commit history"
+            title={
+              branch
+                ? `On ${branch} — branch actions and commit history`
+                : "Branch actions and commit history"
+            }
           >
             <GitGraph className="size-3.5" />
-            Git
+            <span className="max-w-28 truncate">{branch ?? "Git"}</span>
+            {changeCount > 0 && (
+              <span className="rounded bg-amber-500/20 px-1 text-[10px] text-amber-400">
+                {changeCount}
+              </span>
+            )}
           </Button>
         )}
         {activeProject && (

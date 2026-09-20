@@ -14,8 +14,10 @@ import {
   isMonoActivity,
   labelForActivity,
   metaForActivity,
+  segmentWork,
   titleForActivity,
   visibleActivities,
+  type ActivityGroup,
 } from "@/lib/activityDisplay";
 import { TOOL_ICONS, TOOL_TINT } from "@/lib/toolIcons";
 import { isFileReference } from "@/lib/fileRef";
@@ -48,11 +50,10 @@ export const ActivityRow = memo(function ActivityRow({
   const isAgent = isAgentActivity(activity);
   const expandable = activity.arguments != null || activity.output != null;
 
-  // Always closed until clicked. A card that auto-opened while working pushed
-  // the conversation off-screen on every command and shut again the moment you
-  // started reading it.
-  const [override, setOverride] = useState(false);
-  const open = override && expandable;
+  // Open while this row is the one still running; a click sticks. Auto-opening
+  // every card used to bury the answer — only the in-flight one expands.
+  const [override, setOverride] = useState<boolean | null>(null);
+  const open = expandable && !isAgent && (override ?? running);
 
   const selectAgent = useAgentStore((s) => s.selectAgent);
   const selectedAgent = useAgentStore((s) => s.selectedAgent);
@@ -88,6 +89,7 @@ export const ActivityRow = memo(function ActivityRow({
     <div className="text-xs">
       <button
         type="button"
+        aria-expanded={expandable && !isAgent ? open : undefined}
         onClick={() =>
           isAgent
             ? selectAgent(selected ? null : activity.id)
@@ -163,11 +165,10 @@ export const ActivityRow = memo(function ActivityRow({
 });
 
 /**
- * A turn's work, in the order it happened, on one panel: hairline rows, not a
- * stack of boxes.
- *
- * Consecutive thoughts share one Think row; a turn that thought, ran
- * something, then thought again still renders two, around the work.
+ * A turn's work, in the order it happened. Thoughts are their own line;
+ * commands and files share a panel so Think is never the lid on a box of
+ * tools. Consecutive thoughts still collapse; a thought, then work, then
+ * another thought still renders as two Think rows around the panel.
  */
 export function ActivityList({
   activities,
@@ -183,31 +184,36 @@ export function ActivityList({
   /** Live turns hide settled tools; the finished-turn accordion keeps the log. */
   live?: boolean;
   /** The panel is this list's own surface, unless the caller already provides
-   *  one around it (the pane's replay fallback wraps a thinking block and this
-   *  list in the same panel). */
+   *  one around it (the pane's replay fallback wraps tools in the same panel). */
   framed?: boolean;
 }) {
   const rows = visibleActivities(activities, live === true);
   if (rows.length === 0) return null;
+  const renderPanelGroup = (
+    group: Extract<ActivityGroup, { type: "files" | "single" }>
+  ) => {
+    if (group.type === "files") {
+      return (
+        <ActivityFileTree
+          key={`files:${group.activities[0].id}`}
+          activities={group.activities}
+          live={live}
+        />
+      );
+    }
+    const activity = group.activity;
+    const agent = isAgentActivity(activity) ? renderAgent?.(activity) : undefined;
+    return agent ? (
+      <Fragment key={activity.id}>{agent}</Fragment>
+    ) : (
+      <ActivityRow key={activity.id} activity={activity} />
+    );
+  };
   return (
-    <div
-      className={cn(
-        "flex flex-col divide-y divide-border/50",
-        framed && "chat-work-panel overflow-hidden rounded-xl border"
-      )}
-    >
-      {groupActivities(rows).map((group) => {
-        if (group.type === "files") {
-          return (
-            <ActivityFileTree
-              key={`files:${group.activities[0].id}`}
-              activities={group.activities}
-              live={live}
-            />
-          );
-        }
-        if (group.type === "reasoning") {
-          const thoughts = group.activities;
+    <div className="flex flex-col gap-2">
+      {segmentWork(groupActivities(rows)).map((segment) => {
+        if (segment.type === "reasoning") {
+          const thoughts = segment.activities;
           return (
             <ThinkingBlock
               key={thoughts[0].id}
@@ -220,12 +226,20 @@ export function ActivityList({
             />
           );
         }
-        const activity = group.activity;
-        const agent = isAgentActivity(activity) ? renderAgent?.(activity) : undefined;
-        return agent ? (
-          <Fragment key={activity.id}>{agent}</Fragment>
-        ) : (
-          <ActivityRow key={activity.id} activity={activity} />
+        return (
+          <div
+            key={
+              segment.groups[0].type === "files"
+                ? `files:${segment.groups[0].activities[0].id}`
+                : segment.groups[0].activity.id
+            }
+            className={cn(
+              "flex flex-col divide-y divide-border/50",
+              framed && "chat-work-panel overflow-hidden rounded-xl border"
+            )}
+          >
+            {segment.groups.map(renderPanelGroup)}
+          </div>
         );
       })}
     </div>

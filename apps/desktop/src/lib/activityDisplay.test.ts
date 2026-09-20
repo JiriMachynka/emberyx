@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   groupActivities,
+  segmentWork,
   iconForActivity,
   isAgentActivity,
   isFileActivity,
@@ -197,6 +198,21 @@ describe("groupActivities", () => {
   });
 });
 
+describe("segmentWork", () => {
+  it("keeps thoughts outside the tool panel so Think is not a lid on commands", () => {
+    const t1 = row({ id: "t1", kind: "reasoning" });
+    const bash = row({ id: "bash", kind: "command" });
+    const read = row({ id: "read", kind: "fileRead", displayTarget: "src/a.ts" });
+    const t2 = row({ id: "t2", kind: "reasoning" });
+    const segments = segmentWork(groupActivities([t1, bash, read, t2]));
+    expect(segments.map((s) => s.type)).toEqual(["reasoning", "panel", "reasoning"]);
+    expect(segments[0].type === "reasoning" && segments[0].activities).toEqual([t1]);
+    expect(
+      segments[1].type === "panel" && segments[1].groups.map((g) => g.type)
+    ).toEqual(["single", "files"]);
+  });
+});
+
 describe("fileEditsFor", () => {
   it("names the exact state Codex reports, per file", () => {
     const item = row({
@@ -223,7 +239,7 @@ describe("fileEditsFor", () => {
     });
     expect(fileEditsFor(written).get("src/a.ts")).toEqual({
       state: "created",
-      before: null,
+      before: "",
       after: "const a = 1;\n",
     });
     const edited = row({
@@ -247,6 +263,20 @@ describe("fileEditsFor", () => {
       arguments: JSON.stringify({ file_path: "log.ts", old_string: "", new_string: "tail" }),
     });
     expect(fileEditsFor(appended).get("log.ts")?.state).toBe("created");
+  });
+
+  it("reads a half-streamed Write so the tree can paint the growing file", () => {
+    const writing = row({
+      kind: "fileChange",
+      title: "Write",
+      complete: false,
+      arguments: JSON.stringify({ file_path: "src/a.ts", content: "const x = " }),
+    });
+    expect(fileEditsFor(writing).get("src/a.ts")).toEqual({
+      state: "created",
+      before: "",
+      after: "const x = ",
+    });
   });
 
   it("keeps the verb from the tool name while the input is still streaming", () => {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { groupTurns, isAgentTool } from "@/components/chat/turns";
+import {
+  groupTurns,
+  isAgentTool,
+  workLogHeaderVisible,
+  workLogOpen,
+} from "@/components/chat/turns";
 import type { ChatMessage } from "@/hooks/useAgentChat";
 
 const msg = (id: string, role: ChatMessage["role"]): ChatMessage => ({
@@ -48,5 +53,49 @@ describe("isAgentTool", () => {
     expect(isAgentTool("Task")).toBe(true);
     expect(isAgentTool("Agent")).toBe(true);
     expect(isAgentTool("Bash")).toBe(false);
+  });
+});
+
+describe("workLogOpen", () => {
+  const unset = { override: null as boolean | null, agentsRunning: 0 };
+
+  it("stays open while live work has no answer yet", () => {
+    expect(workLogOpen({ live: true, answering: false, ...unset })).toBe(true);
+  });
+
+  it("collapses once the answer starts, unless a subagent is still running", () => {
+    expect(workLogOpen({ live: true, answering: true, ...unset })).toBe(false);
+    expect(
+      workLogOpen({ live: true, answering: true, override: null, agentsRunning: 1 })
+    ).toBe(true);
+  });
+
+  it("lets a click stick, live or settled", () => {
+    expect(
+      workLogOpen({ live: true, answering: true, override: true, agentsRunning: 0 })
+    ).toBe(true);
+    expect(
+      workLogOpen({ live: true, answering: false, override: false, agentsRunning: 0 })
+    ).toBe(false);
+  });
+});
+
+describe("workLogHeaderVisible", () => {
+  it("hides the title while live work is already on screen", () => {
+    expect(
+      workLogHeaderVisible({ live: true, expanded: true, agentsRunning: 0 })
+    ).toBe(false);
+  });
+
+  it("shows a count once the log is collapsed, and while a subagent runs", () => {
+    expect(
+      workLogHeaderVisible({ live: true, expanded: false, agentsRunning: 0 })
+    ).toBe(true);
+    expect(
+      workLogHeaderVisible({ live: false, expanded: false, agentsRunning: 0 })
+    ).toBe(true);
+    expect(
+      workLogHeaderVisible({ live: true, expanded: true, agentsRunning: 1 })
+    ).toBe(true);
   });
 });

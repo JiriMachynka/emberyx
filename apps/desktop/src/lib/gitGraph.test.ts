@@ -55,19 +55,25 @@ describe("layoutGraph", () => {
     expect(rows[4].dot).toBe(0);
   });
 
-  it("keeps two independent branch tips apart", () => {
+  it("keeps two independent branch tips apart, then compacts when one ends", () => {
     const { rows } = layoutGraph([
       c("A1", ["A0"]),
       c("B1", ["B0"]),
       c("A0"),
       c("B0"),
     ]);
-    // A1 opens lane 0; B1 opens lane 1 — independent tips don't collide.
+    // A1 opens lane 0; B1 opens lane 1 — independent tips don't collide while
+    // both lines are alive.
     expect(rows[0].dot).toBe(0);
     expect(rows[1].dot).toBe(1);
-    // Their ancestors stay on their own lanes.
     expect(rows[2].dot).toBe(0);
-    expect(rows[3].dot).toBe(1);
+    // A's line ended at A0, but its lane still draws its top remnant here.
+    expect(rows[2].columns).toBe(2);
+    // B's chain survives on its own lane; after A's lane drops, B slides into
+    // column 0 with the kink that moved it.
+    expect(rows[3].dot).toBe(0);
+    expect(rows[3].columns).toBe(1);
+    expect(rows[3].edges).toEqual([{ from: 1, to: 0 }]);
   });
 
   it("continues columns across an incremental page boundary", () => {
@@ -105,6 +111,83 @@ describe("layoutGraph", () => {
     expect(rows[1].commit).toBe(full[1]);
     expect(rows[0].commit.refs).toEqual(["HEAD -> main", "tag: v1", "origin/main"]);
     expect(rows[0].commit.subject).toBe("merge the side branch");
+  });
+
+  it("pins the trunk (the HEAD -> main line) to column 0", () => {
+    // Walk order (topo): an unrelated tip claims column 0 first, a feature
+    // tip forked off main's tip nests at column 1, then the main chain comes
+    // down. The trunk sits on column 0 from its tip despite that, and lanes
+    // never weave underneath a foreign branch.
+    const { rows, state } = layoutGraph([
+      c("W1", ["W0"]),
+      c("F1", ["M3"]),
+      { ...c("M3", ["M2"]), refs: ["HEAD -> main"] },
+      c("M2", ["M1"]),
+      c("M1", ["M0"]),
+      c("W0", ["M0"]),
+      c("M0"),
+    ]);
+    expect(rows.map((r) => r.dot)).toEqual([0, 1, 0, 0, 0, 1, 0]);
+    // M3's tip was expected in lane 1 (F1 claimed it for its parent): pulling
+    // home draws the bend, and lane 0's occupant shifts over with its own.
+    expect(rows[2].edges).toEqual([
+      { from: 0, to: 1 },
+      { from: 1, to: 0 },
+    ]);
+    expect(state.lanes).toEqual([null]);
+    expect(state.trunkNext).toBe(null);
+  });
+
+  it("threads the trunk anchor across page boundaries like a whole run", () => {
+    const page1 = [
+      { ...c("M2", ["M1", "F"]), refs: ["HEAD -> main"] },
+      c("F", ["M1"]),
+    ];
+    const page2 = [c("M1", ["M0"]), c("M0")];
+    const whole = layoutGraph([...page1, ...page2]);
+    const first = layoutGraph(page1);
+    // The trunk's chain is the sequence of first parents — after the merge,
+    // the expected next trunk sha is M1, threading into the next page.
+    expect(first.state.trunkNext).toBe("M1");
+    const second = layoutGraph(page2, first.state);
+    expect(second.rows).toEqual(whole.rows.slice(2));
+    expect(second.rows.map((r) => r.dot)).toEqual([0, 0]);
+  });
+
+  it("compacts dead lanes so closed branches stop leaving posts", () => {
+    // A merge fans one branch out; once that branch's line ends, the graph
+    // narrows back to one column instead of keeping an empty second lane.
+    const { rows, state } = layoutGraph([
+      c("M", ["A", "S"]), // merge fans out: dot 0, branch opens col 1
+      c("S", ["A"]),      // the branch bends back into the trunk
+      c("A"),             // trailing empty lane compacts away
+    ]);
+    expect(rows[0].columns).toBe(2);
+    // S's row still draws the closing bend (its lane has a top line).
+    expect(rows[1].columns).toBe(2);
+    expect(rows[1].edges).toEqual([{ from: 1, to: 0 }]);
+    // After the bend, the empty slot is gone: A's row is one lane wide.
+    expect(rows[2].columns).toBe(1);
+    expect(state.lanes).toEqual([null]);
+  });
+
+  it("keeps a branch's identity colour while its lane slides left", () => {
+    // Three lanes; the middle one dies at row 1, so the right lane slides
+    // from column 2 to column 1 — but keeps its own colour key.
+    const { rows } = layoutGraph([
+      c("A", ["A0"]),
+      c("B", ["B0"]),
+      c("A0", ["A00"]),
+      c("B0", ["B00"]),
+      c("A00"),
+      c("B00"),
+    ]);
+    // B's chain keeps its identity colour wherever it appears; when A's lane
+    // drops, B's cells slide into the vacated column with the same colour.
+    expect(rows.filter((r) => r.columns > 1).map((r) => r.cells[1].color)).toEqual([
+      1, 1, 1, 1,
+    ]);
+    expect(rows[rows.length - 1].edges).toEqual([{ from: 1, to: 0 }]);
   });
 
   it("hands a root commit a lane it did not expect", () => {

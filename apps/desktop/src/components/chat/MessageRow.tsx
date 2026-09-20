@@ -87,9 +87,7 @@ export const MessageRow = memo(function MessageRow({
       {message.text && (
         <Markdown text={message.text} fontSize={fontSize} streaming={message.streaming} />
       )}
-      {message.text && !message.streaming && (
-        <MessageActions text={message.text} />
-      )}
+      {message.text && <MessageActions text={message.text} />}
     </div>
   );
 });

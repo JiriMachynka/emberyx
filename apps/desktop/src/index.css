@@ -316,6 +316,30 @@
   }
 }
 
+/* Live caret at the end of the last block. 8 Hz publish stays; the bar is
+   what makes those chunks read as still writing. */
+@keyframes md-caret {
+  50% {
+    opacity: 0;
+  }
+}
+.chat-md[data-streaming] > :last-child::after {
+  content: "";
+  display: inline-block;
+  width: 0.4em;
+  height: 1em;
+  margin-left: 0.15em;
+  vertical-align: text-bottom;
+  background: currentColor;
+  animation: md-caret 1s step-end infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-md[data-streaming] > :last-child::after {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 /* TasksCard's expand/collapse: grid-template-rows animates 0fr↔1fr so the card
    eases open and closed at its own content height — no max-height guess that
    clips long task lists. */

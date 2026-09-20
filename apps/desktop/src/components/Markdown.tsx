@@ -2,12 +2,12 @@ import { memo, useRef, useState, type ComponentProps } from "react";
 import { Markdown as TanStackMarkdown, type MarkdownComponents } from "@tanstack/markdown/react";
 import type { CodeHighlighter } from "@tanstack/markdown";
 import { streamingMarkdownExtension } from "@tanstack/markdown/extensions/streaming";
-import remend from "remend";
 import { Check, Copy } from "lucide-react";
 import { FileRef } from "@/components/FileRef";
 import { PrLink } from "@/components/PrLink";
 import { fileRefPath, isFileReference } from "@/lib/fileRef";
 import { highlightToHtml } from "@/lib/lexer";
+import { liveMarkdown } from "@/lib/liveMarkdown";
 import { cn } from "@/lib/utils";
 
 const streamingExtensions = [streamingMarkdownExtension()];
@@ -84,10 +84,10 @@ const components = {
   img: () => null,
 } satisfies MarkdownComponents;
 
-/** Assistant markdown. Streaming runs remend so incomplete markers paint as
- *  the intended structure until the closer arrives; the streaming extension
- *  hides empty trailing headings/quotes/list items. Colouring is the Lezer
- *  lexer, same tree as the editor. */
+/** Assistant markdown. Incomplete markers stay closed while they stream and
+ *  after Stop cuts them off; the streaming extension hides empty trailing
+ *  headings/quotes/list items. `streaming` is the live caret, not the repair.
+ *  Colouring is the Lezer lexer, same tree as the editor. */
 export const Markdown = memo(function Markdown({
   text,
   fontSize,
@@ -97,17 +97,22 @@ export const Markdown = memo(function Markdown({
   fontSize: number;
   streaming?: boolean;
 }) {
-  const source = streaming ? remend(text) : text;
+  const { source, incomplete } = liveMarkdown(text);
+  const repairing = streaming || incomplete;
   return (
-    <div className="chat-md leading-relaxed" style={{ fontSize: `${fontSize}px` }}>
+    <div
+      className="chat-md leading-relaxed"
+      data-streaming={streaming ? "" : undefined}
+      style={{ fontSize: `${fontSize}px` }}
+    >
       <TanStackMarkdown
         frontmatter={false}
         headingIds={false}
         highlighter={highlightCode}
-        extensions={streaming ? streamingExtensions : undefined}
+        extensions={repairing ? streamingExtensions : undefined}
         components={components}
       >
-        {source}
+        {repairing ? source : text}
       </TanStackMarkdown>
     </div>
   );

@@ -192,10 +192,13 @@ const FileTreeFile = memo(function FileTreeFile({
   const live = edit?.live ?? false;
   const open = userOpen ?? (edit != null && autoOpen);
   if (open && edit && !bodyMounted) setBodyMounted(true);
-  // A diff needs both texts in hand; failed work has none to show.
+  // One-sided is enough: a Write is all additions, a delete all removals.
+  // Failed work, and a path with no text yet, stay a header.
+  const before = edit?.before ?? "";
+  const after = edit?.after ?? "";
   const diff =
-    edit && !failed && edit.before != null && edit.after != null
-      ? { before: edit.before, after: edit.after }
+    edit && !failed && (before.length > 0 || after.length > 0)
+      ? { before, after }
       : null;
 
   return (

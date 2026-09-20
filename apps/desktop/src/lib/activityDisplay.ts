@@ -151,12 +151,16 @@ export const fileEditsFor = (
   let before: string | null = null;
   let after: string | null = null;
   if (input != null && Array.isArray(input.edits)) {
-    const edits = input.edits;
     state = "modified";
-    if (edits.length === 1 && typeof edits[0] === "object" && edits[0] != null) {
-      const e = edits[0] as FileToolInput;
-      before = asText(e.old_string);
-      after = asText(e.new_string);
+    for (const raw of input.edits) {
+      if (typeof raw !== "object" || raw == null) continue;
+      const e = raw as FileToolInput;
+      const nextBefore = asText(e.old_string);
+      const nextAfter = asText(e.new_string);
+      if (nextBefore != null || nextAfter != null) {
+        before = nextBefore;
+        after = nextAfter;
+      }
     }
   } else if (
     input != null &&
@@ -168,6 +172,7 @@ export const fileEditsFor = (
     after = asText(input.new_string);
   } else if (input != null && asText(input.content) != null) {
     state = "created";
+    before = "";
     after = asText(input.content);
   } else {
     // Half-streamed or withheld: the tool's name is the only state there is.
@@ -185,6 +190,8 @@ export const fileEditsFor = (
   if (state === "modified" && before === "" && (after?.length ?? 0) > 0) {
     state = "created";
   }
+  if (state === "deleted" && after == null) after = "";
+  if (state === "created" && before == null && after != null) before = "";
   out.set(path, { state, before, after });
   return out;
 };
@@ -223,6 +230,29 @@ export type ActivityGroup =
   | { type: "single"; activity: ActivityItem }
   | { type: "files"; activities: ActivityItem[] }
   | { type: "reasoning"; activities: ActivityItem[] };
+
+/** Reasoning stands alone; adjacent file/tool groups share one work panel
+ *  so a Think row is never the lid on a box of commands. */
+export type WorkSegment =
+  | { type: "reasoning"; activities: ActivityItem[] }
+  | {
+      type: "panel";
+      groups: Array<Extract<ActivityGroup, { type: "files" | "single" }>>;
+    };
+
+export const segmentWork = (groups: ActivityGroup[]): WorkSegment[] => {
+  const segments: WorkSegment[] = [];
+  for (const group of groups) {
+    if (group.type === "reasoning") {
+      segments.push({ type: "reasoning", activities: group.activities });
+      continue;
+    }
+    const last = segments[segments.length - 1];
+    if (last?.type === "panel") last.groups.push(group);
+    else segments.push({ type: "panel", groups: [group] });
+  }
+  return segments;
+};
 
 /** Consecutive file rows collapse into one tree; consecutive thoughts into
  *  one Think row. Bash and search break both runs. A turn that thought, ran

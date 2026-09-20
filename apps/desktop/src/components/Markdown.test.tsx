@@ -95,4 +95,29 @@ describe("Markdown GFM", () => {
     expect(el.querySelector("strong")?.textContent).toBe("bol");
     expect(el.querySelector(".chat-md")?.textContent).not.toContain("**");
   });
+
+  it("keeps incomplete markers closed after Stop, without a live caret", () => {
+    const bold = md("this is **bol", false);
+    expect(bold.querySelector("strong")?.textContent).toBe("bol");
+    expect(bold.querySelector(".chat-md")?.getAttribute("data-streaming")).toBeNull();
+
+    const fence = md("```ts\nconst x = 1", false);
+    expect(fence.querySelector("pre")).not.toBeNull();
+    expect(fence.querySelector("pre")?.textContent).toContain("const x = 1");
+  });
+
+  it("does not rewrite a settled tilde range", () => {
+    const el = md("room 20~25");
+    expect(el.textContent).toContain("20~25");
+    expect(el.textContent).not.toContain("20\\~25");
+  });
+
+  it("marks the live answer so CSS can paint a caret", () => {
+    const live = md("hello", true);
+    expect(live.querySelector(".chat-md")?.hasAttribute("data-streaming")).toBe(true);
+    const settled = md("hello", false);
+    expect(settled.querySelector(".chat-md")?.hasAttribute("data-streaming")).toBe(
+      false
+    );
+  });
 });

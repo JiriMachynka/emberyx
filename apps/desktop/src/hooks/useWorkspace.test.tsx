@@ -130,7 +130,7 @@ describe("useWorkspace launch restore", () => {
   // latest while the real scan refreshes the list behind it. Only a cold cache
   // waits for the scan, so this proves the resume target came from the cache.
   it("resumes the cached latest thread on a warm cache instead of waiting on the scan", async () => {
-    cacheThreads("/p", [
+    cacheThreads("/p", "claude", [
       { id: "older", title: "older", modified: 100 },
       { id: "latest", title: "latest", modified: 200 },
     ]);
@@ -149,7 +149,7 @@ describe("useWorkspace launch restore", () => {
   // the same resume-the-latest boot as any other open, so a project with
   // threads answered the request with an old conversation.
   it("starts a blank chat when a project is opened for a new chat", async () => {
-    cacheThreads("/p", [{ id: "latest", title: "latest", modified: 200 }]);
+    cacheThreads("/p", "claude", [{ id: "latest", title: "latest", modified: 200 }]);
 
     const { result } = renderHook(() => useWorkspace(DEFAULT_SETTINGS));
     await act(() => result.current.openProjectAt("/p", { fresh: true }));
@@ -315,11 +315,27 @@ describe("useWorkspace registerThread", () => {
   // The latest cached thread may belong to a provider the project no longer
   // runs — resuming its id would fail the CLI outright.
   it("does not resume another provider's thread when launching", async () => {
-    cacheThreads("/p", [
+    cacheThreads("/p", "claude", [
       { id: "t9", title: "Codex thread", modified: 10, provider: "codex" },
     ]);
     const { result, projectId } = await openProject();
 
+    expect(result.current.sessionsFor(projectId)[0].resume).toBeUndefined();
+  });
+
+  it("does not resume a scanned Claude transcript when the project runs OpenCode", async () => {
+    setProjectBackend("/p", "opencode");
+    cacheThreads("/p", "opencode", [
+      { id: "c1", title: "from jsonl", modified: 200 },
+    ]);
+    const { result } = renderHook(() =>
+      useWorkspace({ ...DEFAULT_SETTINGS, agentBackend: "opencode" })
+    );
+    await act(() => result.current.openProjectAt("/p"));
+    const projectId = result.current.projects[0].id;
+    await waitFor(() =>
+      expect(result.current.sessionsFor(projectId)).toHaveLength(1)
+    );
     expect(result.current.sessionsFor(projectId)[0].resume).toBeUndefined();
   });
 

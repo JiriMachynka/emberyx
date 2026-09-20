@@ -29,9 +29,17 @@ pub struct GraphCommit {
 ///
 /// Deliberately no `--name-status`: the changed-file list is the single
 /// biggest cost at 50k commits and the lanes only need shas, parents, and the
-/// ref decoration. `--date-order` guarantees a parent is listed after all its
-/// children, which is what the lane layout relies on. `--skip` composes with
-/// `-n` (skip is applied first), so pages can be laid out incrementally.
+/// ref decoration. `--topo-order` guarantees a parent is listed after all its
+/// children (what the lane layout relies on) and keeps each first-parent
+/// chain contiguous, so the default branch reads as one line instead of
+/// weaving between foreign branches. `--skip` composes with `-n` (skip is
+/// applied first), so pages can be laid out incrementally.
+///
+/// Excludes the machinery namespaces `refs/emberyx/*` (this app's
+/// checkpoints/settles) and `refs/t3/*` (T3 Code's ancestor checkpoints,
+/// written as parentless roots) — without them the graph is a staircase of
+/// one-lane snapshot commits no real branch ever references. The patterns
+/// must precede `--all`, which they modify.
 pub fn git_graph_page(path: String, limit: u32, skip: u32) -> Result<Vec<GraphCommit>> {
     if !is_repo(&path) {
         return Err(Error::new("Not a git repository."));
@@ -44,8 +52,10 @@ pub fn git_graph_page(path: String, limit: u32, skip: u32) -> Result<Vec<GraphCo
         &path,
         &[
             "log",
+            "--exclude=refs/emberyx/*",
+            "--exclude=refs/t3/*",
             "--all",
-            "--date-order",
+            "--topo-order",
             &format!("-n{limit}"),
             &format!("--skip={skip}"),
             &format!("--pretty=format:{fmt}"),
@@ -326,7 +336,7 @@ mod tests {
     use crate::git::test_support::Repo;
 
     #[test]
-    fn pages_history_across_all_refs_in_date_order() {
+    fn pages_history_across_all_refs_in_topo_order() {
         let repo = Repo::new("graph_page");
         repo.write("a.txt", "one\n");
         repo.commit("first");
@@ -365,6 +375,25 @@ mod tests {
             assert!(c.author_date.starts_with("20"));
             assert!(!c.relative_date.is_empty());
         }
+    }
+
+    #[test]
+    fn excludes_emberyx_machinery_refs_from_the_graph() {
+        let repo = Repo::new("graph_exclude");
+        repo.write("a.txt", "one\n");
+        repo.commit("real work");
+        // A checkpoint-shaped commit: off-branch, reachable only through a
+        // refs/emberyx ref — the very thing that staircased the graph.
+        let tree = repo.run(&["rev-parse", "HEAD^{tree}"]);
+        let cp = repo.run(&["commit-tree", tree.as_str(), "-m", "emberyx checkpoint: turn one"]);
+        repo.run(&["update-ref", "refs/emberyx/checkpoints/1", cp.as_str()]);
+        // T3 Code's checkpoints the same way, parked in their own namespace.
+        let t3 = repo.run(&["commit-tree", tree.as_str(), "-m", "t3 checkpoint ref=refs/t3/checkpoints/a/turn/0"]);
+        repo.run(&["update-ref", "refs/t3/checkpoints/a/turn/0", t3.as_str()]);
+
+        let page = git_graph_page(repo.path(), 10, 0).unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].subject, "real work");
     }
 
     #[test]

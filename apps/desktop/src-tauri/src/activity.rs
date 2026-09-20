@@ -446,6 +446,91 @@ fn live_reasoning_text(text: &str) -> Cow<'_, str> {
     Cow::Owned(format!("…{}", &text[start..]))
 }
 
+/// Keys a live file-change snapshot cares about. The rest of the tool input
+/// waits for the block to close.
+const FILE_INPUT_KEYS: &[&str] = &[
+    "file_path",
+    "path",
+    "notebook_path",
+    "filePath",
+    "content",
+    "old_string",
+    "new_string",
+    "oldText",
+    "newText",
+];
+
+/// Pull string fields out of incomplete tool JSON so a Write/Edit can stream
+/// before the closer arrives. `"content": "const x =` is not valid JSON, but
+/// the path and the prefix of the file are already worth painting.
+fn file_input_from_partial(json: &str) -> Option<Value> {
+    let mut map = serde_json::Map::new();
+    for key in FILE_INPUT_KEYS {
+        if let Some(value) = json_string_field(json, key) {
+            map.insert((*key).to_string(), Value::String(value));
+        }
+    }
+    if map.is_empty() {
+        None
+    } else {
+        Some(Value::Object(map))
+    }
+}
+
+fn json_string_field(json: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let mut from = 0;
+    let mut found = None;
+    while let Some(rel) = json[from..].find(&needle) {
+        let key_end = from + rel + needle.len();
+        let after_key = json[key_end..].trim_start();
+        if let Some(rest) = after_key.strip_prefix(':') {
+            let rest = rest.trim_start();
+            if let Some(body) = rest.strip_prefix('"') {
+                found = Some(unclosed_json_string(body));
+            }
+        }
+        from = key_end;
+    }
+    found
+}
+
+fn unclosed_json_string(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '"' {
+            break;
+        }
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('r') => out.push('\r'),
+            Some('"') => out.push('"'),
+            Some('\\') => out.push('\\'),
+            Some('u') => {
+                let hex: String = chars.by_ref().take(4).collect();
+                if hex.len() == 4 {
+                    if let Ok(code) = u32::from_str_radix(&hex, 16) {
+                        if let Some(c) = char::from_u32(code) {
+                            out.push(c);
+                            continue;
+                        }
+                    }
+                }
+                break;
+            }
+            Some(other) => out.push(other),
+            None => break,
+        }
+    }
+    out
+}
+
 /// A content block still being streamed.
 enum OpenBlock {
     Reasoning {
@@ -469,10 +554,11 @@ enum OpenBlock {
 ///
 /// Snapshots are whole `ActivityItem`s rather than appendable deltas: the
 /// consumer stays stateless and a dropped event self-heals on the next one.
-/// The one field held back is `arguments` — it is the disclosure body, not
-/// something being watched stream, and re-sending a large tool input on every
-/// token is the whole cost this shape could have had. It arrives once, when
-/// the block closes. Reasoning text is bounded the same way: a live snapshot
+/// Tool `arguments` stay off the live snapshot — they are the disclosure
+/// body, not something to watch token by token — except file changes, whose
+/// growing `content` / `old_string` / `new_string` is the thing the chat
+/// paints. Incomplete JSON is scraped for those fields so a Write can stream
+/// before the closer arrives. Reasoning text is bounded: a live snapshot
 /// carries only its tail (`LIVE_REASONING_TAIL`), the close carries all of it.
 #[derive(Default)]
 pub struct ActivityStream {
@@ -634,18 +720,22 @@ impl ActivityStream {
                 if json.len() > PARTIAL_PARSE_LIMIT {
                     return Vec::new();
                 }
-                // Half a JSON object says nothing yet; the row keeps the name
-                // it already has.
-                match serde_json::from_str::<Value>(json) {
-                    Ok(input) => {
-                        let mut item = from_tool_call(id, name, &input);
-                        // The disclosure body waits for the block to close —
-                        // see the type docs.
-                        item.arguments = None;
-                        Some(item)
-                    }
-                    Err(_) => None,
+                let file_change = kind_for_tool(name) == ActivityKind::FileChange;
+                // Half a JSON object says nothing yet for Bash; a Write's
+                // growing `content` string is scraped so the chat can paint it.
+                let input = match serde_json::from_str::<Value>(json) {
+                    Ok(value) => value,
+                    Err(_) if file_change => match file_input_from_partial(json) {
+                        Some(value) => value,
+                        None => return Vec::new(),
+                    },
+                    Err(_) => return Vec::new(),
+                };
+                let mut item = from_tool_call(id, name, &input);
+                if !file_change {
+                    item.arguments = None;
                 }
+                Some(item)
             }
             _ => None,
         };
@@ -978,6 +1068,31 @@ mod tests {
             "delta": { "type": "input_json_delta", "partial_json": " -la\"}" }
         })));
         assert_eq!(whole[0].display_target.as_deref(), Some("ls -la"));
+    }
+
+    #[test]
+    fn a_streamed_write_paints_its_file_before_the_json_closes() {
+        let mut stream_state = ActivityStream::new();
+        stream_state.push_line(&stream(json!({
+            "type": "message_start", "message": { "id": "msg_1" }
+        })));
+        stream_state.push_line(&stream(json!({
+            "type": "content_block_start", "index": 0,
+            "content_block": { "type": "tool_use", "id": "t1", "name": "Write" }
+        })));
+        let live = stream_state.push_line(&stream(json!({
+            "type": "content_block_delta", "index": 0,
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": "{\"file_path\": \"src/a.ts\", \"content\": \"const x = "
+            }
+        })));
+        assert_eq!(live[0].display_target.as_deref(), Some("src/a.ts"));
+        let args = live[0].arguments.as_deref().unwrap();
+        assert!(args.contains("src/a.ts"));
+        assert!(args.contains("const x = "));
+        // Still unclosed JSON — Bash would have published nothing.
+        assert!(!live[0].complete);
     }
 
     #[test]

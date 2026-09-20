@@ -13,7 +13,12 @@ import { projectBackend } from "@/lib/projectConfig";
 import { useAgentStore } from "@/lib/agentStore";
 import { getRecents, addRecent, removeRecent } from "@/lib/recents";
 import { getOpenProjects, saveOpenProjects } from "@/lib/openProjects";
-import { cachedThreads, cacheThreads } from "@/lib/threadCache";
+import {
+  cachedThreads,
+  cacheThreads,
+  mergeLiveThreads,
+  resumableThreads,
+} from "@/lib/threadCache";
 import { threadTitleFrom } from "@/lib/threadTitle";
 import { disposeLog, killLog, shellSessionId, spawnLog } from "@/lib/ptyLog";
 import { markSwitch } from "@/lib/perf";
@@ -64,7 +69,13 @@ const listThreads = async (backend: AgentBackend, cwd: string): Promise<Thread[]
     }),
   ]);
   const scannedIds = new Set(scanned.map((t) => t.id));
-  return [...scanned, ...imported.filter((t) => !scannedIds.has(t.id))].sort(
+  // A transcript on disk is Claude's, even when the row left provider unset.
+  // Stamping it here keeps a restart from treating those ids as resumable
+  // OpenCode/Grok sessions.
+  const tagged = scanned.map((t) =>
+    t.provider == null ? { ...t, provider: "claude" as const } : t
+  );
+  return [...tagged, ...imported.filter((t) => !scannedIds.has(t.id))].sort(
     (a, b) => b.modified - a.modified
   );
 };
@@ -73,11 +84,6 @@ const listThreads = async (backend: AgentBackend, cwd: string): Promise<Thread[]
  *  provider is known and differs from the backend about to spawn carries an id
  *  that backend cannot read — resuming it would fail the CLI outright, so it
  *  waits for its own provider instead. */
-const resumable = (threads: Thread[], backend: AgentBackend): Thread[] =>
-  threads
-    .filter((t) => !t.imported && (t.provider == null || t.provider === backend))
-    .sort((a, b) => b.modified - a.modified);
-
 const labelFor = (thread: Thread) =>
   thread.title.length > LABEL_MAX
     ? `${thread.title.slice(0, LABEL_MAX)}…`
@@ -183,7 +189,6 @@ export function useWorkspace(settings: Settings) {
     }
     const scan = listThreads(backend, path)
       .then((t) => {
-        cacheThreads(path, t);
         // A fresh thread is listed by the pane before any store or transcript
         // scan can see it. Replacing the list wholesale dropped that row —
         // the conversation you were already in vanished from the sidebar.
@@ -192,11 +197,15 @@ export function useWorkspace(settings: Settings) {
             s.projectId === projectId && s.threadId ? [s.threadId] : []
           )
         );
-        const incoming = new Set(t.map((thread) => thread.id));
-        const pending = (
+        const live = (
           projectsRef.current.find((p) => p.id === projectId)?.threads ?? []
-        ).filter((thread) => liveIds.has(thread.id) && !incoming.has(thread.id));
-        setThreads(projectId, [...pending, ...t]);
+        ).filter((thread) => liveIds.has(thread.id));
+        const next = mergeLiveThreads(t, live);
+        // Cache the list the sidebar actually shows, so a restart does not
+        // drop an in-flight ACP thread the scan has not written yet — and
+        // does not replay another backend's store under this one.
+        cacheThreads(path, backend, next);
+        setThreads(projectId, next);
         return t;
       })
       .finally(() => {
@@ -259,11 +268,11 @@ export function useWorkspace(settings: Settings) {
   async function startPrimaryAgent(id: string, path: string): Promise<void> {
     const backend = backendFor(path);
     if (capabilitiesOf(backend).threads) {
-      const cached = cachedThreads(path);
+      const cached = cachedThreads(path, backend);
       if (cached.length) {
         // Imported threads are history, not a conversation to continue — the
         // agent behind one has no memory of it, so launch never lands there.
-        const latest = resumable(cached, backend)[0];
+        const latest = resumableThreads(cached, backend)[0];
         if (latest) {
           startChat(id, path, latest.id, labelFor(latest), backend);
           // Show the cached list now; the scan refreshes it behind the boot.
@@ -274,7 +283,7 @@ export function useWorkspace(settings: Settings) {
       try {
         const threads = await fetchThreads(id, path);
         if (torndownRef.current.has(id)) return;
-        const latest = threads ? resumable(threads, backend)[0] : undefined;
+        const latest = threads ? resumableThreads(threads, backend)[0] : undefined;
         if (latest) {
           startChat(id, path, latest.id, labelFor(latest), backend);
           return;
@@ -362,7 +371,7 @@ export function useWorkspace(settings: Settings) {
     else setRecents(addRecent(path));
     // Seed the sidebar from the last-known list while the real scan runs, so a
     // restored window shows its threads without waiting on the directory read.
-    const cached = cachedThreads(path);
+    const cached = cachedThreads(path, backendFor(path));
     if (cached.length) setThreads(id, cached);
     // Fresh project, or a reopened one whose agent tab had been closed. Skip
     // when the in-flight pre-warm will start the agent itself. startPrimaryAgent

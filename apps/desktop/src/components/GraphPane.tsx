@@ -18,10 +18,19 @@ import type { GitFile } from "@/types";
 /** One page's worth of commits, and how many rows the graph draws per page
  *  fetch. Git log is cheap at this scale; the layout is the same. */
 const PAGE = 60;
-/** Lane column width, row height, and dot radius — the SVG's geometry. */
+/** Lane column width, row height, dot radius, and the right hand padding —
+ *  the SVG's geometry. */
 const LANE_W = 18;
 const ROW_H = 44;
 const DOT_R = 4.5;
+const SVG_PAD = 8;
+const laneWidth = (row: GraphRow) =>
+  Math.max(
+    row.columns,
+    ...row.edges.map((e) => Math.max(e.from, e.to) + 1),
+    row.dot + 1
+  ) * LANE_W +
+  SVG_PAD;
 
 /** Distinct, muted hues for the lanes. Data-viz colour, not theme chrome: a
  *  branch keeps the same column, and so the same colour, as it descends. */
@@ -76,7 +85,7 @@ const BADGE_STYLE: Record<RefBadge["kind"], string> = {
 /** The lane SVG for one row: vertical lines per column, the horizontal
  *  connectors between the dot and each parent's column, then the dot on top. */
 function LaneSvg({ row }: { row: GraphRow }) {
-  const width = row.columns * LANE_W;
+  const width = laneWidth(row);
   const midY = ROW_H / 2;
   return (
     <svg

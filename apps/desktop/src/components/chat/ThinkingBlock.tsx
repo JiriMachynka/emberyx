@@ -36,7 +36,16 @@ export function ThinkingBlock({
     : null;
   const ran =
     timing?.endedAt != null ? formatDuration(timing.endedAt - timing.startedAt) : null;
-  const label = active ? "Thinking" : ran ? `Thought for ${ran}` : "Thought";
+  // Live reasoning over IPC is a 4 KB tail prefixed with … — don't read as the
+  // whole thought. The close restates the full text without the mark.
+  const latest = active && text.startsWith("…");
+  const label = active
+    ? latest
+      ? "Thinking · latest"
+      : "Thinking"
+    : ran
+      ? `Thought for ${ran}`
+      : "Thought";
   const tail = useTailScroll<HTMLDivElement>(active && open, text);
 
   return (
@@ -46,10 +55,8 @@ export function ThinkingBlock({
         aria-expanded={expandable ? open : undefined}
         disabled={!expandable}
         onClick={() => setOverride(!open)}
-        // Square like the tool rows beside it — a rounded hover bg is cut at
-        // the panel's seams; the panel clips its own corners.
         className={cn(
-          "flex w-full items-center gap-2 px-3 py-2 text-left text-muted-foreground transition-colors",
+          "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-muted-foreground transition-colors",
           expandable && "hover:bg-secondary"
         )}
       >

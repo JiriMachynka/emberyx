@@ -247,13 +247,11 @@ export const ToolCard = memo(function ToolCard({ tool }: { tool: ToolCall }) {
   const Icon = TOOL_ICONS[display.icon];
   const running = tool.result == null;
   const expandable = display.body.length > 0 || tool.result != null;
-  // Always closed until clicked. A card that auto-opened while working pushed
-  // the conversation off-screen on every Bash call and shut again the moment
-  // you started reading it; the shimmering label and the spinner already say
-  // work is in flight, which is all the running state has to convey.
-  const [override, setOverride] = useState(false);
+  // Open while this card is still running; a click sticks. Auto-opening every
+  // Bash call used to bury the answer — only the in-flight one expands.
+  const [override, setOverride] = useState<boolean | null>(null);
   const isAgent = display.icon === "task";
-  const open = override && expandable;
+  const open = expandable && !isAgent && (override ?? running);
 
   // An agent card is a doorway to the side panel — clicking it selects the run
   // there rather than expanding a body inline. Everything else toggles inline.
@@ -274,6 +272,7 @@ export const ToolCard = memo(function ToolCard({ tool }: { tool: ToolCall }) {
     <div className="rounded-lg border border-border/70 bg-card/40 px-2.5 text-xs">
       <button
         type="button"
+        aria-expanded={expandable && !isAgent ? open : undefined}
         onClick={() =>
           isAgent
             ? selectAgent(selected ? null : tool.id)
