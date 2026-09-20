@@ -210,6 +210,8 @@
   }
 
   .chat-content-width {
+    width: 100%;
+    min-width: 0;
     max-width: 52.5rem;
   }
 

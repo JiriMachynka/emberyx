@@ -84,12 +84,13 @@ describe("metaForActivity", () => {  it("says how many files and how many lines 
 });
 
 describe("visibleActivities", () => {
-  it("hides settled tools on a live turn and keeps reasoning", () => {
+  it("keeps settled tools in the live stream so finished work stays visible", () => {
     const thinking = row({ id: "t", kind: "reasoning", complete: true, output: "plan" });
     const done = row({ id: "d", kind: "command", complete: true });
     const running = row({ id: "r", kind: "command", complete: false });
     expect(visibleActivities([thinking, done, running], true)).toEqual([
       thinking,
+      done,
       running,
     ]);
   });
@@ -117,7 +118,7 @@ describe("visibleActivities", () => {
       displayTarget: "src/a.ts",
     });
     const bash = row({ id: "bash", kind: "command", complete: true });
-    expect(visibleActivities([read, bash], true)).toEqual([read]);
+    expect(visibleActivities([read, bash], true)).toEqual([read, bash]);
   });
 
   it("keeps the full log once the turn has settled", () => {

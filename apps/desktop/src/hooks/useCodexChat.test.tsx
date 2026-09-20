@@ -18,6 +18,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invoke(...args),
 }));
 
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: () => Promise.resolve(() => {}),
+}));
+
 vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: () => Promise.resolve(false),
   requestPermission: () => Promise.resolve("denied"),
@@ -54,16 +58,39 @@ const frame = () =>
 const sentTo = (command: string) =>
   invoke.mock.calls.filter(([name]) => name === command);
 
+/** Runtime-owned prompt queue, emulated so enqueue/drain is the real path. */
+let queueItems: { queueId: string; text: string; attachments: string | null }[] =
+  [];
+let queueSeq = 0;
+
 beforeEach(() => {
   channels.length = 0;
+  queueItems = [];
+  queueSeq = 0;
   invoke.mockReset();
-  invoke.mockImplementation((command: string) => {
+  invoke.mockImplementation((command: string, args: Record<string, unknown>) => {
     if (command === "codex_spawn") {
       return Promise.resolve({ id: 7, initialize: {}, version: "0.147.0" });
     }
     if (command === "codex_thread_start" || command === "codex_thread_resume") {
       return Promise.resolve(THREAD);
     }
+    if (command === "agent_queue_list")
+      return Promise.resolve(queueItems.map((p) => ({ ...p, createdAt: 0 })));
+    if (command === "agent_queue_state")
+      return Promise.resolve([queueItems.length, false]);
+    if (command === "agent_queue_enqueue") {
+      const item = {
+        queueId: `q${++queueSeq}`,
+        text: String(args.text),
+        attachments: (args.attachments as string | null) ?? null,
+        createdAt: 0,
+      };
+      queueItems.push(item);
+      return Promise.resolve(item);
+    }
+    if (command === "agent_queue_run_next")
+      return Promise.resolve(queueItems.shift() ?? null);
     return Promise.resolve(undefined);
   });
 });
@@ -392,33 +419,35 @@ describe("useCodexChat approvals", () => {
 });
 
 describe("useCodexChat sending", () => {
-  it("starts a turn, and steers the one already running", async () => {
+  it("queues a mid-turn message and drains it on idle", async () => {
     const { result, notify } = await mount();
     act(() => result.current.send("first"));
-    expect(sentTo("codex_turn_start")[0][1]).toEqual({
-      id: 7,
-      params: {
-        threadId: "t1",
-        input: [{ type: "text", text: "first", text_elements: [] }],
-      },
-    });
-
     notify("turn/started", { turn: { id: "u1" } });
     act(() => result.current.send("actually, second"));
-    expect(sentTo("codex_turn_steer")[0][1]).toEqual({
+    // Nothing races the running turn: the message waits in the queue.
+    expect(sentTo("codex_turn_steer")).toHaveLength(0);
+    expect(result.current.queued).toBe(1);
+    expect(
+      result.current.messages.filter((m) => m.role === "user").map((m) => m.text)
+    ).toEqual(["first"]);
+
+    notify("turn/completed", { turn: { id: "u1", status: "completed" } });
+    await waitFor(() => expect(result.current.queued).toBe(0));
+    expect(
+      result.current.messages.filter((m) => m.role === "user").map((m) => m.text)
+    ).toEqual(["first", "actually, second"]);
+    // Auto-title also starts a throwaway turn on its own thread; this is the
+    // session turn that drained from the queue.
+    const queuedStart = sentTo("codex_turn_start").find((call) =>
+      JSON.stringify(call[1]).includes("actually, second")
+    );
+    expect(queuedStart?.[1]).toEqual({
       id: 7,
       params: {
         threadId: "t1",
         input: [{ type: "text", text: "actually, second", text_elements: [] }],
-        expectedTurnId: "u1",
       },
     });
-    // Steering replaces queueing, so nothing ever waits.
-    expect(result.current.queued).toBe(0);
-    // The steering message lands after the turn it interjects into.
-    expect(
-      result.current.messages.filter((m) => m.role === "user").map((m) => m.text)
-    ).toEqual(["first", "actually, second"]);
   });
 
   it("interrupts the running turn on stop", async () => {

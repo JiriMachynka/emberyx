@@ -864,8 +864,17 @@ export const ChatPane = memo(function ChatPane({
                   data-index={vItem.index}
                   data-vkey={slot.key}
                   ref={rowVirt.measureElement}
-                  className="absolute inset-x-0 will-change-transform"
-                  style={{ transform: `translateY(${vItem.start}px)` }}
+                  // A definite full-width box. The centred column below is only
+                  // centred within this row, so a row left to size itself drifts
+                  // and clips the answer text at the pane edge.
+                  className="will-change-transform"
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${vItem.start}px)`,
+                  }}
                 >
                   <div className="chat-content-width mx-auto flex flex-col gap-8 pt-8">
                     {slot.kind === "load" && (

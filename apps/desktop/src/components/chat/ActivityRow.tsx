@@ -181,7 +181,8 @@ export function ActivityList({
    *  rather than this file reaching into the agent store for a second view of
    *  the same run. */
   renderAgent?: (activity: ActivityItem) => ReactNode;
-  /** Live turns hide settled tools; the finished-turn accordion keeps the log. */
+  /** Live and settled turns render the same rows now; the param names the
+   *  pane's turn state for callers that dispatch on it. */
   live?: boolean;
   /** The panel is this list's own surface, unless the caller already provides
    *  one around it (the pane's replay fallback wraps tools in the same panel). */
@@ -193,12 +194,24 @@ export function ActivityList({
     group: Extract<ActivityGroup, { type: "files" | "single" }>
   ) => {
     if (group.type === "files") {
+      // A live turn folds consecutive file work into a tree that accumulates.
+      // Settled, the "Changed N files" card summarizes the turn, so the tree
+      // would read twice its own summary — settled file work is plain rows.
+      if (live === true) {
+        return (
+          <ActivityFileTree
+            key={`files:${group.activities[0].id}`}
+            activities={group.activities}
+            live
+          />
+        );
+      }
       return (
-        <ActivityFileTree
-          key={`files:${group.activities[0].id}`}
-          activities={group.activities}
-          live={live}
-        />
+        <Fragment key={`files:${group.activities[0].id}`}>
+          {group.activities.map((activity) => (
+            <ActivityRow key={activity.id} activity={activity} />
+          ))}
+        </Fragment>
       );
     }
     const activity = group.activity;

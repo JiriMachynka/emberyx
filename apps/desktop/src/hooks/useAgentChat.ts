@@ -40,7 +40,7 @@ import { notifyNative } from "@/lib/notifications";
 import { loadSettings } from "@/lib/settings";
 import { snapshotTextBlock } from "@/lib/snapshotA11y";
 import { basename } from "@/lib/path";
-import { usePromptQueue } from "@/lib/promptQueue";
+import { parseAttachments, usePromptQueue } from "@/lib/promptQueue";
 import {
   ASK_REJECT,
   CONTINUE_PROMPT,
@@ -326,20 +326,6 @@ const STDERR_CAP = 8192;
  *  local so the Claude transport doesn't import a Codex module. */
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
-
-/** Queue attachments are stored opaquely by the supervisor, so the column can
- *  hold anything an older schema or a truncated write left there. Throwing on
- *  it inside an effect unmounts the whole tree — a queued image is not worth
- *  the window. */
-const parseAttachments = (raw: string | null | undefined): ChatImage[] | undefined => {
-  if (!raw) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as ChatImage[]) : undefined;
-  } catch {
-    return undefined;
-  }
-};
 
 /**
  * Parse a Claude Code transcript (`.jsonl`) into the chat message model, so a

@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { ChatImage } from "@/hooks/useAgentChat";
 
 export interface QueuedPrompt {
   queueId: string;
@@ -41,6 +42,22 @@ export interface PromptQueue {
 }
 
 const AGENT_EVENT = "agent-event";
+
+/** Queue attachments are stored opaquely by the supervisor, so the column can
+ *  hold anything an older schema or a truncated write left there. Throwing on
+ *  it inside an effect unmounts the whole tree — a queued image is not worth
+ *  the window. */
+export const parseAttachments = (
+  raw: string | null | undefined
+): ChatImage[] | undefined => {
+  if (!raw) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ChatImage[]) : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 /**
  * Subscribe to one thread's queue and expose its operations. `agentId` is

@@ -282,15 +282,11 @@ export const groupActivities = (activities: ActivityItem[]): ActivityGroup[] => 
 export const isEmptyThought = (activity: ActivityItem): boolean =>
   activity.kind === "reasoning" && activity.complete && !activity.output?.trim();
 
-/** Live turns keep running tools, reasoning, and file rows. File rows stay so
- *  the tree can accumulate the way T3's does; settled bash belongs in the
- *  finished-turn accordion. */
+/** Settled rows stay in the live stream, collapsed — a tool that finished
+ *  should not vanish from view mid-turn. Only a finished thought with nothing
+ *  to read (a signature) is hidden, live or settled. */
 export const visibleActivities = (
   activities: ActivityItem[],
-  live: boolean
-): ActivityItem[] =>
-  activities.filter(
-    (a) =>
-      !isEmptyThought(a) &&
-      (!live || a.kind === "reasoning" || isFileActivity(a) || !a.complete)
-  );
+  /** Kept for the API — visibility no longer depends on turn liveness. */
+  _live: boolean
+): ActivityItem[] => activities.filter((a) => !isEmptyThought(a));

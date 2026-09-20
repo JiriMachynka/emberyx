@@ -356,8 +356,14 @@ export function AllThreads(props: SidebarProps) {
               key={vItem.key}
               data-index={vItem.index}
               ref={rowVirt.measureElement}
-              className="absolute inset-x-0 pb-1.5 will-change-transform"
-              style={{ transform: `translateY(${vItem.start}px)` }}
+              className="pb-1.5 will-change-transform"
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${vItem.start}px)`,
+              }}
             >
               {renderSlot(slot)}
             </div>

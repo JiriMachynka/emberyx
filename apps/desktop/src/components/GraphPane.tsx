@@ -502,7 +502,7 @@ export function GraphPane({ path, active, onBack }: GraphPaneProps) {
                     position: "absolute",
                     top: 0,
                     left: 0,
-                    right: 0,
+                    width: "100%",
                     transform: `translateY(${vItem.start}px)`,
                   }}
                 >

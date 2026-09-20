@@ -125,6 +125,22 @@ describe("ChatPane", () => {
     expect(occurrences - 1).toBe(1);
   });
 
+  // Absolute rows without a definite width shrink-wrap, then mx-auto parks the
+  // 52.5rem column in the right half of that oversized box — the screenshot
+  // was a thin clipped strip of answer text against the window edge.
+  it("gives each virtualized turn a definite full-width box", async () => {
+    await mount();
+    await waitFor(() => expect(transcript().querySelector("[data-vkey]")).toBeTruthy());
+    const row = transcript().querySelector<HTMLElement>("[data-vkey]");
+    expect(row?.style.position).toBe("absolute");
+    expect(row?.style.left).toBe("0px");
+    // happy-dom can't lay out, so this pins the mechanism: either a definite
+    // width or both insets stretch the row. What must not happen is the row
+    // sizing itself.
+    expect(row?.style.width === "100%" || row?.style.right === "0px").toBe(true);
+    expect(row?.querySelector(".chat-content-width")).toBeTruthy();
+  });
+
   // The mock transport never issues a live thread id, so an imported pane
   // keeps the banner — the same condition that hides it once a real agent
   // names a thread.

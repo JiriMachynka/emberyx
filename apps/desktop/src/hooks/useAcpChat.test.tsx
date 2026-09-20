@@ -19,6 +19,10 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invoke(...args),
 }));
 
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: () => Promise.resolve(() => {}),
+}));
+
 vi.mock("@tauri-apps/plugin-notification", () => ({
   isPermissionGranted: () => Promise.resolve(false),
   requestPermission: () => Promise.resolve("denied"),
@@ -47,15 +51,38 @@ const setModelCalls = () =>
       (args as { method: string }).method === "session/set_model"
   );
 
+/** Runtime-owned prompt queue, emulated so enqueue/drain is the real path. */
+let queueItems: { queueId: string; text: string; attachments: string | null }[] =
+  [];
+let queueSeq = 0;
+
 beforeEach(() => {
   channels.length = 0;
   localStorage.clear();
+  queueItems = [];
+  queueSeq = 0;
   invoke.mockReset();
-  invoke.mockImplementation((command: string) => {
+  invoke.mockImplementation((command: string, args: Record<string, unknown> = {}) => {
     if (command === "acp_spawn") {
       return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
     }
     if (command === "acp_session_new") return Promise.resolve(SESSION);
+    if (command === "agent_queue_list")
+      return Promise.resolve(queueItems.map((p) => ({ ...p, createdAt: 0 })));
+    if (command === "agent_queue_state")
+      return Promise.resolve([queueItems.length, false]);
+    if (command === "agent_queue_enqueue") {
+      const item = {
+        queueId: `q${++queueSeq}`,
+        text: String(args.text),
+        attachments: (args.attachments as string | null) ?? null,
+        createdAt: 0,
+      };
+      queueItems.push(item);
+      return Promise.resolve(item);
+    }
+    if (command === "agent_queue_run_next")
+      return Promise.resolve(queueItems.shift() ?? null);
     return Promise.resolve(null);
   });
 });
@@ -296,12 +323,22 @@ describe("useAcpChat thread durability", () => {
     expect(events[1].threadId).toBe("s1");
 
     // A second prompt records under the same thread, without re-adopting or
-    // re-titling it.
+    // re-titling it. End the first turn first — a mid-turn send now queues.
+    await act(async () => {
+      channels[0]?.onmessage?.({
+        type: "turnEnded",
+        data: { sessionId: "s1", result: { stopReason: "end_turn" } },
+      });
+    });
+    await waitFor(() => expect(view.result.current.status).toBe("idle"));
     await act(async () => view.result.current.send("again"));
     const adopts = invoke.mock.calls.filter(([name]) => name === "thread_adopt");
     expect(adopts).toHaveLength(1);
     const later = appended();
-    expect(later[later.length - 1]?.kind).toBe("userPrompt");
+    expect(later[later.length - 1]).toMatchObject({
+      kind: "userPrompt",
+      payload: "again",
+    });
   });
 
   it("does not adopt a new store thread when sending on a reopened one", async () => {
@@ -464,6 +501,41 @@ describe("useAcpChat thread durability", () => {
     );
     // Replayed history is not streaming and carries no half-open tool cards.
     expect(view.result.current.messages.every((m) => !m.streaming)).toBe(true);
+  });
+});
+
+describe("useAcpChat queueing", () => {
+  it("holds a turn typed while the agent is working, then sends it when idle", async () => {
+    const view = await mount();
+    await act(async () => view.result.current.send("first"));
+    expect(
+      invoke.mock.calls.filter(([name]) => name === "acp_prompt")
+    ).toHaveLength(1);
+    expect(view.result.current.status).toBe("thinking");
+
+    await act(async () => view.result.current.send("second"));
+    expect(
+      invoke.mock.calls.filter(([name]) => name === "acp_prompt")
+    ).toHaveLength(1);
+    expect(view.result.current.queued).toBe(1);
+    expect(view.result.current.messages.map((m) => m.text)).toEqual(["first"]);
+
+    await act(async () => {
+      channels[0]?.onmessage?.({
+        type: "turnEnded",
+        data: { sessionId: "s1", result: { stopReason: "end_turn" } },
+      });
+    });
+    await waitFor(() =>
+      expect(
+        invoke.mock.calls.filter(([name]) => name === "acp_prompt")
+      ).toHaveLength(2)
+    );
+    expect(view.result.current.queued).toBe(0);
+    expect(view.result.current.messages.map((m) => m.text)).toEqual([
+      "first",
+      "second",
+    ]);
   });
 });
 

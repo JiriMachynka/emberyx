@@ -27,6 +27,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { parseAttachments, usePromptQueue } from "@/lib/promptQueue";
 import {
   cancelStreamPublish,
   scheduleStreamPublish,
@@ -219,6 +220,16 @@ const rememberRefusal = (
 let nextMessageId = 0;
 const messageId = (prefix: string) => `acp-${prefix}-${(nextMessageId += 1)}`;
 
+/** States where a turn is in flight, so a new message queues instead of
+ *  cancelling the running turn. Matches the transports that drain on idle. */
+const BUSY_STATUS = new Set<ChatStatus>([
+  "thinking",
+  "streaming",
+  "tool",
+  "awaiting_permission",
+  "awaiting_answer",
+]);
+
 export function useAcpChat({
   cwd,
   emberyxSessionId,
@@ -248,6 +259,30 @@ export function useAcpChat({
   const pendingSendRef = useRef<{ text: string; images?: ChatImage[] } | null>(
     null
   );
+
+  // The supervisor owns this thread's prompt queue, the same runtime Claude
+  // queues through — enqueue on busy, drain one per idle.
+  const promptQueue = usePromptQueue(emberyxSessionId);
+  const queueRef = useRef<
+    { queueId: string | null; text: string; images: ChatImage[] | undefined }[]
+  >([]);
+  const [queued, setQueued] = useState(0);
+  // Set while a queue drain is in flight — the queue identity changes on every
+  // queue event, and without this guard the effect re-enters mid-drain.
+  const drainingRef = useRef(false);
+  useEffect(() => {
+    const runtime = promptQueue.items;
+    for (let i = 0; i < runtime.length; i++) {
+      const p = runtime[i];
+      const existing = queueRef.current[i];
+      queueRef.current[i] =
+        existing && existing.text === p.text
+          ? { queueId: p.queueId, text: p.text, images: existing.images }
+          : { queueId: p.queueId, text: p.text, images: parseAttachments(p.attachments) };
+    }
+    queueRef.current.length = runtime.length;
+    setQueued(runtime.length);
+  }, [promptQueue.items]);
   const [exitReason, setExitReason] = useState<string | null>(null);
   const [pendingPermission, setPendingPermission] =
     useState<PendingPermission | null>(null);
@@ -956,13 +991,12 @@ export function useAcpChat({
     [provider, model]
   );
 
-  const send = useCallback(
+  const acceptTurn = useCallback(
     (text: string, images?: ChatImage[]) => {
       const id = processRef.current;
       const sessionId = sessionRef.current;
       const channel = channelRef.current;
       const hasImages = !!images && images.length > 0;
-      if (!text.trim() && !hasImages) return;
       committedRef.current = [
         ...committedRef.current,
         {
@@ -1007,6 +1041,54 @@ export function useAcpChat({
     },
     [cwd, emberyxSessionId, publish, adoptThread, recordTimeline, resume, wake, promptTurn]
   );
+
+  const send = useCallback(
+    (text: string, images?: ChatImage[]) => {
+      const hasImages = !!images && images.length > 0;
+      if (!text.trim() && !hasImages) return;
+      if (processRef.current !== null && BUSY_STATUS.has(turnRef.current.status)) {
+        // Queue like every transport: a mid-turn message waits for the idle
+        // instead of cancelling the running turn, and joins the transcript on
+        // delivery.
+        const attachments = hasImages ? JSON.stringify(images) : undefined;
+        queueRef.current.push({ queueId: null, text, images });
+        setQueued((n) => n + 1);
+        void promptQueue.enqueue(text, attachments, emberyxSessionId);
+        return;
+      }
+      acceptTurn(text, images);
+    },
+    [acceptTurn, emberyxSessionId, promptQueue]
+  );
+
+  // Drain one queued turn each time the agent goes idle. The supervisor's queue
+  // pops the head — and stays paused while the agent is blocked — so this only
+  // dispatches what the runtime is ready for.
+  useEffect(() => {
+    if (status !== "idle") {
+      drainingRef.current = false;
+      return;
+    }
+    if (drainingRef.current) return;
+    if (queueRef.current.length === 0) return;
+    drainingRef.current = true;
+    let cancelled = false;
+    void promptQueue
+      .runNext()
+      .then((next) => {
+        if (cancelled || !next) return;
+        queueRef.current.shift();
+        setQueued((n) => Math.max(0, n - 1));
+        acceptTurn(next.text, parseAttachments(next.attachments));
+      })
+      .catch((e) => console.error("[emberyx] queue drain failed", e))
+      .finally(() => {
+        drainingRef.current = false;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [status, acceptTurn, promptQueue]);
 
   // The turn that woke the pane goes on the wire as soon as the spawn lands.
   useEffect(() => {
@@ -1137,9 +1219,8 @@ export function useAcpChat({
     threadId: resume ?? liveThreadId,
     send,
     compact: noop,
-    queued: 0,
-    // ACP has no queue of its own; a turn is cancelled and re-sent instead.
-    queue: null,
+    queued,
+    queue: promptQueue,
     stop,
     restart,
     exitReason,

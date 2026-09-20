@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { parseAttachments, usePromptQueue } from "@/lib/promptQueue";
 import {
   cancelStreamPublish,
   scheduleStreamPublish,
@@ -103,7 +104,8 @@ interface Options {
   visible?: boolean;
 }
 
-/** States where a turn is in flight, so a new message steers it. */
+/** States where a turn is in flight, so a new message queues instead of
+ *  steering the running turn. Matches the transports that drain on idle. */
 const BUSY_STATUS = new Set<ChatStatus>([
   "thinking",
   "streaming",
@@ -246,6 +248,31 @@ export function useCodexChat({
   // rebuilding (and respawning) on a change.
   const effortRef = useRef(effort);
   effortRef.current = effort;
+
+  // The supervisor owns this thread's prompt queue, the same runtime Claude
+  // queues through — enqueue on busy, drain one per idle. React keeps a
+  // synchronous mirror for the composer count and the chip's identity tweaks.
+  const promptQueue = usePromptQueue(emberyxSessionId);
+  const queueRef = useRef<
+    { queueId: string | null; text: string; images: ChatImage[] | undefined }[]
+  >([]);
+  const [queued, setQueued] = useState(0);
+  // Set while a queue drain is in flight — the queue identity changes on every
+  // queue event, and without this guard the effect re-enters mid-drain.
+  const drainingRef = useRef(false);
+  useEffect(() => {
+    const runtime = promptQueue.items;
+    for (let i = 0; i < runtime.length; i++) {
+      const p = runtime[i];
+      const existing = queueRef.current[i];
+      queueRef.current[i] =
+        existing && existing.text === p.text
+          ? { queueId: p.queueId, text: p.text, images: existing.images }
+          : { queueId: p.queueId, text: p.text, images: parseAttachments(p.attachments) };
+    }
+    queueRef.current.length = runtime.length;
+    setQueued(runtime.length);
+  }, [promptQueue.items]);
 
   const addChange = useAgentStore((st) => st.addChange);
   const setSessionStatus = useAgentStore((st) => st.setStatus);
@@ -728,12 +755,9 @@ export function useCodexChat({
     void call.catch((e) => console.error("[emberyx] codex turn failed", e));
   }, []);
 
-  /** Accept a turn at any time. A message sent mid-turn steers the running
-   *  turn, so nothing is ever queued. */
-  const send = useCallback(
+  const acceptTurn = useCallback(
     (text: string, images?: ChatImage[]) => {
       const hasImages = !!images && images.length > 0;
-      if (!enabled || (!text.trim() && !hasImages)) return;
       interruptedRef.current = false;
       if (firstMsgRef.current === null && text.trim()) firstMsgRef.current = text;
       const message: ChatMessage = {
@@ -772,7 +796,28 @@ export function useCodexChat({
       }
       deliver(text, images);
     },
-    [cwd, deliver, emberyxSessionId, enabled, publish, wake]
+    [cwd, deliver, emberyxSessionId, publish, wake]
+  );
+
+  /** Accept a turn at any time. A message sent mid-turn waits in the queue
+   *  and joins the transcript when the running turn goes idle. */
+  const send = useCallback(
+    (text: string, images?: ChatImage[]) => {
+      const hasImages = !!images && images.length > 0;
+      if (!enabled || (!text.trim() && !hasImages)) return;
+      if (idRef.current !== null && BUSY_STATUS.has(stateRef.current.status)) {
+        // Queue like every transport: a mid-turn message waits for the idle
+        // instead of steering the running turn, and joins the transcript on
+        // delivery.
+        const attachments = hasImages ? JSON.stringify(images) : undefined;
+        queueRef.current.push({ queueId: null, text, images });
+        setQueued((n) => n + 1);
+        void promptQueue.enqueue(text, attachments, emberyxSessionId);
+        return;
+      }
+      acceptTurn(text, images);
+    },
+    [acceptTurn, emberyxSessionId, enabled, promptQueue]
   );
 
   // Turns accepted before the app-server existed, in the order they were typed.
@@ -782,6 +827,37 @@ export function useCodexChat({
     pendingSendRef.current = [];
     for (const turn of held) deliver(turn.text, turn.images);
   }, [ready, deliver]);
+
+  // Drain one queued turn each time the agent goes idle. `turn/completed`
+  // clears the turn id, so the popped turn starts a fresh one rather than
+  // steering the turn that just finished.
+  useEffect(() => {
+    if (status !== "idle") {
+      drainingRef.current = false;
+      return;
+    }
+    if (drainingRef.current) return;
+    if (queueRef.current.length === 0) return;
+    drainingRef.current = true;
+    let cancelled = false;
+    void promptQueue
+      .runNext()
+      .then((next) => {
+        if (cancelled || !next) return;
+        queueRef.current.shift();
+        setQueued((n) => Math.max(0, n - 1));
+        // `acceptTurn`, not `deliver` — the Codex transcript only shows the
+        // user's turn on the idle-path accept, which also scores the checkpoint.
+        acceptTurn(next.text, parseAttachments(next.attachments));
+      })
+      .catch((e) => console.error("[emberyx] queue drain failed", e))
+      .finally(() => {
+        drainingRef.current = false;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [status, acceptTurn, promptQueue]);
 
   const compact = useCallback(() => {
     const id = idRef.current;
@@ -887,9 +963,8 @@ export function useCodexChat({
     threadId: liveThreadId,
     send,
     compact,
-    queued: 0,
-    // Codex steers instead of queueing, so it has no runtime queue to manage.
-    queue: null,
+    queued,
+    queue: promptQueue,
     stop,
     restart,
     exitReason,
