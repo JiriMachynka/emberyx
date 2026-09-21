@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "preview-webview",
-  "description": "The native preview surface reports its console back to the app. Loopback dev servers only — the spike flag keeps this off unless asked for.",
+  "description": "The native preview surface reports its console back to the app. Loopback dev servers only.",
   "webviews": ["preview"],
   "remote": {
     "urls": ["http://localhost:*", "http://127.0.0.1:*"]

@@ -115,7 +115,7 @@ pub fn run() {
             // and it runs while the webview loads instead of after it.
             pty::warm_shell_env();
             app.manage(ask::start(app.handle())?);
-            // The native preview surface, created on first attach (spike flag).
+            // The native preview surface, created on first attach.
             app.manage(preview::NativePreview::new());
             Ok(())
         })

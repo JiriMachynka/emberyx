@@ -617,20 +617,18 @@ in `RunEvent::Exit` like every other spawner. The live path is covered by
 `#[ignore]`d tests (`cargo test -- --ignored browser_sees`); CI has no
 browser, and a test that passes without one is worse than none.
 
-**The native preview is a spike, not the default.** With
-`localStorage["emberyx.preview.native"] = "1"`, the preview tab becomes a
-Tauri child webview (`preview.rs`, `NativePreview`) whose bounds track the
-dock's placeholder, hidden (state-preserving) when the tab goes away, with a
-console bridge — an initialization script wrapping `console.*` and emitting
-`preview-console` events through the capability in
-`capabilities/preview.json` (loopback URLs only) — rendered in the tab. It
-exists to answer what a document can't: z-order over the main webview, resize
-sync during dock drags, focus fights with the terminal. This is why Cargo.toml
-carries tauri's `unstable` feature; it is the price of the multiwebview API,
-and the feature set should be revisited with the spike's verdict. If the
-spike wins, `preview_console` should read this console and `browser.rs` keeps
-only screenshots (a child webview cannot be photographed). Until the verdict,
-the iframe is the shipping surface.
+**The native preview is a Tauri child webview, not the iframe.** (`preview.rs`,
+`NativePreview`) Its bounds track the dock's placeholder, it is hidden
+(state-preserving) when the tab goes away, and it carries a console bridge — an
+initialization script wrapping `console.*` and emitting `preview-console`
+events through the capability in `capabilities/preview.json` (loopback URLs
+only) — rendered in the tab. It is the default surface; setting
+`emberyx.preview.native` to `"0"` falls back to the iframe, and any attach
+failure drops the pane back to it for the session. This is why Cargo.toml
+carries tauri's `unstable` feature: that is the price of the multiwebview API.
+The agent's `preview_screenshot` / `preview_snapshot` / `preview_console` tools
+still go through `browser.rs`, never this surface — they must work with the
+Preview tab closed, and a child webview cannot be photographed anyway.
 
 ### SnapShots
 

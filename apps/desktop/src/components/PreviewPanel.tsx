@@ -18,8 +18,8 @@ interface PreviewPanelProps {
 }
 
 const memoryKey = (project: string) => `emberyx.preview.${project}`;
-/** The native-preview spike flag: set `emberyx.preview.native` to 1 in
- *  localStorage and reload. Off means the plain iframe, as always. */
+/** Set `emberyx.preview.native` to "0" in localStorage to fall back to the
+ *  plain iframe. The native surface is the default. */
 const NATIVE_FLAG = "emberyx.preview.native";
 /** The console is a tail, not a log: only the end of it is ever read. */
 const MAX_CONSOLE_LINES = 50;
@@ -53,11 +53,11 @@ export function PreviewPanel({
   const loadedFor = useRef<string | null>(null);
 
   const native = useMemo(
-    () => typeof window !== "undefined" && localStorage.getItem(NATIVE_FLAG) === "1",
+    () => typeof window !== "undefined" && localStorage.getItem(NATIVE_FLAG) !== "0",
     []
   );
   // Any attach failure drops the pane back to the iframe for the session: the
-  // spike must never cost the preview itself.
+  // native surface must never cost the preview itself.
   const [nativeFailed, setNativeFailed] = useState(false);
   const useNative = native && !nativeFailed;
   const surfaceRef = useRef<HTMLDivElement | null>(null);

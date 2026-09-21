@@ -6,14 +6,13 @@
 //! deliberately dumb — it says "something is listening", not "this is your
 //! app" — which is the honest limit of what a port check can tell you.
 //!
-//! The dock's preview is an `<iframe>` by default, which the app can neither
-//! photograph nor read — that is why the agent has its own headless Chrome
-//! (`browser.rs`). The native surface below is the spike that replaces the
-//! frame with a Tauri child webview: one browser, whose console the app can
-//! actually see. It is off until `emberyx.preview.native` is set, and exists
-//! to answer the platform questions a document cannot: z-order over the main
-//! webview, resize sync while the dock is dragged, focus fights with the
-//! terminal pane.
+//! The dock's preview is a Tauri child webview, whose console the app can
+//! actually see — the `<iframe>` it replaced could be neither read nor
+//! photographed, which is why the agent still has its own headless Chrome
+//! (`browser.rs`) for screenshots. The surface is a real browser the app
+//! drives: bounds track the dock as it is dragged, and the page keeps its
+//! state while the tab is closed. Setting `emberyx.preview.native` to "0"
+//! in localStorage falls back to the iframe.
 
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::sync::Mutex;
@@ -59,8 +58,8 @@ pub async fn preview_ports() -> Result<Vec<u16>> {
 
 /// The one native preview surface. Created on first attach and kept for the
 /// window's life — the child-webview API has no close/navigate pair worth
-/// betting a spike on, so it is shown, hidden, repositioned, and pointed at a
-/// new address with `location.replace` instead.
+/// building on, so it is shown, hidden, repositioned, and pointed at a new
+/// address with `location.replace` instead.
 pub struct NativePreview(Mutex<Option<Webview>>);
 
 impl NativePreview {
