@@ -180,7 +180,7 @@ describe("useAcpChat model switching", () => {
   });
 });
 
-describe("useAcpChat Jev cascade", () => {
+describe("useAcpChat model pinning", () => {
   const OPENCODE_SESSION = {
     sessionId: "s1",
     configOptions: [
@@ -209,13 +209,13 @@ describe("useAcpChat Jev cascade", () => {
       if (command === "acp_session_new") return Promise.resolve(OPENCODE_SESSION);
       if (command === "skills_list") return Promise.resolve([]);
       if (command === "typesafe_turn_prep") {
-        return Promise.resolve({ skill: null, depth: 2, injection: false });
+        return Promise.resolve({ skill: null, injection: false });
       }
       return Promise.resolve(null);
     });
   };
 
-  it("keeps a model the user pinned, even when Jev wants a larger one", async () => {
+  it("keeps the model the user pinned", async () => {
     jevPrep();
     const view = await mount({
       provider: "opencode",
@@ -235,7 +235,7 @@ describe("useAcpChat Jev cascade", () => {
     expect(switched).toEqual(["opencode-go/deepseek-v4-flash"]);
   });
 
-  it("still upshifts the agent's own default, without leaving the vendor", async () => {
+  it("leaves the agent's own default alone on a deep turn", async () => {
     invoke.mockImplementation((command: string) => {
       if (command === "acp_spawn") {
         return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
@@ -253,7 +253,7 @@ describe("useAcpChat Jev cascade", () => {
       }
       if (command === "skills_list") return Promise.resolve([]);
       if (command === "typesafe_turn_prep") {
-        return Promise.resolve({ skill: null, depth: 2, injection: false });
+        return Promise.resolve({ skill: null, injection: false });
       }
       return Promise.resolve(null);
     });
@@ -270,7 +270,7 @@ describe("useAcpChat Jev cascade", () => {
     const switched = setModelCalls().map(
       ([, args]) => (args as { params: { modelId: string } }).params.modelId
     );
-    expect(switched).toEqual(["opencode-go/qwen3.7-max"]);
+    expect(switched).toEqual([]);
     expect(switched.some((id) => id.startsWith("gitlab/"))).toBe(false);
   });
 });
@@ -700,7 +700,7 @@ describe("useAcpChat permission requests", () => {
         ]);
       }
       if (command === "typesafe_turn_prep") {
-        return Promise.resolve({ skill: "fe-design", depth: 0.2, injection: false });
+        return Promise.resolve({ skill: "fe-design", injection: false });
       }
       return Promise.resolve(null);
     });

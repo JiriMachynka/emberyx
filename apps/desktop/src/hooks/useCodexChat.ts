@@ -52,8 +52,7 @@ import {
 } from "@/lib/codex/transport";
 import { classifyFailure } from "@/lib/accountState";
 import { useAgentStore } from "@/lib/agentStore";
-import { scoreDiffRisk, withJevReview } from "@/lib/jev";
-import { settleTurnCheckpoint } from "@/lib/queries";
+import { settleTurn } from "@/lib/turnSettle";
 import { registerAgent, setAgentLifecycle } from "@/lib/agentRegistry";
 import { nextChangeId } from "@/lib/changes";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
@@ -70,8 +69,12 @@ import {
   type PendingAsk,
   type PendingPermission,
   type PermissionDecision,
-  notifyPlanNothing,
 } from "@/hooks/useAgentChat";
+import {
+  BUSY_STATUS,
+  notifyPlanNothing,
+  type ChatSession,
+} from "@/lib/chatSession";
 import { snapshotTextBlock } from "@/lib/snapshotA11y";
 
 interface Options {
@@ -103,17 +106,6 @@ interface Options {
    *  refs keep accumulating and one flush lands when it is shown again. */
   visible?: boolean;
 }
-
-/** States where a turn is in flight, so a new message queues instead of
- *  steering the running turn. Matches the transports that drain on idle. */
-const BUSY_STATUS = new Set<ChatStatus>([
-  "thinking",
-  "streaming",
-  "tool",
-  "awaiting_permission",
-  "awaiting_answer",
-  "retrying",
-]);
 
 /** Rolling stderr kept per spawn, enough to classify a failure. */
 const STDERR_CAP = 8192;
@@ -191,7 +183,7 @@ export function useCodexChat({
   enabled = true,
   visible = true,
   persistent = false,
-}: Options) {
+}: Options): ChatSession {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
@@ -323,7 +315,6 @@ export function useCodexChat({
     setMessages(s.messages);
     setStatus(s.status);
     setUsage(s.usage);
-    setExitReason(s.errorMessage);
   }, [cancelFrame, syncSessionStatus]);
 
   const schedulePublish = useCallback(() => {
@@ -443,21 +434,14 @@ export function useCodexChat({
           turnId: eventTurnId,
           status: turn && typeof turn.status === "string" ? turn.status : method,
         });
-        // Freeze this turn's file delta at its settle, so edits made between
-        // turns land in no turn's card. Best-effort.
-        const settledId = lastCheckpointIdRef.current;
-        if (settledId) {
-          void (async () => {
-            await settleTurnCheckpoint(cwd, settledId);
-            if (!(await scoreDiffRisk(cwd, emberyxSessionId, settledId))) return;
-            const cur = stateRef.current;
-            stateRef.current = {
-              ...cur,
-              messages: withJevReview(cur.messages, settledId),
-            };
-            publish();
-          })();
-        }
+        // Freeze this turn's file delta under its checkpoint; see `settleTurn`.
+        settleTurn(cwd, emberyxSessionId, lastCheckpointIdRef.current, (fn) => {
+          stateRef.current = {
+            ...stateRef.current,
+            messages: fn(stateRef.current.messages),
+          };
+          publish();
+        });
       }
       for (const c of changes) {
         addChange({
@@ -599,6 +583,11 @@ export function useCodexChat({
         }
         idRef.current = spawned.id;
         void registerAgent(emberyxSessionId, cwd, "codex", spawned.id);
+        // A spawn that landed is no longer an ended session, so the previous
+        // failure's banner must not outlive it. `publish` deliberately does not
+        // do this: it used to, from the adapter's per-turn `errorMessage`, which
+        // also wiped a real exit reason on the next paint of a hidden pane.
+        setExitReason(null);
         if (spawned.reattached) {
           // The process was initialized by the window that started it and
           // still has its thread open; the replay rebuilt the transcript, so
@@ -968,8 +957,10 @@ export function useCodexChat({
     stop,
     restart,
     exitReason,
-    // Codex takes the model as a `turn/start` parameter, so a model it won't
-    // run fails the turn in the open rather than silently staying on another.
+    // Codex carries the model into the thread open (`thread/start` or
+    // `thread/resume`), so a model it won't run fails the spawn in the open —
+    // surfaced as `exitReason`, not a mid-session switch refusal. Nothing sets
+    // `modelError`, which is an ACP-only surface.
     modelError: null as string | null,
     rewind,
     revertTurn,

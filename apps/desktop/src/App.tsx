@@ -2,6 +2,7 @@ import { lazy, Profiler, Suspense, useCallback, useEffect, useMemo, useRef, useS
 import { markSwitch, onRender } from "@/lib/perf";
 import { toast, Toaster } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onOpenFileRequest } from "@/lib/openFileRequest";
 import { SessionPanes } from "@/components/SessionPanes";
@@ -59,6 +60,14 @@ import { useShortcuts } from "@/hooks/useShortcuts";
 import { useSnapshots } from "@/hooks/useSnapshots";
 import { useLaunchUpdateCheck } from "@/hooks/useLaunchUpdateCheck";
 import { usePricingRefresh } from "@/hooks/usePricingRefresh";
+
+/** Mirrors `panic::PanicReport` in Rust — a `back-end` panic on its way to a toast. */
+interface BackendPanic {
+  message: string;
+  location: string;
+  thread: string;
+  logPath: string | null;
+}
 
 // CodeMirror is a big chunk; only sessions that open the editor pay for it.
 // Three CodeMirror instances plus the merge machinery — only pay for it when a
@@ -360,6 +369,23 @@ function App() {
       // Not running under Tauri.
     }
   }, [unread]);
+
+  // A backend command that panics rejects its invoke, but nothing forces the
+  // caller to notice — a dropped rejection leaves a pane hanging with no
+  // explanation. The Rust hook reports it here so it is never silent, and names
+  // the log it also appended to.
+  useEffect(() => {
+    const unlisten = listen<BackendPanic>("backend-panic", (event) => {
+      const { message, location, logPath } = event.payload;
+      toast.error("Backend panic", {
+        description: `${location} — ${message}${logPath ? `\n${logPath}` : ""}`,
+        duration: 15000,
+      });
+    });
+    return () => {
+      void unlisten.then((off) => off()).catch(() => {});
+    };
+  }, []);
 
   const toggleNotifications = () => {
     if (!notificationsOpen) markNotificationsRead();

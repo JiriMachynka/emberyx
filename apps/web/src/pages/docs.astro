@@ -12,45 +12,42 @@ const nav = [
 ];
 
 const requirements = [
-  ["macOS", "Ships as a universal <code>.dmg</code>. First launch needs right-click → Open — builds aren't notarized yet."],
-  ["Claude Code CLI", "On your PATH for the default experience. Other agents work via Settings, but threads, the cost meter, live status, and the agent edit-feed are Claude-Code-specific."],
-  ["Git", "Powers the Changes panel and Dokploy remote matching. Non-git folders degrade gracefully."],
-  ["Dokploy", "Optional — a reachable server URL and API key to light up the deployment panel."],
+  ["macOS", "Ships as an Apple-silicon (arm64) <code>.dmg</code>. First launch needs right-click → Open — builds aren't notarized yet."],
+  ["Claude Code CLI", "On your PATH for the default experience. Codex, OpenCode, and Grok work too — pick one from the model picker; each drives its own threads, usage, and status."],
+  ["Git", "Powers the Changes panel and the git menu. Non-git folders degrade gracefully."],
 ];
 
 const steps = [
   ["Install the app", "Download the latest <code>.dmg</code> from Releases, drag Emberyx to Applications, then right-click → Open on first run."],
   ["Install Claude Code", "Emberyx runs the <code>claude</code> CLI as a subprocess. Make sure it's installed and on your PATH. Prefer another agent? Set it under Settings → Agent command."],
-  ["Open a project", "Hit <kbd>⌘O</kbd> and pick any folder. Emberyx launches the agent in an embedded terminal there and loads the project's past conversations. Recent projects live on the welcome screen."],
-  ["Work", "Type into the terminal like a normal Claude Code session. Add more projects with the <kbd>+</kbd> tab — each stays open at once."],
+  ["Open a project", "Hit <kbd>⌘O</kbd> and pick any folder. Emberyx opens a chat thread with the agent there and loads the project's past conversations. Recent projects live on the welcome screen."],
+  ["Work", "Type into the composer. The agent's replies, tool calls, and file edits stream into the thread. Add more projects with the <kbd>+</kbd> tab — each stays open at once."],
 ];
 
 const features = [
   ["Multi-project tabs", "Every open folder is a tab in the top strip with a status dot — idle, working, or needs-you. Click to switch, hover for ✕. Closing a busy agent asks first."],
-  ["Agent terminal", "A real terminal (xterm.js) runs the agent. The primary terminal's scrollback survives app restarts, keyed by project path."],
-  ["Session tabs", "A project holds several sessions — agent tabs and dev-server tabs. The bottom strip switches, drag-reorders, and closes them. <kbd>⌘T</kbd> spawns a fresh agent tab."],
-  ["Resume threads", "The Threads dropdown lists past Claude Code conversations for the project. Pick one to open a tab resuming it via <code>claude --resume</code>. Reads from <code>~/.claude/projects</code>."],
+  ["Chat pane", "The default view: streaming replies, collapsible tool calls with expanded output, image paste, and slash-command autocomplete."],
+  ["Agent terminal", "Or run the agent in a real embedded terminal (Ghostty) instead. The primary terminal's scrollback survives app restarts, keyed by project path."],
+  ["Session tabs", "A project holds several sessions — agent tabs and dev-server tabs. The bottom strip switches, drag-reorders, and closes them. <kbd>⌘N</kbd> spawns a fresh agent tab."],
+  ["Resume threads", "The Threads dropdown lists past conversations for the project. Claude and Codex threads resume natively; ACP threads reopen as history."],
   ["Dev launcher", "Detects turbo / pnpm / npm / bun workspaces on open. The Dev button runs the dev script; monorepos get a dropdown to run All or one package. Becomes Stop while running."],
   ["Changes panel", "Two tabs — Git (working-tree diffs, stage files, commit inline) and Agent (a live feed of every file the agent edits, rendered as diffs)."],
   ["Token & cost meter", "Running tokens and estimated USD for the active agent, updated each turn. Hover for the input / output / cache breakdown."],
-  ["Status & notifications", "Live agent status via injected hooks. When the agent waits and the app is unfocused, a desktop notification fires — click it to jump to the waiting session."],
-  ["Dokploy status", "With a Dokploy URL and API key set, matches the project to its Dokploy project by git remote and lists every service's deploy status. Read-only."],
+  ["Status & notifications", "Live agent status from the running agent. When the agent waits and the app is unfocused, a desktop notification fires — click it to jump to the waiting session."],
   ["Auto-updates", "On launch Emberyx checks GitHub releases for a newer signed build. If found, a toast offers Install & restart."],
 ];
 
 const settings = [
-  ["Agent command", "claude", "Command run when a project opens. Claude-specific UI appears only when it starts with <code>claude</code>."],
+  ["Agent command", "claude", "Command run when a project opens. Defaults to Claude Code; per-project pins and the model picker choose the others."],
   ["Skip permission prompts", "on", "Runs Claude with <code>--dangerously-skip-permissions</code> — no confirmation before commands or edits. Claude only."],
   ["Terminal font family", "Geist Mono", "Font stack for all terminals. Applies live."],
   ["Font size", "13", "Terminal font size in px (8–32)."],
   ["Scrollback", "1000", "Terminal scrollback in lines (100–100000)."],
-  ["Dokploy · Server URL", "—", "Base URL of your Dokploy server. Enables the deployment panel."],
-  ["Dokploy · API key", "—", "Sent as the <code>x-api-key</code> header. Both Dokploy fields are required."],
 ];
 
 const shortcuts = [
   ["⌘O", "Open project"],
-  ["⌘T", "New agent tab"],
+  ["⌘N", "New agent tab"],
 ];
 ---
 

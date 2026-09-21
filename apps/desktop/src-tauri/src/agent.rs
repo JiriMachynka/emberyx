@@ -322,7 +322,7 @@ mcp__emberyx__preview_snapshot",
 
     /// Write one stream-json message line to the process stdin (a user turn).
     pub fn send(&self, id: u32, message: &str) -> Result<()> {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let session = sessions.get_mut(&id).ok_or("no such agent session")?;
         session
             .stdin
@@ -336,7 +336,11 @@ mcp__emberyx__preview_snapshot",
     /// EOF, but can't once we've removed the session here — so wait() ourselves
     /// (after releasing the lock) to avoid leaving a zombie.
     pub fn kill(&self, id: u32) -> Result<()> {
-        let session = self.sessions.lock().unwrap().remove(&id);
+        let session = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
         if let Some(mut session) = session {
             let _ = session.child.kill();
             let _ = session.child.wait();

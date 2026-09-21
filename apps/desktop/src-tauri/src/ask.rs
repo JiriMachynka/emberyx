@@ -66,10 +66,7 @@ visible browser window, and do not `open` the preview URL, to check UI changes."
 
 impl AskServer {
     fn mcp_url(&self, session: &str) -> String {
-        format!(
-            "http://127.0.0.1:{}/mcp?session={}",
-            self.port, session
-        )
+        format!("http://127.0.0.1:{}/mcp?session={}", self.port, session)
     }
 
     /// The `--mcp-config` payload for one agent. The session id rides in the
@@ -598,7 +595,11 @@ fn ask_user(app: &AppHandle, url: &str, params: &Value) -> std::result::Result<V
     let (tx, rx) = channel::<String>();
     {
         let state = app.state::<AskServer>();
-        state.pending.lock().unwrap().insert(id.clone(), tx);
+        state
+            .pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id.clone(), tx);
     }
 
     let event = AskEvent {
@@ -620,7 +621,11 @@ fn ask_user(app: &AppHandle, url: &str, params: &Value) -> std::result::Result<V
     let _ = app.emit("ask-user", event);
 
     let answer = rx.recv_timeout(ANSWER_TIMEOUT);
-    app.state::<AskServer>().pending.lock().unwrap().remove(&id);
+    app.state::<AskServer>()
+        .pending
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id);
     // Answered paths close it themselves; this catches the timeout, and is a
     // no-op once the answer already closed it.
     if let Some(supervisor) = crate::supervisor::Supervisor::active() {
@@ -643,7 +648,11 @@ fn ask_user(app: &AppHandle, url: &str, params: &Value) -> std::result::Result<V
 /// Hand the user's choice back to the blocked tool call.
 #[tauri::command]
 pub fn answer_ask(state: tauri::State<'_, AskServer>, id: String, answer: String) -> Result<()> {
-    let sender = state.pending.lock().unwrap().remove(&id);
+    let sender = state
+        .pending
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id);
     if let Some(supervisor) = crate::supervisor::Supervisor::active() {
         supervisor.close_approval(&id, Some(&answer));
     }

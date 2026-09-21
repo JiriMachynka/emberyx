@@ -70,10 +70,7 @@ import {
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
 import {
   jevEnabled,
-  largerModel,
-  scoreDiffRisk,
   skillWireText,
-  withJevReview,
   type JevSkill,
   type JevTurnPrep,
 } from "@/lib/jev";
@@ -85,7 +82,7 @@ import { threadTitleFrom } from "@/lib/threadTitle";
 import { deniedVendor, splitModelLabel } from "@/lib/modelCatalog";
 import { markProviderUnavailable } from "@/lib/modelFavorites";
 import { useAgentStore } from "@/lib/agentStore";
-import { settleTurnCheckpoint } from "@/lib/queries";
+import { settleTurn } from "@/lib/turnSettle";
 import {
   SESSION_STATUS,
   type ChatImage,
@@ -99,6 +96,14 @@ import {
   type PlanOutcome,
   type ToolCall,
 } from "@/hooks/useAgentChat";
+import {
+  BUSY_STATUS,
+  chatNoop,
+  loadNothing,
+  rewindNothing,
+  revertNothing,
+  type ChatSession,
+} from "@/lib/chatSession";
 
 /** Keep the tail of stderr for an exit message; the rest is diagnostics. */
 const STDERR_CAP = 4000;
@@ -220,16 +225,6 @@ const rememberRefusal = (
 let nextMessageId = 0;
 const messageId = (prefix: string) => `acp-${prefix}-${(nextMessageId += 1)}`;
 
-/** States where a turn is in flight, so a new message queues instead of
- *  cancelling the running turn. Matches the transports that drain on idle. */
-const BUSY_STATUS = new Set<ChatStatus>([
-  "thinking",
-  "streaming",
-  "tool",
-  "awaiting_permission",
-  "awaiting_answer",
-]);
-
 export function useAcpChat({
   cwd,
   emberyxSessionId,
@@ -243,7 +238,7 @@ export function useAcpChat({
   onTitled,
   visible = true,
   persistent = false,
-}: Options) {
+}: Options): ChatSession {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
@@ -559,17 +554,11 @@ export function useAcpChat({
           JSON.stringify({ stopReason: ended.status === "error" ? reason : ended.status })
         );
       }
-      // Freeze this turn's file delta at its settle, so edits made between
-      // turns land in no turn's card. Best-effort.
-      const settledId = lastCheckpointIdRef.current;
-      if (settledId) {
-        void (async () => {
-          await settleTurnCheckpoint(cwd, settledId);
-          if (!(await scoreDiffRisk(cwd, emberyxSessionId, settledId))) return;
-          committedRef.current = withJevReview(committedRef.current, settledId);
-          publish();
-        })();
-      }
+      // Freeze this turn's file delta under its checkpoint; see `settleTurn`.
+      settleTurn(cwd, emberyxSessionId, lastCheckpointIdRef.current, (fn) => {
+        committedRef.current = fn(committedRef.current);
+        publish();
+      });
     },
     [publish, cwd, recordTimeline, resume, emberyxSessionId]
   );
@@ -969,18 +958,9 @@ export function useAcpChat({
           if (prep) {
             wire = skillWireText(text, prep.skill);
             if (prep.injection) notes = notes.map(() => "");
-            // A pick in the chip is a pin. Cascade only when the agent is
-            // still on its own default (`model` === ""), so a DeepSeek Flash
-            // the user chose is not swapped for a "larger" sibling.
-            const bump =
-              !model && prep.depth != null && prep.depth >= 1.5
-                ? largerModel(modelRef.current, usageRef.current.models ?? [])
-                : null;
-            if (bump) {
-              await acpSetModel(id, sessionId, bump);
-              modelRef.current = bump;
-              setUsage((u) => ({ ...u, model: bump }));
-            }
+            // Jev never changes the model: the picker is the only thing that
+            // decides which one runs, pinned or not. A small model the agent
+            // defaulted to is left alone.
           }
         } catch {
           // Fail-open: send the user's text as typed.
@@ -1218,7 +1198,7 @@ export function useAcpChat({
     // register the provider's new session as a second row.
     threadId: resume ?? liveThreadId,
     send,
-    compact: noop,
+    compact: chatNoop,
     queued,
     queue: promptQueue,
     stop,
@@ -1239,17 +1219,9 @@ export function useAcpChat({
     // ACP has no `ask_user`: that is an Emberyx MCP tool wired for Claude. The
     // pane only calls this while a question is showing, and none ever is.
     pendingAsk: null as PendingAsk | null,
-    answerAsk: noop,
+    answerAsk: chatNoop,
     hasMore: false,
     loadingOlder: false,
     loadOlder: loadNothing,
   };
 }
-
-// Module-level, so the pane sees the same function every render. Inline, each
-// publish handed ChatPane a new `revertTurn`, which rebuilt its `chat` object
-// and re-rendered every visible turn about eight times a second.
-const noop = () => {};
-const rewindNothing = () => null;
-const revertNothing = async () => {};
-const loadNothing = async () => false;

@@ -18,7 +18,7 @@ Built with Tauri v2 + React. A lighter, purpose-built alternative to cmux.
 - **Chat pane** (default) — a structured view of the agent: streaming messages,
   collapsible tool calls, image paste, and slash-command autocomplete.
 - **Integrated agent terminal** — or run the agent in a real embedded terminal
-  (xterm, Geist Mono) instead; scrollback persists across restarts.
+  (Ghostty, Geist Mono) instead; scrollback persists across restarts.
 - **Interactive option picker** — when the agent asks a multiple-choice question,
   it renders as a real picker in the chat rather than raw text.
 - **One model picker across providers** — picking another provider's model
@@ -71,18 +71,19 @@ managers are intentionally retained beneath this seam.
 
 Known limitations: the registry is still runtime-owned, but its metadata,
 bounded orchestration events, and provider thread IDs are atomically restored
-on the next launch; live child processes are intentionally stopped on exit and
-must be respawned against those provider threads. Codex delegation starts a
-fresh turn when idle and steers an active turn using its expected turn ID. A
-future `emberyxd` daemon can keep processes alive across full app exits without
-changing the IPC contract.
+on the next launch. Live child processes are stopped on exit by default and
+respawned against those provider threads; with persistent agents enabled the
+`emberyxd` daemon holds them instead. Codex delegation starts a fresh turn when
+idle and steers an active turn using its expected turn ID.
 
-### `emberyxd` daemon (experimental)
+### `emberyxd` daemon
 
-The repository includes an independent `emberyxd` binary. It owns a durable,
-bounded orchestration registry behind a Unix-domain socket and speaks
-newline-delimited JSON. This is the migration seam for moving Claude/Codex
-process ownership out of the Tauri process.
+The repository includes an independent `emberyxd` binary, spawned into its own
+process group so it survives the app quitting. It owns a durable, bounded
+orchestration registry behind a Unix-domain socket and speaks
+newline-delimited JSON, and it holds the live agent processes themselves —
+Claude children natively, and Codex, ACP, and PTY sessions over a generic byte
+shuttle.
 
 ```bash
 cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin emberyxd
@@ -90,9 +91,10 @@ cargo run --manifest-path apps/desktop/src-tauri/Cargo.toml --bin emberyxd
 
 The default socket is `${TMPDIR}/emberyxd.sock`; override it with
 `EMBERYX_DAEMON_SOCKET`, and override its metadata state with
-`EMBERYX_DAEMON_STATE`. The current daemon persists registry metadata and
-events, while the Tauri app still uses its in-process transport managers.
-Live process migration is the next daemon increment.
+`EMBERYX_DAEMON_STATE`. Persistent agents are opt-in (Settings → Connections)
+and default off; with them off the Tauri app uses its in-process transport
+managers as before. Health reports whether the daemon is running and how many
+live children it holds.
 
 ### Shortcuts
 
@@ -104,7 +106,7 @@ Live process migration is the next daemon increment.
 ## Stack
 
 Tauri v2 (Rust core + system WebView) · React 19 + Vite + TypeScript ·
-CodeMirror 6 · xterm.js · shadcn/ui + Tailwind CSS 4 · bun + turbo.
+CodeMirror 6 · Ghostty · shadcn/ui + Tailwind CSS 4 · bun + turbo.
 
 ## Development
 

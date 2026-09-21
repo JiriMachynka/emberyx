@@ -1,48 +1,18 @@
-import { describe, expect, it } from "vitest";
-import { isSmallModel, largerModel, skillWireText } from "@/lib/jev";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
+import { guardActivity, guardOutput, secretish, skillWireText } from "@/lib/jev";
+import { useActivityRiskStore } from "@/lib/activityRisk";
+import type { ActivityItem } from "@/types";
 
-describe("largerModel", () => {
-  const catalog = [
-    { value: "grok-4-fast" },
-    { value: "grok-4" },
-    { value: "grok-4-heavy" },
-  ];
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-  it("stays put on a general model", () => {
-    expect(largerModel("grok-4", catalog)).toBeNull();
-  });
-
-  it("bumps a fast/mini id to the first non-small catalog entry", () => {
-    expect(largerModel("grok-4-fast", catalog)).toBe("grok-4");
-    expect(isSmallModel("claude-haiku-4-5")).toBe(true);
-  });
-
-  it("does nothing when the catalog has only small ids", () => {
-    expect(largerModel("haiku", [{ value: "haiku" }, { value: "flash" }])).toBeNull();
-  });
-
-  it("does not jump from OpenCode Go flash to GitLab Duo", () => {
-    const mixed = [
-      { value: "gitlab/duo-chat-gpt-5-4-nano" },
-      { value: "gitlab/duo-chat-fable-5-1" },
-      { value: "opencode-go/deepseek-v4-flash" },
-      { value: "opencode-go/qwen3.7-max" },
-      { value: "opencode/big-pickle" },
-    ];
-    expect(largerModel("opencode-go/deepseek-v4-flash", mixed)).toBe(
-      "opencode-go/qwen3.7-max"
-    );
-  });
-
-  it("stays on a flash model when that vendor has no larger sibling", () => {
-    expect(
-      largerModel("opencode-go/deepseek-v4-flash", [
-        { value: "gitlab/duo-chat-fable-5-1" },
-        { value: "opencode-go/deepseek-v4-flash" },
-        { value: "opencode-go/glm-5.3-flash" },
-      ])
-    ).toBeNull();
-  });
+const row = (over: Partial<ActivityItem>): ActivityItem => ({
+  id: "t1",
+  kind: "command",
+  title: "rm -rf build",
+  failed: false,
+  complete: false,
+  ...over,
 });
 
 describe("skillWireText", () => {
@@ -53,5 +23,87 @@ describe("skillWireText", () => {
   it("prefixes a hint without rewriting the user's words", () => {
     expect(skillWireText("fix the test", "fe-design")).toContain("fe-design");
     expect(skillWireText("fix the test", "fe-design").endsWith("fix the test")).toBe(true);
+  });
+});
+
+describe("secretish", () => {
+  it("catches known credential shapes", () => {
+    expect(secretish("AKIAIOSFODNN7EXAMPLE")).toBe(true);
+    expect(secretish("-----BEGIN RSA PRIVATE KEY-----")).toBe(true);
+    expect(secretish("api_key = 1234")).toBe(true);
+  });
+
+  it("catches a long high-entropy run", () => {
+    expect(secretish("token sk-abcdefghijklmnopqrstuvwxyz")).toBe(true);
+    expect(secretish("a".repeat(40))).toBe(true);
+  });
+
+  it("leaves ordinary output alone", () => {
+    expect(secretish("build finished in 1.2s")).toBe(false);
+  });
+});
+
+describe("guardActivity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useActivityRiskStore.setState({ risks: {} });
+  });
+
+  it("asks Jev about a command and stores the label it returns", async () => {
+    vi.mocked(invoke).mockResolvedValue("destructive");
+    guardActivity(row({ id: "g1" }));
+    await vi.waitFor(() =>
+      expect(useActivityRiskStore.getState().risks.g1).toBe("destructive")
+    );
+    expect(invoke).toHaveBeenCalledWith("typesafe_call_risk", {
+      title: "rm -rf build",
+      description: null,
+      toolKind: "command",
+    });
+  });
+
+  it("never judges a read", () => {
+    guardActivity(row({ id: "g2", kind: "fileRead", title: "src/app.ts" }));
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("judges a row once, however many snapshots arrive", () => {
+    vi.mocked(invoke).mockResolvedValue(null);
+    guardActivity(row({ id: "g3" }));
+    guardActivity(row({ id: "g3" }));
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a label it does not recognise", async () => {
+    vi.mocked(invoke).mockResolvedValue("something-new");
+    guardActivity(row({ id: "g4" }));
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalled());
+    expect(useActivityRiskStore.getState().risks.g4).toBeUndefined();
+  });
+});
+
+describe("guardOutput", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useActivityRiskStore.setState({ risks: {} });
+  });
+
+  it("confirms a candidate secret only after a local shape match", async () => {
+    vi.mocked(invoke).mockResolvedValue("secret");
+    const secret = row({ id: "o1", complete: true, output: "token = sk-abcdefghijklmnopqrstuvwxyz" });
+    guardOutput(secret);
+    await vi.waitFor(() =>
+      expect(useActivityRiskStore.getState().risks.o1).toBe("secret")
+    );
+  });
+
+  it("does not call Jev for output that looks ordinary", () => {
+    guardOutput(row({ id: "o2", complete: true, output: "42 tests passed" }));
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("waits for the output to finish", () => {
+    guardOutput(row({ id: "o3", complete: false, output: "AKIAIOSFODNN7EXAMPLE" }));
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

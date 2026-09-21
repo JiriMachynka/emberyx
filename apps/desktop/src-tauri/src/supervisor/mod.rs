@@ -235,7 +235,7 @@ mod tests {
         let s = supervisor();
         {
             let (lock, _) = &*s.inner;
-            let mut inner = lock.lock().unwrap();
+            let mut inner = lock.lock().unwrap_or_else(|e| e.into_inner());
             Supervisor::push_timeline(
                 &mut inner,
                 "t1",

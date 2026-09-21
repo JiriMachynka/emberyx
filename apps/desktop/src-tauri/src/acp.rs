@@ -189,7 +189,11 @@ impl AcpManager {
     }
 
     fn handle(&self, id: u32) -> Result<Handle> {
-        let sessions = self.inner.sessions.lock().unwrap();
+        let sessions = self
+            .inner
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let session = sessions.get(&id).ok_or("no such ACP session")?;
         Ok(Handle {
             stdin: session.stdin.clone(),
@@ -301,7 +305,10 @@ impl Inner {
             on_event: on_event.clone(),
             drain: None,
         };
-        self.sessions.lock().unwrap().insert(id, session);
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, session);
 
         let err_channel = on_event.clone();
         std::thread::spawn(move || {
@@ -392,24 +399,31 @@ impl Inner {
             tx.clone(),
         );
         let (proc_handle, outcome) = daemon.proc_spawn(spec, None, sink)?;
-        self.sessions.lock().unwrap().insert(
-            id,
-            Session {
-                child: None,
-                stdin: StdinRoute::Daemon(Arc::clone(&daemon), proc_handle),
-                next_request_id: Arc::clone(&next_request_id),
-                pending: Arc::clone(&pending),
-                open_agent_requests: Arc::clone(&open_agent_requests),
-                on_event: on_event.clone(),
-            },
-        );
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                id,
+                Session {
+                    child: None,
+                    stdin: StdinRoute::Daemon(Arc::clone(&daemon), proc_handle),
+                    next_request_id: Arc::clone(&next_request_id),
+                    pending: Arc::clone(&pending),
+                    open_agent_requests: Arc::clone(&open_agent_requests),
+                    on_event: on_event.clone(),
+                },
+            );
         let exit_code = Arc::new(Mutex::new(None));
         let reap = {
             let inner = Arc::clone(self);
             let exit_code = Arc::clone(&exit_code);
             move || {
-                inner.sessions.lock().unwrap().remove(&id);
-                *exit_code.lock().unwrap()
+                inner
+                    .sessions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&id);
+                *exit_code.lock().unwrap_or_else(|e| e.into_inner())
             }
         };
         Self::spawn_forwarder(rx, on_event.clone(), Arc::new(reap));
@@ -487,10 +501,15 @@ impl Inner {
                 std::thread::sleep(STUCK_POLL);
                 // The session is removed when the reader reaps, which is what
                 // ends this thread.
-                if !inner.sessions.lock().unwrap().contains_key(&id) {
+                if !inner
+                    .sessions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains_key(&id)
+                {
                     return;
                 }
-                for (request_id, request) in open.lock().unwrap().iter() {
+                for (request_id, request) in open.lock().unwrap_or_else(|e| e.into_inner()).iter() {
                     if request.at.elapsed() >= STUCK_AFTER {
                         eprintln!(
                             "[timing] acp {} id={request_id} UNANSWERED for {:.1}s",
@@ -587,7 +606,11 @@ impl Inner {
     /// A daemon-backed session's process lives in the daemon: the kill routes
     /// there, and the local session is just the parsers.
     fn kill(&self, id: u32) -> Result<()> {
-        let session = self.sessions.lock().unwrap().remove(&id);
+        let session = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
         if let Some(mut session) = session {
             session.pending.fail_all("ACP session killed");
             match &session.stdin {
@@ -608,7 +631,11 @@ impl Inner {
     /// Let go of a daemon-backed session without stopping it. Closing a pane
     /// is not the user asking the agent to stop.
     fn detach(&self, id: u32) -> Result<()> {
-        let session = self.sessions.lock().unwrap().remove(&id);
+        let session = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
         if let Some(session) = session {
             session.pending.fail_all("ACP session detached");
             if let StdinRoute::Daemon(daemon, proc_handle) = &session.stdin {
@@ -665,7 +692,7 @@ fn route_line(
             None
         }
         Frame::Request(req) => {
-            open.lock().unwrap().insert(
+            open.lock().unwrap_or_else(|e| e.into_inner()).insert(
                 req.id,
                 OpenRequest {
                     method: req.method.clone(),
@@ -702,7 +729,7 @@ fn frame_sink(
     Arc::new(move |frame: ProcFrame| {
         drain.frame();
         if let Some(code) = frame.exit.as_ref().and_then(|e| e.code) {
-            *exit_code.lock().unwrap() = Some(code);
+            *exit_code.lock().unwrap_or_else(|e| e.into_inner()) = Some(code);
         }
         let Some(data) = &frame.data else {
             if frame.exit.is_some() {
@@ -718,7 +745,7 @@ fn frame_sink(
         };
         match frame.stream {
             ProcIo::Out => {
-                for line in out.lock().unwrap().push(&bytes) {
+                for line in out.lock().unwrap_or_else(|e| e.into_inner()).push(&bytes) {
                     if let Some(event) = route_line(&pending, &open, &line) {
                         if tx.send(Chunk::Event(event)).is_err() {
                             return false;
@@ -727,7 +754,7 @@ fn frame_sink(
                 }
             }
             ProcIo::Err => {
-                for line in err.lock().unwrap().push(&bytes) {
+                for line in err.lock().unwrap_or_else(|e| e.into_inner()).push(&bytes) {
                     if tx.send(Chunk::Event(AcpEvent::Stderr(line))).is_err() {
                         return false;
                     }
@@ -743,7 +770,7 @@ fn write_line(handle: &Handle, line: &str) -> Result<()> {
     bytes.push(b'\n');
     match &handle.stdin {
         StdinRoute::Pipe(stdin) => {
-            let mut stdin = stdin.lock().unwrap();
+            let mut stdin = stdin.lock().unwrap_or_else(|e| e.into_inner());
             stdin
                 .write_all(&bytes)
                 .and_then(|_| stdin.flush())
@@ -793,7 +820,11 @@ fn request(handle: &Handle, method: &str, params: Value) -> Result<Value> {
 /// written, or the agent stays blocked; an unknown id is refused so a stale
 /// answer can't be mistaken for the live one.
 fn respond(handle: &Handle, id: i64, outcome: std::result::Result<Value, RpcError>) -> Result<()> {
-    let open = handle.open_agent_requests.lock().unwrap().remove(&id);
+    let open = handle
+        .open_agent_requests
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id);
     let Some(open) = open else {
         return Err(crate::err!("no ACP request {id} is waiting for an answer"));
     };
@@ -892,11 +923,9 @@ pub async fn acp_session_new(
 ) -> Result<Value> {
     let params = session_mcp(&ask, &cwd, session.as_deref());
     let handle = manager.handle(id)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        request(&handle, "session/new", params)
-    })
-    .await
-    .map_err(|e| crate::err!("session/new join failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || request(&handle, "session/new", params))
+        .await
+        .map_err(|e| crate::err!("session/new join failed: {e}"))?
 }
 
 /// Resume a previous conversation, for agents whose `loadSession` capability
@@ -913,11 +942,9 @@ pub async fn acp_session_load(
     let mut params = session_mcp(&ask, &cwd, session.as_deref());
     params["sessionId"] = json!(session_id);
     let handle = manager.handle(id)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        request(&handle, "session/load", params)
-    })
-    .await
-    .map_err(|e| crate::err!("session/load join failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || request(&handle, "session/load", params))
+        .await
+        .map_err(|e| crate::err!("session/load join failed: {e}"))?
 }
 
 #[tauri::command]
@@ -1116,7 +1143,10 @@ mod tests {
         ) {
             Some(AcpEvent::Request(req)) => {
                 assert_eq!(req.id, 7);
-                assert!(open.lock().unwrap().contains_key(&7));
+                assert!(open
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains_key(&7));
             }
             _ => panic!("expected a request"),
         }
@@ -1152,10 +1182,16 @@ mod tests {
             with["mcpServers"][0]["url"],
             "http://127.0.0.1:9999/mcp?session=emberyx-1"
         );
-        assert!(with["_meta"]["rules"].as_str().unwrap().contains("headless"));
+        assert!(with["_meta"]["rules"]
+            .as_str()
+            .unwrap()
+            .contains("headless"));
 
         let probe = session_mcp(&ask, "/repo", None);
         assert_eq!(probe["mcpServers"], json!([]));
-        assert!(probe["_meta"]["rules"].as_str().unwrap().contains("headless"));
+        assert!(probe["_meta"]["rules"]
+            .as_str()
+            .unwrap()
+            .contains("headless"));
     }
 }

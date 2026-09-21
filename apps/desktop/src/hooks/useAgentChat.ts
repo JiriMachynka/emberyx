@@ -20,14 +20,12 @@ import {
   type PendingAsk,
   type PendingPermission,
   type PermissionDecision,
-  type PlanOutcome,
   type ToolCall,
 } from "@/lib/chatMessage";
 import { registerAgent, setAgentLifecycle } from "@/lib/agentRegistry";
 import { askQuestions, fetchPendingAsk } from "@/lib/approvals";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
-import { scoreDiffRisk, withJevReview } from "@/lib/jev";
-import { settleTurnCheckpoint } from "@/lib/queries";
+import { settleTurn } from "@/lib/turnSettle";
 import {
   cancelStreamPublish,
   scheduleStreamPublish,
@@ -54,6 +52,11 @@ import {
   type AccountIssue,
 } from "@/lib/accountState";
 import type { AgentBackend } from "@/lib/agentBackend";
+import {
+  BUSY_STATUS,
+  notifyPlanNothing,
+  type ChatSession,
+} from "@/lib/chatSession";
 
 import { notifyNative } from "@/lib/notifications";
 import { loadSettings } from "@/lib/settings";
@@ -112,17 +115,14 @@ export {
   sameQuota,
 } from "@/lib/chatMessage";
 
-/** States where the agent can't take a new turn, so one gets queued instead. */
-const BUSY_STATUS = new Set<ChatStatus>([
-  "thinking",
-  "streaming",
-  "tool",
-  "awaiting_permission",
-  "awaiting_answer",
-]);
-
-/** What `agent_spawn` returns. `reattached` means the daemon already had this
- *  agent and replayed it; `truncated` means the replay is knowingly partial. */
+/** What `agent_spawn` returns. `truncated` means the daemon's replay is
+ *  knowingly partial and the transcript's start is missing.
+ *
+ *  `reattached` says the daemon already held this agent and replayed its buffer.
+ *  This transport does not branch on it: `agent_spawn` owns resume internally,
+ *  and `persistent` already suppresses the disk prefill so the replay stays the
+ *  sole source. Codex and ACP branch on the same field to skip their own
+ *  thread-open round trip — Claude has no equivalent round trip to skip. */
 interface AgentHandle {
   id: number;
   reattached: boolean;
@@ -220,7 +220,7 @@ export function useAgentChat({
   keepGoing = null,
   onKeepGoingTurn,
   onKeepGoingStop,
-}: Options) {
+}: Options): ChatSession {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // Mirror for reads inside callbacks (rewind) without stale closures or making
   // the callback re-created — and thus the composer re-rendered — every token.
@@ -934,18 +934,8 @@ export function useAgentChat({
         // The turn is over — resolve any background runs still marked open,
         // since they never get a per-completion signal.
         endOpenSubagents(emberyxSessionId);
-        // Freeze this turn's file delta: snapshot the tree now under the
-        // turn's checkpoint, so edits made between turns land in no turn's
-        // card. Best-effort; a missed settle only widens the range.
-        const settledId = lastCheckpointIdRef.current;
-        if (settledId) {
-          void (async () => {
-            await settleTurnCheckpoint(cwd, settledId);
-            if (await scoreDiffRisk(cwd, emberyxSessionId, settledId)) {
-              setMessages((prev) => withJevReview(prev, settledId));
-            }
-          })();
-        }
+        // Freeze this turn's file delta under its checkpoint; see `settleTurn`.
+        settleTurn(cwd, emberyxSessionId, lastCheckpointIdRef.current, setMessages);
         return;
       }
     },
@@ -1762,10 +1752,6 @@ export function useAgentChat({
     loadOlder,
   };
 }
-
-/** The three chat hooks expose one shape to the pane; Claude and Codex never
- *  raise the plan gate, so theirs is permanent absence. */
-export const notifyPlanNothing = (_outcome: PlanOutcome, _comments: string) => {};
 
 function attachToolResult(
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,

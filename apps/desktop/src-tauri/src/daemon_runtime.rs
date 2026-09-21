@@ -697,7 +697,7 @@ mod tests {
     fn an_exited_agent_is_not_reattachable() {
         let runtime = Runtime::new();
         {
-            let mut streams = runtime.streams.lock().unwrap();
+            let mut streams = runtime.streams.lock().unwrap_or_else(|e| e.into_inner());
             streams.entry("a".into()).or_default().process_id = Some(7);
         }
         assert!(runtime.outcome_if_live("a").is_some());
@@ -725,7 +725,7 @@ mod tests {
         }
         let (backlog, _rx) = runtime.attach("a", None);
         assert_eq!(backlog.len(), MAX_FRAMES);
-        let streams = runtime.streams.lock().unwrap();
+        let streams = runtime.streams.lock().unwrap_or_else(|e| e.into_inner());
         assert!(streams.get("a").unwrap().truncated);
     }
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { ActivityList, ActivityRow } from "@/components/chat/ActivityRow";
+import { useActivityRiskStore } from "@/lib/activityRisk";
 import type { ActivityItem } from "@/types";
 
 const row = (over: Partial<ActivityItem> = {}): ActivityItem => ({
@@ -13,7 +14,10 @@ const row = (over: Partial<ActivityItem> = {}): ActivityItem => ({
   ...over,
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useActivityRiskStore.setState({ risks: {} });
+});
 
 describe("ActivityRow", () => {
   it("opens the in-flight tool and closes it once the result lands", () => {
@@ -23,6 +27,13 @@ describe("ActivityRow", () => {
 
     const done = render(<ActivityRow activity={row({ complete: true, output: "ok" })} />);
     expect(done.getByRole("button", { expanded: false })).toBeTruthy();
+  });
+
+  it("shows the risk label the store holds for the row", () => {
+    useActivityRiskStore.setState({ risks: { "bash-1": "credentials" } });
+    const view = render(<ActivityRow activity={row({ complete: true })} />);
+    expect(view.getByText("credentials")).toBeTruthy();
+    expect(view.getByTitle(/touches a credential/)).toBeTruthy();
   });
 });
 

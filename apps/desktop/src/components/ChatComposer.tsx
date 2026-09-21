@@ -326,6 +326,12 @@ export const ChatComposer = memo(function ChatComposer({
     usedTokens: usage.contextTokens ?? 0,
   });
 
+  const hasContent = input.trim().length > 0 || images.length > 0;
+  /** The send slot is one control, and which action it carries follows the box,
+   *  not the turn: Stop only while a turn streams and there is nothing to send,
+   *  Send the moment there is — because typing mid-turn is how you queue. */
+  const showStop = busy && !hasContent;
+
   /** Escape while a turn is in flight: pull the just-sent message back into the
    *  box to edit. A draft already typed is kept, below the restored text. */
   const rewindToDraft = (): boolean => {
@@ -662,30 +668,25 @@ export const ChatComposer = memo(function ChatComposer({
             >
               <ImagePlus className="size-4" />
             </button>
-            {busy && (
-              <Button
-                type="button"
-                variant="secondary"
-                size="icon"
-                onClick={onStop}
-                title="Stop"
-                className="rounded-full"
-              >
-                <Square className="size-3.5 fill-current" />
-              </Button>
-            )}
             {/* The shared primary button, not a hand-rolled circle: the
                 composer's most-used control was the one place missing the
-                press-scale and the ember shadow every other primary has. */}
+                press-scale and the ember shadow every other primary has. It
+                carries whichever action the box calls for — a stop while a turn
+                streams with nothing typed, a send as soon as there is. */}
             <Button
               type="button"
               size="icon"
-              onClick={submit}
-              title={busy ? "Queue message" : "Send"}
-              disabled={(!input.trim() && images.length === 0) || exited}
+              onClick={showStop ? onStop : submit}
+              title={showStop ? "Stop" : busy ? "Queue message" : "Send"}
+              aria-label={showStop ? "Stop" : busy ? "Queue message" : "Send"}
+              disabled={!showStop && (!hasContent || exited)}
               className="rounded-full"
             >
-              <ArrowUp className="size-4" />
+              {showStop ? (
+                <Square className="size-3.5 fill-current" />
+              ) : (
+                <ArrowUp className="size-4" />
+              )}
             </Button>
           </div>
         </div>

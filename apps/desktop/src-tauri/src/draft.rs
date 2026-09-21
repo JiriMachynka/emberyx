@@ -153,7 +153,7 @@ impl Drafter {
     /// Errors are the caller's to ignore — warming is an optimisation, and a
     /// failure here must not stop the draft that follows from trying cold.
     pub fn warm(&self, model: &str) -> Result<()> {
-        let mut slot = self.slot.lock().unwrap();
+        let mut slot = self.slot.lock().unwrap_or_else(|e| e.into_inner());
         if slot
             .as_ref()
             .is_some_and(|w| w.model == model && w.born.elapsed() < MAX_WARM_AGE)
@@ -170,7 +170,7 @@ impl Drafter {
     /// Take the warm child if it fits, else say so — the caller spawns cold
     /// rather than waiting on a boot it could have been doing itself.
     fn take(&self, model: &str) -> Option<Warm> {
-        let mut slot = self.slot.lock().unwrap();
+        let mut slot = self.slot.lock().unwrap_or_else(|e| e.into_inner());
         match slot.take() {
             Some(w) if w.model == model && w.born.elapsed() < MAX_WARM_AGE => Some(w),
             Some(stale) => {

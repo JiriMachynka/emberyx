@@ -1,4 +1,4 @@
-import { Fragment, memo, useMemo, useState } from "react";
+import { Fragment, memo, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 import { FileTypeIcon } from "@/components/FileTypeIcon";
@@ -6,6 +6,8 @@ import { ActivityFileTree } from "@/components/chat/ActivityFileTree";
 import { Disclosure, DisclosureChevron } from "@/components/chat/Disclosure";
 import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { ToolBody } from "@/components/chat/ToolViews";
+import { guardActivity, guardOutput } from "@/lib/jev";
+import { RISK_LABEL, RISK_TITLE, useActivityRisk } from "@/lib/activityRisk";
 import { useAgentStore } from "@/lib/agentStore";
 import {
   groupActivities,
@@ -35,14 +37,27 @@ import type { ActivityItem } from "@/types";
  */
 export const ActivityRow = memo(function ActivityRow({
   activity,
+  live,
 }: {
   activity: ActivityItem;
+  /** This row belongs to the turn still streaming. Only a live row is worth a
+   *  Jev judgment: replaying an old thread must not bill one call per tool. */
+  live?: boolean;
 }) {
   const Icon = TOOL_ICONS[iconForActivity(activity)];
   const tint = TOOL_TINT[iconForActivity(activity)];
   const label = labelForActivity(activity);
   const title = titleForActivity(activity);
   const meta = metaForActivity(activity);
+  const risk = useActivityRisk(activity.id);
+
+  // Fire-and-forget, off the render path. `guardActivity`/`guardOutput` dedupe
+  // by id, so a row that updates as it streams judges at most once.
+  useEffect(() => {
+    if (!live) return;
+    guardActivity(activity);
+    guardOutput(activity);
+  }, [live, activity]);
   // A provider says when its work finished. The tool card had to infer it from
   // whether a result had landed, which left a tool that returns nothing
   // spinning forever.
@@ -121,6 +136,11 @@ export const ActivityRow = memo(function ActivityRow({
           </span>
         )}
         {meta && <span className="shrink-0 text-muted-foreground">{meta}</span>}
+        {risk && (
+          <span className="shrink-0 text-amber-400/90" title={RISK_TITLE[risk]}>
+            {RISK_LABEL[risk]}
+          </span>
+        )}
         {activity.autoApproved && (
           <span
             className="shrink-0 text-muted-foreground/70"
@@ -209,7 +229,7 @@ export function ActivityList({
       return (
         <Fragment key={`files:${group.activities[0].id}`}>
           {group.activities.map((activity) => (
-            <ActivityRow key={activity.id} activity={activity} />
+            <ActivityRow key={activity.id} activity={activity} live={live} />
           ))}
         </Fragment>
       );
@@ -219,7 +239,7 @@ export function ActivityList({
     return agent ? (
       <Fragment key={activity.id}>{agent}</Fragment>
     ) : (
-      <ActivityRow key={activity.id} activity={activity} />
+      <ActivityRow key={activity.id} activity={activity} live={live} />
     );
   };
   return (

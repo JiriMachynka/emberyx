@@ -125,7 +125,7 @@ pub(crate) fn warm_shell_env() {
     STARTED.call_once(|| {
         if let Some(cached) = read_env_cache() {
             let (lock, cv) = env_cell();
-            *lock.lock().unwrap() = EnvState::Done(Some(cached));
+            *lock.lock().unwrap_or_else(|e| e.into_inner()) = EnvState::Done(Some(cached));
             cv.notify_all();
         }
         std::thread::spawn(|| {
@@ -134,11 +134,14 @@ pub(crate) fn warm_shell_env() {
             // nothing — the fallback for "no env" is Finder's stub PATH.
             if let Some(vars) = &env {
                 write_env_cache(vars);
-            } else if matches!(&*env_cell().0.lock().unwrap(), EnvState::Done(Some(_))) {
+            } else if matches!(
+                &*env_cell().0.lock().unwrap_or_else(|e| e.into_inner()),
+                EnvState::Done(Some(_))
+            ) {
                 return;
             }
             let (lock, cv) = env_cell();
-            *lock.lock().unwrap() = EnvState::Done(env);
+            *lock.lock().unwrap_or_else(|e| e.into_inner()) = EnvState::Done(env);
             cv.notify_all();
         });
     });
@@ -148,7 +151,7 @@ pub(crate) fn warm_shell_env() {
 /// that have a working fallback and must not stall (terminal panes).
 pub(crate) fn shell_env_now() -> Option<Vec<(String, String)>> {
     warm_shell_env();
-    match &*env_cell().0.lock().unwrap() {
+    match &*env_cell().0.lock().unwrap_or_else(|e| e.into_inner()) {
         EnvState::Done(env) => env.clone(),
         EnvState::Warming => None,
     }
@@ -161,9 +164,11 @@ pub(crate) fn shell_env_blocking(timeout: std::time::Duration) -> Option<Vec<(St
     warm_shell_env();
     let (lock, cv) = env_cell();
     let (state, _) = cv
-        .wait_timeout_while(lock.lock().unwrap(), timeout, |s| {
-            matches!(s, EnvState::Warming)
-        })
+        .wait_timeout_while(
+            lock.lock().unwrap_or_else(|e| e.into_inner()),
+            timeout,
+            |s| matches!(s, EnvState::Warming),
+        )
         .unwrap();
     match &*state {
         EnvState::Done(env) => env.clone(),
@@ -343,7 +348,10 @@ impl PtyManager {
 
         // Register before the reader thread starts so a fast-exiting process
         // can't be removed from the map before it was ever inserted.
-        self.sessions.lock().unwrap().insert(id, session);
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, session);
 
         // Output pipeline: a reader thread pulls raw bytes off the PTY and a
         // forwarder thread coalesces everything already queued into a single
@@ -387,7 +395,10 @@ impl PtyManager {
                 let mut batch = match first {
                     Chunk::Data(bytes) => bytes,
                     Chunk::Done(code) => {
-                        sessions.lock().unwrap().remove(&id);
+                        sessions
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .remove(&id);
                         let _ = event_channel.send(PtyEvent::Exit(code));
                         return;
                     }
@@ -409,7 +420,10 @@ impl PtyManager {
                     return;
                 }
                 if let Some(code) = done {
-                    sessions.lock().unwrap().remove(&id);
+                    sessions
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .remove(&id);
                     let _ = event_channel.send(PtyEvent::Exit(code));
                     return;
                 }
@@ -420,7 +434,7 @@ impl PtyManager {
     }
 
     pub fn write(&self, id: u32, data: &str) -> Result<()> {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let session = sessions.get_mut(&id).ok_or("pty not found")?;
         session.writer.write_all(data.as_bytes())?;
         session.writer.flush()?;
@@ -428,7 +442,7 @@ impl PtyManager {
     }
 
     pub fn resize(&self, id: u32, cols: u16, rows: u16) -> Result<()> {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let session = sessions.get(&id).ok_or("pty not found")?;
         session
             .master
@@ -445,7 +459,12 @@ impl PtyManager {
     /// Stop a PTY and everything running in it — a dev server dies with its
     /// tab. Asks politely first so servers can release their port, then kills.
     pub fn kill(&self, id: u32) -> Result<()> {
-        let Some(session) = self.sessions.lock().unwrap().remove(&id) else {
+        let Some(session) = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id)
+        else {
             return Ok(());
         };
         stop_session(session);

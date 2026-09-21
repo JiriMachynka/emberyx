@@ -169,17 +169,27 @@ pub struct Pending {
 impl Pending {
     pub(crate) fn register(&self, id: i64) -> Receiver<std::result::Result<Value, RpcError>> {
         let (tx, rx) = mpsc::channel();
-        self.waiters.lock().unwrap().insert(id, tx);
+        self.waiters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, tx);
         rx
     }
 
     pub(crate) fn forget(&self, id: i64) {
-        self.waiters.lock().unwrap().remove(&id);
+        self.waiters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
     }
 
     /// Returns false when nothing was waiting — a late reply after a timeout.
     pub(crate) fn resolve(&self, id: i64, outcome: std::result::Result<Value, RpcError>) -> bool {
-        let waiter = self.waiters.lock().unwrap().remove(&id);
+        let waiter = self
+            .waiters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
         match waiter {
             Some(tx) => tx.send(outcome).is_ok(),
             None => false,
@@ -281,7 +291,7 @@ impl Drain {
     }
 
     pub(crate) fn frame(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.0 = state.0.saturating_sub(1);
         if state.0 == 0 {
             self.done.notify_all();
@@ -290,7 +300,7 @@ impl Drain {
 
     /// The child died mid-replay: stop waiting, there is nothing more coming.
     pub(crate) fn dead(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.1 = true;
         self.done.notify_all();
     }
@@ -300,7 +310,7 @@ impl Drain {
     /// request timeout: a socket that died mid-replay must fail loudly, not
     /// hang the turn forever.
     pub(crate) fn wait(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let deadline = std::time::Instant::now() + REQUEST_TIMEOUT;
         while state.0 > 0 && !state.1 {
             let now = std::time::Instant::now();
@@ -351,7 +361,11 @@ impl CodexManager {
     }
 
     fn handle(&self, id: u32) -> Result<Handle> {
-        let sessions = self.inner.sessions.lock().unwrap();
+        let sessions = self
+            .inner
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let session = sessions.get(&id).ok_or("no such codex session")?;
         Ok(Handle {
             stdin: session.stdin.clone(),
@@ -433,7 +447,10 @@ impl Inner {
             open_server_requests: Arc::clone(&session.open_server_requests),
             drain: None,
         };
-        self.sessions.lock().unwrap().insert(id, session);
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(id, session);
 
         let err_channel = on_event.clone();
         std::thread::spawn(move || {
@@ -525,23 +542,30 @@ impl Inner {
             open_server_requests: Arc::clone(&open_server_requests),
             drain: Some(Arc::clone(&drain)),
         };
-        self.sessions.lock().unwrap().insert(
-            id,
-            Session {
-                child: None,
-                stdin: StdinRoute::Daemon(Arc::clone(&daemon), proc_handle),
-                next_request_id,
-                pending,
-                open_server_requests,
-            },
-        );
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                id,
+                Session {
+                    child: None,
+                    stdin: StdinRoute::Daemon(Arc::clone(&daemon), proc_handle),
+                    next_request_id,
+                    pending,
+                    open_server_requests,
+                },
+            );
         let exit_code = Arc::new(Mutex::new(None));
         let reap = {
             let inner = Arc::clone(self);
             let exit_code = Arc::clone(&exit_code);
             move || {
-                inner.sessions.lock().unwrap().remove(&id);
-                *exit_code.lock().unwrap()
+                inner
+                    .sessions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&id);
+                *exit_code.lock().unwrap_or_else(|e| e.into_inner())
             }
         };
         self.spawn_forwarder(id, rx, on_event.clone(), Arc::new(reap));
@@ -707,7 +731,11 @@ impl Inner {
     /// A daemon-backed session's process lives in the daemon: the kill routes
     /// there, and the local session is just the parsers.
     fn kill(&self, id: u32) -> Result<()> {
-        let session = self.sessions.lock().unwrap().remove(&id);
+        let session = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
         if let Some(mut session) = session {
             session.pending.fail_all("codex session killed");
             match &session.stdin {
@@ -729,7 +757,11 @@ impl Inner {
     /// closing a pane does in persistent mode — the process keeps running in
     /// the daemon, and a reopened window reattaches to it.
     fn detach(&self, id: u32) -> Result<()> {
-        let session = self.sessions.lock().unwrap().remove(&id);
+        let session = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id);
         if let Some(session) = session {
             session.pending.fail_all("codex session detached");
             if let StdinRoute::Daemon(daemon, proc_handle) = &session.stdin {
@@ -833,7 +865,9 @@ fn route_line(pending: &Pending, open: &Mutex<HashSet<i64>>, line: &str) -> Opti
             None
         }
         Frame::Request(req) => {
-            open.lock().unwrap().insert(req.id);
+            open.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(req.id);
             Some(CodexEvent::Request(ServerRequest {
                 id: req.id,
                 method: req.method,
@@ -884,7 +918,7 @@ fn frame_sink(
     Arc::new(move |frame: ProcFrame| {
         drain.frame();
         if let Some(code) = frame.exit.as_ref().and_then(|e| e.code) {
-            *exit_code.lock().unwrap() = Some(code);
+            *exit_code.lock().unwrap_or_else(|e| e.into_inner()) = Some(code);
         }
         let Some(data) = &frame.data else {
             // The terminal frame (or a frame with neither data nor exit) ends
@@ -902,7 +936,7 @@ fn frame_sink(
         };
         match frame.stream {
             ProcIo::Out => {
-                for line in out.lock().unwrap().push(&bytes) {
+                for line in out.lock().unwrap_or_else(|e| e.into_inner()).push(&bytes) {
                     if let Some(event) = route_line(&pending, &open, &line) {
                         if tx.send(Chunk::Event(event)).is_err() {
                             return false;
@@ -911,7 +945,7 @@ fn frame_sink(
                 }
             }
             ProcIo::Err => {
-                for line in err.lock().unwrap().push(&bytes) {
+                for line in err.lock().unwrap_or_else(|e| e.into_inner()).push(&bytes) {
                     if tx.send(Chunk::Event(CodexEvent::Stderr(line))).is_err() {
                         return false;
                     }
@@ -927,7 +961,7 @@ fn write_line(handle: &Handle, line: &str) -> Result<()> {
     bytes.push(b'\n');
     match &handle.stdin {
         StdinRoute::Pipe(stdin) => {
-            let mut stdin = stdin.lock().unwrap();
+            let mut stdin = stdin.lock().unwrap_or_else(|e| e.into_inner());
             stdin
                 .write_all(&bytes)
                 .and_then(|_| stdin.flush())
@@ -1313,7 +1347,9 @@ mod tests {
                     pending.resolve(id, Err(error));
                 }
                 Frame::Request(req) => {
-                    open.lock().unwrap().insert(req.id);
+                    open.lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(req.id);
                     forwarded.push(req.method);
                 }
                 Frame::Notification { method, .. } => forwarded.push(method),
@@ -1329,10 +1365,10 @@ mod tests {
                 "item/commandExecution/requestApproval"
             ]
         );
-        assert!(open.lock().unwrap().contains(&7));
+        assert!(open.lock().unwrap_or_else(|e| e.into_inner()).contains(&7));
         // An id we never handed out must not be answerable.
-        assert!(!open.lock().unwrap().remove(&8));
-        assert!(open.lock().unwrap().remove(&7));
+        assert!(!open.lock().unwrap_or_else(|e| e.into_inner()).remove(&8));
+        assert!(open.lock().unwrap_or_else(|e| e.into_inner()).remove(&7));
     }
 
     #[test]
@@ -1388,7 +1424,7 @@ mod tests {
         match route_line(&pending, &open, SERVER_REQUEST) {
             Some(CodexEvent::Request(req)) => {
                 assert_eq!(req.id, 7);
-                assert!(open.lock().unwrap().contains(&7));
+                assert!(open.lock().unwrap_or_else(|e| e.into_inner()).contains(&7));
             }
             _ => panic!("expected request"),
         }

@@ -162,6 +162,26 @@ describe("ChatComposer", () => {
     expect(sent).toEqual([["hello grok", []]]);
   });
 
+  it("the send slot is Stop while a turn streams and empty, Send once you type", async () => {
+    const sent: [string, ChatImage[]][] = [];
+    const onStop = vi.fn();
+    await mount({ ...propsFor("claude", sent), busy: true, onStop });
+
+    // Streaming with an empty box: the slot carries Stop, and it stops.
+    fireEvent.click(screen.getByTitle("Stop"));
+    expect(onStop).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTitle("Send")).toBeNull();
+
+    // Typing mid-turn turns it into a send, so the message can be queued.
+    fireEvent.change(textarea(), { target: { value: "one more thing" } });
+    expect(screen.queryByTitle("Stop")).toBeNull();
+    fireEvent.click(screen.getByTitle("Queue message"));
+    expect(sent).toEqual([["one more thing", []]]);
+
+    // Sending emptied the box, so the slot is Stop again.
+    expect(screen.getByTitle("Stop")).toBeTruthy();
+  });
+
   // Chips are gated on the capability table, never on the backend's name —
   // otherwise Claude's controls leak into sessions that can't honour them.
   it.each([...AGENT_BACKENDS])("%s shows exactly the chips its capabilities allow", async (backend) => {

@@ -20,7 +20,7 @@ import type {
   PendingAsk,
   PendingPermission,
 } from "@/hooks/useAgentChat";
-import { notifyPlanNothing } from "@/hooks/useAgentChat";
+import { notifyPlanNothing } from "@/lib/chatSession";
 import {
   MOCKUP_LIVE_ASSISTANT_ID,
   mockupAsk,

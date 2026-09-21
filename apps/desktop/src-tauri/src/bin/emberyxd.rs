@@ -170,7 +170,10 @@ fn serve(
         // metadata, but "how many agents are actually running" is only knowable
         // from the runtime. Generic procs count too — they are real children.
         if matches!(request, Request::Health) {
-            let (response, _) = state.lock().unwrap().handle(request);
+            let (response, _) = state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .handle(request);
             let response =
                 with_live_count(response, runtime.live().len() + runtime.proc_live().len());
             if serde_json::to_writer(&mut writer, &response).is_err()
@@ -186,20 +189,38 @@ fn serve(
             // window can list what is running before it attaches to anything.
             match &request {
                 Request::AgentSpawn { spec } => {
-                    state.lock().unwrap().register_spawn(spec);
-                    let _ = state.lock().unwrap().save(state_path);
+                    state
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .register_spawn(spec);
+                    let _ = state
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .save(state_path);
                 }
                 Request::AgentKill { agent_id } => {
-                    state.lock().unwrap().mark_exited(agent_id);
-                    let _ = state.lock().unwrap().save(state_path);
+                    state
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .mark_exited(agent_id);
+                    let _ = state
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .save(state_path);
                 }
                 _ => {}
             }
             handle_runtime(runtime, request)
         } else {
-            let (response, should_stop) = state.lock().unwrap().handle(request);
+            let (response, should_stop) = state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .handle(request);
             stop |= should_stop;
-            let _ = state.lock().unwrap().save(state_path);
+            let _ = state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .save(state_path);
             response
         };
         if serde_json::to_writer(&mut writer, &response).is_err()
@@ -250,7 +271,10 @@ fn main() -> std::io::Result<()> {
                 // Stopping is the one time the daemon kills its children: they
                 // are the whole reason it outlives the window otherwise.
                 runtime.kill_all();
-                let _ = state.lock().unwrap().save(&state_path);
+                let _ = state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .save(&state_path);
                 let _ = std::fs::remove_file(&socket);
                 std::process::exit(0);
             }

@@ -26,6 +26,7 @@ mod ingest;
 mod mcp;
 mod menu;
 pub mod models;
+mod panic;
 mod paths;
 mod preview;
 mod providers;
@@ -86,6 +87,15 @@ pub fn run() {
         .manage(draft::Drafter::default())
         .manage(snapshots::SnapshotManager::default())
         .setup(|app| {
+            // Install the panic reporter before anything else runs: a panic
+            // during startup is exactly the kind that used to vanish into a
+            // bundled .app's closed stderr.
+            if let Ok(path) = app
+                .path()
+                .resolve("emberyx-panic.log", BaseDirectory::AppData)
+            {
+                panic::install(app.handle(), path);
+            }
             // Attach the durable event log first: restore() migrates legacy
             // registry timelines into it.
             match app
@@ -314,6 +324,8 @@ pub fn run() {
             typesafe::cmd::typesafe_turn_prep,
             typesafe::cmd::typesafe_diff_risk,
             typesafe::cmd::typesafe_screen,
+            typesafe::cmd::typesafe_call_risk,
+            typesafe::cmd::typesafe_output_risk,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

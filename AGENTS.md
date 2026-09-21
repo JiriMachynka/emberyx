@@ -95,7 +95,7 @@ is not available.
 Easy to conflate — they share almost nothing.
 
 1. **Terminal sessions** (`pty.rs`) — a real PTY running the agent CLI
-   interactively, rendered by xterm.js in `TerminalPane`. Scrollback persists
+   interactively, rendered by `ghostty-web` in `TerminalPane`. Scrollback persists
    across restarts. Backend-agnostic: it spawns `$SHELL` and writes a command
    line, so Claude-only flags are gated on the session's backend.
 2. **Claude chat sessions** (`agent.rs`) — headless `claude -p --input-format
@@ -343,7 +343,10 @@ with no rate and no recorded cost is unknown, never $0.
 
 ### Provider switching
 
-The model picker is the only way to move a thread to another provider. It
+The model picker is the only way to move a thread to another provider — and
+the only thing that picks a model. Jev never changes it: a turn's depth does
+not upshift a small model, and a Jev judgment never swaps the pick. What the
+user selected is what runs, pinned or defaulted. It
 switches **in place**: `ChatPane` holds `activeBackend` (seeded from the
 session) and a `CarriedThread` of everything earlier providers produced.
 `lib/thread.ts` stamps those turns with who made them **at carry-over time** —
