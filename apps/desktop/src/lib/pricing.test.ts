@@ -116,14 +116,14 @@ describe("refreshPricing", () => {
     expect(pricingCatalogIds()).toContain("claude-sonnet-4-5");
   });
 
-  it("skips the network call when the cache is still fresh", async () => {
+  it("revalidates even when the cache is still fresh, so a new catalog entry shows up", async () => {
     localStorage.setItem(
       CACHE_KEY,
       JSON.stringify({ fetchedAt: Date.now(), rates: {}, contexts: {} })
     );
     stubFetch(async () => ({ ok: true, json: async () => ({}) }));
     await refreshPricing();
-    expect(calls).toBe(0);
+    expect(calls).toBe(1);
   });
 
   it("falls back silently when the fetch fails", async () => {

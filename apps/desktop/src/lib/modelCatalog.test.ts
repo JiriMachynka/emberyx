@@ -30,7 +30,7 @@ describe("CLAUDE_MODELS", () => {
   it("puts the current generation up front and the aliases behind", () => {
     const current = CLAUDE_MODELS.filter((m) => !m.legacy).map((m) => m.id);
     expect(current).toEqual([
-      "claude-opus-5",
+      "claude-opus-5-5",
       "claude-fable-5-1",
       "claude-sonnet-5",
       "claude-haiku-4-5",

@@ -121,7 +121,6 @@ export function codexCost(model: string, tokens: CodexTokens): number | undefine
 const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const CACHE_KEY = "emberyx.pricing.litellm.v2";
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
 interface PricingCache {
   fetchedAt: number;
@@ -234,13 +233,12 @@ interface LiteLlmEntry {
  *  dev — fetch the catalog once rather than racing two downloads at launch. */
 let inFlight: Promise<void> | null = null;
 
-/** Fetch the LiteLLM pricing catalog and cache Claude rates locally. Skips the
- *  network call if the cache is still fresh; safe to call repeatedly (e.g. once
- *  per app launch). Failures are silent — the fallback table keeps working
- *  either way. */
+/** Fetch the LiteLLM pricing catalog and cache Claude rates locally. The cache
+ *  holds the previous catalog only until this lands — it is never used to skip
+ *  the fetch, so a model the catalog gains overnight shows up the next launch,
+ *  not a day later. One fetch per process (inFlight); failures are silent — the
+ *  fallback table keeps working either way. */
 export function refreshPricing(): Promise<void> {
-  const cached = readCache();
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return Promise.resolve();
   inFlight ??= fetchPricing().finally(() => {
     inFlight = null;
   });

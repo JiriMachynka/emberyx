@@ -40,10 +40,11 @@ const claude = (id: string, label: string, legacy = false): ModelEntry => ({
  *  older pins rather than pretending to be a named model. Live pins from the
  *  LiteLLM catalog replace the pinned rows once pricing has loaded. */
 export const CLAUDE_MODELS: ModelEntry[] = [
-  claude("claude-opus-5", "Claude Opus 5"),
+  claude("claude-opus-5-5", "Claude Opus 5.5"),
   claude("claude-fable-5-1", "Claude Fable 5.1"),
   claude("claude-sonnet-5", "Claude Sonnet 5"),
   claude("claude-haiku-4-5", "Claude Haiku 4.5"),
+  claude("claude-opus-5", "Claude Opus 5", true),
   claude("opus", "Opus (latest)", true),
   claude("sonnet", "Sonnet (latest)", true),
   claude("haiku", "Haiku (latest)", true),
