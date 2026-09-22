@@ -72,6 +72,16 @@ describe("mergeTimeline", () => {
     const existing = [event(1)];
     expect(mergeTimeline(existing, [])).toBe(existing);
   });
+
+  it("appends a strictly later run in one concat", () => {
+    const merged = mergeTimeline([event(1), event(2)], [event(3), event(4)]);
+    expect(merged.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("sorts an out-of-order burst through the slow path", () => {
+    const merged = mergeTimeline([event(1)], [event(4), event(3), event(2)]);
+    expect(merged.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+  });
 });
 
 describe("lastSeqOf", () => {

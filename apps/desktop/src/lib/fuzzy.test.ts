@@ -51,4 +51,14 @@ describe("fuzzyFilter", () => {
     const items = Array.from({ length: 50 }, (_, i) => `file${i}.ts`);
     expect(fuzzyFilter(items, "file", 5)).toHaveLength(5);
   });
+
+  it("returns the same ranking as a full sort of every match", () => {
+    const items = Array.from(
+      { length: 40 },
+      (_, i) => `pkg${i}/core/file${i}.ts`
+    );
+    const all = fuzzyFilter(items, "file", items.length).map((h) => h.value);
+    const top = fuzzyFilter(items, "file", 5).map((h) => h.value);
+    expect(top).toEqual(all.slice(0, 5));
+  });
 });

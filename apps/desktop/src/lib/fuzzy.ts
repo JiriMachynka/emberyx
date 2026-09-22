@@ -51,22 +51,57 @@ function match(text: string, lower: string, query: string): FuzzyHit | null {
   return { value: text, score: score - text.length * 0.05, positions };
 }
 
-/** Best `limit` matches for `query`, highest score first. */
+/** A hit plus the index it had in the input, so equal scores keep list order. */
+interface Ranked {
+  hit: FuzzyHit;
+  index: number;
+}
+
+/** True when `a` outranks `b` — higher score, or equal score and earlier. */
+const ranksAbove = (a: Ranked, b: Ranked) =>
+  a.hit.score > b.hit.score ||
+  (a.hit.score === b.hit.score && a.index < b.index);
+
+/** Insert `entry` into `best` (ranked best-first), keeping it ordered. */
+function insertRanked(best: Ranked[], entry: Ranked): void {
+  let lo = 0;
+  let hi = best.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (ranksAbove(best[mid], entry)) lo = mid + 1;
+    else hi = mid;
+  }
+  best.splice(lo, 0, entry);
+}
+
+/** Best `limit` matches for `query`, highest score first.
+ *
+ *  Keeps only the top `limit` while scanning instead of sorting every match: a
+ *  one-character query can match tens of thousands of paths, and sorting them
+ *  all to return 200 was most of the work. Ties keep input order, so the result
+ *  is identical to a stable sort of every hit followed by a slice. */
 export function fuzzyFilter(
   items: string[],
   query: string,
   limit: number
 ): FuzzyHit[] {
+  if (limit <= 0) return [];
   const q = query.trim().toLowerCase().replace(/\s+/g, "");
   if (!q) {
     return items.slice(0, limit).map((value) => ({ value, score: 0, positions: [] }));
   }
   const lower = lowerAll(items);
-  const hits: FuzzyHit[] = [];
+  const best: Ranked[] = [];
   for (let i = 0; i < items.length; i += 1) {
     const hit = match(items[i], lower[i], q);
-    if (hit) hits.push(hit);
+    if (!hit) continue;
+    const entry = { hit, index: i };
+    if (best.length < limit) {
+      insertRanked(best, entry);
+    } else if (ranksAbove(entry, best[best.length - 1])) {
+      best.pop();
+      insertRanked(best, entry);
+    }
   }
-  hits.sort((a, b) => b.score - a.score);
-  return hits.slice(0, limit);
+  return best.map((entry) => entry.hit);
 }

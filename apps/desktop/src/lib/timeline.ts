@@ -73,16 +73,32 @@ export interface ThreadTimeline {
 
 const TIMELINE_EVENT = "timeline-event";
 
+/** True when every element is strictly later than the one before it. */
+const isAscending = (events: TimelineEvent[]): boolean => {
+  for (let i = 1; i < events.length; i += 1) {
+    if (events[i].seq <= events[i - 1].seq) return false;
+  }
+  return true;
+};
+
 /**
  * Merge incoming events into an existing timeline: sequence order wins, and a
  * sequence already held is dropped rather than duplicated. Backfill and the
  * live stream overlap by design, so this has to be idempotent.
+ *
+ * The live path is a strict append — a run of later, ascending sequences — and
+ * takes a concat. Only a backfill, an overlap or an out-of-order arrival pays
+ * for the Map rebuild and full sort.
  */
 export function mergeTimeline(
   existing: TimelineEvent[],
   incoming: TimelineEvent[]
 ): TimelineEvent[] {
   if (incoming.length === 0) return existing;
+  const lastSeq = existing.length === 0 ? 0 : existing[existing.length - 1].seq;
+  if (incoming[0].seq > lastSeq && isAscending(incoming)) {
+    return existing.length === 0 ? incoming.slice() : existing.concat(incoming);
+  }
   const bySeq = new Map(existing.map((event) => [event.seq, event]));
   for (const event of incoming) bySeq.set(event.seq, event);
   return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
