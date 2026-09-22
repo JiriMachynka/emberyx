@@ -26,7 +26,6 @@ pub struct ClaudeRewind {
     pub session_id: Option<String>,
 }
 
-#[tauri::command]
 pub fn claude_session_rewind(
     cwd: String,
     session_id: String,
@@ -244,6 +243,14 @@ fn new_uuid() -> String {
         bytes[8], bytes[9], bytes[10], bytes[11],
         bytes[12], bytes[13], bytes[14], bytes[15]
     )
+}
+
+pub mod cmd {
+    use super::*;
+
+    crate::offload! {
+        claude_session_rewind(cwd: String, session_id: String, drop_turns: u32, config_dir: Option<String>) -> ClaudeRewind;
+    }
 }
 
 #[cfg(test)]

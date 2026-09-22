@@ -16,6 +16,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -723,7 +724,6 @@ pub fn mcp_list() -> Vec<McpServerInfo> {
     collect()
 }
 
-#[tauri::command]
 pub fn mcp_add(spec: McpAddSpec) -> Result<()> {
     validate_name(&spec.name)?;
     if spec.harnesses.is_empty() {
@@ -736,7 +736,6 @@ pub fn mcp_add(spec: McpAddSpec) -> Result<()> {
     Ok(())
 }
 
-#[tauri::command]
 pub fn mcp_remove(name: String, harness: String) -> Result<()> {
     let harness =
         Harness::from_id(&harness).ok_or_else(|| crate::err!("unknown harness {harness}"))?;
@@ -768,13 +767,19 @@ fn write_server(harness: Harness, name: &str, transport: &McpTransport) -> Resul
     atomic_write(&path, &contents)
 }
 
-// Add and remove stay synchronous: each rewrites a config file wholesale, and
-// two in flight would each drop the other's change.
+// Add and remove rewrite a config file wholesale, and two in flight would each
+// drop the other's change — so they serialize on this lock. Off the main thread
+// (the `cmd` twins below), that lock is what preserves the ordering; staying on
+// the main thread is not.
+static CONFIG_WRITES: Mutex<()> = Mutex::new(());
+
 pub mod cmd {
     use super::*;
 
     crate::offload! {
         mcp_list() => Vec<McpServerInfo>;
+        [CONFIG_WRITES] mcp_add(spec: McpAddSpec) -> ();
+        [CONFIG_WRITES] mcp_remove(name: String, harness: String) -> ();
     }
 }
 

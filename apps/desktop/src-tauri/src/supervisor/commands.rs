@@ -210,16 +210,23 @@ pub fn agent_read(
     supervisor.read(&agent_id, after_event_id)
 }
 
+/// Waits for an agent to leave `Working`. The wait parks on a condvar for as
+/// long as the timeout allows (up to 5 minutes), so it runs on the blocking
+/// pool — a plain command here would freeze the window for its whole duration.
 #[tauri::command]
-pub fn agent_wait(
+pub async fn agent_wait(
     supervisor: tauri::State<'_, Supervisor>,
     agent_id: String,
     timeout_ms: Option<u64>,
 ) -> Result<AgentRecord> {
-    supervisor.wait(
-        &agent_id,
-        Duration::from_millis(timeout_ms.unwrap_or(30_000).min(300_000)),
-    )
+    let supervisor = supervisor.inner().clone();
+    crate::error::blocking(move || {
+        supervisor.wait(
+            &agent_id,
+            Duration::from_millis(timeout_ms.unwrap_or(30_000).min(300_000)),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
