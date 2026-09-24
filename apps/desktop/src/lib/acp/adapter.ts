@@ -20,7 +20,6 @@ import type { ActivityItem } from "@/types";
 import { acpActivity } from "./activities";
 import type {
   AcpContentBlock,
-  AcpPermissionRequest,
   AcpPlanEntry,
   AcpStopReason,
   AcpToolCallUpdate,
@@ -30,6 +29,21 @@ import type { AccessLevel } from "@/lib/settings";
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null;
+
+const asString = (v: unknown): string | undefined =>
+  typeof v === "string" ? v : undefined;
+
+/** A tool call as either revision states it: `{ toolCallId, title, kind }`. */
+const readToolCall = (
+  v: unknown
+): { toolCallId?: string; title?: string; kind?: string } | null => {
+  if (!isRecord(v)) return null;
+  return {
+    toolCallId: asString(v.toolCallId),
+    title: asString(v.title),
+    kind: asString(v.kind),
+  };
+};
 
 /** Flatten a content block to text; nested blocks carry their own `content`. */
 export function blockText(block: AcpContentBlock | undefined): string {
@@ -302,21 +316,30 @@ export function readPermission(
   params: unknown
 ): AcpPermission | null {
   if (!isRecord(params)) return null;
-  const req = params as unknown as AcpPermissionRequest;
-  const toolCall = req.toolCall ?? req.subject?.toolCall;
-  const options = Array.isArray(req.options) ? req.options : [];
+  // v1 states the tool call at the top level; the v2 draft wraps it in a
+  // tagged `subject`. Read both without trusting the frame's shape.
+  const subject = isRecord(params.subject) ? params.subject : null;
+  const toolCall =
+    readToolCall(params.toolCall) ?? readToolCall(subject?.toolCall);
+  const rawOptions = Array.isArray(params.options) ? params.options : [];
+  const options = rawOptions.flatMap(
+    (o): { optionId: string; name: string; kind?: string }[] => {
+      if (!isRecord(o)) return [];
+      const optionId = asString(o.optionId);
+      const name = asString(o.name);
+      // An option the user cannot identify is not one they can answer.
+      if (optionId === undefined || name === undefined) return [];
+      return [{ optionId, name, kind: asString(o.kind) }];
+    }
+  );
   if (options.length === 0) return null;
   return {
     requestId,
-    title: req.title ?? toolCall?.title ?? "Allow this action?",
-    description: req.description,
+    title: asString(params.title) ?? toolCall?.title ?? "Allow this action?",
+    description: asString(params.description),
     toolCallId: toolCall?.toolCallId,
     toolKind: toolCall?.kind,
-    options: options.map((o) => ({
-      optionId: o.optionId,
-      name: o.name,
-      kind: o.kind,
-    })),
+    options,
   };
 }
 

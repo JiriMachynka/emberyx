@@ -223,10 +223,9 @@ impl BrowserManager {
         }
 
         let exe = chrome_path().ok_or_else(|| {
-            format!(
-                "browser: no Chromium browser found (Chrome, Chromium, Brave, Edge or \
-                 Vivaldi, in /Applications or ~/Applications). Set CHROME_PATH to point at one."
-            )
+            "browser: no Chromium browser found (Chrome, Chromium, Brave, Edge or \
+             Vivaldi, in /Applications or ~/Applications). Set CHROME_PATH to point at one."
+                .to_string()
         })?;
 
         // Its own profile, so the user's real Chrome session, cookies and

@@ -3,7 +3,6 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
-// @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
 /**
@@ -48,6 +47,28 @@ export default defineConfig(async () => ({
   // degrading, so this is required, not a tuning knob.
   worker: {
     format: "es",
+  },
+
+  // One 1.7 MB index chunk (react, radix, codemirror, tanstack and the app in
+  // one file) means every release re-downloads libraries that never changed.
+  // Split the big, stable vendors into their own chunks so only the app's own
+  // code changes between releases. Note this is about caching, not lazy load:
+  // the transcript lexer (lib/lexer.ts) eagerly imports every language grammar,
+  // so codemirror and lezer are needed on startup either way.
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("@tanstack")) return "tanstack";
+          if (id.includes("@radix-ui")) return "radix";
+          if (id.includes("@lezer")) return "lezer";
+          if (id.includes("@codemirror")) return "codemirror";
+          if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return "react";
+          return undefined;
+        },
+      },
+    },
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

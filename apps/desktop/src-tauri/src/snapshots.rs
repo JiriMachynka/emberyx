@@ -905,7 +905,7 @@ mod platform {
         let _ = GetCurrentProcess(&mut psn);
         let _ = SetFrontProcessWithOptions(&psn, K_SET_FRONT_PROCESS_FRONT_WINDOW_ONLY);
 
-        let running_cls = objc_getClass(b"NSRunningApplication\0".as_ptr().cast());
+        let running_cls = objc_getClass(c"NSRunningApplication".as_ptr());
         if !running_cls.is_null() {
             let running = msg0(running_cls, sel(b"currentApplication\0"));
             if !running.is_null() {
@@ -1131,7 +1131,7 @@ mod platform {
             if prompt.is_null() || kCFBooleanTrue.is_null() {
                 return;
             }
-            let keys: [*const c_void; 1] = [prompt as *const c_void];
+            let keys: [*const c_void; 1] = [prompt];
             let values: [*const c_void; 1] = [kCFBooleanTrue];
             let dict = CFDictionaryCreate(
                 ptr::null(),
