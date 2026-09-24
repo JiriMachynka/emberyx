@@ -502,6 +502,18 @@ describe("useAcpChat thread durability", () => {
     // Replayed history is not streaming and carries no half-open tool cards.
     expect(view.result.current.messages.every((m) => !m.streaming)).toBe(true);
   });
+
+  // In persistent mode the daemon's replay is the single source; seeding the
+  // store on top of it races the replay into duplicated turns.
+  it("does not seed from the event log in persistent mode", async () => {
+    const view = renderHook(() =>
+      useAcpChat({ ...options, resume: "s9", persistent: true })
+    );
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    expect(
+      invoke.mock.calls.filter(([name]) => name === "thread_messages_page")
+    ).toHaveLength(0);
+  });
 });
 
 describe("useAcpChat queueing", () => {

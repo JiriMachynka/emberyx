@@ -976,6 +976,7 @@ export function useAgentChat({
     if (hydratedRef.current === target) return;
     hydratedRef.current = target;
     let cancelled = false;
+    let completed = false;
     void (async () => {
       try {
         // The sidebar starts this page on hover; when it did, the switch pays
@@ -1024,6 +1025,9 @@ export function useAgentChat({
           };
           return hu;
         });
+        // The page is on screen: this target is hydrated. Set before the
+        // catch-up below so its early returns don't look like a failed read.
+        completed = true;
 
         // Now that the thread is on screen, catch the projections up. This is
         // the pass the read above skipped, and it matters for turns written
@@ -1042,7 +1046,9 @@ export function useAgentChat({
         const freshLines = fresher.rows
           .map((row) => row.payloadJson)
           .filter((line): line is string => typeof line === "string");
-        if (freshLines.length === lines.length) return;
+        // Compare content, not count: a page that gained a turn while capped at
+        // the page limit keeps the same length but is not the same history.
+        if (freshLines.join("\n") === lines.join("\n")) return;
         const reparsed = attachTranscriptActivities(
           parseTranscript(freshLines.join("\n")),
           fresher.activities
@@ -1055,12 +1061,17 @@ export function useAgentChat({
           : oldestCursorRef.current;
       } catch (e) {
         // Let a later mount retry; a failed read must not look hydrated.
-        hydratedRef.current = null;
+        if (!cancelled) hydratedRef.current = null;
         console.error("[emberyx] thread_messages_page failed", e);
       }
     })();
     return () => {
       cancelled = true;
+      // A read torn down before it painted must not leave the target looking
+      // hydrated. StrictMode's phantom unmount cancels the first read and then
+      // re-runs this effect, which would otherwise see `hydratedRef` already
+      // set and skip the retry — leaving a resumed thread permanently blank.
+      if (!completed) hydratedRef.current = null;
     };
   }, [enabled, resume, imported, cwd, persistent]);
 

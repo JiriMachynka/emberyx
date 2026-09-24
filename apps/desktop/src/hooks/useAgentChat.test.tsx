@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import { useAgentStore } from "@/lib/agentStore";
@@ -730,6 +731,40 @@ describe("useAgentChat persistent agents", () => {
       expect(result.current.messages.map((m) => m.text)).toEqual(["from-disk"])
     );
     expect(result.current.hasMore).toBe(true);
+  });
+
+  it("hydrates a resumed thread under StrictMode's double-mount", async () => {
+    // StrictMode mounts the effect twice, so the pane reads twice. The real
+    // backend is idempotent; answer both calls with the same page.
+    const page = { rows: [userRow("m2", "from-disk", 1000)], hasMore: false };
+    messagePages = [page, page];
+    const view = renderHook(
+      () => useAgentChat({ ...options, resume: "old-thread" }),
+      { wrapper: React.StrictMode }
+    );
+    await waitFor(() =>
+      expect(view.result.current.messages.map((m) => m.text)).toEqual(["from-disk"])
+    );
+  });
+
+  it("applies a same-length catch-up page whose content changed", async () => {
+    // The initial read (fresh: false) and the catch-up read return the same
+    // number of rows but different text — the guard must compare content, not
+    // length, or the catch-up is dropped.
+    messagePages = [
+      { rows: [userRow("m1", "first", 1000)], hasMore: false },
+      { rows: [userRow("m1", "edited", 1000)], hasMore: false },
+    ];
+    const base = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === "transcripts_ingest")
+        return Promise.resolve({ filesChanged: 1 });
+      return base(command, args);
+    });
+    const { result } = await mount({ resume: "old-thread" });
+    await waitFor(() =>
+      expect(result.current.messages.map((m) => m.text)).toEqual(["edited"])
+    );
   });
 
   it("paints a page with the activity rows that came in the same reply", async () => {

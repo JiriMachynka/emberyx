@@ -887,8 +887,12 @@ export function useAcpChat({
   // died with its process — but the conversation itself is not lost. A first
   // page (the tail) is what the pane paints; the user's own first message
   // beats a late-arriving page, so a seed is skipped if anything is committed.
+  //
+  // Skipped in persistent mode, same as the Claude transport: the daemon's
+  // replay is the single source there, and seeding the store on top of it
+  // races the replay into duplicated turns.
   useEffect(() => {
-    if (!enabled || !resume) return;
+    if (!enabled || !resume || persistent) return;
     let cancelled = false;
     void fetchThreadPage(cwd, resume, { fresh: false })
       .then((page) => {
@@ -898,11 +902,13 @@ export function useAcpChat({
         committedRef.current = seeded;
         publish();
       })
-      .catch(() => {});
+      .catch((e) =>
+        console.error("[emberyx] thread_messages_page failed", e)
+      );
     return () => {
       cancelled = true;
     };
-  }, [enabled, resume, cwd, publish]);
+  }, [enabled, resume, cwd, publish, persistent]);
 
   // Pin the picked model, at open and on a mid-session switch alike. "" means
   // the agent decides, and there is no id to hand back — the agent just keeps
