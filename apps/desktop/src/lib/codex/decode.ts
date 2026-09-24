@@ -93,6 +93,10 @@ const COLLAB_TOOLS: CollabAgentTool[] = [
   "resumeAgent",
   "wait",
   "closeAgent",
+  "sendMessage",
+  "followupTask",
+  "interruptAgent",
+  "listAgents",
 ];
 
 const collabTool = (v: unknown): CollabAgentTool =>

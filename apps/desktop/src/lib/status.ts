@@ -19,6 +19,7 @@ const CODEX_STATUS: Record<CodexHookEvent, SessionStatus | null> = {
   subagentStart: "working",
   subagentStop: "working",
   stop: "idle",
+  interrupt: "idle",
 };
 
 const CODEX_LOOKUP = new Map(Object.entries(CODEX_STATUS));

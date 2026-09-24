@@ -1,6 +1,6 @@
 /**
  * Codex app-server protocol, vendored from the ts-rs output of codex-cli
- * 0.147.0 (its `v2` surface). Only the subset the chat transport reads or
+ * 0.155.0 (its `v2` surface). Only the subset the chat transport reads or
  * writes is kept — regenerate from the binary rather than editing by hand.
  *
  * Path-shaped aliases (AbsolutePathBuf, LegacyAppPathString) are plain strings
@@ -85,7 +85,11 @@ export type CollabAgentTool =
   | "sendInput"
   | "resumeAgent"
   | "wait"
-  | "closeAgent";
+  | "closeAgent"
+  | "sendMessage"
+  | "followupTask"
+  | "interruptAgent"
+  | "listAgents";
 
 export type CollabAgentStatus =
   | "pendingInit"
@@ -184,7 +188,8 @@ export type CodexHookEvent =
   | "userPromptSubmit"
   | "subagentStart"
   | "subagentStop"
-  | "stop";
+  | "stop"
+  | "interrupt";
 
 /** The part of `hook/started` and `hook/completed` the status feed reads. */
 export interface CodexHookRun {

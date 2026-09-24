@@ -17,7 +17,7 @@ use crate::error::Result;
 /// The `codex-cli` release this client was written against. A mismatch is
 /// reported as a warning event, never a hard failure — the protocol is additive
 /// and an untested version usually still works.
-pub const TESTED_VERSION: &str = "0.147.0";
+pub const TESTED_VERSION: &str = "0.155.0";
 
 /// Matches agent.rs: sessions restored on launch race the login-shell env
 /// capture, and `codex` lives in ~/.local/bin which Finder's stub PATH misses.
@@ -1394,7 +1394,7 @@ mod tests {
 
     #[test]
     fn tested_version_matches_the_probed_binary() {
-        assert_eq!(TESTED_VERSION, "0.147.0");
+        assert_eq!(TESTED_VERSION, "0.155.0");
     }
 
     #[test]
