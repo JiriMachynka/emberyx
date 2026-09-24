@@ -222,6 +222,36 @@ describe("switchedBackends", () => {
   });
 });
 
+describe("review requests", () => {
+  const turnReview = {
+    projectPath: "/repo",
+    threadId: "t1",
+    fromId: "cp1",
+  };
+  const commitReview = {
+    projectPath: "/repo",
+    sha: "abc",
+    file: "a.ts",
+    subject: "one",
+  };
+
+  // App clears a request on arrival; a request left behind would re-open the
+  // Review tab on the next project switch.
+  it("clears a turn review so the effect cannot re-fire", () => {
+    store().requestTurnReview(turnReview);
+    expect(store().turnReview).not.toBeNull();
+    store().clearTurnReview();
+    expect(useAgentStore.getState().turnReview).toBeNull();
+  });
+
+  it("clears a commit review the same way", () => {
+    store().requestCommitReview(commitReview);
+    expect(store().commitReview).not.toBeNull();
+    store().clearCommitReview();
+    expect(useAgentStore.getState().commitReview).toBeNull();
+  });
+});
+
 describe("pendingSnapshot", () => {
   const image = (): ChatImage => ({
     id: crypto.randomUUID(),

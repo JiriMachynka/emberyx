@@ -10,6 +10,7 @@ import {
   labelForModel,
   modelRowLabels,
   prettyModelId,
+  splitModelLabel,
   opencodeOwnModels,
   orderByFavorites,
   searchModels,
@@ -252,8 +253,11 @@ export const ModelPicker = memo(function ModelPicker({
 
   // The CLI-resolved model when nothing is pinned, so the chip still names what
   // is actually running. Catalog labels win; otherwise the id is phrased so
-  // `grok-4.6` reads as Grok 4.6 instead of a slug.
-  const named = (id: string) => labelForModel(id, all) ?? prettyModelId(id);
+  // `grok-4.6` reads as Grok 4.6 instead of a slug. The chip shows the name
+  // half only — ACP labels are vendor-prefixed (`Go/GLM-5.3-Flash`) and the
+  // icon already says the vendor.
+  const named = (id: string) =>
+    splitModelLabel(labelForModel(id, all) ?? prettyModelId(id)).name;
   const resolved = resolvedModel ? named(resolvedModel) : "";
   const label = model ? named(model) : resolved || "Default";
 

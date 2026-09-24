@@ -24,7 +24,10 @@ function Fence({
   const preRef = useRef<HTMLPreElement>(null);
   const [copied, setCopied] = useState(false);
   const langAttr = rest["data-lang"];
-  const lang = langAttr && langAttr !== "plaintext" ? langAttr : "";
+  // "text" and "plaintext" name a language that isn't one — the tag is noise,
+  // and the header shows the copy affordance alone.
+  const lang =
+    langAttr && langAttr !== "plaintext" && langAttr !== "text" ? langAttr : "";
 
   const copy = () => {
     const text = preRef.current?.textContent ?? "";

@@ -130,9 +130,13 @@ interface AgentState {
    *  every click; App consumes it into the diff tab's state. */
   turnReview: TurnReviewRequest | null;
   requestTurnReview: (request: TurnReviewRequest) => void;
+  /** App consumed the request; nulling it stops a later effect re-run
+   *  (project switch, remount) from re-firing a click the user made once. */
+  clearTurnReview: () => void;
   /** Latest "show me this file in this commit" request from the git menu. */
   commitReview: CommitReviewRequest | null;
   requestCommitReview: (request: CommitReviewRequest) => void;
+  clearCommitReview: () => void;
   selectAgent: (id: string | null) => void;
   registerSender: (
     id: string,
@@ -211,8 +215,10 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
   // A fresh object identity per click, so a repeat click on the same turn
   // still reads as a new request downstream.
   requestTurnReview: (request) => set({ turnReview: { ...request } }),
+  clearTurnReview: () => set({ turnReview: null }),
   commitReview: null,
   requestCommitReview: (request) => set({ commitReview: { ...request } }),
+  clearCommitReview: () => set({ commitReview: null }),
   selectAgent: (id) => set({ selectedAgent: id }),
   registerSender: (id, fn) =>
     set((s) => ({ senders: { ...s.senders, [id]: fn } })),

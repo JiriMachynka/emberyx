@@ -209,8 +209,14 @@ export interface TurnRange {
 }
 
 export function turnRangesNewestFirst(checkpoints: Checkpoint[]): TurnRange[] {
-  // checkpoint_list already answers newest first.
-  return checkpoints.map((point) => ({ fromId: point.id, label: point.label }));
+  // checkpoint_list already answers newest first. Entries read "Turn N", the
+  // number counted chronologically (Turn 1 = oldest), so the newest entry
+  // carries the highest N. The turn's opening prompt still lives in the
+  // transcript — the dropdown doesn't need a wall of it.
+  return checkpoints.map((point, at) => ({
+    fromId: point.id,
+    label: `Turn ${checkpoints.length - at}`,
+  }));
 }
 
 /** +/− totals for a card, ignoring files numstat couldn't count (binary). */

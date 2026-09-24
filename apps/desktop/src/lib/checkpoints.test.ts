@@ -150,12 +150,13 @@ const point = (id: string, label = `prompt ${id}`): Checkpoint => ({
 
 describe("turnRangesNewestFirst", () => {
   // checkpoint_list answers newest first; the dropdown lists turns the same
-  // way — "Last turn" first — and the Rust side resolves each range end.
-  it("passes the list through newest first with its prompt labels", () => {
+  // way — the newest, highest-numbered turn on top. "Turn N" counts
+  // chronologically: Turn 1 is the oldest checkpoint.
+  it("labels turns by chronological number, newest first", () => {
     const ranges = turnRangesNewestFirst([point("c2"), point("c1")]);
     expect(ranges).toEqual([
-      { fromId: "c2", label: "prompt c2" },
-      { fromId: "c1", label: "prompt c1" },
+      { fromId: "c2", label: "Turn 2" },
+      { fromId: "c1", label: "Turn 1" },
     ]);
   });
 });

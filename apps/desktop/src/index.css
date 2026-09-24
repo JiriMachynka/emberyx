@@ -210,9 +210,16 @@
   }
 
   /* Chat sits on its own softer canvas rather than the terminal-first black
-     used by the rest of the application. */
+     used by the rest of the application, lifted by a faint ember glow in the
+     top corner — the accent breathes into the void instead of the canvas
+     reading as a dead black field. */
   .chat-pane {
     background-color: var(--chat-canvas);
+    background-image: radial-gradient(
+      90% 55% at 50% -10%,
+      color-mix(in oklch, var(--primary) 4%, transparent),
+      transparent 65%
+    );
   }
 
   .chat-content-width {

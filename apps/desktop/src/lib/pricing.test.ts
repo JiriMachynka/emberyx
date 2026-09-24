@@ -116,6 +116,29 @@ describe("refreshPricing", () => {
     expect(pricingCatalogIds()).toContain("claude-sonnet-4-5");
   });
 
+  it("hydrates context windows from the models.dev catalog for models LiteLLM has no entry for", async () => {
+    let call = 0;
+    stubFetch(async () => {
+      call += 1;
+      // Two fetches per refresh — LiteLLM first (the catalog that keeps
+      // Anthropic windows), then models.dev for the rest of the field.
+      const body =
+        call === 2
+          ? {
+              "opencode-go": {
+                models: { "glm-5.3-flash": { limit: { context: 1_000_000 } } },
+              },
+            }
+          : ({} as Record<string, never>);
+      return { ok: true, json: async () => body };
+    });
+    await refreshPricing();
+    expect(contextWindowFor("go/glm-5.3-flash")).toBe(1_000_000);
+    expect(contextWindowFor("opencode-go/glm-5.3-flash")).toBe(1_000_000);
+    // An Anthropic window comes from LiteLLM, never from models.dev.
+    expect(contextWindowFor("claude-sonnet-4-5-20250929") === undefined).toBe(true);
+  });
+
   it("revalidates even when the cache is still fresh, so a new catalog entry shows up", async () => {
     localStorage.setItem(
       CACHE_KEY,
@@ -123,13 +146,13 @@ describe("refreshPricing", () => {
     );
     stubFetch(async () => ({ ok: true, json: async () => ({}) }));
     await refreshPricing();
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
   });
 
   it("falls back silently when the fetch fails", async () => {
     stubFetch(() => Promise.reject(new Error("offline")));
     await expect(refreshPricing()).resolves.toBeUndefined();
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
     // No live opus rate was ever hydrated, so the fallback table answers.
     expect(costOf(usage({ input: 1_000_000, model: "claude-opus-4-8" }), "claude")).toBeCloseTo(15, 10);
   });

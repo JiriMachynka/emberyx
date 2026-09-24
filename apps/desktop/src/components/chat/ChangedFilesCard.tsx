@@ -63,7 +63,9 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
         <FileDiff className="size-4 flex-none shrink-0 text-muted-foreground" />
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <span className="truncate text-sm font-medium">
-            {files.length === 1 ? "Changed 1 file" : `Changed ${files.length} files`}
+            <span className="tabular-nums">
+              {files.length === 1 ? "Changed 1 file" : `Changed ${files.length} files`}
+            </span>
           </span>
           {review && (
             <span className="shrink-0 text-xs text-amber-400" title="Jev flagged auth, secrets, or a hard-to-undo change">
@@ -78,7 +80,7 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
         <button
           type="button"
           onClick={() => requestTurnReview({ projectPath, threadId, fromId })}
-          className="flex flex-none items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+          className="flex flex-none items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition active:scale-[0.97] hover:bg-muted/50 hover:text-foreground"
         >
           <FileDiff className="size-3.5" />
           Review

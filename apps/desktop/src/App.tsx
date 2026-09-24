@@ -217,26 +217,87 @@ function App() {
   // active project's is consumed — a pane behind a project switch must not aim
   // the diff tab at checkpoints from a repo that isn't showing.
   const turnReviewRequest = useAgentStore((s) => s.turnReview);
+  const clearTurnReview = useAgentStore((s) => s.clearTurnReview);
   const [turnPick, setTurnPick] = useState<TurnReviewRequest | null>(null);
+  // A Review click raised for a project that isn't showing is followed there —
+  // the click opened its own turn's delta; dropping it would lose that. Held in
+  // a ref and applied when the switch lands, since `turnReview` is already
+  // cleared and can't re-fire.
+  const pendingTurnReview = useRef<TurnReviewRequest | null>(null);
+  // True when the pending pick's own follow-through switch is in flight, so the
+  // thread-change drop below doesn't treat it as the user walking away.
+  const pickRef = useRef(false);
   const activeProjectPath = activeProject?.path ?? null;
   useEffect(() => {
     if (!turnReviewRequest) return;
-    if (turnReviewRequest.projectPath !== activeProjectPath) return;
+    // Consume the request immediately: a lingering one would re-fire later.
+    clearTurnReview();
+    if (turnReviewRequest.projectPath !== activeProjectPath) {
+      const target = projects.find((p) => p.path === turnReviewRequest.projectPath);
+      if (target) {
+        pendingTurnReview.current = turnReviewRequest;
+        pickRef.current = true;
+        ws.setActiveProjectId(target.id);
+      }
+      return;
+    }
     setTurnPick(turnReviewRequest);
     showTab("diff");
   }, [turnReviewRequest, activeProjectPath]);
+  useEffect(() => {
+    const pending = pendingTurnReview.current;
+    if (!pending || pending.projectPath !== activeProjectPath) return;
+    pendingTurnReview.current = null;
+    setTurnPick(pending);
+    showTab("diff");
+  }, [activeProjectPath]);
 
   // Same contract for a file picked out of the git menu's history: the popover
   // is gone by the time the diff renders, so the request travels through the
   // store and App is what opens the tab.
   const commitReviewRequest = useAgentStore((s) => s.commitReview);
+  const clearCommitReview = useAgentStore((s) => s.clearCommitReview);
   const [commitPick, setCommitPick] = useState<CommitReviewRequest | null>(null);
+  const pendingCommitReview = useRef<CommitReviewRequest | null>(null);
   useEffect(() => {
     if (!commitReviewRequest) return;
-    if (commitReviewRequest.projectPath !== activeProjectPath) return;
+    clearCommitReview();
+    if (commitReviewRequest.projectPath !== activeProjectPath) {
+      const target = projects.find((p) => p.path === commitReviewRequest.projectPath);
+      if (target) {
+        pendingCommitReview.current = commitReviewRequest;
+        ws.setActiveProjectId(target.id);
+      }
+      return;
+    }
     setCommitPick(commitReviewRequest);
     showTab("diff");
   }, [commitReviewRequest, activeProjectPath]);
+  useEffect(() => {
+    const pending = pendingCommitReview.current;
+    if (!pending || pending.projectPath !== activeProjectPath) return;
+    pendingCommitReview.current = null;
+    setCommitPick(pending);
+    showTab("diff");
+  }, [activeProjectPath]);
+
+  // A turn review belongs to the thread it was raised in. App-level state would
+  // otherwise follow you around: open a Review, switch threads, come back — and
+  // a pick you never asked for in this thread is still aimed. Threads without a
+  // session row (a pick raised onto a thread no pane has opened since) keep
+  // their pick — nothing here disagrees with it.
+  useEffect(() => {
+    if (!turnPick) return;
+    // A follow switch, onto the review's own project, is not a thread the user
+    // walked away from.
+    if (pickRef.current) {
+      pickRef.current = false;
+      return;
+    }
+    const active = projectSessions.find((s) => s.id === activeId);
+    if (active?.threadId === turnPick.threadId) return;
+    setTurnPick(null);
+  }, [activeId, projectSessions]);
 
   // ChatPanes are memoized, so their callbacks must keep a stable identity
   // across a session switch or the memo can't short-circuit. updateSettings and

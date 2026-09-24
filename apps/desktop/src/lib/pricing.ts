@@ -128,6 +128,30 @@ interface PricingCache {
   contexts: Record<string, number>;
 }
 
+/** models.dev's catalog keys windows by `providerId/modelId` — LiteLLM has no
+ *  entries for most OpenCode models, so their window would otherwise stay
+ *  unsaid. Keys are lowercased; `lookup`'s substring match resolves a bare
+ *  model id against an entry that names its provider. */
+const MODELSDEV_URL = "https://models.dev/api.json";
+const DEV_CACHE_KEY = "emberyx.contexts.modelsdev.v1";
+
+interface ModelsDevEntry {
+  limit?: { context?: number };
+}
+type ModelsDevCatalog = Record<string, { models?: Record<string, ModelsDevEntry> }>;
+
+let devContexts: Record<string, number> | undefined = (() => {
+  try {
+    const parsed: unknown = JSON.parse(
+      localStorage.getItem(DEV_CACHE_KEY) ?? "null"
+    );
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+    return parsed as Record<string, number>;
+  } catch {
+    return undefined;
+  }
+})();
+
 const EMPTY_IDS: readonly string[] = [];
 const pricingListeners = new Set<() => void>();
 let pinSnapshot: readonly string[] = EMPTY_IDS;
@@ -214,10 +238,11 @@ function rateFor(model: string, provider: Provider): Rate {
   );
 }
 
-/** The model's context window in tokens, from the LiteLLM catalog. Undefined
- *  when the catalog has not been fetched or the model is unknown. */
+/** The model's context window in tokens. LiteLLM first, then models.dev —
+ *  Undefined when neither has been fetched or knows the model. */
 export function contextWindowFor(model: string): number | undefined {
-  return model ? lookup(liveContexts, model) : undefined;
+  if (!model) return undefined;
+  return lookup(liveContexts, model) ?? lookup(devContexts, model);
 }
 
 /** Per-token USD field names as they appear in the LiteLLM pricing catalog. */
@@ -237,12 +262,37 @@ let inFlight: Promise<void> | null = null;
  *  holds the previous catalog only until this lands — it is never used to skip
  *  the fetch, so a model the catalog gains overnight shows up the next launch,
  *  not a day later. One fetch per process (inFlight); failures are silent — the
- *  fallback table keeps working either way. */
+ *  fallback table carries on either way. models.dev rides along — same trigger,
+ *  a context-window-only table the LiteLLM keys do not cover. */
 export function refreshPricing(): Promise<void> {
-  inFlight ??= fetchPricing().finally(() => {
-    inFlight = null;
-  });
+  inFlight ??= Promise.all([fetchPricing(), fetchModelsDevContexts()])
+    .then(() => undefined)
+    .finally(() => {
+      inFlight = null;
+    });
   return inFlight;
+}
+
+async function fetchModelsDevContexts(): Promise<void> {
+  try {
+    const res = await fetch(MODELSDEV_URL);
+    if (!res.ok) return;
+    const catalog = (await res.json()) as ModelsDevCatalog;
+    const windows: Record<string, number> = {};
+    for (const [providerId, provider] of Object.entries(catalog)) {
+      for (const [modelId, entry] of Object.entries(provider.models ?? {})) {
+        const window = entry.limit?.context;
+        if (window && window > 0) {
+          windows[`${providerId}/${modelId}`.toLowerCase()] = window;
+        }
+      }
+    }
+    if (!Object.keys(windows).length) return;
+    devContexts = windows;
+    localStorage.setItem(DEV_CACHE_KEY, JSON.stringify(windows));
+  } catch {
+    // Offline or the catalog moved — LiteLLM carries on.
+  }
 }
 
 async function fetchPricing(): Promise<void> {

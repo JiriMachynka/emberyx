@@ -54,7 +54,11 @@ function FileChip({
     <span
       className={cn(
         "inline-flex max-w-full items-baseline gap-1 rounded bg-muted px-1.5 py-0.5 align-baseline font-mono text-[0.9em]",
-        interactive && "cursor-pointer hover:bg-muted/70",
+        // A clickable file ref reads as one before the cursor lands: a hairline
+        // ring the plain inline code beside it doesn't have, and an accent
+        // hover — link semantics, not a button treatment.
+        interactive &&
+          "cursor-pointer ring-1 ring-inset ring-foreground/10 transition-colors hover:bg-primary/10 hover:ring-primary/40",
         className
       )}
     >

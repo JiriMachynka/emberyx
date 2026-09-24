@@ -320,9 +320,9 @@ const WorkingChip = memo(function WorkingChip({
 
   if (!working) return <>{idle}</>;
   return (
-    <span className="flex items-center gap-1 text-[11px] font-medium text-sky-400">
+    <span className="flex items-center gap-1 text-[11px] font-medium text-primary">
       <LoaderCircle className="size-3 animate-spin" />
-      Working {formatElapsed(since)}
+      <span className="tabular-nums">Working {formatElapsed(since)}</span>
     </span>
   );
 });
