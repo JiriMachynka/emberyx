@@ -84,9 +84,6 @@ interface GitCommitMenuProps {
 export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  // Read once on mount, not per render: this menu lives in the top bar, which
-  // re-renders often, and `loadSettings` parses and migrates the whole blob.
-  const [draftModel] = useState(() => loadSettings().commitMessageModel);
   /** A draft started when the menu opened, keyed by the change set it describes.
    *  Dropped when the menu closes: the key sees a file's status, not its bytes,
    *  so a draft is only trusted for as long as the menu it was started for. */
@@ -129,11 +126,13 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
   const noun = FORGE_NOUN[forge ?? "github"].one;
 
   /** The message for this commit, written from the diff. Conventional Commits
-   *  format — the prompt lives in `git.rs`. */
+   *  format — the prompt lives in `git/commit.rs`. Read at call time: the menu
+   *  stays mounted in the top bar, and a model picked in Settings has to apply
+   *  to the next commit without a restart. */
   async function draftMessage(): Promise<string> {
     return invoke<string>("git_draft_commit_message", {
       path: projectPath,
-      model: draftModel,
+      model: loadSettings().commitMessageModel,
     });
   }
 
@@ -144,12 +143,14 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
   /**
    * Start the work the click is going to need, when the menu opens.
    *
-   * Two halves, because they cost different things. Warming spawns a `claude`
-   * that waits on stdin — free, so it runs whenever the menu opens. Drafting
-   * spends a model call, so it only runs when there is something to commit;
-   * opening the menu to hit Pull must not bill for a message nobody asked for.
+   * Two halves, because they cost different things. Warming spawns a Claude
+   * child that waits on stdin — free, and a no-op for the other providers, so
+   * it runs whenever the menu opens. Drafting spends a model call, so it only
+   * runs when there is something to commit; opening the menu to hit Pull must
+   * not bill for a message nobody asked for.
    */
   function prefetch() {
+    const draftModel = loadSettings().commitMessageModel;
     if (!draftModel) return;
     void invoke("draft_warm", { model: draftModel }).catch(() => {});
     if (files.length === 0 || draftRef.current?.key === changeKey) return;
@@ -256,9 +257,9 @@ export function GitCommitMenu({ projectPath, remoteHost }: GitCommitMenuProps) {
     if (busy) return;
     // Nothing here can write a message without a model to write it with, and a
     // commit is not something to run with a placeholder subject.
-    if (needsMessage(kind) && !draftModel) {
+    if (needsMessage(kind) && !loadSettings().commitMessageModel) {
       toast.error("No commit-message model set", {
-        description: "Pick one in Settings → General to commit from here.",
+        description: "Pick one in Settings → Source Control to commit from here.",
       });
       return;
     }

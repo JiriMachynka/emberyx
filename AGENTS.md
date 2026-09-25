@@ -295,18 +295,21 @@ Restore that silently skips it. Two sections are worth knowing about:
   (`useDaemonHealth`, polled) before the persistent-agents toggle, because that
   toggle is meaningless without it. `provider_status` powers **Providers** the
   same way — a provider that isn't installed is listed, not hidden.
-- **Source Control**'s commit-message model drives `draft.rs`, which keeps one
-  warm `claude` waiting on stdin so a draft costs ~1.7s instead of ~14s. Three
-  measurements shape it (2026-09-08): `claude -p` spends ~3.8s booting before it
-  sends anything — the same for `reply with the word ok`, so it is startup, not
-  work; thinking is off (`MAX_THINKING_TOKENS=0`) because Haiku otherwise spends
-  ~2000 thinking tokens on an 18-token subject line; and the warm child is spent
-  after one draft, since `--input-format stream-json` is one conversation and the
-  next draft would carry this diff with it. `GitCommitMenu` warms on open and
-  prefetches the draft itself only when there is something to commit, so opening
-  the menu for Pull bills nothing. It also drafts **before** staging: with
-  nothing staged `commit_diff` reads the working tree, so drafting after staging
-  would describe a different diff than the prefetch did.
+- **Source Control**'s commit-message model drives `draft.rs`. A bare model id
+  is Claude: one warm `claude` waits on stdin so a draft costs ~1.7s instead of
+  ~14s. `codex:`, `opencode:` and `grok:` (see `lib/commitDraft.ts`) run that
+  provider's own CLI instead, cold, so a commit message can spend someone else's
+  quota. Three measurements shape the Claude path (2026-09-08): `claude -p`
+  spends ~3.8s booting before it sends anything — the same for `reply with the
+  word ok`, so it is startup, not work; thinking is off (`MAX_THINKING_TOKENS=0`)
+  because Haiku otherwise spends ~2000 thinking tokens on an 18-token subject
+  line; and the warm child is spent after one draft, since `--input-format
+  stream-json` is one conversation and the next draft would carry this diff with
+  it. `GitCommitMenu` warms on open and prefetches the draft itself only when
+  there is something to commit, so opening the menu for Pull bills nothing. It
+  also drafts **before** staging: with nothing staged `commit_diff` reads the
+  working tree, so drafting after staging would describe a different diff than
+  the prefetch did.
 - **Keyboard Shortcuts** records a new chord per command, with `lib/commands.ts`
   as the one declaration and `lib/keybindings.ts` holding the overrides (under
   their own storage key, not `Settings`). Two things stay un-rebindable and say

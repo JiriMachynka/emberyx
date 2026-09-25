@@ -92,6 +92,8 @@ pub async fn git_draft_commit_message(
              reply with the subject line alone.\n\
              - Write the subject the way a person would. No file-by-file \
              inventory, no bullet padding.\n\
+             - Do not use tools, read files, or run commands. The diff below \
+             is the whole change.\n\
              - Reply with the message only: no quotes, no code fences, no \
              preamble.\n\nDiff:\n{}",
             truncate_diff(&diff, DRAFT_DIFF_LIMIT)

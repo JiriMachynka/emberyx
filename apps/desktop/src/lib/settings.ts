@@ -205,10 +205,9 @@ export interface Settings {
   /** Walk the captured window's accessibility tree and send it beside the
    *  image, so the agent reads labels instead of guessing from pixels. */
   snapshotsIncludeAppText: boolean;
-  /** Model that drafts commit messages from the diff, as a one-shot `claude -p`
-   *  call. "" turns the Generate button off. Claude ids only — the one-shot
-   *  path is the Claude CLI, and offering a model it can't run would fail on
-   *  click instead of in the picker. */
+  /** Model that drafts commit messages from the diff. "" turns drafting off.
+   *  A bare id is Claude (`claude -p`). `codex:`, `opencode:` and `grok:` name
+   *  another CLI — see `lib/commitDraft.ts`, which Rust parses the same way. */
   commitMessageModel: string;
   /** Wrap long lines in the built-in editor. */
   wordWrap: boolean;

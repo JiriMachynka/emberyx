@@ -140,7 +140,7 @@ export const TABS: TabMeta[] = [
     label: "Source Control",
     icon: GitBranch,
     keys: ["gitlabRemote", "diffIgnoreWhitespace", "commitMessageModel"],
-    finds: "git github gitlab gh glab cli login remote pull request merge request diff whitespace commit message model generate ai",
+    finds: "git github gitlab gh glab cli login remote pull request merge request diff whitespace commit message model generate ai claude codex opencode grok",
   },
   {
     id: "notifications",

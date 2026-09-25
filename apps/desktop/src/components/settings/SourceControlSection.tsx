@@ -1,13 +1,29 @@
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { homeDir } from "@tauri-apps/api/path";
 import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import { Group, Row, SwitchRow, Tile } from "@/components/SettingsFields";
-import { useClaudeModels, type ForgeCliStatus } from "@/lib/queries";
+import { AGENT_BACKENDS, BACKEND_LABEL } from "@/lib/agentBackend";
+import {
+  commitDraftClosedLabel,
+  commitDraftOptions,
+} from "@/lib/commitDraft";
+import { codexModelEntries, opencodeOwnModels } from "@/lib/modelCatalog";
+import {
+  useAcpModels,
+  useClaudeModels,
+  useCodexModels,
+  useProviderStatus,
+  type ForgeCliStatus,
+} from "@/lib/queries";
 import type { Settings } from "@/lib/settings";
 
 /** Radix Select refuses an empty item value, so "no model" needs a name of its
@@ -24,6 +40,41 @@ export const SourceControlSection = ({
   forgeClis: ForgeCliStatus[];
 }) => {
   const claudeModels = useClaudeModels();
+  const providers = useProviderStatus().data ?? [];
+  const installed = (id: string) => providers.some((p) => p.id === id && p.installed);
+  // Catalogs for the other CLIs need a directory to start in. Home is not a
+  // project, so OpenCode answers with its default list rather than one repo's
+  // opencode.json. Claude's list doesn't need a process at all.
+  const wantsCatalog = installed("codex") || installed("opencode") || installed("grok");
+  const home = useQuery({
+    queryKey: ["paths", "home"],
+    queryFn: () => homeDir(),
+    enabled: wantsCatalog,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const cwd = home.data ?? "";
+  const codexOn = installed("codex");
+  const grokOn = installed("grok");
+  const opencodeOn = installed("opencode");
+  const codexCatalog = useCodexModels(cwd, !!cwd && codexOn);
+  const grokCatalog = useAcpModels("grok", cwd, !!cwd && grokOn);
+  const opencodeCatalog = useAcpModels("opencode", cwd, !!cwd && opencodeOn);
+  const selected = settings.commitMessageModel;
+  const options = useMemo(
+    () =>
+      commitDraftOptions({
+        claude: claudeModels,
+        codex: codexModelEntries(codexCatalog.data ?? []),
+        grok: grokCatalog.data ?? [],
+        opencode: opencodeOwnModels(opencodeCatalog.data ?? []),
+        selected,
+      }),
+    [claudeModels, codexCatalog.data, grokCatalog.data, opencodeCatalog.data, selected]
+  );
+  const closed =
+    selected ? commitDraftClosedLabel(selected, options) : "Off";
+
   return (
     <>
       <Group
@@ -84,26 +135,60 @@ export const SourceControlSection = ({
         />
         <Row
           label="Commit message model"
-          hint="Drafts a commit message from the diff when you press Generate in the commit box. One throwaway claude -p call, so the list is Claude's."
+          hint="Drafts a commit message from the diff when you press Generate in the commit box. The call goes to the provider you pick, so it doesn't have to spend Claude usage. OpenCode's free models only answer inside OpenCode itself — Codex, an OpenCode Go model, or Grok will draft from here."
           control={
             <Select
-              value={settings.commitMessageModel || NO_COMMIT_MODEL}
+              value={selected || NO_COMMIT_MODEL}
               onValueChange={(v) =>
                 onUpdate({
                   commitMessageModel: v === NO_COMMIT_MODEL ? "" : v,
                 })
               }
             >
-              <SelectTrigger>
-                <SelectValue />
+              <SelectTrigger className="overflow-hidden">
+                <span className="truncate">{closed}</span>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={NO_COMMIT_MODEL}>Off</SelectItem>
-                {claudeModels.filter((m) => !m.legacy).map((m) => (
-                  <SelectItem key={m.id} value={m.id}>
-                    {m.label}
-                  </SelectItem>
-                ))}
+                {AGENT_BACKENDS.map((provider) => {
+                  const rows = options.filter((o) => o.provider === provider);
+                  // Claude's list is local. The others come from a CLI, so an
+                  // installed provider with no rows yet is still loading — an
+                  // empty group would look like that provider isn't offered.
+                  const catalog =
+                    provider === "codex"
+                      ? codexCatalog
+                      : provider === "grok"
+                        ? grokCatalog
+                        : provider === "opencode"
+                          ? opencodeCatalog
+                          : undefined;
+                  const offered = provider === "claude" || installed(provider);
+                  if (!offered) return null;
+                  const failed = !!catalog && (home.isError || catalog.isError);
+                  const waiting = !!catalog && !catalog.data && !failed;
+                  if (rows.length === 0 && !waiting && !failed) return null;
+                  return (
+                    <SelectGroup key={provider}>
+                      <SelectLabel>{BACKEND_LABEL[provider]}</SelectLabel>
+                      {rows.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                      {waiting && (
+                        <SelectItem value={`loading-${provider}`} disabled>
+                          Loading…
+                        </SelectItem>
+                      )}
+                      {failed && (
+                        <SelectItem value={`unavailable-${provider}`} disabled>
+                          Couldn't load models
+                        </SelectItem>
+                      )}
+                    </SelectGroup>
+                  );
+                })}
               </SelectContent>
             </Select>
           }
