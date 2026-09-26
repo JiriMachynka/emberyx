@@ -33,6 +33,12 @@ interface HunkAnchor {
   hunkIndex: number;
 }
 
+/** Above this many files the diff renders only the first slice and offers the
+ *  rest behind a button. A 48-file working tree used to parse, tokenize and lay
+ *  out every file at once — seconds of stall and over a gigabyte of renderer
+ *  memory for a surface nobody reads top to bottom. */
+const FILE_BUDGET = 10;
+
 interface WorkingDiffViewProps {
   /** The whole scope as one multi-file patch. */
   patch: string;
@@ -76,6 +82,7 @@ export function WorkingDiffView({
   cacheKey = "working",
 }: WorkingDiffViewProps) {
   const view = useRef<CodeViewHandle<HunkAnchor, undefined>>(null);
+  const pendingScroll = useRef<string | null>(null);
   // A dead worker pool falls back to main-thread highlighting rather than
   // rendering nothing; `getServerSnapshot` is the same getter because this app
   // never server-renders.
@@ -86,6 +93,8 @@ export function WorkingDiffView({
   );
   const [filter, setFilter] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  /** How many parsed files the CodeView is handed. Grows on "Show all". */
+  const [budget, setBudget] = useState(FILE_BUDGET);
 
   // One parse per patch, and it is the expensive one — a wide working tree is
   // megabytes of text on the main thread. Deferred so a turn that rewrites the
@@ -125,6 +134,14 @@ export function WorkingDiffView({
       }));
   }, [parsed, cacheKey]);
 
+  const capped = items.length > budget;
+  const visibleItems = capped ? items.slice(0, budget) : items;
+
+  // A new patch re-caps, so a reveal doesn't carry into the next diff.
+  useEffect(() => {
+    setBudget(FILE_BUDGET);
+  }, [parsed]);
+
   const rows = useMemo(() => {
     const query = filter.trim().toLowerCase();
     const visible = query
@@ -154,6 +171,30 @@ export function WorkingDiffView({
     if (active && !items.some((item) => item.id === active)) setActive(null);
   }, [items, active]);
 
+  // A file past the budget is revealed first, then scrolled to once pierre has
+  // laid the new items out — two frames: React's commit, then pierre's.
+  useEffect(() => {
+    const path = pendingScroll.current;
+    if (!path) return;
+    pendingScroll.current = null;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        view.current?.scrollTo({ type: "item", id: path, align: "start", behavior: "instant" });
+      })
+    );
+  }, [budget]);
+
+  const revealAndScroll = (path: string) => {
+    setActive(path);
+    const index = items.findIndex((item) => item.id === path);
+    if (index >= visibleItems.length) {
+      pendingScroll.current = path;
+      setBudget(items.length);
+      return;
+    }
+    view.current?.scrollTo({ type: "item", id: path, align: "start", behavior: "instant" });
+  };
+
   const runHunk = (anchor: HunkAnchor, action: "stage" | "unstage" | "discard") => {
     // Cut from the patch the rendered hunks came from — the deferred one, not
     // the newest. The index the user clicked only means anything in that text,
@@ -167,13 +208,13 @@ export function WorkingDiffView({
       highlighterOptions={diffHighlighterOptions}
     >
     <div className="flex min-h-0 flex-1">
-      <div className="min-h-0 min-w-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <CodeView<HunkAnchor, undefined>
           disableWorkerPool={poolFailed}
           // Same CSS variable bridge the turn review uses, or pierre renders
           // with its own chrome colors instead of the panel's.
-          className="pierre-diffs size-full overflow-auto"
-          items={items}
+          className="pierre-diffs min-h-0 flex-1 overflow-auto"
+          items={visibleItems}
           options={options}
           ref={view}
           renderAnnotation={(annotation) => {
@@ -211,6 +252,20 @@ export function WorkingDiffView({
             );
           }}
         />
+        {capped && (
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t px-3 py-1.5 text-xs text-muted-foreground">
+            <span>
+              Showing {visibleItems.length} of {items.length} files.
+            </span>
+            <button
+              type="button"
+              onClick={() => setBudget(items.length)}
+              className="rounded-md border px-2 py-0.5 text-foreground transition-colors hover:bg-accent"
+            >
+              Show all {items.length} files
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="flex w-64 shrink-0 flex-col border-l">
@@ -237,15 +292,7 @@ export function WorkingDiffView({
                   return next;
                 })
               }
-              onPick={() => {
-                setActive(row.path);
-                view.current?.scrollTo({
-                  type: "item",
-                  id: row.path,
-                  align: "start",
-                  behavior: "instant",
-                });
-              }}
+              onPick={() => revealAndScroll(row.path)}
               onAction={
                 onFileAction &&
                 ((action) => {

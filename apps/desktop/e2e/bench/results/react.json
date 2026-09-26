@@ -1,70 +1,41 @@
 {
   "fixture": {
-    "repo": "/private/var/folders/9y/6j_5d4vx2rgbzq9p24b6gzsr0000gn/T/emberyx-e2e-Htxxgh/bench-repo"
+    "repo": "/private/var/folders/9y/6j_5d4vx2rgbzq9p24b6gzsr0000gn/T/emberyx-e2e-wVgSee/bench-repo",
+    "files": 48,
+    "linesPerFile": 400,
+    "changedLines": 19200
   },
-  "welcomeMs": 2,
-  "composerReadyMs": 165,
-  "diffOpenMs": 2185,
+  "welcomeMs": 111,
+  "composerReadyMs": 74,
+  "diffOpenMs": 1411,
   "diff": {
-    "hosts": {
-      "DIFFS-CONTAINER": 48
-    },
-    "lines": 19200,
-    "scroller": {
-      "ch": 2750668,
-      "sh": 2750668
-    }
+    "ch": 481508,
+    "hosts": 10,
+    "lines": 20,
+    "sh": 481508
   },
   "memoryAfterDiff": {
-    "rows": [
+    "appRssMb": 148,
+    "webkitDeltaMb": 659,
+    "webkit": [
       {
-        "pid": 60423,
-        "comm": "/Users/jiri/Desktop/Personal/emberyx/target/debug/emberyx-desktop",
-        "rssMb": 150
-      },
-      {
-        "pid": 60427,
+        "pid": 8879,
         "comm": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU",
-        "rssMb": 52
+        "rssMb": 46,
+        "deltaMb": 3
       },
       {
-        "pid": 60428,
+        "pid": 8880,
         "comm": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.Networking.xpc/Contents/MacOS/com.apple.WebKit.Networking",
-        "rssMb": 27
+        "rssMb": 42,
+        "deltaMb": -5
       },
       {
-        "pid": 60429,
+        "pid": 8881,
         "comm": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
-        "rssMb": 1098
+        "rssMb": 829,
+        "deltaMb": 661
       }
-    ],
-    "totalMb": 1327
-  },
-  "threadOpenMs": 36,
-  "memoryAfterThread": {
-    "rows": [
-      {
-        "pid": 60423,
-        "comm": "/Users/jiri/Desktop/Personal/emberyx/target/debug/emberyx-desktop",
-        "rssMb": 150
-      },
-      {
-        "pid": 60427,
-        "comm": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.GPU.xpc/Contents/MacOS/com.apple.WebKit.GPU",
-        "rssMb": 52
-      },
-      {
-        "pid": 60428,
-        "comm": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.Networking.xpc/Contents/MacOS/com.apple.WebKit.Networking",
-        "rssMb": 27
-      },
-      {
-        "pid": 60429,
-        "comm": "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
-        "rssMb": 1128
-      }
-    ],
-    "totalMb": 1357
-  },
-  "title": "Bench thread: refactor the parser"
+    ]
+  }
 }

@@ -15,7 +15,8 @@
     "tauri": "tauri",
     "sidecar": "bun ../../scripts/build-sidecar.ts",
     "e2e:build": "bun e2e/build.ts",
-    "e2e": "wdio run e2e/wdio.conf.ts"
+    "e2e": "wdio run e2e/wdio.conf.ts",
+    "bench": "wdio run e2e/wdio.conf.ts --spec e2e/specs/bench.spec.ts"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
