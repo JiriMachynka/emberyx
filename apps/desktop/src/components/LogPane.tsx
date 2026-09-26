@@ -32,6 +32,7 @@ export function LogPane({ sessionId, fontFamily, fontSize, active }: LogPaneProp
     if (!root) return;
     let disposed = false;
     let unsubscribe: (() => void) | null = null;
+    let frame: number | null = null;
 
     void loadGhostty().then(({ Terminal, FitAddon }) => {
       if (disposed || !rootRef.current) return;
@@ -52,10 +53,35 @@ export function LogPane({ sessionId, fontFamily, fontSize, active }: LogPaneProp
       term.onResize(({ cols, rows }) => void resizeLog(sessionId, cols, rows));
 
       // Replay first, then live: subscribing before the replay would interleave
-      // a chunk into the middle of the history it already contains.
+      // a chunk into the middle of the history it already contains. The backlog
+      // can be megabytes and writing it whole freezes the window, so it streams
+      // through write's callback chain a chunk at a time. Live output is
+      // coalesced to one write per frame rather than one per chunk — a dev
+      // server emits hundreds of small chunks a second and each write is a wasm
+      // call plus a repaint. Same treatment as TerminalPane.
       const backlog = rawLog(sessionId);
-      if (backlog.length > 0) term.write(backlog);
-      unsubscribe = subscribeRaw(sessionId, (chunk) => term.write(chunk));
+      const CHUNK = 64 * 1024;
+      let written = 0;
+      let pending = "";
+      const drain = () => {
+        if (disposed) return;
+        const slice = backlog.slice(written, written + CHUNK);
+        if (slice.length > 0)
+          term.write(slice, () => {
+            written += slice.length;
+            drain();
+          });
+      };
+      drain();
+      unsubscribe = subscribeRaw(sessionId, (chunk) => {
+        pending += chunk;
+        frame ??= requestAnimationFrame(() => {
+          frame = null;
+          const data = pending;
+          pending = "";
+          if (data.length > 0) term.write(data);
+        });
+      });
 
       termRef.current = term;
       fitRef.current = fit;
@@ -63,6 +89,7 @@ export function LogPane({ sessionId, fontFamily, fontSize, active }: LogPaneProp
 
     return () => {
       disposed = true;
+      if (frame !== null) cancelAnimationFrame(frame);
       unsubscribe?.();
       fitRef.current?.dispose();
       termRef.current?.dispose();
