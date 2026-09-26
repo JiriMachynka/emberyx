@@ -1,8 +1,9 @@
-import { Fragment, memo, useEffect, useMemo, useState } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { ActivityFileTree } from "@/components/chat/ActivityFileTree";
+import { StepEnter, useStepQueue } from "@/components/chat/StepEnter";
 import { Disclosure, DisclosureChevron } from "@/components/chat/Disclosure";
 import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { ToolBody } from "@/components/chat/ToolViews";
@@ -22,6 +23,7 @@ import {
   type ActivityGroup,
 } from "@/lib/activityDisplay";
 import { TOOL_ICONS, TOOL_TINT } from "@/lib/toolIcons";
+import { workSummaryLine } from "@/lib/workSummary";
 import { isFileReference } from "@/lib/fileRef";
 import { describeResult, describeTool, stripReminders } from "@/lib/toolDisplay";
 import { cn } from "@/lib/utils";
@@ -209,6 +211,17 @@ export function ActivityList({
   framed?: boolean;
 }) {
   const rows = visibleActivities(activities, live === true);
+  const turnFor = useStepQueue();
+  // A step already on screen when the group mounted is history; only one that
+  // lands later is queued. `mounted` keeps the first render from animating the
+  // whole list at once.
+  const seen = useRef(new Set<string>());
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    for (const row of rows) seen.current.add(row.id);
+  });
+  const isNew = (id: string) => mounted.current && !seen.current.has(id);
   if (rows.length === 0) return null;
   const renderPanelGroup = (
     group: Extract<ActivityGroup, { type: "files" | "single" }>
@@ -259,19 +272,40 @@ export function ActivityList({
             />
           );
         }
+        const key =
+          segment.groups[0].type === "files"
+            ? `files:${segment.groups[0].activities[0].id}`
+            : segment.groups[0].activity.id;
+        const segmentActivities = segment.groups.flatMap((group) =>
+          group.type === "files" ? group.activities : [group.activity]
+        );
+        const summary = workSummaryLine(segmentActivities, live === true);
         return (
-          <div
-            key={
-              segment.groups[0].type === "files"
-                ? `files:${segment.groups[0].activities[0].id}`
-                : segment.groups[0].activity.id
-            }
-            className={cn(
-              "flex flex-col divide-y divide-border/50",
-              framed && "chat-work-panel overflow-hidden rounded-xl border"
+          <div key={key} className="flex flex-col gap-1.5">
+            {summary && (
+              <p className="px-1 text-xs text-muted-foreground">{summary}</p>
             )}
-          >
-            {segment.groups.map(renderPanelGroup)}
+            <div
+              className={cn(
+                "flex flex-col divide-y divide-border/50",
+                framed && "chat-work-panel overflow-hidden rounded-xl border"
+              )}
+            >
+              {segment.groups.map((group) => {
+                const id =
+                  group.type === "files"
+                    ? group.activities[0].id
+                    : group.activity.id;
+                return (
+                  <StepEnter
+                    key={id}
+                    turn={live === true && isNew(id) ? turnFor(id) : undefined}
+                  >
+                    {renderPanelGroup(group)}
+                  </StepEnter>
+                );
+              })}
+            </div>
           </div>
         );
       })}

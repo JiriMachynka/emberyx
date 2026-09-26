@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { liveWorkLabel, summarizeWork } from "./workSummary";
+import { liveWorkLabel, summarizeWork, workSummaryLine } from "./workSummary";
 import type { ActivityItem, ActivityKind } from "@/types";
 
 const row = (
@@ -82,5 +82,57 @@ describe("liveWorkLabel", () => {
         },
       ])
     ).toBe("Running command: Run the tests");
+  });
+});
+
+const cmd = (id: string): ActivityItem => row("command", id);
+const readAt = (id: string, path: string): ActivityItem => ({
+  ...row("fileRead", id),
+  displayTarget: path,
+});
+const editAt = (id: string, path: string): ActivityItem => ({
+  ...row("fileChange", id),
+  displayTarget: path,
+});
+
+describe("workSummaryLine", () => {
+  it("adds up a run, in the order the kinds were first used", () => {
+    expect(
+      workSummaryLine([
+        cmd("1"),
+        cmd("2"),
+        cmd("3"),
+        cmd("4"),
+        readAt("r1", "src/a.ts"),
+        readAt("r2", "src/b.ts"),
+      ])
+    ).toBe("Ran 4 commands · Read 2 files");
+  });
+
+  it("names a single file, counts several", () => {
+    expect(workSummaryLine([readAt("r", "src/app.ts")])).toBe("Read app.ts");
+    expect(
+      workSummaryLine([editAt("e", "a.ts"), editAt("e2", "b.ts")])
+    ).toBe("Edited 2 files");
+  });
+
+  it("keeps only the call in flight present tense", () => {
+    expect(workSummaryLine([cmd("1"), cmd("2")], true)).toBe(
+      "Running 2 commands"
+    );
+    expect(workSummaryLine([cmd("1"), readAt("r", "a.ts")], true)).toBe(
+      "Ran a command · Reading a.ts"
+    );
+  });
+
+  it("reads a search-only run as exploration", () => {
+    expect(workSummaryLine([row("fileSearch", "s")])).toBe(
+      "Searched the project"
+    );
+  });
+
+  it("is null when the run holds no tool calls", () => {
+    expect(workSummaryLine([])).toBeNull();
+    expect(workSummaryLine([row("reasoning", "t")])).toBeNull();
   });
 });

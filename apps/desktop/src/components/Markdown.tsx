@@ -1,4 +1,4 @@
-import { memo, useRef, useState, type ComponentProps } from "react";
+import { memo, useMemo, useRef, useState, type ComponentProps } from "react";
 import { Markdown as TanStackMarkdown, type MarkdownComponents } from "@tanstack/markdown/react";
 import type { CodeHighlighter } from "@tanstack/markdown";
 import { streamingMarkdownExtension } from "@tanstack/markdown/extensions/streaming";
@@ -8,6 +8,8 @@ import { PrLink } from "@/components/PrLink";
 import { fileRefPath, isFileReference } from "@/lib/fileRef";
 import { highlightToHtml } from "@/lib/lexer";
 import { liveMarkdown } from "@/lib/liveMarkdown";
+import { usePacedText, useWordFading } from "@/lib/pacedText";
+import { wordFadeExtension } from "@/lib/wordFadeExtension";
 import { cn } from "@/lib/utils";
 
 const streamingExtensions = [streamingMarkdownExtension()];
@@ -100,11 +102,21 @@ export const Markdown = memo(function Markdown({
   fontSize: number;
   streaming?: boolean;
 }) {
-  const { source, incomplete } = liveMarkdown(text);
+  // Streamed prose is let out a word at a time, each word fading as it lands.
+  const paced = usePacedText(text, streaming);
+  const shown = paced.text;
+  const fading = useWordFading(streaming || paced.revealing);
+  const { source, incomplete } = liveMarkdown(shown);
   const repairing = streaming || incomplete;
+  const extensions = useMemo(() => {
+    if (!fading) return repairing ? streamingExtensions : undefined;
+    return repairing
+      ? [wordFadeExtension(), ...streamingExtensions]
+      : [wordFadeExtension()];
+  }, [fading, repairing]);
   return (
     <div
-      className="chat-md leading-relaxed"
+      className={cn("chat-md leading-relaxed", fading && "word-fading")}
       data-streaming={streaming ? "" : undefined}
       style={{ fontSize: `${fontSize}px` }}
     >
@@ -112,10 +124,10 @@ export const Markdown = memo(function Markdown({
         frontmatter={false}
         headingIds={false}
         highlighter={highlightCode}
-        extensions={repairing ? streamingExtensions : undefined}
+        extensions={extensions}
         components={components}
       >
-        {repairing ? source : text}
+        {repairing ? source : shown}
       </TanStackMarkdown>
     </div>
   );

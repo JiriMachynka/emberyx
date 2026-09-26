@@ -34,6 +34,10 @@
   /* Runtime-overridden from Appearance. Streamdown and `font-mono` read these. */
   --font-sans: var(--chat-font);
   --font-mono: var(--code-font);
+  /* Route Tailwind's default transition timing through the motion tokens, so
+     every `transition-*` utility moves at the same tempo as the keyframes. */
+  --default-transition-duration: var(--motion-fast);
+  --default-transition-timing-function: var(--motion-ease-in-out);
 }
 
 /* Dark only — Emberyx is a terminal-first app. Base is true-black neutral;
@@ -85,6 +89,14 @@
   --chat-font: "DM Sans Variable", ui-sans-serif, system-ui, sans-serif;
   --code-font: "JetBrains Mono Variable", "Geist Mono Variable", ui-monospace, Menlo,
     monospace;
+  /* Motion — one set of durations and easings, so keyframes and the Tailwind
+     `transition-*` utilities move at the same tempo. Interaction motion only;
+     the ambient loops (caret, pulse, shimmer) keep their own timings. */
+  --motion-fast: 150ms;
+  --motion-base: 200ms;
+  --motion-slow: 320ms;
+  --motion-ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --motion-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 @layer base {
@@ -355,6 +367,47 @@
   }
 }
 
+/* Streaming words fade in as they are let out — the soft leading edge of a
+   reply being written. Applied only while a reply streams or is still being
+   revealed, then dropped, so a settled reply never re-fades. */
+@keyframes word-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.chat-md.word-fading [data-word-fade] {
+  animation: word-fade-in var(--motion-slow) var(--motion-ease-out) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-md.word-fading [data-word-fade] {
+    animation: none;
+  }
+}
+
+/* A tool step arriving mid-turn rises into the layout on its own beat, so a
+   burst queues instead of popping in as a block. Paced by --step-ms. */
+@keyframes step-enter-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.step-enter[data-entering] {
+  animation: step-enter-in var(--step-ms, var(--motion-base)) var(--motion-ease-out) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .step-enter[data-entering] {
+    animation: none;
+  }
+}
+
 /* TasksCard's expand/collapse: grid-template-rows animates 0fr↔1fr so the card
    eases open and closed at its own content height — no max-height guess that
    clips long task lists. */
@@ -362,8 +415,8 @@
   display: grid;
   grid-template-rows: 0fr;
   transition:
-    grid-template-rows 200ms ease-out,
-    opacity 160ms ease-out;
+    grid-template-rows var(--motion-base) var(--motion-ease-out),
+    opacity var(--motion-fast) var(--motion-ease-out);
   opacity: 0;
 }
 .task-list-clip[data-open="true"] {
@@ -424,7 +477,7 @@
   }
 }
 .animate-ember-pulse {
-  animation: ember-pulse 1.8s ease-in-out infinite;
+  animation: ember-pulse 1.8s var(--motion-ease-in-out) infinite;
 }
 
 /* A running tool says so in its label, not on its frame: the text is masked
@@ -454,7 +507,7 @@
   }
 }
 .working-dots span {
-  animation: working-dot 1.4s ease-in-out infinite;
+  animation: working-dot 1.4s var(--motion-ease-in-out) infinite;
 }
 .working-dots span:nth-child(2) {
   animation-delay: 0.18s;
