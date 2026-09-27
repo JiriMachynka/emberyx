@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { layoutGraph, type GraphRow } from "./gitGraph";
+import {
+  arcPath,
+  isHeadRef,
+  laneColor,
+  layoutGraph,
+  type GraphRow,
+} from "./gitGraph";
 
 const c = (sha: string, parents: string[] = []) => ({ sha, parents });
 
@@ -214,5 +220,57 @@ describe("layoutGraph", () => {
     expect(colors(rows[2]).includes(1)).toBe(true);
     // The shared base folds both branches back onto one lane.
     expect(rows[3].dot).toBe(0);
+  });
+});
+
+describe("compact renderer helpers", () => {
+  // The Changes column's compact graph draws the same layout with arcs and
+  // rings — these pin its geometry so the two surfaces cannot drift.
+  it("detects HEAD on a commit's decorations", () => {
+    expect(isHeadRef(["HEAD -> main"])).toBe(true);
+    expect(isHeadRef(["HEAD"])).toBe(true);
+    expect(isHeadRef(["origin/main"])).toBe(false);
+    expect(isHeadRef([])).toBe(false);
+  });
+
+  it("colors lanes cyclically and stably", () => {
+    expect(laneColor(0)).toBe("#f59e0b");
+    expect(laneColor(12)).toBe("#f59e0b");
+    expect(laneColor(1)).not.toBe(laneColor(0));
+  });
+
+  it("draws a semicircular connector", () => {
+    const d = arcPath(9, 27, 11);
+    // Starts and ends at the two lane centres, one arc across.
+    expect(d).toMatch(/^M 9 11 A 9 9 0 0 0 27 11$/);
+    // Leftward arc sweeps the other way.
+    const back = arcPath(27, 9, 5);
+    expect(back).toBe("M 27 5 A 9 9 0 0 1 9 5");
+  });
+
+  // The 3-commit merge fixture: M3 merges S2 back in. The tip row's dot gets
+  // a HEAD ring (wearing HEAD -> main) and its second parent opens an arc to
+  // a new lane.
+  const mergeWithHead = [
+    { sha: "M3", parents: ["M2", "S2"], refs: ["HEAD -> main"] },
+    { sha: "M2", parents: ["M1"], refs: [] },
+    { sha: "S2", parents: ["S1"], refs: ["origin/feature"] },
+    { sha: "S1", parents: ["M1"], refs: [] },
+    { sha: "M1", parents: [], refs: [] },
+  ];
+
+  it("picks a merge arc: the merge's edge becomes the incoming branch arc", () => {
+    const { rows } = layoutGraph(mergeWithHead);
+    const mode = rows[0];
+    expect(mode.dot).toBe(0);
+    expect(mode.edges).toEqual([{ from: 0, to: 1 }]);
+    // The side-branch row joins with a leftward arc back to the trunk.
+    expect(rows[3].edges).toEqual([{ from: 1, to: 0 }]);
+  });
+
+  it("identifies the tip for the HEAD ring", () => {
+    const { rows } = layoutGraph(mergeWithHead);
+    expect(isHeadRef(rows[0].commit.refs)).toBe(true);
+    expect(isHeadRef(rows[1].commit.refs)).toBe(false);
   });
 });

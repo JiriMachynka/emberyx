@@ -506,6 +506,7 @@ export const useInvalidateGit = () => {
         "log",
         "commits",
         "commitDiff",
+        "graph",
         "worktrees",
         "conflicts",
         "mergeState",

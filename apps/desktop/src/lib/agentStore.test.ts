@@ -250,6 +250,23 @@ describe("review requests", () => {
     store().clearCommitReview();
     expect(useAgentStore.getState().commitReview).toBeNull();
   });
+
+  // The Changes graph picks a whole commit — no file; the diff tab renders
+  // the multi-file patch.
+  it("accepts a file-less request for a whole-commit review", () => {
+    store().requestCommitReview({
+      projectPath: "/repo",
+      sha: "abc",
+      subject: "one",
+    });
+    expect(store().commitReview).toEqual({
+      projectPath: "/repo",
+      sha: "abc",
+      subject: "one",
+    });
+    store().clearCommitReview();
+    expect(useAgentStore.getState().commitReview).toBeNull();
+  });
 });
 
 describe("pendingSnapshot", () => {

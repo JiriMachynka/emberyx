@@ -36,6 +36,8 @@ import {
   useTurnFiles,
   useTurnPatch,
   fetchTurnContents,
+  useCommitDetail,
+  useCommitPatch,
 } from "@/lib/queries";
 import {
   sumRangeFiles,
@@ -45,6 +47,7 @@ import {
 import { buildTurnReviewOptions, contentsToLoader } from "@/lib/diffView";
 import { PANEL_REVIEW_WIDTH } from "@/lib/panels";
 import type { CommitReviewRequest, TurnReviewRequest } from "@/lib/agentStore";
+import type { CommitDetail } from "@/types";
 import type { GitFile } from "@/types";
 // File history is a drill-down, not part of the changes list — and it carries
 // its own diff rendering. Only a session that opens it pays for it.
@@ -53,6 +56,107 @@ const GitRewind = lazy(() =>
 );
 import { SidePanel } from "@/components/SidePanel";
 import { WorkingDiffView } from "@/components/WorkingDiffView";
+
+/** A commit picked from the git menu's history or the Changes graph. One file →
+ *  that file's unified diff (`git_commit_diff`, the GitPanel path); no file →
+ *  the whole commit as one multi-file patch (`git_commit_patch`), read-only. */
+function CommitView({
+  pick,
+  onExit,
+}: {
+  pick: CommitReviewRequest;
+  onExit: () => void;
+}) {
+  return pick.file ? (
+    <CommitFileView pick={pick} file={pick.file} onExit={onExit} />
+  ) : (
+    <WholeCommitView pick={pick} onExit={onExit} />
+  );
+}
+
+function CommitHeaderRow({
+  label,
+  onExit,
+}: {
+  label: string;
+  onExit: () => void;
+}) {
+  return (
+    <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-card px-3 py-1 text-[11px] text-muted-foreground">
+      <span className="truncate">{label}</span>
+      <button
+        onClick={onExit}
+        title="Back to working tree"
+        className="ml-auto shrink-0 rounded p-0.5 hover:bg-accent hover:text-foreground"
+      >
+        <X className="size-3" />
+      </button>
+    </div>
+  );
+}
+
+function CommitFileView({
+  pick,
+  file,
+  onExit,
+}: {
+  pick: CommitReviewRequest;
+  file: string;
+  onExit: () => void;
+}) {
+  const diff = useGitCommitDiff(pick.projectPath, pick.sha, file);
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <CommitHeaderRow
+        label={`${basename(file)} · ${pick.sha.slice(0, 7)}`}
+        onExit={onExit}
+      />
+      <div className="min-h-0 flex-1 overflow-auto">
+        <UnifiedDiff text={diff.data ?? ""} lang={langFromPath(file)} file={file} />
+      </div>
+    </div>
+  );
+}
+
+const COMMIT_FILES_TYPE = (files: CommitDetail["files"]): GitFile[] =>
+  files.map((f) => ({ path: f.path, status: f.status, untracked: false }));
+
+function WholeCommitView({
+  pick,
+  onExit,
+}: {
+  pick: CommitReviewRequest;
+  onExit: () => void;
+}) {
+  const detail = useCommitDetail(pick.projectPath, pick.sha);
+  const patch = useCommitPatch(pick.projectPath, pick.sha);
+  const files: GitFile[] = useMemo(
+    () => COMMIT_FILES_TYPE(detail.data?.files ?? []),
+    [detail.data]
+  );
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <CommitHeaderRow
+        label={`${pick.subject} · ${pick.sha.slice(0, 7)}`}
+        onExit={onExit}
+      />
+      {patch.isLoading && !patch.data ? (
+        <EmptyState>Loading commit…</EmptyState>
+      ) : patch.data?.trim() ? (
+        <WorkingDiffView
+          patch={patch.data}
+          files={files}
+          staged={false}
+          // A commit's delta is history, not a work queue — no staging here.
+          hunkActions={false}
+          cacheKey={`commit:${pick.sha}`}
+        />
+      ) : (
+        <EmptyState>No file changes.</EmptyState>
+      )}
+    </div>
+  );
+}
 
 /** Unified diff rendered hunk by hunk, each with its own apply actions. */
 function UnifiedDiff({
@@ -167,12 +271,6 @@ export function ChangesPanel({
   const unstagedFiles = gitFiles.filter(isUnstaged);
 
   const invalidateGit = useInvalidateGit();
-
-  const commitDiffQuery = useGitCommitDiff(
-    projectPath,
-    commitPick?.sha ?? null,
-    commitPick?.file ?? null
-  );
 
   /** Run a git mutation, refresh every git view, and toast on failure. */
   async function run(fn: () => Promise<unknown>, what: string) {
@@ -339,56 +437,28 @@ export function ChangesPanel({
               onExit={onExitTurnPick}
               onPickTurn={(range) => onPickTurn({ ...turnPick, fromId: range.fromId })}
             />
-          ) : (
-            <>
-              {gitFiles.length === 0 ? (
+          ) : commitPick ? (
+            <CommitView pick={commitPick} onExit={onExitCommitPick} />
+          ) : gitFiles.length === 0 ? (
             <EmptyState icon={<GitBranch className="size-5" />}>
               No working-tree changes (or not a git repo).
             </EmptyState>
           ) : (
-            <>
-              <div className="min-h-0 flex-1 overflow-auto">
-                {commitPick ? (
-                  <>
-                    <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-card px-3 py-1 text-[11px] text-muted-foreground">
-                      <span className="truncate">
-                        {basename(commitPick.file)} · {commitPick.sha.slice(0, 7)}
-                      </span>
-                      <button
-                        onClick={onExitCommitPick}
-                        title="Back to working tree"
-                        className="ml-auto shrink-0 rounded p-0.5 hover:bg-accent hover:text-foreground"
-                      >
-                        <X className="size-3" />
-                      </button>
-                    </div>
-                    <UnifiedDiff
-                      text={commitDiffQuery.data ?? ""}
-                      lang={langFromPath(commitPick.file)}
-                      file={commitPick.file}
-                    />
-                  </>
-                ) : (
-                  <WorkingDiffView
-                    patch={workingDiff.data ?? ""}
-                    files={scope === "staged" ? stagedFiles : unstagedFiles}
-                    staged={scope === "staged"}
-                    // A `-w` patch has line counts that no longer match the
-                    // file, so git apply rejects every hunk cut from it. Hide
-                    // the buttons rather than offer an action that always fails.
-                    hunkActions={!ignoreWhitespace}
-                    // Staged and unstaged are two patches that can be the same
-                    // length; without the scope in the key, one renders the
-                    // other's parse.
-                    cacheKey={`working:${scope}`}
-                    onHunk={onHunk}
-                    onFileAction={onFileAction}
-                  />
-                )}
-              </div>
-            </>
-              )}
-            </>
+            <WorkingDiffView
+              patch={workingDiff.data ?? ""}
+              files={scope === "staged" ? stagedFiles : unstagedFiles}
+              staged={scope === "staged"}
+              // A `-w` patch has line counts that no longer match the
+              // file, so git apply rejects every hunk cut from it. Hide
+              // the buttons rather than offer an action that always fails.
+              hunkActions={!ignoreWhitespace}
+              // Staged and unstaged are two patches that can be the same
+              // length; without the scope in the key, one renders the
+              // other's parse.
+              cacheKey={`working:${scope}`}
+              onHunk={onHunk}
+              onFileAction={onFileAction}
+            />
           )}
       </div>
 

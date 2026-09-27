@@ -56,6 +56,46 @@ export interface GraphRow<
 
 export type LaneCellKind = "dot" | "line" | "empty";
 
+/** Distinct, muted hues for the lanes — data-viz colour, not theme chrome.
+ *  Shared by the full-window History pane and the Changes column's graph so
+ *  the same sha wears the same colour on both surfaces. */
+export const LANE_PALETTE = [
+  "#f59e0b",
+  "#34d399",
+  "#22d3ee",
+  "#fb7185",
+  "#a78bfa",
+  "#fbbf24",
+  "#2dd4bf",
+  "#60a5fa",
+  "#f472b6",
+  "#4ade80",
+  "#facc15",
+  "#c084fc",
+];
+
+export const laneColor = (i: number) => LANE_PALETTE[i % LANE_PALETTE.length];
+
+/**
+ * Compact-renderer helpers: the small arc + ring vocabulary the Changes
+ * column's swimlane graph draws on top of the shared layout. Kept here so the
+ * geometry is unit-testable without a DOM, and so the two graph surfaces
+ * cannot drift apart.
+ */
+
+/** Whether the commit's decoration puts HEAD on it — the tip row gets a ring. */
+export const isHeadRef = (refs: readonly string[]): boolean =>
+  refs.some((r) => r === "HEAD" || r.startsWith("HEAD -> "));
+
+/** A connector from one lane's x to another at the same y, as an upward
+ *  semicircular arc — the compact surface's merge/slide connector, where the
+ *  History pane draws a straight `line`. */
+export const arcPath = (x1: number, x2: number, midY: number): string => {
+  const r = Math.abs(x2 - x1) / 2;
+  const sweep = x2 > x1 ? 0 : 1;
+  return `M ${x1} ${midY} A ${r} ${r} 0 0 ${sweep} ${x2} ${midY}`;
+};
+
 export interface LaneCell {
   kind: LaneCellKind;
   /** The column's vertical extent: "full" spans the whole row, "top" reaches

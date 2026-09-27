@@ -9,7 +9,7 @@ import {
   useCommitPatch,
   useGraphRefs,
 } from "@/lib/queries";
-import { layoutGraph, type GraphRow, type LayoutState } from "@/lib/gitGraph";
+import { layoutGraph, laneColor, type GraphRow, type LayoutState } from "@/lib/gitGraph";
 import type { CommitDetail, GraphCommit, GraphRef } from "@/types";
 import { cn } from "@/lib/utils";
 import { WorkingDiffView } from "@/components/WorkingDiffView";
@@ -31,25 +31,6 @@ const laneWidth = (row: GraphRow) =>
     row.dot + 1
   ) * LANE_W +
   SVG_PAD;
-
-/** Distinct, muted hues for the lanes. Data-viz colour, not theme chrome: a
- *  branch keeps the same column, and so the same colour, as it descends. */
-const LANE_PALETTE = [
-  "#f59e0b",
-  "#34d399",
-  "#22d3ee",
-  "#fb7185",
-  "#a78bfa",
-  "#fbbf24",
-  "#2dd4bf",
-  "#60a5fa",
-  "#f472b6",
-  "#4ade80",
-  "#facc15",
-  "#c084fc",
-];
-
-const laneColor = (i: number) => LANE_PALETTE[i % LANE_PALETTE.length];
 
 /** Split a commit's %D decoration into typed ref badges for the row. */
 interface RefBadge {

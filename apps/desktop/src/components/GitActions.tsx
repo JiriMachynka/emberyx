@@ -12,6 +12,7 @@ import {
   GitFork,
   Archive,
   Check,
+  Ellipsis,
   Trash2,
   X,
 } from "lucide-react";
@@ -24,6 +25,9 @@ import {
   DropdownMenuLabel,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import {
   useGitBranch,
@@ -38,6 +42,9 @@ interface GitActionsProps {
   projectPath: string;
   onOpenWorktree: (path: string, repoRoot: string, branch: string) => void;
   onRemoveWorktree: (worktreePath: string, repoRoot: string) => void | Promise<void>;
+  /** Changes column: one compact `⋯` menu (Pull + the three submenus) instead
+   *  of the visible button row. The Git dock keeps its chrome. */
+  compact?: boolean;
 }
 
 /** `stash@{0}: On main: message` / `stash@{0}: WIP on main: abc123 subject`
@@ -57,8 +64,14 @@ type Prompt =
   | { kind: "worktree"; label: string; placeholder: string; value: string }
   | null;
 
-/** Branch bar + pull/push/checkout/stash/worktree actions for the current repo. */
-export function GitActions({ projectPath, onOpenWorktree, onRemoveWorktree }: GitActionsProps) {
+/** Branch bar + pull/push/checkout/stash/worktree actions for the current repo.
+ *  Full chrome in the Git dock; a single overflow menu in the Changes column. */
+export function GitActions({
+  projectPath,
+  onOpenWorktree,
+  onRemoveWorktree,
+  compact = false,
+}: GitActionsProps) {
   const [branchesOpen, setBranchesOpen] = useState(false);
   const [stashesOpen, setStashesOpen] = useState(false);
   const [worktreesOpen, setWorktreesOpen] = useState(false);
@@ -205,6 +218,149 @@ export function GitActions({ projectPath, onOpenWorktree, onRemoveWorktree }: Gi
     setPrompt(null);
   }
 
+  if (compact) {
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            title="Branch, stash, worktree"
+            className="rounded text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <Ellipsis className="size-3.5" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-52">
+          <DropdownMenuItem
+            disabled={busy || !upstream}
+            title={upstream ? `Pull from ${upstream}` : "No upstream to pull from"}
+            onSelect={() =>
+              run("Pulled", () => invoke<string>("git_pull", { path: projectPath }))
+            }
+          >
+            <ArrowDownToLine className="size-3.5 shrink-0 text-muted-foreground" />
+            Pull
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {/* The three submenus reuse the dock menu content verbatim — the
+              item JSX is shared with the full chrome below. */}
+          <DropdownMenuSub open={branchesOpen} onOpenChange={setBranchesOpen}>
+            <DropdownMenuSubTrigger className="text-xs">
+              <GitBranchPlus className="mr-2 size-3.5 text-muted-foreground" />
+              Branch
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="max-h-80 w-72 overflow-auto">
+              {branchMenuItems({
+                branches,
+                current: branch.branch,
+                usedBy,
+                onNewBranch: () =>
+                  setPrompt({
+                    kind: "new-branch",
+                    label: "New branch name:",
+                    placeholder: "feature/…",
+                    value: "",
+                  }),
+                onCheckout: (b) =>
+                  run("Checked out", () =>
+                    invoke<string>("git_checkout", {
+                      path: projectPath,
+                      branch: b,
+                      create: false,
+                    })
+                  ),
+                onDelete: confirmDeleteBranch,
+              })}
+              {prompt?.kind === "new-branch" && (
+                <PromptRow prompt={prompt} onDone={submitPrompt} onCancel={() => setPrompt(null)} syncValue={(v) => setPrompt({ ...prompt, value: v })} />
+              )}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuSub open={stashesOpen} onOpenChange={setStashesOpen}>
+            <DropdownMenuSubTrigger className="text-xs">
+              <Archive className="mr-2 size-3.5 text-muted-foreground" />
+              Stash
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="max-h-80 w-96 overflow-auto">
+              <DropdownMenuItem
+                onSelect={() =>
+                  setPrompt({
+                    kind: "stash",
+                    label: "Stash name",
+                    placeholder: "Stash name…",
+                    value: "",
+                  })
+                }
+              >
+                <Archive className="size-4" />
+                Stash changes…
+              </DropdownMenuItem>
+              {(stashesQuery.data ?? []).length > 0 && <DropdownMenuSeparator />}
+              {(stashesQuery.data ?? []).map((s) => {
+                const parsed = parseStash(s.label);
+                return (
+                  <StashRow
+                    key={s.index}
+                    branch={parsed.branch}
+                    message={parsed.message}
+                    onApply={() =>
+                      run("Popped stash", () =>
+                        invoke<string>("git_stash_apply", {
+                          path: projectPath,
+                          index: s.index,
+                          pop: true,
+                        })
+                      )
+                    }
+                    onDrop={() => confirmDropStash(s.index, parsed.branch, parsed.message)}
+                  />
+                );
+              })}
+              {prompt?.kind === "stash" && (
+                <PromptRow prompt={prompt} onDone={submitPrompt} onCancel={() => setPrompt(null)} syncValue={(v) => setPrompt({ ...prompt, value: v })} />
+              )}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuSub open={worktreesOpen} onOpenChange={(o) => void openWorktrees(o)}>
+            <DropdownMenuSubTrigger className="text-xs">
+              <GitFork className="mr-2 size-3.5 text-muted-foreground" />
+              Worktree
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="max-h-80 w-96 overflow-auto">
+              <DropdownMenuItem
+                onSelect={() =>
+                  setPrompt({
+                    kind: "worktree",
+                    label: "Worktree branch name:",
+                    placeholder: "feature/…",
+                    value: "",
+                  })
+                }
+              >
+                <GitFork className="size-4" />
+                New worktree…
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Worktrees</DropdownMenuLabel>
+              {worktrees.map((w) => (
+                <WorktreeRow
+                  key={w.path}
+                  worktree={w}
+                  current={w.path === projectPath}
+                  onOpen={() => onOpenWorktree(w.path, mainRoot, w.branch)}
+                  onDrop={() => void dropWorktree(w.path)}
+                />
+              ))}
+              {prompt?.kind === "worktree" && (
+                <PromptRow prompt={prompt} onDone={submitPrompt} onCancel={() => setPrompt(null)} syncValue={(v) => setPrompt({ ...prompt, value: v })} />
+              )}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
+
   return (
     <div className="shrink-0 border-b">
       <div className="flex items-center gap-1 px-2 py-1.5">
@@ -277,61 +433,22 @@ export function GitActions({ projectPath, onOpenWorktree, onRemoveWorktree }: Gi
             </span>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="max-h-80 w-72 overflow-auto">
-            <DropdownMenuItem
-              onSelect={() =>
+            {branchMenuItems({
+              branches,
+              current: branch.branch,
+              usedBy,
+              onNewBranch: () =>
                 setPrompt({
                   kind: "new-branch",
                   label: "New branch name:",
                   placeholder: "feature/…",
                   value: "",
-                })
-              }
-            >
-              <GitBranchPlus className="size-4" />
-              New branch…
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>Checkout</DropdownMenuLabel>
-            {branches.map((b) => {
-              const isCurrent = b === branch.branch;
-              const elsewhere = usedBy.get(b);
-              return (
-                <div key={b} className="flex items-center px-1">
-                  <button
-                    disabled={isCurrent || !!elsewhere}
-                    title={elsewhere}
-                    onClick={() =>
-                      run("Checked out", () =>
-                        invoke<string>("git_checkout", { path: projectPath, branch: b, create: false })
-                      )
-                    }
-                    className={cn(
-                      "flex min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors",
-                      isCurrent
-                        ? "font-medium disabled:pointer-events-none"
-                        : elsewhere
-                          ? "disabled:pointer-events-none disabled:opacity-50"
-                          : "hover:bg-accent"
-                    )}
-                  >
-                    {isCurrent && <Check className="size-4 shrink-0" />}
-                    <span className="truncate">{b}</span>
-                    {elsewhere && (
-                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                        in worktree
-                      </span>
-                    )}
-                  </button>
-                  {!isCurrent && (
-                    <button
-                      onClick={() => confirmDeleteBranch(b)}
-                      className="ml-1 grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-red-400"
-                    >
-                      <Trash2 className="size-4" />
-                    </button>
-                  )}
-                </div>
-              );
+                }),
+              onCheckout: (b) =>
+                run("Checked out", () =>
+                  invoke<string>("git_checkout", { path: projectPath, branch: b, create: false })
+                ),
+              onDelete: confirmDeleteBranch,
             })}
           </DropdownMenuContent>
         </DropdownMenu>
@@ -500,6 +617,76 @@ export function GitActions({ projectPath, onOpenWorktree, onRemoveWorktree }: Gi
   );
 }
 
+/** Branch list shared by the dock chrome and the compact submenu. Kept as a
+ *  function over its data rather than a component, so both call sites render
+ *  exactly the same rows (a menu whose two homes differ has to be read twice). */
+function branchMenuItems({
+  branches,
+  current,
+  usedBy,
+  onNewBranch,
+  onCheckout,
+  onDelete,
+}: {
+  branches: string[];
+  current: string;
+  usedBy: Map<string, string>;
+  onNewBranch: () => void;
+  onCheckout: (branch: string) => void;
+  onDelete: (branch: string) => void;
+}) {
+  return (
+    <>
+      <DropdownMenuItem onSelect={onNewBranch}>
+        <GitBranchPlus className="size-4" />
+        New branch…
+      </DropdownMenuItem>
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel>Checkout</DropdownMenuLabel>
+      {branches.map((b) => {
+        const isCurrent = b === current;
+        const elsewhere = usedBy.get(b);
+        return (
+          <div key={b} className="flex items-center px-1">
+            <button
+              disabled={isCurrent || !!elsewhere}
+              title={elsewhere}
+              onClick={() => onCheckout(b)}
+              className={cn(
+                "flex min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors",
+                isCurrent
+                  ? "font-medium disabled:pointer-events-none"
+                  : elsewhere
+                    ? "disabled:pointer-events-none disabled:opacity-50"
+                    : "hover:bg-accent"
+              )}
+            >
+              {isCurrent && <Check className="size-4 shrink-0" />}
+              <span className="truncate">{b}</span>
+              {elsewhere && (
+                <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                  in worktree
+                </span>
+              )}
+            </button>
+            {!isCurrent && (
+              <button
+                onClick={() => onDelete(b)}
+                className="ml-1 grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-red-400"
+              >
+                <Trash2 className="size-4" />
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/** Branch list shared by the dock chrome and the compact submenu. */
+export { branchMenuItems };
+
 function ActionButton({
   icon,
   label,
@@ -533,5 +720,142 @@ function ActionButton({
       {icon}
       {label}
     </button>
+  );
+}
+
+/** One stash row in the compact submenu: branch • message, pop and drop. */
+function StashRow({
+  branch,
+  message,
+  onApply,
+  onDrop,
+}: {
+  branch: string;
+  message: string;
+  onApply: () => void;
+  onDrop: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 px-2 py-1.5">
+      <GitBranchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+      {branch && (
+        <>
+          <span className="shrink-0 text-xs font-medium">{branch}</span>
+          <span className="shrink-0 text-xs text-muted-foreground">•</span>
+        </>
+      )}
+      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={message}>
+        {message}
+      </span>
+      <button
+        className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-emerald-400"
+        onClick={onApply}
+      >
+        <ArrowUpFromLine className="size-4" />
+      </button>
+      <button
+        className="ml-1 grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-red-400"
+        onClick={onDrop}
+      >
+        <Trash2 className="size-4" />
+      </button>
+    </div>
+  );
+}
+
+/** One worktree row in the compact submenu. */
+function WorktreeRow({
+  worktree,
+  current,
+  onOpen,
+  onDrop,
+}: {
+  worktree: { path: string; branch: string; head: string; isMain: boolean; prunable: boolean };
+  current: boolean;
+  onOpen: () => void;
+  onDrop: () => void;
+}) {
+  return (
+    <div className="flex items-center px-1">
+      <button
+        onClick={onOpen}
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent",
+          current && "font-medium",
+          worktree.prunable && "text-muted-foreground"
+        )}
+        title={worktree.path}
+      >
+        {current && <Check className="size-4 shrink-0" />}
+        <span className="truncate">{worktree.branch || worktree.head}</span>
+        {(worktree.isMain || worktree.prunable) && (
+          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+            {worktree.isMain ? "main" : "missing"}
+          </span>
+        )}
+      </button>
+      {!worktree.isMain && (
+        <button
+          onClick={onDrop}
+          className="ml-1 grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-red-400"
+        >
+          <Trash2 className="size-4" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The inline text row a compact submenu prompt renders. Lives inside the
+ *  submenu so a new branch/stash/worktree name is entered where it was asked;
+ *  each keystroke also lands in the shared prompt object the hub's
+ *  `submitPrompt` reads, so Enter confirms the typed value. */
+function PromptRow({
+  prompt,
+  onDone,
+  onCancel,
+  syncValue,
+}: {
+  prompt: { kind: string; value: string; placeholder: string };
+  onDone: () => void;
+  onCancel: () => void;
+  /** Each keystroke lands in the shared prompt object the hub's
+   *  `submitPrompt` reads, so Enter confirms the typed value. */
+  syncValue: (text: string) => void;
+}) {
+  const [value, setValue] = useState(prompt.value);
+  const sync = (text: string) => {
+    setValue(text);
+    syncValue(text);
+  };
+  return (
+    <div className="flex items-center gap-1.5 border-t p-1">
+      <Input
+        autoFocus
+        value={value}
+        placeholder={prompt.placeholder}
+        onChange={(e) => sync(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && value.trim()) onDone();
+          if (e.key === "Escape") onCancel();
+        }}
+        className="h-7 text-xs"
+      />
+      <button
+        onClick={() => value.trim() && onDone()}
+        disabled={!value.trim()}
+        className="rounded p-1 text-emerald-400 hover:bg-accent disabled:opacity-40"
+        title="Confirm"
+      >
+        <Check className="size-4" />
+      </button>
+      <button
+        onClick={onCancel}
+        className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+        title="Cancel"
+      >
+        <X className="size-4" />
+      </button>
+    </div>
   );
 }

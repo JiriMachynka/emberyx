@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
@@ -8,13 +8,16 @@ import {
   ArrowUpFromLine,
   Check,
   ChevronDown,
-  GitCommitVertical,
+  ChevronRight,
+  Files,
+  GitBranch,
   GitPullRequest,
   LoaderCircle,
   Minus,
   Plus,
-  RefreshCw,
+  Sparkles,
   Trash2,
+  Undo2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -26,33 +29,40 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
 import { GitActions } from "@/components/GitActions";
-import { RecentCommits } from "@/components/RecentCommits";
+import { ChangesGraph } from "./ChangesGraph";
 import { cn } from "@/lib/utils";
 import { basename, dirname } from "@/lib/path";
 import { isStaged, isUnstaged } from "@/lib/gitStatus";
-import {
-  menuActions,
-  needsMessage,
-  opensPr,
-  pushes,
-  type GitActionKind,
-  type GitActionState,
-} from "@/lib/gitAction";
 import { FORGE_NOUN, isRemoteHost, type RemoteHost } from "@/lib/forge";
 import { loadSettings } from "@/lib/settings";
-import { gitStatusInterval, useForgeCliStatus, useForgeOpenPr, useGitBranch, useGitChanges, useGitDefaultBranch, useInvalidateGit } from "@/lib/queries";
+import {
+  gitStatusInterval,
+  useForgeCliStatus,
+  useForgeOpenPr,
+  useGitBranch,
+  useGitChanges,
+  useGitDefaultBranch,
+  useInvalidateGit,
+} from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { CommitPush, GitFile } from "@/types";
+import type { GitActionKind } from "@/lib/gitAction";
 
-const ACTION_ICON: Record<GitActionKind, typeof GitCommitVertical> = {
-  commitPush: ArrowUpFromLine,
-  commit: GitCommitVertical,
-  commitPushPr: GitPullRequest,
-  push: ArrowUp,
-  pushPr: GitPullRequest,
-  openPr: GitPullRequest,
-  pull: ArrowDown,
+/** Auto-resize cap for the commit-message textarea. */
+const MESSAGE_MAX = 160;
+
+/** VS Code-style line for a clean tree that's ahead/behind — the empty list's
+ *  second line, matching what the sync row can do right now. */
+const syncCopy = (branch: { ahead: number; behind: number }): string | null => {
+  if (branch.behind === 0) {
+    return branch.ahead === 0
+      ? null
+      : `${branch.ahead} unpushed commit${branch.ahead === 1 ? "" : "s"}`;
+  }
+  return branch.ahead === 0
+    ? `${branch.behind} incoming commit${branch.behind === 1 ? "" : "s"}`
+    : `Diverged with ${branch.ahead} ahead, ${branch.behind} behind`;
 };
 
 const subjectOf = (message: string) => message.trim().split("\n")[0] ?? "";
@@ -73,6 +83,148 @@ const statusColor = (letter: string): string => {
   return "text-amber-400";
 };
 
+/** One file row: hover discard (unstaged only) + stage/unstage, status letter. */
+function FileRow({
+  file,
+  staged,
+  open,
+  onPick,
+  onToggle,
+  onDiscard,
+}: {
+  file: GitFile;
+  staged: boolean;
+  open: boolean;
+  onPick: () => void;
+  onToggle: () => void;
+  onDiscard: () => void;
+}) {
+  const letter = statusLetter(file);
+  const dir = file.path.includes("/") ? dirname(file.path) : "";
+  return (
+    <li className="group/file flex items-center">
+      <button
+        type="button"
+        onClick={onPick}
+        className={cn(
+          "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs hover:bg-accent",
+          open && "bg-accent text-foreground"
+        )}
+      >
+        <FileTypeIcon path={file.path} />
+        <span className="min-w-0 flex-1 truncate">
+          {basename(file.path)}
+          {dir && <span className="ml-1.5 text-muted-foreground">{dir}</span>}
+        </span>
+      </button>
+      <span
+        className={cn(
+          "w-4 shrink-0 text-center font-mono text-[10px]",
+          statusColor(letter)
+        )}
+      >
+        {letter}
+      </span>
+      <span className="flex items-center">
+        <button
+          type="button"
+          title={staged ? "Unstage" : "Stage"}
+          onClick={onToggle}
+          className="rounded p-1 text-muted-foreground opacity-0 hover:text-foreground group-hover/file:opacity-100"
+        >
+          {staged ? <Minus className="size-3" /> : <Plus className="size-3" />}
+        </button>
+        {!staged && (
+          <button
+            type="button"
+            title={file.untracked ? "Delete" : "Discard"}
+            onClick={onDiscard}
+            className="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover/file:opacity-100"
+          >
+            <Undo2 className="size-3" />
+          </button>
+        )}
+      </span>
+    </li>
+  );
+}
+
+/** One collapsible section of the file list with its header actions. */
+function FileSection({
+  title,
+  count,
+  files,
+  actions,
+  rows,
+}: {
+  title: string;
+  count: number;
+  files: GitFile[];
+  actions: React.ReactNode;
+  rows: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(true);
+  if (files.length === 0) return null;
+  return (
+    <>
+      <div className="flex items-center gap-1 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="flex items-center gap-0.5 hover:text-foreground"
+        >
+          {open ? (
+            <ChevronDown className="size-3" />
+          ) : (
+            <ChevronRight className="size-3" />
+          )}
+          {title}
+        </button>
+        <span className="rounded bg-primary/15 px-1.5 tabular-nums text-primary">
+          {count}
+        </span>
+        <span className="ml-auto flex items-center gap-0.5">{actions}</span>
+      </div>
+      {open && <ul className="px-1 pb-1">{rows}</ul>}
+    </>
+  );
+}
+
+/** Small round header button in a section row. */
+function MiniButton({
+  title,
+  disabled,
+  onClick,
+  children,
+}: {
+  title: string;
+  disabled?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      className="rounded p-1 hover:bg-accent hover:text-foreground disabled:opacity-40"
+    >
+      {children}
+    </button>
+  );
+}
+
+const ACTION_ICON = {
+  commitPush: ArrowUpFromLine,
+  commit: Check,
+  commitPushPr: GitPullRequest,
+  push: ArrowUp,
+  pushPr: GitPullRequest,
+  openPr: GitPullRequest,
+  pull: ArrowDown,
+} as const;
+
 export function ChangesColumn({
   projectPath,
   rightDock,
@@ -90,15 +242,13 @@ export function ChangesColumn({
 }) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [wandBusy, setWandBusy] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const drafting = useRef(false);
 
   const branchQuery = useGitBranch(projectPath);
-  const changesQuery = useGitChanges(
-    projectPath,
-    true,
-    gitStatusInterval("watch")
-  );
+  const changesQuery = useGitChanges(projectPath, true, gitStatusInterval("watch"));
   const defaultBranchQuery = useGitDefaultBranch(projectPath);
   const forge = isRemoteHost(remoteHost ?? "") ? (remoteHost as RemoteHost) : undefined;
   const branch = branchQuery.data;
@@ -108,13 +258,19 @@ export function ChangesColumn({
   const requestCommitReview = useAgentStore((s) => s.requestCommitReview);
 
   const files = changesQuery.data ?? [];
-  const staged = files.filter(isStaged);
-  const unstaged = files.filter(isUnstaged);
+  const staged = useMemo(() => files.filter(isStaged), [files]);
+  const unstaged = useMemo(() => files.filter(isUnstaged), [files]);
   const canOpenPr =
-    !!forge &&
-    !!cliStatus.data?.find((c) => c.id === forge)?.authenticated;
-
+    !!forge && !!cliStatus.data?.find((c) => c.id === forge)?.authenticated;
   const noun = FORGE_NOUN[forge ?? "github"].one;
+
+  // Stage-first: the column's Commit is `git_commit` on the staged index only.
+  // It never stages implicitly — the top-bar GitCommitMenu keeps its own
+  // auto-stage rules in lib/gitAction.ts, this surface is the deliberate
+  // exception. A split item with an empty message of a model-less draft falls
+  // through to the no-model error path below.
+  const canCommit = staged.length > 0;
+  const hasMessage = message.trim() !== "";
 
   const draftMessage = () =>
     invoke<string>("git_draft_commit_message", {
@@ -122,18 +278,27 @@ export function ChangesColumn({
       model: loadSettings().commitMessageModel,
     });
 
-  const fillDraft = async () => {
-    if (message.trim() || files.length === 0 || drafting.current) return;
-    const model = loadSettings().commitMessageModel;
-    if (!model) return;
+  /** Wand: draft from the whole working tree into the message box. */
+  const runWand = async () => {
+    if (files.length === 0 || drafting.current) return;
+    if (!loadSettings().commitMessageModel) {
+      toast.error("No commit-message model set", {
+        description: "Pick one in Settings → Source Control to draft messages.",
+      });
+      return;
+    }
     drafting.current = true;
-    void invoke("draft_warm", { model }).catch(() => {});
+    setWandBusy(true);
+    void invoke("draft_warm", { model: loadSettings().commitMessageModel }).catch(
+      () => {}
+    );
     try {
       setMessage(await draftMessage());
     } catch {
-      // The box stays empty; commit will try again or refuse.
+      // The box stays empty; commit will confirm the real error on click.
     } finally {
       drafting.current = false;
+      setWandBusy(false);
     }
   };
 
@@ -176,29 +341,43 @@ export function ChangesColumn({
     );
   }
 
-  const state: GitActionState | null = branch
-    ? {
-        staged: staged.length,
-        unstaged: unstaged.length,
-        ahead: branch.ahead,
-        behind: branch.behind,
-        upstream: branch.upstream,
-        isDefaultBranch:
-          !!defaultBranchQuery.data && defaultBranchQuery.data === branch.branch,
-        openPr: openPrQuery.data ?? null,
-        canOpenPr,
+  /** Discard every unstaged file after one confirmation; untracked ones are
+   *  deleted (their own flag), tracked ones checked out. */
+  const discardAll = async () => {
+    if (unstaged.length === 0) return;
+    const noun = `file${unstaged.length === 1 ? "" : "s"}`;
+    const ok = await ask(
+      `Discard all changes to ${unstaged.length} ${noun}? This can't be undone.`,
+      { title: "Discard all", kind: "warning" }
+    );
+    if (!ok) return;
+    const tracked = unstaged.filter((f) => !f.untracked).map((f) => f.path);
+    const untracked = unstaged.filter((f) => f.untracked).map((f) => f.path);
+    await runGit(async () => {
+      if (tracked.length) {
+        await invoke("git_discard", {
+          path: projectPath,
+          files: tracked,
+          untracked: false,
+        });
       }
-    : null;
-  const actions = state ? menuActions(state) : [];
-  const primary = actions.find((a) => a.kind === "commit") ?? actions[0];
+      if (untracked.length) {
+        await invoke("git_discard", {
+          path: projectPath,
+          files: untracked,
+          untracked: true,
+        });
+      }
+    }, "Couldn't discard");
+  };
 
-  async function stageForCommit() {
-    if (staged.length > 0 || unstaged.length === 0) return;
-    await invoke("git_stage", {
-      path: projectPath,
-      files: unstaged.map((f) => f.path),
-    });
-  }
+  /** The message textarea grows with its content, capped. */
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, MESSAGE_MAX)}px`;
+  }, [message]);
 
   async function commitAndPush(text: string): Promise<boolean> {
     let out = await invoke<CommitPush>("git_commit_and_push", {
@@ -236,9 +415,62 @@ export function ChangesColumn({
     return out.pushed;
   }
 
-  async function run(kind: GitActionKind, label: string) {
+  const commitToast = async (subject: string) => {
+    const url = await invoke<string | null>("git_head_commit_url", {
+      path: projectPath,
+    }).catch(() => null);
+    toast.success("Committed", {
+      description: subject,
+      action: url
+        ? { label: "Read more…", onClick: () => void openUrl(url) }
+        : undefined,
+    });
+  };
+
+  /** The user's message, or a fresh draft from the diff when a model is set. */
+  const resolveMessage = async (): Promise<string> => {
+    const text = message.trim();
+    if (text) return text;
+    if (!loadSettings().commitMessageModel) {
+      toast.error("No commit-message model set", {
+        description:
+          "Write a message, or pick a model in Settings → Source Control.",
+      });
+      throw new Error("no message");
+    }
+    const drafted = await draftMessage();
+    setMessage(drafted);
+    return drafted;
+  };
+
+  /** The primary Commit, on the staged set as it stands. No implicit staging. */
+  const commit = async () => {
+    if (busy || !canCommit) return;
+    setBusy(true);
+    try {
+      const text = await resolveMessage();
+      await invoke<string>("git_commit", { path: projectPath, message: text });
+      await commitToast(subjectOf(text));
+      setMessage("");
+    } catch {
+      // Toasts already handled: resolveMessage owns the missing draft error.
+    } finally {
+      setBusy(false);
+      invalidateGit(projectPath);
+    }
+  };
+
+  /** The split dropdown's run. Same three kinds as the top bar, but the column
+   *  never stages implicitly — commits write the staged index only. */
+  const runAction = async (kind: GitActionKind, label: string) => {
     if (busy || !branch) return;
-    if (pushes(kind) && state?.isDefaultBranch) {
+    if (
+      (kind === "commitPush" ||
+        kind === "commitPushPr" ||
+        kind === "push" ||
+        kind === "pushPr") &&
+      defaultBranchQuery.data === branch.branch
+    ) {
       const ok = await ask(
         `This will push to ${branch.branch}, the default branch.`,
         { title: `${label} to default branch?`, kind: "warning" }
@@ -248,35 +480,8 @@ export function ChangesColumn({
     setBusy(true);
     try {
       let pushed = true;
-      let text = message.trim();
-      if (needsMessage(kind)) {
-        if (!text) {
-          const model = loadSettings().commitMessageModel;
-          if (!model) {
-            toast.error("No commit-message model set", {
-              description:
-                "Write a message, or pick a model in Settings → Source Control.",
-            });
-            return;
-          }
-          text = await draftMessage();
-          setMessage(text);
-        }
-        await stageForCommit();
-      }
-      if (kind === "commit") {
-        await invoke<string>("git_commit", { path: projectPath, message: text });
-        const url = await invoke<string | null>("git_head_commit_url", {
-          path: projectPath,
-        }).catch(() => null);
-        toast.success("Committed", {
-          description: subjectOf(text),
-          action: url
-            ? { label: "Read more…", onClick: () => void openUrl(url) }
-            : undefined,
-        });
-        setMessage("");
-      } else if (kind === "commitPush" || kind === "commitPushPr") {
+      if (kind === "commitPush" || kind === "commitPushPr") {
+        const text = await resolveMessage();
         pushed = await commitAndPush(text);
         if (pushed) setMessage("");
       } else if (kind === "push" || kind === "pushPr") {
@@ -290,12 +495,9 @@ export function ChangesColumn({
           });
         }
         toast.success(`Pushed ${branch.branch}`);
-      } else if (kind === "pull") {
-        await invoke<string>("git_pull", { path: projectPath });
-        toast.success("Pulled");
       }
-      if (opensPr(kind) && pushed) {
-        const [title, ...rest] = text.split("\n");
+      if ((kind === "commitPushPr" || kind === "pushPr") && pushed) {
+        const [title, ...rest] = message.trim().split("\n");
         const url = await invoke<string>("forge_pr_create", {
           path: projectPath,
           provider: forge,
@@ -304,7 +506,6 @@ export function ChangesColumn({
           base: defaultBranchQuery.data ?? null,
         });
         toast.success(`Opened ${noun}`, {
-          description: subjectOf(text),
           action: { label: "Read more…", onClick: () => void openUrl(url) },
         });
       }
@@ -314,54 +515,220 @@ export function ChangesColumn({
       setBusy(false);
       invalidateGit(projectPath);
     }
-  }
+  };
+
+  const publishBranch = async () => {
+    if (!branch || busy) return;
+    if (defaultBranchQuery.data === branch.branch) {
+      const ok = await ask(
+        `This will publish ${branch.branch}, the default branch, to origin.`,
+        { title: "Publish branch?", kind: "warning" }
+      );
+      if (!ok) return;
+    }
+    setBusy(true);
+    try {
+      await invoke<string>("git_push_to", {
+        path: projectPath,
+        remote: "origin",
+        branch: branch.branch,
+      });
+      toast.success(`Published ${branch.branch}`);
+    } catch (e) {
+      toast.error("Publish failed", { description: String(e) });
+    } finally {
+      setBusy(false);
+      invalidateGit(projectPath);
+    }
+  };
+
+  /** Pull, then push what remains — the one Sync Changes move. */
+  const syncChanges = async () => {
+    if (!branch || busy) return;
+    setBusy(true);
+    try {
+      if (branch.behind > 0) {
+        await invoke<string>("git_pull", { path: projectPath });
+      }
+      if (branch.ahead > 0) {
+        if (defaultBranchQuery.data === branch.branch) {
+          const ok = await ask(
+            `This will push to ${branch.branch}, the default branch.`,
+            { title: "Push to default branch?", kind: "warning" }
+          );
+          if (!ok) return;
+        }
+        await invoke<string>("git_push", { path: projectPath });
+      }
+      toast.success(
+        branch.behind > 0 && branch.ahead > 0
+          ? "Synced"
+          : branch.ahead > 0
+            ? `Pushed ${branch.branch}`
+            : "Pulled"
+      );
+    } catch (e) {
+      toast.error("Sync failed", { description: String(e) });
+    } finally {
+      setBusy(false);
+      invalidateGit(projectPath);
+    }
+  };
+
+  const openPr = openPrQuery.data ?? null;
+  // Off default, no open PR, and the forge can act: the offer exists even when
+  // disabled — a control that appears only when ready moves under you.
+  const prOfferExists =
+    !!forge && canOpenPr && !!branch &&
+    defaultBranchQuery.data !== branch.branch && !openPr;
+  const canCreatePr =
+    prOfferExists &&
+    files.length === 0 &&
+    branch!.ahead > 0 &&
+    branch!.behind === 0;
+
+  const createPr = async () => {
+    if (!branch || busy || !canCreatePr) return;
+    setBusy(true);
+    try {
+      const url = await invoke<string>("forge_pr_create", {
+        path: projectPath,
+        provider: forge,
+        title: branch.branch,
+        body: "",
+        base: defaultBranchQuery.data ?? null,
+      });
+      toast.success(`Opened ${noun}`, {
+        action: { label: "Read more…", onClick: () => void openUrl(url) },
+      });
+    } catch (e) {
+      toast.error(`Opening ${noun} failed`, { description: String(e) });
+    } finally {
+      setBusy(false);
+      invalidateGit(projectPath);
+    }
+  };
 
   const pickFile = (file: GitFile) => {
     setSelected(file.path);
     if (rightDock) onOpenReview();
   };
 
+  const empty = files.length === 0;
+  const cleanNote = branch && empty ? syncCopy(branch) : null;
+  // The split dropdown, stage-first: commit moves need the staged index and
+  // (per MonoCode) a written message; the PR move needs somewhere to push.
+  const canPush = !!branch && (branch.ahead > 0 || !branch.upstream);
+  const prKind: GitActionKind = canCommit && hasMessage ? "commitPushPr" : "pushPr";
+  const dropdown: {
+    kind: GitActionKind;
+    label: string;
+    reason?: string;
+  }[] = [
+    {
+      kind: "commitPush",
+      label: "Commit & push",
+      reason: !canCommit
+        ? "Stage something first"
+        : !hasMessage
+          ? "Write a message first"
+          : undefined,
+    },
+    {
+      kind: "commit",
+      label: "Commit",
+      reason: !canCommit ? "Stage something first" : undefined,
+    },
+    {
+      kind: prKind,
+      label: prKind === "commitPushPr" ? "Commit, push & open PR" : "Push & open PR",
+      reason: !canPush
+        ? "Nothing to push"
+        : openPr
+          ? "A pull request is already open"
+          : !canOpenPr
+            ? "No forge CLI signed in"
+            : undefined,
+    },
+  ];
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center justify-between px-3 pt-2">
+      {/* Header row: title, branch + arrows, overflow. */}
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
         <span className="text-sm font-medium">Changes</span>
+        {branch && (
+          <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+            <GitBranch className="size-3 shrink-0" />
+            <span className="min-w-0 max-w-28 truncate">{branch.branch}</span>
+            {branch.behind > 0 && (
+              <span className="flex shrink-0 items-center tabular-nums">
+                <ArrowDown className="size-3" />
+                {branch.behind}
+              </span>
+            )}
+            {branch.ahead > 0 && (
+              <span className="flex shrink-0 items-center tabular-nums">
+                <ArrowUp className="size-3" />
+                {branch.ahead}
+              </span>
+            )}
+          </span>
+        )}
+        <span className="ml-auto">
+          <GitActions
+            projectPath={projectPath}
+            onOpenWorktree={onOpenWorktree}
+            onRemoveWorktree={onRemoveWorktree}
+            compact
+          />
+        </span>
       </div>
-      <GitActions
-        projectPath={projectPath}
-        onOpenWorktree={onOpenWorktree}
-        onRemoveWorktree={onRemoveWorktree}
-      />
 
-      <div className="grid gap-2 border-b px-3 py-2">
-        <Textarea
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          onFocus={() => void fillDraft()}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              if (primary && !primary.disabledReason) {
-                void run(primary.kind, primary.label);
+      {/* Commit composer */}
+      <div className="grid shrink-0 gap-2 border-b px-3 py-2">
+        <div className="relative">
+          <Textarea
+            ref={textareaRef}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onFocus={() => void runWand()}
+            disabled={!canCommit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                if (canCommit) void commit();
               }
+            }}
+            placeholder={
+              canCommit ? "Message (⌘⏎ to commit)" : "Stage files to write a message"
             }
-          }}
-          placeholder="Message (⌘⏎ to commit)"
-          className="min-h-16 resize-none text-xs"
-        />
+            className="min-h-9 pr-8 text-xs"
+          />
+          <button
+            type="button"
+            title="Draft a commit message from the diff"
+            disabled={busy || wandBusy || files.length === 0}
+            onClick={() => void runWand()}
+            className="absolute right-1.5 top-1.5 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+          >
+            <Sparkles className="size-3.5" />
+          </button>
+        </div>
         <div className="flex items-center gap-1">
           <Button
             size="sm"
             className="min-w-0 flex-1"
-            disabled={busy || !primary || !!primary.disabledReason}
-            title={primary?.disabledReason}
-            onClick={() => primary && void run(primary.kind, primary.label)}
+            disabled={busy || !canCommit}
+            title={!canCommit ? "Stage something first" : undefined}
+            onClick={() => void commit()}
           >
             {busy ? (
               <LoaderCircle className="size-3.5 animate-spin" />
             ) : (
               <Check className="size-3.5" />
             )}
-            {primary?.label ?? "Commit"}
+            Commit
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -369,20 +736,20 @@ export function ChangesColumn({
                 size="sm"
                 variant="secondary"
                 disabled={busy}
-                title="More git actions"
+                title="More commit actions"
               >
                 <ChevronDown className="size-3.5" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              {actions.map((action) => {
+            <DropdownMenuContent align="end" className="w-52">
+              {dropdown.map((action) => {
                 const Icon = ACTION_ICON[action.kind];
                 return (
                   <DropdownMenuItem
                     key={action.kind}
-                    disabled={busy || !!action.disabledReason}
-                    title={action.disabledReason}
-                    onSelect={() => void run(action.kind, action.label)}
+                    disabled={busy || !!action.reason}
+                    title={action.reason}
+                    onSelect={() => void runAction(action.kind, action.label)}
                   >
                     <Icon className="size-3.5 shrink-0 text-muted-foreground" />
                     {action.label}
@@ -392,119 +759,172 @@ export function ChangesColumn({
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-      </div>
-
-      <div className="flex items-center gap-1 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        <span>Changes</span>
-        {files.length > 0 && (
-          <span className="rounded bg-primary/15 px-1.5 tabular-nums text-primary">
-            {files.length}
-          </span>
+        {!canCommit && files.length > 0 && (
+          <p className="text-[11px] text-muted-foreground">
+            Stage files to commit
+          </p>
         )}
-        <span className="ml-auto flex items-center gap-0.5">
-          <button
-            type="button"
-            title="Stage all"
-            disabled={unstaged.length === 0}
-            onClick={() => void stage(unstaged.map((f) => f.path))}
-            className="rounded p-1 hover:bg-accent hover:text-foreground disabled:opacity-40"
-          >
-            <Plus className="size-3" />
-          </button>
-          <button
-            type="button"
-            title="Unstage all"
-            disabled={staged.length === 0}
-            onClick={() => void unstage(staged.map((f) => f.path))}
-            className="rounded p-1 hover:bg-accent hover:text-foreground disabled:opacity-40"
-          >
-            <Minus className="size-3" />
-          </button>
-          <button
-            type="button"
-            title="Refresh"
-            onClick={() => void changesQuery.refetch()}
-            className="rounded p-1 hover:bg-accent hover:text-foreground"
-          >
-            <RefreshCw className="size-3" />
-          </button>
-        </span>
       </div>
 
-      <ul className="min-h-0 flex-1 overflow-auto px-1 pb-1">
-        {files.length === 0 ? (
-          <li className="px-2 py-3 text-center text-xs text-muted-foreground">
-            No working-tree changes
-          </li>
+      {/* Sync row — shown only when it can do something. */}
+      {branch &&
+        (!branch.upstream || branch.ahead > 0 || branch.behind > 0 || canCreatePr || openPr) && (
+          <div className="flex shrink-0 items-center gap-1 px-3 py-1.5 text-xs">
+            {!branch.upstream ? (
+              <LaneButton onClick={() => void publishBranch()}>
+                <ArrowUpFromLine className="size-3.5" />
+                Publish Branch
+              </LaneButton>
+            ) : branch.ahead > 0 || branch.behind > 0 ? (
+              <LaneButton onClick={() => void syncChanges()}>
+                Sync Changes
+                {branch.behind > 0 && (
+                  <span className="flex shrink-0 items-center tabular-nums">
+                    <ArrowDown className="size-3" />
+                    {branch.behind}
+                  </span>
+                )}
+                {branch.ahead > 0 && (
+                  <span className="flex shrink-0 items-center tabular-nums">
+                    <ArrowUp className="size-3" />
+                    {branch.ahead}
+                  </span>
+                )}
+              </LaneButton>
+            ) : null}
+            {canCreatePr && (
+              <LaneButton onClick={() => void createPr()}>
+                <GitPullRequest className="size-3.5" />
+                Create PR
+              </LaneButton>
+            )}
+            {openPr && (
+              <LaneButton onClick={() => void openUrl(openPr)}>
+                View PR
+              </LaneButton>
+            )}
+          </div>
+        )}
+
+      {/* File lists */}
+      <div className="min-h-0 flex-1 overflow-auto pb-1">
+        {empty ? (
+          <div className="pt-2">
+            <p className="px-3 py-2 text-center text-xs text-muted-foreground">
+              No uncommitted changes
+            </p>
+            {cleanNote && (
+              <p className="px-3 pb-2 text-center text-[11px] text-muted-foreground">
+                {cleanNote}
+              </p>
+            )}
+          </div>
         ) : (
-          files.map((file) => {
-            const letter = statusLetter(file);
-            const dir = file.path.includes("/") ? dirname(file.path) : "";
-            const open = selected === file.path;
-            return (
-              <li key={file.path} className="group/file flex items-center">
-                <button
-                  type="button"
-                  onClick={() => pickFile(file)}
-                  className={cn(
-                    "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs hover:bg-accent",
-                    open && "bg-accent text-foreground"
-                  )}
-                >
-                  <FileTypeIcon path={file.path} />
-                  <span className="min-w-0 flex-1 truncate">
-                    {basename(file.path)}
-                    {dir && (
-                      <span className="ml-1.5 text-muted-foreground">{dir}</span>
-                    )}
-                  </span>
-                  <span
-                    className={cn(
-                      "w-4 shrink-0 text-center font-mono text-[10px]",
-                      statusColor(letter)
-                    )}
+          <>
+            <FileSection
+              title="Staged Changes"
+              count={staged.length}
+              files={staged}
+              actions={
+                <>
+                  <MiniButton
+                    title="Stage all"
+                    disabled={unstaged.length === 0}
+                    onClick={() => void stage(unstaged.map((f) => f.path))}
                   >
-                    {letter}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  title={isUnstaged(file) ? "Stage" : "Unstage"}
-                  onClick={() =>
-                    void (isUnstaged(file)
-                      ? stage([file.path])
-                      : unstage([file.path]))
-                  }
-                  className="rounded p-1 text-muted-foreground opacity-0 hover:text-foreground group-hover/file:opacity-100"
-                >
-                  {isUnstaged(file) ? (
                     <Plus className="size-3" />
-                  ) : (
+                  </MiniButton>
+                  <MiniButton
+                    title="Unstage all"
+                    onClick={() => void unstage(staged.map((f) => f.path))}
+                  >
                     <Minus className="size-3" />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  title="Discard"
-                  onClick={() => void discardFile(file)}
-                  className="rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover/file:opacity-100"
-                >
-                  <Trash2 className="size-3" />
-                </button>
-              </li>
-            );
-          })
+                  </MiniButton>
+                </>
+              }
+              rows={staged.map((file) => (
+                <FileRow
+                  key={file.path}
+                  file={file}
+                  staged
+                  open={selected === file.path}
+                  onPick={() => pickFile(file)}
+                  onToggle={() => void unstage([file.path])}
+                  onDiscard={() => void discardFile(file)}
+                />
+              ))}
+            />
+            <FileSection
+              title="Changes"
+              count={unstaged.length}
+              files={unstaged}
+              actions={
+                <>
+                  <MiniButton
+                    title="Discard all"
+                    onClick={() => void discardAll()}
+                  >
+                    <Trash2 className="size-3" />
+                  </MiniButton>
+                  <MiniButton
+                    title="Stage all"
+                    onClick={() => void stage(unstaged.map((f) => f.path))}
+                  >
+                    <Plus className="size-3" />
+                  </MiniButton>
+                  <MiniButton
+                    title="Open all"
+                    disabled={!rightDock}
+                    onClick={onOpenReview}
+                  >
+                    <Files className="size-3" />
+                  </MiniButton>
+                </>
+              }
+              rows={unstaged.map((file) => (
+                <FileRow
+                  key={file.path}
+                  file={file}
+                  staged={false}
+                  open={selected === file.path}
+                  onPick={() => pickFile(file)}
+                  onToggle={() => void stage([file.path])}
+                  onDiscard={() => void discardFile(file)}
+                />
+              ))}
+            />
+          </>
         )}
-      </ul>
+      </div>
 
-      <RecentCommits
+      {/* Compact swimlane graph */}
+      <ChangesGraph
         projectPath={projectPath}
-        title="Graph"
-        onPickCommitFile={(sha, file, subject) => {
-          requestCommitReview({ projectPath, sha, file, subject });
+        onPickCommit={(sha, subject) => {
+          requestCommitReview({ projectPath, sha, subject });
           if (rightDock) onOpenReview();
         }}
       />
     </div>
+  );
+}
+
+/** The quiet wide button of the sync row. */
+function LaneButton({
+  onClick,
+  children,
+}: {
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Button
+      size="sm"
+      variant="secondary"
+      className="min-w-0 flex-1 justify-start"
+      onClick={onClick}
+    >
+      {children}
+    </Button>
   );
 }

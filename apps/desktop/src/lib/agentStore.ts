@@ -80,7 +80,9 @@ export interface TurnReviewRequest {
 export interface CommitReviewRequest {
   projectPath: string;
   sha: string;
-  file: string;
+  /** One file's diff; omitted for a whole-commit review (the Changes graph's
+   *  click, rendered through `git_commit_patch`). */
+  file?: string;
   subject: string;
 }
 
