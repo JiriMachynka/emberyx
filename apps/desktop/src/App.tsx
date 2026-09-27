@@ -26,9 +26,10 @@ import {
   type AccessLevel,
 } from "@/lib/settings";
 import {
-  DOCK_KINDS,
   EMPTY_DOCK,
   closeTab,
+  closeTabs,
+  dockKindsFor,
   isShowing,
   hideDock,
   openTab,
@@ -43,7 +44,15 @@ import {
   type CommitReviewRequest,
   type TurnReviewRequest,
 } from "@/lib/agentStore";
-import { getSidebarCollapsed, setSidebarCollapsed } from "@/lib/sidebar";
+import {
+  getSidebarCollapsed,
+  getWorkspaceCollapsed,
+  getWorkspaceTab,
+  setSidebarCollapsed,
+  setWorkspaceCollapsed,
+  setWorkspaceTab,
+  type WorkspaceTab,
+} from "@/lib/sidebar";
 import { requestSearch } from "@/lib/searchRequest";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import type { Session } from "@/types";
@@ -162,13 +171,10 @@ function App() {
   // scroll position and undo history survive closing it.
   const [editorMounted, setEditorMounted] = useState(false);
   const [sidebarCollapsed, setCollapsed] = useState<boolean>(getSidebarCollapsed);
-
-  function toggleSidebar() {
-    setCollapsed((c) => {
-      setSidebarCollapsed(!c);
-      return !c;
-    });
-  }
+  const [workspaceCollapsed, setWorkspaceCollapsedState] = useState<boolean>(
+    getWorkspaceCollapsed
+  );
+  const [workspaceTab, setWorkspaceTabState] = useState<WorkspaceTab>("sessions");
 
   const { settings, update: updateSettings } = useSettings();
   const ws = useWorkspace(settings);
@@ -182,6 +188,28 @@ function App() {
     revealed,
     recents,
   } = ws;
+
+  function toggleSidebar() {
+    if (settings.workspaceLayout === "column") {
+      setWorkspaceCollapsedState((c) => {
+        setWorkspaceCollapsed(!c);
+        return !c;
+      });
+    } else {
+      setCollapsed((c) => {
+        setSidebarCollapsed(!c);
+        return !c;
+      });
+    }
+  }
+
+  const openChangesColumn = () => {
+    if (!activeProjectId) return;
+    setWorkspaceTab(activeProjectId, "changes");
+    setWorkspaceTabState("changes");
+    setWorkspaceCollapsed(false);
+    setWorkspaceCollapsedState(false);
+  };
 
   // The dock's state is per project. Switching to a thread in another project
   // swaps in what was open there instead of closing everything, so switching
@@ -208,9 +236,29 @@ function App() {
   const toggleDock = () =>
     updateDock((s) => (s.open ? hideDock(s) : showDock(s)));
 
-  // Clicking a file in the chat brings the Files tab forward; the editor pane
-  // itself picks the file up from the same request.
-  useEffect(() => onOpenFileRequest(() => showTab("files")), []);
+  // Clicking a file in the chat opens the editor. Column layout and a hidden
+  // dock have no Files tab, so those paths use the overlay editor instead.
+  useEffect(
+    () =>
+      onOpenFileRequest(() => {
+        if (settings.workspaceLayout === "column" || !settings.rightDock) {
+          setEditorMounted(true);
+          setEditorOpen(true);
+        } else {
+          showTab("files");
+        }
+      }),
+    [settings.workspaceLayout, settings.rightDock]
+  );
+
+  useEffect(() => {
+    if (activeProjectId) setWorkspaceTabState(getWorkspaceTab(activeProjectId));
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    if (settings.workspaceLayout !== "column") return;
+    updateDock((s) => closeTabs(s, ["files", "git"]));
+  }, [settings.workspaceLayout]);
 
   // A transcript card's "Review" scopes the diff tab to that turn's delta. The
   // request lives in the agent store so any mounted pane can raise it; only the
@@ -402,7 +450,7 @@ function App() {
   const runAction = (a: ProjectAction) => {
     if (!activeProject) return;
     ws.addDev(activeProject.id, a.name, activeProject.path, a.command);
-    if (settings.autoOpenDevPanel) showTab("dev");
+    if (settings.autoOpenDevPanel && settings.rightDock) showTab("dev");
   };
   // Open a new worktree, then fire the source project's run-on-create actions.
   const openWorktreeAndRun = async (
@@ -478,7 +526,7 @@ function App() {
   };
 
   const openProjectSettings = () => {
-    if (!activeProject) return;
+    if (!activeProject || !settings.rightDock) return;
     showTab("projectSettings");
   };
 
@@ -697,10 +745,32 @@ function App() {
           fontFamily={settings.chatFontFamily}
           collapsed={sidebarCollapsed}
           onToggleCollapse={toggleSidebar}
+          workspaceLayout={settings.workspaceLayout}
+          workspaceCollapsed={workspaceCollapsed}
+          workspaceTab={workspaceTab}
+          onWorkspaceTab={(tab) => {
+            if (activeProjectId) setWorkspaceTab(activeProjectId, tab);
+            setWorkspaceTabState(tab);
+          }}
+          onOpenEditor={() => {
+            setEditorMounted(true);
+            setEditorOpen(true);
+          }}
+          onOpenReview={() => {
+            if (settings.rightDock) showTab("diff");
+          }}
+          rightDock={settings.rightDock}
+          onOpenWorktree={openWorktreeAndRun}
+          onRemoveWorktree={ws.removeWorktree}
+          remoteHost={remoteHostValue}
           onSelectProject={(id) => {
             setSettingsOpen(false);
             setUsageOpen(false);
             ws.setActiveProjectId(id);
+            if (settings.workspaceLayout === "column") {
+              setWorkspaceCollapsed(false);
+              setWorkspaceCollapsedState(false);
+            }
           }}
           onCloseProject={async (id) => {
             const closed = await ws.closeProjectById(id);
@@ -754,8 +824,19 @@ function App() {
               activeProject={activeProject}
               agent={agent}
               devRunning={projectSessions.some((s) => s.kind === "dev")}
-              gitOpen={isShowing(dock, "git")}
-              onToggleGit={() => flipTab("git")}
+              gitOpen={
+                settings.workspaceLayout === "column"
+                  ? workspaceTab === "changes" && !workspaceCollapsed
+                  : isShowing(dock, "git")
+              }
+              onToggleGit={() => {
+                if (settings.workspaceLayout === "column") openChangesColumn();
+                else flipTab("git");
+              }}
+              showGit={
+                settings.workspaceLayout === "column" || settings.rightDock
+              }
+              showDock={settings.rightDock}
               devOpen={isShowing(dock, "dev")}
               devCount={devCount}
               onToggleDev={() => flipTab("dev")}
@@ -861,9 +942,12 @@ function App() {
               </div>
             )}
           </main>
+          {settings.rightDock && (
           <RightDock
             state={dock}
-            available={activeProject ? DOCK_KINDS : []}
+            available={
+              activeProject ? dockKindsFor(settings.workspaceLayout) : []
+            }
             panes={dockPanes}
             onSelect={showTab}
             onClose={hideTab}
@@ -879,6 +963,7 @@ function App() {
                 : { mrs: `No ${FORGE_NOUN[remoteHost].one} on this branch yet.` }
             }
           />
+          )}
           {notificationsOpen && (
             <NotificationPanel
               onClose={() => setNotificationsOpen(false)}

@@ -1,7 +1,8 @@
 import type { LinkedPr } from "@/lib/forge";
 import type { ThreadState } from "@/lib/threadMeta";
 import type { Project, Session, Thread } from "@/types";
-import type { ThreadGrouping, ThreadView } from "@/lib/settings";
+import type { ThreadGrouping, ThreadView, WorkspaceLayout } from "@/lib/settings";
+import type { WorkspaceTab } from "@/lib/sidebar";
 
 export interface SidebarProps {
   projects: Project[];
@@ -20,6 +21,22 @@ export interface SidebarProps {
   fontFamily: string;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  workspaceLayout: WorkspaceLayout;
+  /** Column layout: the Sessions/Explorer/Changes column is hidden. */
+  workspaceCollapsed: boolean;
+  workspaceTab: WorkspaceTab;
+  onWorkspaceTab: (tab: WorkspaceTab) => void;
+  /** Open the editor overlay on an Explorer click. */
+  onOpenEditor: (path?: string) => void;
+  /** Open the Review dock tab from a Changes file, when the dock is on. */
+  onOpenReview: () => void;
+  rightDock: boolean;
+  onOpenWorktree: (path: string, repoRoot: string, branch: string) => void;
+  onRemoveWorktree: (worktreePath: string, repoRoot: string) => void | Promise<void>;
+  /** Origin remote host, for commit/PR actions in the Changes column. */
+  remoteHost: string | undefined;
+  /** Column Sessions tab: the rail already names the project. */
+  sessionsOnly?: boolean;
   onSelectProject: (id: string) => void;
   onCloseProject: (id: string) => void;
   onPickProject: () => void;

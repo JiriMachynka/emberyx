@@ -4,10 +4,12 @@ import {
   PICKER_OFFERS,
   closeTab,
   closeTabs,
+  dockKindsFor,
   hideDock,
   isChooser,
   isShowing,
   openTab,
+  pickerOffersFor,
   showDock,
   toggleTab,
   type DockState,
@@ -112,6 +114,25 @@ describe("showDock / hideDock", () => {
     const hidden = hideDock(dock(["dev"], "dev"));
     expect(hidden).toEqual(dock(["dev"], "dev", false));
     expect(showDock(hidden)).toEqual(dock(["dev"], "dev"));
+  });
+});
+
+describe("dockKindsFor", () => {
+  it("drops files and git in column layout, keeps them in classic", () => {
+    expect(dockKindsFor("classic")).toEqual(expect.arrayContaining(["files", "git"]));
+    expect(dockKindsFor("column")).not.toContain("files");
+    expect(dockKindsFor("column")).not.toContain("git");
+    expect(dockKindsFor("column")).toEqual(
+      expect.arrayContaining(["terminal", "diff", "preview"])
+    );
+  });
+});
+
+describe("pickerOffersFor", () => {
+  it("hides Files from the column-layout chooser", () => {
+    expect(pickerOffersFor("classic").some((o) => o.kind === "files")).toBe(true);
+    expect(pickerOffersFor("column").some((o) => o.kind === "files")).toBe(false);
+    expect(pickerOffersFor("column").every((o) => o.shortcut.length === 1)).toBe(true);
   });
 });
 

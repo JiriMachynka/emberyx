@@ -1,3 +1,10 @@
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Group, Row, SwitchRow } from "@/components/SettingsFields";
 import { THEMES } from "@/lib/themes";
 import { ThemeCard } from "./ThemeCard";
@@ -27,6 +34,37 @@ export const AppearanceSection = ({
           />
         ))}
       </div>
+    </Group>
+
+    <Group title="Layout">
+      <Row
+        label="Workspace"
+        hint="Column keeps a project rail and a workspace column with Sessions, Explorer, and Changes."
+        control={
+          <Select
+            value={settings.workspaceLayout}
+            onValueChange={(value) => {
+              if (value === "classic" || value === "column") {
+                onUpdate({ workspaceLayout: value });
+              }
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="classic">Classic</SelectItem>
+              <SelectItem value="column">Column</SelectItem>
+            </SelectContent>
+          </Select>
+        }
+      />
+      <SwitchRow
+        label="Right sidebar"
+        hint="Terminal, Preview, Review, and merge requests. Off hides the dock until you turn it back on."
+        checked={settings.rightDock}
+        onChange={(v) => onUpdate({ rightDock: v })}
+      />
     </Group>
 
     <Group title="Interface">

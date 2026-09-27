@@ -71,6 +71,26 @@ describe("useSettings", () => {
     expect(JSON.parse(localStorage.getItem("emberyx.settings")!).threadView).toBe("all");
   });
 
+  it("persists workspace layout and the right-dock toggle", () => {
+    const { result } = renderHook(() => useSettings());
+    expect(result.current.settings.workspaceLayout).toBe("classic");
+    expect(result.current.settings.rightDock).toBe(true);
+    act(() => result.current.update({ workspaceLayout: "column", rightDock: false }));
+    expect(result.current.settings.workspaceLayout).toBe("column");
+    expect(result.current.settings.rightDock).toBe(false);
+    const stored = JSON.parse(localStorage.getItem("emberyx.settings")!);
+    expect(stored.workspaceLayout).toBe("column");
+    expect(stored.rightDock).toBe(false);
+  });
+
+  it("coerces an unknown workspace layout back to classic", () => {
+    localStorage.setItem(
+      "emberyx.settings",
+      JSON.stringify({ workspaceLayout: "deck" })
+    );
+    expect(loadSettings().workspaceLayout).toBe("classic");
+  });
+
   it("persists an update and merges it into the current settings", () => {
     const { result } = renderHook(() => useSettings());
     act(() => result.current.update({ fontSize: 16 }));

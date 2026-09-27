@@ -11,6 +11,7 @@ const BRANCH: GitBranch = { branch: "main", upstream: null, ahead: 0, behind: 0 
 vi.mock("@tauri-apps/api/core", () => ({
   Channel: class {},
   invoke: (cmd: string) => {
+    if (cmd === "git_head_ref") return Promise.resolve("refs/heads/main");
     if (cmd === "git_branch") return Promise.resolve(BRANCH);
     if (cmd === "git_merged_branches") return Promise.resolve([]);
     if (cmd === "machine_name") return Promise.resolve("studio");
@@ -80,6 +81,16 @@ const baseProps = (over: Partial<SidebarProps> = {}): SidebarProps => ({
   fontFamily: "sans-serif",
   collapsed: false,
   onToggleCollapse: () => {},
+  workspaceLayout: "classic",
+  workspaceCollapsed: false,
+  workspaceTab: "sessions",
+  onWorkspaceTab: () => {},
+  onOpenEditor: () => {},
+  onOpenReview: () => {},
+  rightDock: true,
+  onOpenWorktree: () => {},
+  onRemoveWorktree: () => {},
+  remoteHost: undefined,
   onSelectProject: () => {},
   onCloseProject: () => {},
   onPickProject: () => {},
@@ -175,6 +186,21 @@ describe("Sidebar — project tree", () => {
 
     await setStatus("s1", "idle");
     expect(row("Flaky test").textContent).not.toContain("working");
+  });
+
+  it("column layout shows Sessions, Explorer and Changes beside the rail", async () => {
+    await mount({ workspaceLayout: "column", workspaceCollapsed: false });
+    expect(screen.getByRole("button", { name: "Sessions" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Explorer" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Changes" })).toBeTruthy();
+    expect(screen.getByText("Flaky test")).toBeTruthy();
+    expect(screen.queryByText("Projects")).toBeNull();
+  });
+
+  it("column layout can hide the workspace column and keep the rail", async () => {
+    await mount({ workspaceLayout: "column", workspaceCollapsed: true });
+    expect(screen.queryByRole("button", { name: "Sessions" })).toBeNull();
+    expect(screen.getByTitle("Open project (⌘O)")).toBeTruthy();
   });
 
   it("collapsed, it drops to the rail; in settings, it hosts the settings navigation", async () => {

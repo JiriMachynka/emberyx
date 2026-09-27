@@ -27,6 +27,15 @@ export type ThreadView = "project" | "all";
 
 export type ThreadGrouping = "none" | "repository";
 
+/** How the left chrome is arranged. Classic is today's sidebar; column is a
+ *  project rail plus a Sessions / Explorer / Changes workspace. */
+export const WORKSPACE_LAYOUTS = ["classic", "column"] as const;
+
+export type WorkspaceLayout = (typeof WORKSPACE_LAYOUTS)[number];
+
+export const isWorkspaceLayout = (value: string): value is WorkspaceLayout =>
+  WORKSPACE_LAYOUTS.some((v) => v === value);
+
 /** One name/value injected into the agent process. Empty names are dropped. */
 export interface LaunchEnv {
   name: string;
@@ -211,6 +220,11 @@ export interface Settings {
   commitMessageModel: string;
   /** Wrap long lines in the built-in editor. */
   wordWrap: boolean;
+  /** Left chrome: one sidebar, or a project rail plus a workspace column. */
+  workspaceLayout: WorkspaceLayout;
+  /** Right-hand dock (terminal, preview, review, merge requests). Off hides
+   *  it until turned back on — those surfaces have nowhere else to go. */
+  rightDock: boolean;
   /** Let TypeSafe Jev auto-answer low-risk ACP permission prompts. Independent
    *  of whether a key is saved — a key without this still prompts. */
   jevAutoApprove: boolean;
@@ -255,6 +269,8 @@ export const DEFAULT_SETTINGS: Settings = {
   snapshotsIncludeAppText: true,
   commitMessageModel: "claude-haiku-4-5",
   wordWrap: false,
+  workspaceLayout: "classic",
+  rightDock: true,
   jevAutoApprove: true,
 };
 
@@ -282,6 +298,14 @@ const splitStoredEffort = (s: Settings): Settings => {
 const dropStoredUnknownTheme = (s: Settings): Settings =>
   isThemeId(s.theme) ? s : { ...s, theme: DEFAULT_SETTINGS.theme };
 
+const coerceLayout = (s: Settings): Settings => ({
+  ...s,
+  workspaceLayout: isWorkspaceLayout(s.workspaceLayout)
+    ? s.workspaceLayout
+    : DEFAULT_SETTINGS.workspaceLayout,
+  rightDock: s.rightDock !== false,
+});
+
 /** Dropped settings: OpenRouter commit generate, first-party Dokploy API. */
 const dropStoredRemovedKeys = (
   s: Settings & {
@@ -306,10 +330,12 @@ export function loadSettings(): Settings {
     const raw = localStorage.getItem(KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const stored = JSON.parse(raw) as Partial<Settings>;
-    const merged = dropStoredRemovedKeys(
-      dropStoredUnknownTheme(
-        dropStoredPlanMode(
-          splitStoredEffort({ ...DEFAULT_SETTINGS, ...stored })
+    const merged = coerceLayout(
+      dropStoredRemovedKeys(
+        dropStoredUnknownTheme(
+          dropStoredPlanMode(
+            splitStoredEffort({ ...DEFAULT_SETTINGS, ...stored })
+          )
         )
       )
     );

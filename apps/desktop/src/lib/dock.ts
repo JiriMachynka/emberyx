@@ -61,6 +61,25 @@ export const PICKER_OFFERS = [
   { kind: "dev", shortcut: "O", blurb: "Running servers and command output." },
 ] as const satisfies readonly DockOffer[];
 
+/** Kinds the dock may host. Column layout owns files and git in the left workspace. */
+export function dockKindsFor(
+  layout: "classic" | "column"
+): readonly DockKind[] {
+  if (layout === "column") {
+    return DOCK_KINDS.filter((k) => k !== "files" && k !== "git");
+  }
+  return DOCK_KINDS;
+}
+
+/** Chooser cards for this layout — same order as `PICKER_OFFERS`, minus kinds
+ *  the workspace column already owns. */
+export function pickerOffersFor(
+  layout: "classic" | "column"
+): readonly DockOffer[] {
+  const allowed = new Set(dockKindsFor(layout));
+  return PICKER_OFFERS.filter((o) => allowed.has(o.kind));
+}
+
 export interface DockState {
   /** Open tabs, left to right, in the order they were opened. */
   tabs: DockKind[];

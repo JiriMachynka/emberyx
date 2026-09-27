@@ -28,11 +28,14 @@ const statusColor = (status: string): string => {
 interface RecentCommitsProps {
   projectPath: string;
   onPickCommitFile: (sha: string, file: string, subject: string) => void;
+  /** Section label. The Git dock says Recent Commits; the Changes column says Graph. */
+  title?: string;
 }
 
 export function RecentCommits({
   projectPath,
   onPickCommitFile,
+  title = "Recent Commits",
 }: RecentCommitsProps) {
   const [limit, setLimit] = useState(PAGE);
   const [open, setOpen] = useState(true);
@@ -75,7 +78,7 @@ export function RecentCommits({
           ) : (
             <ChevronRight className="size-3" />
           )}
-          Recent Commits
+          {title}
         </button>
         <span className="tabular-nums">{commits.length}</span>
       </div>

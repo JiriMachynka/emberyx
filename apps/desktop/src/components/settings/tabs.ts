@@ -70,8 +70,10 @@ export const TABS: TabMeta[] = [
       "editorFontSize",
       "scrollback",
       "wordWrap",
+      "workspaceLayout",
+      "rightDock",
     ],
-    finds: "theme themes color colour accent dark palette ember graphite phosphor crimson sandstone font family size chat terminal editor scrollback typography wrap",
+    finds: "theme themes color colour accent dark palette ember graphite phosphor crimson sandstone font family size chat terminal editor scrollback typography wrap layout workspace column classic sidebar dock rail sessions explorer changes",
   },
   {
     id: "shortcuts",

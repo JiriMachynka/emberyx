@@ -9,6 +9,8 @@ interface DockPickerProps {
   titles?: Partial<Record<DockKind, string>>;
   /** Kind → why it can't be opened. The card stays visible, greyed out. */
   unavailable?: Partial<Record<DockKind, string>>;
+  /** Surfaces this dock may offer. Defaults to the full chooser list. */
+  offers?: readonly { kind: DockKind; shortcut: string; blurb: string }[];
 }
 
 /**
@@ -16,7 +18,12 @@ interface DockPickerProps {
  * the badges, and only fire while this chooser is mounted and the user isn't
  * typing in the composer.
  */
-export function DockPicker({ onPick, titles, unavailable }: DockPickerProps) {
+export function DockPicker({
+  onPick,
+  titles,
+  unavailable,
+  offers = PICKER_OFFERS,
+}: DockPickerProps) {
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -32,14 +39,14 @@ export function DockPicker({ onPick, titles, unavailable }: DockPickerProps) {
         return;
       }
       const key = e.key.toUpperCase();
-      const offer = PICKER_OFFERS.find((o) => o.shortcut === key);
+      const offer = offers.find((o) => o.shortcut === key);
       if (!offer || unavailable?.[offer.kind]) return;
       e.preventDefault();
       onPick(offer.kind);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onPick, unavailable]);
+  }, [onPick, unavailable, offers]);
 
   return (
     <div
@@ -52,7 +59,7 @@ export function DockPicker({ onPick, titles, unavailable }: DockPickerProps) {
         Choose what to show in the right panel.
       </p>
       <div className="mt-8 grid w-full max-w-lg grid-cols-2 gap-3">
-        {PICKER_OFFERS.map((offer) => {
+        {offers.map((offer) => {
           const Icon = DOCK_ICONS[offer.kind];
           const blocked = unavailable?.[offer.kind];
           return (

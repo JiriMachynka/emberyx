@@ -1,4 +1,4 @@
-import { GitGraph, PanelRight, Terminal } from "lucide-react";
+import { PanelRight, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ProjectMark } from "@/components/ProjectMark";
 import { ActionsMenu } from "@/components/ActionsMenu";
@@ -31,8 +31,11 @@ interface ContextBarProps {
   onStopDev: () => void;
   gitOpen: boolean;
   onToggleGit: () => void;
+  /** Git dock / Changes column. Hidden when the dock is off in classic layout. */
+  showGit?: boolean;
   dockOpen: boolean;
   onToggleDock: () => void;
+  showDock?: boolean;
 }
 
 /** Slim bar above the chat: project / thread title, plus the dock controls. */
@@ -51,8 +54,10 @@ export function ContextBar({
   onStopDev,
   gitOpen,
   onToggleGit,
+  showGit = true,
   dockOpen,
   onToggleDock,
+  showDock = true,
 }: ContextBarProps) {
   const path = activeProject?.path ?? "";
   const agentId = agent?.id;
@@ -111,7 +116,7 @@ export function ContextBar({
             onStop={onStopDev}
           />
         )}
-        {activeProject && (
+        {activeProject && showGit && (
           <Button
             variant={gitOpen ? "chromeActive" : "chrome"}
             size="sm"
@@ -122,8 +127,12 @@ export function ContextBar({
                 : "Branch actions and commit history"
             }
           >
-            <GitGraph className="size-3.5" />
-            <span className="max-w-28 truncate">{branch ?? "Git"}</span>
+            <img
+              src="/source-control-icons/git.svg"
+              alt=""
+              className="size-3.5 shrink-0"
+            />
+            Git
             {changeCount > 0 && (
               <span className="rounded bg-warning/20 px-1 text-[10px] tabular-nums text-warning">
                 {changeCount}
@@ -137,7 +146,7 @@ export function ContextBar({
             remoteHost={remoteHost}
           />
         )}
-        {devCount > 0 && (
+        {devCount > 0 && showDock && (
           <Button
             variant={devOpen ? "chromeActive" : "chrome"}
             size="sm"
@@ -151,7 +160,7 @@ export function ContextBar({
             </span>
           </Button>
         )}
-        {activeProject && (
+        {activeProject && showDock && (
           <Button
             variant={dockOpen ? "chromeActive" : "chrome"}
             size="icon"

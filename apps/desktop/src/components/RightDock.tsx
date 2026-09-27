@@ -11,6 +11,7 @@ import { DockPicker } from "@/components/DockPicker";
 import { DOCK_ICONS } from "@/lib/dockIcons";
 import {
   DOCK_LABEL,
+  PICKER_OFFERS,
   isChooser,
   type DockKind,
   type DockState,
@@ -119,7 +120,12 @@ export function RightDock({
       }
     >
       {chooser && (
-        <DockPicker onPick={onAdd} titles={titles} unavailable={unavailable} />
+        <DockPicker
+          onPick={onAdd}
+          titles={titles}
+          unavailable={unavailable}
+          offers={PICKER_OFFERS.filter((o) => available.includes(o.kind))}
+        />
       )}
       {tabs.map((kind) => (
         <div

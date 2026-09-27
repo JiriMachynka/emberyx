@@ -33,7 +33,42 @@ export function ProjectTree(props: SidebarProps) {
     onPickProject,
     onNewAgent,
     onOpenSearch,
+    sessionsOnly,
   } = props;
+
+  if (sessionsOnly) {
+    const project = projects.find((p) => p.id === activeProjectId);
+    const pSessions = project
+      ? sessionsFor(project.id).filter((s) => s.kind !== "dev")
+      : [];
+    return (
+      <div className="px-2.5 pt-2">
+        <button
+          onClick={onOpenSearch}
+          className="mb-3 flex w-full items-center gap-2 rounded-lg bg-secondary/70 px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <Search className="size-3.5" />
+          <span className="flex-1 text-left">Search</span>
+          <kbd className="rounded bg-background/60 px-1 text-[10px] tabular-nums">
+            ⌘K
+          </kbd>
+        </button>
+        {project ? (
+          <SessionList
+            {...props}
+            flush
+            sessions={pSessions}
+            activeId={activeByProject[project.id] ?? null}
+            projectId={project.id}
+          />
+        ) : (
+          <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+            Open a project to see sessions
+          </p>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="px-2.5 pt-2">
@@ -217,10 +252,13 @@ function SessionList({
   onSelectSession,
   onCloseSession,
   onMoveSession,
+  flush,
 }: SidebarProps & {
   sessions: Session[];
   activeId: string | null;
   projectId: string;
+  /** Drop the indent used when the list sits under a project row. */
+  flush?: boolean;
 }) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -230,7 +268,11 @@ function SessionList({
   const shown = showAll ? sessions : sessions.slice(0, LIMIT);
 
   return (
-    <ul className="ml-3 mt-1 border-l border-white/[0.08] pl-2">
+    <ul
+      className={cn(
+        !flush && "ml-3 mt-1 border-l border-white/[0.08] pl-2"
+      )}
+    >
       {shown.map((s) => {
         const active = s.id === activeId;
         return (

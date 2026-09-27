@@ -11,50 +11,53 @@ export function SidebarFooter({
   notificationCount,
   onOpenNotifications,
 }: SidebarProps) {
+  const btn =
+    "flex items-center gap-1.5 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
+
   return (
     <footer
       className={cn(
         "flex shrink-0 items-center border-t",
         collapsed
-          ? "flex-col justify-center gap-1 py-2"
-          : "h-12 justify-between px-3"
+          ? "flex-col justify-center gap-0.5 py-1.5"
+          : "justify-between px-2 py-1"
       )}
     >
       <div className={cn("flex items-center", collapsed && "flex-col")}>
       {settingsOpen ? (
         <button
           onClick={onBackFromSettings}
-          className="flex items-center gap-2 rounded-md p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className={btn}
           title="Back"
         >
-          <ArrowLeft className="size-5" />
-          {!collapsed && <span>Back</span>}
+          <ArrowLeft className="size-3.5" />
+          {!collapsed && <span className="text-xs">Back</span>}
         </button>
       ) : (
         <>
           <button
             onClick={onOpenSettings}
-            className="flex items-center gap-2 rounded-md p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className={btn}
             title="Settings"
           >
-            <Settings className="size-5" />
+            <Settings className="size-3.5" />
           </button>
           <button
             onClick={onOpenUsage}
-            className="flex items-center gap-2 rounded-md p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className={btn}
             title="Usage"
           >
-            <ChartColumn className="size-5" />
+            <ChartColumn className="size-3.5" />
           </button>
         </>
       )}
       </div>
       <button
         onClick={onOpenNotifications}
-        className="relative flex items-center gap-2 rounded-md p-2.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className={cn("relative", btn)}
         title="Notifications"
       >
-        <Bell className="size-5" />
+        <Bell className="size-3.5" />
         {notificationCount > 0 &&
           (collapsed ? (
             <span className="absolute right-1 top-1 size-2 rounded-full bg-primary" />

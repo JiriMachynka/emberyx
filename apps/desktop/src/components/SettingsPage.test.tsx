@@ -255,6 +255,13 @@ describe("SettingsPage", () => {
       expect(patches).toEqual([{ threadView: "all" }]);
     });
 
+    it("Appearance: the workspace select", async () => {
+      const { host, patches } = await mount();
+      await openTab(host, "Appearance");
+      await pickOtherOption(controlFor("Workspace", "button[role=combobox]"));
+      expect(patches).toEqual([{ workspaceLayout: "column" }]);
+    });
+
     it("Appearance: a theme card", async () => {
       const { host, patches } = await mount();
       await openTab(host, "Appearance");
