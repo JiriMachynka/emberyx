@@ -1,8 +1,8 @@
 {
   "name": "@emberyx/desktop",
   "private": true,
-  "version": "0.2.61",
-  "description": "Desktop cockpit for AI coding agents — run Claude Code and Codex across projects in integrated terminals.",
+  "version": "0.2.62",
+  "description": "Desktop cockpit for AI coding agents \u2014 run Claude Code and Codex across projects in integrated terminals.",
   "author": "Jiri Machynka <machynka.j@gmail.com>",
   "type": "module",
   "scripts": {
