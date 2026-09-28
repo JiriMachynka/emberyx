@@ -32,8 +32,6 @@ export interface ChatMessage {
   /** User messages only: the working-tree snapshot taken before this turn was
    *  sent, so its file changes can be reverted on their own. */
   checkpointId?: string;
-  /** User messages only: Jev scored this turn's file delta as worth a look. */
-  jevReview?: boolean;
   /** Who produced this turn. Stamped by the pane when a thread changes hands,
    *  so a provider switch never relabels what came before it. */
   provider?: Provider;
@@ -55,10 +53,6 @@ export interface ChatImage {
   mediaType: string;
   /** base64 payload without the data: URL prefix. */
   data: string;
-  /** SnapShots sidecar: what was captured and, when "Include app text" was
-   *  on, the formatted accessibility tree that rides next to the image on
-   *  send — never into the composer's text. */
-  snapshot?: { app: string; title: string; a11y?: string };
 }
 
 export type ChatStatus =

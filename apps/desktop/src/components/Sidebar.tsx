@@ -12,6 +12,9 @@ export function Sidebar(props: SidebarProps) {
   const { collapsed, fontFamily, settingsOpen, workspaceLayout, workspaceCollapsed } =
     props;
   const column = workspaceLayout === "column";
+  // The settings navigation is hosted in this same aside, so a collapsed rail
+  // clips every tab label to the icon. Opening settings forces it wide.
+  const rail = collapsed && !settingsOpen;
 
   if (column) {
     return (
@@ -48,10 +51,10 @@ export function Sidebar(props: SidebarProps) {
       style={{ fontFamily }}
       className={cn(
         "flex shrink-0 flex-col border-r border-white/[0.06] bg-sidebar transition-[width] duration-200",
-        collapsed ? "w-14" : "w-72"
+        rail ? "w-14" : "w-72"
       )}
     >
-      <SidebarHeader {...props} />
+      <SidebarHeader {...props} collapsed={rail} />
       <div
         data-sidebar-scroll
         className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1.5"
@@ -64,7 +67,7 @@ export function Sidebar(props: SidebarProps) {
           <Tree {...props} />
         )}
       </div>
-      <SidebarFooter {...props} />
+      <SidebarFooter {...props} collapsed={rail} />
     </aside>
   );
 }

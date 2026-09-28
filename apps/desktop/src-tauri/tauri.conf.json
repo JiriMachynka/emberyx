@@ -37,6 +37,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "copyright": "© 2026 Jiri Machynka",
+    "publisher": "Jiri Machynka",
+    "shortDescription": "Desktop cockpit for coding agents",
+    "longDescription": "Run Claude Code, Codex, OpenCode, and Grok across projects from one local-first chat cockpit.",
     "macOS": {
       "signingIdentity": "-"
     }

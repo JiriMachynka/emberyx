@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { ActivityList, ActivityRow } from "@/components/chat/ActivityRow";
-import { useActivityRiskStore } from "@/lib/activityRisk";
 import type { ActivityItem } from "@/types";
 
 const row = (over: Partial<ActivityItem> = {}): ActivityItem => ({
@@ -16,7 +15,6 @@ const row = (over: Partial<ActivityItem> = {}): ActivityItem => ({
 
 afterEach(() => {
   cleanup();
-  useActivityRiskStore.setState({ risks: {} });
 });
 
 describe("ActivityRow", () => {
@@ -27,13 +25,6 @@ describe("ActivityRow", () => {
 
     const done = render(<ActivityRow activity={row({ complete: true, output: "ok" })} />);
     expect(done.getByRole("button", { expanded: false })).toBeTruthy();
-  });
-
-  it("shows the risk label the store holds for the row", () => {
-    useActivityRiskStore.setState({ risks: { "bash-1": "credentials" } });
-    const view = render(<ActivityRow activity={row({ complete: true })} />);
-    expect(view.getByText("credentials")).toBeTruthy();
-    expect(view.getByTitle(/touches a credential/)).toBeTruthy();
   });
 });
 
@@ -58,5 +49,20 @@ describe("ActivityList file groups", () => {
     expect(settled.container.textContent).not.toContain("created");
     expect(settled.container.textContent).toContain("Write");
     expect(settled.container.textContent).toContain("src/a.ts");
+  });
+
+  it("hides a finished command on a live turn and keeps the one still running", () => {
+    const done = row({
+      id: "done",
+      kind: "search",
+      title: "Grep",
+      complete: true,
+      output: "ok",
+    });
+    const running = row({ id: "run", complete: false });
+    const view = render(<ActivityList live activities={[done, running]} />);
+    expect(view.container.textContent).not.toContain("Grep");
+    expect(view.container.textContent).toContain("Bash");
+    expect(view.getByRole("button", { expanded: true })).toBeTruthy();
   });
 });

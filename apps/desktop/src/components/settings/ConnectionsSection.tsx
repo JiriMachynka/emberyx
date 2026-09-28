@@ -30,10 +30,7 @@ export const ConnectionsSection = ({
   copyDiagnostics: () => Promise<void>;
 }) => (
   <>
-    <Group
-      title="Persistent agents"
-      hint="With emberyxd running, chat agents live in the daemon and survive closing the window. Without it, they stop when the window does."
-    >
+    <Group title="Persistent agents">
       <Tile
         status={daemon ? "on" : "off"}
         title={daemon ? "Running" : "Not running"}
@@ -59,7 +56,7 @@ export const ConnectionsSection = ({
       />
       <SwitchRow
         label="Keep agents running in the background"
-        hint="New chats run inside the daemon. A resumed thread renders from the daemon's own replay, so reopening an older conversation starts empty and fills from the next turn."
+        hint="Reopening an older thread starts empty and fills from the next turn."
         checked={settings.persistentAgents}
         onChange={(v) => onUpdate({ persistentAgents: v })}
       />
@@ -68,7 +65,6 @@ export const ConnectionsSection = ({
     <Group title="External editor">
       <Row
         label="Open in"
-        hint="Used by Run → Open in…, and needs the editor's command line tools on PATH."
         control={
           <Select
             value={settings.ide}
@@ -109,13 +105,9 @@ export const ConnectionsSection = ({
       )}
     </Group>
 
-    <Group
-      title="Diagnostics"
-      hint="A bug-report snapshot: versions, platform, provider and daemon state. No conversation content ever leaves with it unless you paste it."
-    >
+    <Group title="Diagnostics">
       <Row
         label="Copy diagnostics"
-        hint="Text to paste into a bug report."
         control={
           <Button
             variant="outline"

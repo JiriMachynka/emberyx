@@ -40,7 +40,6 @@ import {
   emptyTurn,
   endTurn,
   grokTurnStop,
-  jevAllowOnce,
   permissionOutcome,
   readPermission,
   type AcpPermission,
@@ -49,7 +48,6 @@ import {
 import type { AcpSessionUpdate } from "@/lib/acp/protocol";
 import {
   accessLevelFrom,
-  loadSettings,
   type PermissionMode,
 } from "@/lib/settings";
 import {
@@ -68,15 +66,6 @@ import {
   type AcpServerRequest,
 } from "@/lib/acp/transport";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
-import {
-  jevEnabled,
-  skillWireText,
-  type JevSkill,
-  type JevTurnPrep,
-} from "@/lib/jev";
-import { readersOf, type SkillInfo } from "@/lib/skills";
-import type { McpHarness } from "@/lib/mcp";
-import { snapshotTextBlock } from "@/lib/snapshotA11y";
 import { fetchThreadPage, type ProjectedMessageRow } from "@/lib/threadPage";
 import { threadTitleFrom } from "@/lib/threadTitle";
 import { deniedVendor, splitModelLabel } from "@/lib/modelCatalog";
@@ -345,9 +334,6 @@ export function useAcpChat({
   // Tool calls this client approved on the user's behalf, so the row can say so
   // rather than looking like the agent was never gated at all.
   const autoApprovedRef = useRef(new Set<string>());
-  /** Bumped when queued permissions are dropped (stop, restart, process
-   *  death) so an in-flight Jev call cannot answer a request that is gone. */
-  const permissionGenRef = useRef(0);
   /** The last session id this provider handed us, which is the only id it can
    *  be asked to load back. Survives a restart of the child within this pane;
    *  nothing outside it stores an ACP session id. */
@@ -460,7 +446,6 @@ export function useAcpChat({
    */
   const clearPermissions = useCallback(
     (answer: boolean) => {
-      permissionGenRef.current += 1;
       const id = processRef.current;
       const queued = permissionQueueRef.current;
       permissionQueueRef.current = [];
@@ -555,10 +540,7 @@ export function useAcpChat({
         );
       }
       // Freeze this turn's file delta under its checkpoint; see `settleTurn`.
-      settleTurn(cwd, emberyxSessionId, lastCheckpointIdRef.current, (fn) => {
-        committedRef.current = fn(committedRef.current);
-        publish();
-      });
+      settleTurn(cwd, lastCheckpointIdRef.current);
     },
     [publish, cwd, recordTimeline, resume, emberyxSessionId]
   );
@@ -585,36 +567,6 @@ export function useAcpChat({
           if (permission.toolCallId) autoApprovedRef.current.add(permission.toolCallId);
           await acpRespond(id, request.id, permissionOutcome(auto));
           return;
-        }
-        const once = jevAllowOnce(permission);
-        if (once && loadSettings().jevAutoApprove) {
-          const gen = permissionGenRef.current;
-          let judged: string | null = null;
-          try {
-            judged = await invoke<string | null>("typesafe_judge", {
-              title: permission.title,
-              description: permission.description ?? null,
-              toolKind: permission.toolKind ?? null,
-              allowOnceId: once,
-            });
-          } catch {
-            // Fail open to the prompt — a down TypeSafe must not stall the turn.
-          }
-          if (permissionGenRef.current !== gen) {
-            // Stop/restart dropped this request while Jev was in flight.
-            // An agent blocked in its permission handler never reads cancel,
-            // so answer it rather than leave it on the wire.
-            if (processRef.current === id) {
-              await acpRespond(id, request.id, permissionOutcome(null));
-            }
-            return;
-          }
-          if (processRef.current !== id) return;
-          if (judged) {
-            if (permission.toolCallId) autoApprovedRef.current.add(permission.toolCallId);
-            await acpRespond(id, request.id, permissionOutcome(judged));
-            return;
-          }
         }
         permissionQueueRef.current = [...permissionQueueRef.current, permission];
         showHeadPermission();
@@ -939,42 +891,9 @@ export function useAcpChat({
       text: string,
       images?: ChatImage[]
     ) => {
-      let wire = text;
-      let notes = (images ?? []).map((img) =>
-        img.snapshot ? snapshotTextBlock(img.snapshot) : ""
-      );
-      if (jevEnabled()) {
-        try {
-          const harness: McpHarness | null =
-            provider === "grok" || provider === "opencode" ? provider : null;
-          const listed = harness
-            ? ((await invoke<SkillInfo[]>("skills_list")) ?? [])
-            : [];
-          const skills: JevSkill[] = listed
-            .filter((skill) => harness && readersOf(skill).includes(harness))
-            .map((skill) => ({
-              name: skill.name,
-              description: skill.description,
-            }));
-          const prep = await invoke<JevTurnPrep | null>("typesafe_turn_prep", {
-            prompt: text,
-            skills,
-            snapshot: notes.filter(Boolean).join("\n") || null,
-          });
-          if (prep) {
-            wire = skillWireText(text, prep.skill);
-            if (prep.injection) notes = notes.map(() => "");
-            // Jev never changes the model: the picker is the only thing that
-            // decides which one runs, pinned or not. A small model the agent
-            // defaulted to is left alone.
-          }
-        } catch {
-          // Fail-open: send the user's text as typed.
-        }
-      }
-      await acpPrompt(id, sessionId, wire, images, notes);
+      await acpPrompt(id, sessionId, text, images);
     },
-    [provider, model]
+    []
   );
 
   const acceptTurn = useCallback(

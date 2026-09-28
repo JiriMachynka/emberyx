@@ -5,17 +5,14 @@ import { displayed } from "../helpers";
 const TABS = [
   "General",
   "Appearance",
-  "Keyboard Shortcuts",
+  "Shortcuts",
+  "Notifications",
   "Providers",
-  "Jev",
   "MCP",
   "Skills",
   "Connections",
-  "SnapShots",
   "Source Control",
-  "Notifications",
   "Usage",
-  "About",
 ];
 
 describe("settings", () => {
@@ -34,9 +31,7 @@ describe("settings", () => {
       await $("#settings-navigation nav").$(`button=${label}`).click();
       const heading = $(`//h1[normalize-space()=${JSON.stringify(label)}]`);
       await expect(heading).toBeDisplayed();
-      // The heading is the page's; the section component renders after it.
-      // Something there means the section itself mounted without throwing.
-      await expect(heading.$("./following-sibling::*[1]")).toBeExisting();
+      await expect($("[data-settings-content] > *")).toBeExisting();
     });
   }
 

@@ -62,8 +62,6 @@ const PROPS: ComponentProps<typeof ChatPane> = {
   effort: "",
   onEffortChange: () => {},
   onAccessChange: () => {},
-  jevAutoApprove: true,
-  onJevAutoApproveChange: () => {},
   providerLaunch: {},
   claudeProfiles: [],
   codexSandbox: "",

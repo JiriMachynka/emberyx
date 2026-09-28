@@ -203,8 +203,12 @@ describe("Sidebar — project tree", () => {
   it("collapsed, it drops to the rail; in settings, it hosts the settings navigation", async () => {
     const { rerender } = await mount({ collapsed: true });
     expect(screen.queryByText("Flaky test")).toBeNull();
-    rerender(<Sidebar {...baseProps({ settingsOpen: true })} />);
+    const aside = () => document.querySelector("aside");
+    expect(aside()?.className).toContain("w-14");
+    rerender(<Sidebar {...baseProps({ collapsed: true, settingsOpen: true })} />);
     expect(document.getElementById("settings-navigation")).not.toBeNull();
+    // The nav lives in this aside — a rail would clip every tab label.
+    expect(aside()?.className).toContain("w-72");
   });
 });
 

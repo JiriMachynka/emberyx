@@ -60,7 +60,6 @@ export function ThemeCard({
         />
         <span className="text-sm font-medium">{theme.label}</span>
       </div>
-      <p className="mt-0.5 px-0.5 text-xs text-muted-foreground">{theme.hint}</p>
     </button>
   );
 }

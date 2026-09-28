@@ -61,9 +61,9 @@ import { useAgentBackend } from "@/hooks/useAgentBackend";
 import { resolveLoginCommand, type AgentBackend } from "@/lib/agentBackend";
 import { useProjectActions } from "@/hooks/useProjectActions";
 import { ActionDialog } from "@/components/ActionDialog";
+import { AboutDialog } from "@/components/AboutDialog";
 import { getStoredActions, type ProjectAction } from "@/lib/actions";
 import { useShortcuts } from "@/hooks/useShortcuts";
-import { useSnapshots } from "@/hooks/useSnapshots";
 import { useLaunchUpdateCheck } from "@/hooks/useLaunchUpdateCheck";
 import { usePricingRefresh } from "@/hooks/usePricingRefresh";
 
@@ -365,10 +365,6 @@ function App() {
     (level: AccessLevel) => modelChangeRef.current(accessLevelToSettings(level)),
     []
   );
-  const onJevAutoApproveChange = useCallback(
-    (jevAutoApprove: boolean) => modelChangeRef.current({ jevAutoApprove }),
-    []
-  );
   const titledRef = useRef<(session: Session, title: string) => void>(() => {});
   titledRef.current = (session, title) => {
     ws.renameSession(session.id, title);
@@ -553,7 +549,6 @@ function App() {
     if (!activeProject) return;
     setGraphOpen(true);
   }, [activeProject]);
-  useSnapshots(settings);
   useLaunchUpdateCheck();
   usePricingRefresh();
 
@@ -845,7 +840,6 @@ function App() {
                onBackendChange={onBackendChange}
               onEffortChange={onEffortChange}
              onAccessChange={onAccessChange}
-             onJevAutoApproveChange={onJevAutoApproveChange}
              projects={projects}
              recentProjects={recents}
              onSelectProject={ws.newAgentIn}
@@ -1032,6 +1026,7 @@ function App() {
         onDelete={projectActions.removeAction}
       />
 
+      <AboutDialog />
       <Toaster theme="dark" position="top-right" richColors closeButton />
     </div>
   );

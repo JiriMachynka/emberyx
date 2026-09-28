@@ -51,10 +51,7 @@ export function McpSection() {
 
   return (
     <>
-      <Group
-        title="Servers"
-        hint="Merged from each harness's own config file — servers added by the CLIs themselves show up here on the next read."
-      >
+      <Group title="Servers">
         {list.length > 0 ? (
           <>
             <div className="flex items-center justify-between gap-4">

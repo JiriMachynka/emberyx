@@ -84,15 +84,11 @@ describe("metaForActivity", () => {  it("says how many files and how many lines 
 });
 
 describe("visibleActivities", () => {
-  it("keeps settled tools in the live stream so finished work stays visible", () => {
+  it("drops finished tools from the live stream so only current work stays on screen", () => {
     const thinking = row({ id: "t", kind: "reasoning", complete: true, output: "plan" });
     const done = row({ id: "d", kind: "command", complete: true });
     const running = row({ id: "r", kind: "command", complete: false });
-    expect(visibleActivities([thinking, done, running], true)).toEqual([
-      thinking,
-      done,
-      running,
-    ]);
+    expect(visibleActivities([thinking, done, running], true)).toEqual([running]);
   });
 
   // Signature-only reasoning: nothing to disclose once it has finished.
@@ -118,6 +114,17 @@ describe("visibleActivities", () => {
       displayTarget: "src/a.ts",
     });
     const bash = row({ id: "bash", kind: "command", complete: true });
+    expect(visibleActivities([read, bash], true)).toEqual([read]);
+  });
+
+  it("keeps a running command next to the file tree", () => {
+    const read = row({
+      id: "read",
+      kind: "fileRead",
+      complete: true,
+      displayTarget: "src/a.ts",
+    });
+    const bash = row({ id: "bash", kind: "command", complete: false });
     expect(visibleActivities([read, bash], true)).toEqual([read, bash]);
   });
 

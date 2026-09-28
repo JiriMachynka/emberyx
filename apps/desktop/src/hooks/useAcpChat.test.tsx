@@ -201,22 +201,18 @@ describe("useAcpChat model pinning", () => {
     ],
   };
 
-  const jevPrep = () => {
+  const pinPrep = () => {
     invoke.mockImplementation((command: string) => {
       if (command === "acp_spawn") {
         return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
       }
       if (command === "acp_session_new") return Promise.resolve(OPENCODE_SESSION);
-      if (command === "skills_list") return Promise.resolve([]);
-      if (command === "typesafe_turn_prep") {
-        return Promise.resolve({ skill: null, injection: false });
-      }
       return Promise.resolve(null);
     });
   };
 
   it("keeps the model the user pinned", async () => {
-    jevPrep();
+    pinPrep();
     const view = await mount({
       provider: "opencode",
       model: "opencode-go/deepseek-v4-flash",
@@ -250,10 +246,6 @@ describe("useAcpChat model pinning", () => {
             },
           ],
         });
-      }
-      if (command === "skills_list") return Promise.resolve([]);
-      if (command === "typesafe_turn_prep") {
-        return Promise.resolve({ skill: null, injection: false });
       }
       return Promise.resolve(null);
     });
@@ -618,29 +610,7 @@ describe("useAcpChat permission requests", () => {
     expect(view.result.current.pendingPermission).toBeNull();
   });
 
-  const judgeCalls = () =>
-    invoke.mock.calls.filter(([name]) => name === "typesafe_judge");
-
-  it("auto-answers when Jev returns allow_once", async () => {
-    invoke.mockImplementation((command: string) => {
-      if (command === "acp_spawn") {
-        return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
-      }
-      if (command === "acp_session_new") return Promise.resolve(SESSION);
-      if (command === "typesafe_judge") return Promise.resolve("yes");
-      return Promise.resolve(null);
-    });
-    const view = await mount();
-    await act(async () => ask(3, "Run tests"));
-    await waitFor(() => expect(answered()).toHaveLength(1));
-    expect(answered()[0]).toMatchObject({
-      requestId: 3,
-      result: { outcome: { outcome: "selected", optionId: "yes" } },
-    });
-    expect(view.result.current.pendingPermission).toBeNull();
-  });
-
-  it("still prompts when Jev declines", async () => {
+  it("prompts when the access level does not auto-answer", async () => {
     const view = await mount();
     await act(async () => ask(3, "Run tests"));
     await waitFor(() =>
@@ -649,100 +619,11 @@ describe("useAcpChat permission requests", () => {
     expect(answered()).toEqual([]);
   });
 
-  it("still prompts when Jev throws", async () => {
-    invoke.mockImplementation((command: string) => {
-      if (command === "acp_spawn") {
-        return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
-      }
-      if (command === "acp_session_new") return Promise.resolve(SESSION);
-      if (command === "typesafe_judge") return Promise.reject(new Error("down"));
-      return Promise.resolve(null);
-    });
-    const view = await mount();
-    await act(async () => ask(3, "Run tests"));
-    await waitFor(() =>
-      expect(view.result.current.pendingPermission?.toolName).toBe("Run tests")
-    );
-    expect(answered()).toEqual([]);
-  });
-
-  it("does not call Jev for a delete", async () => {
-    const view = await mount();
-    await act(async () => {
-      channels[0]?.onmessage?.({
-        type: "request",
-        data: {
-          id: 3,
-          method: "session/request_permission",
-          params: {
-            toolCall: { toolCallId: "t3", title: "Delete file", kind: "delete" },
-            options: OPTIONS,
-          },
-        },
-      });
-    });
-    await waitFor(() =>
-      expect(view.result.current.pendingPermission?.toolName).toBe("Delete file")
-    );
-    expect(judgeCalls()).toHaveLength(0);
-  });
-
-  it("does not call Jev when the access level already answered", async () => {
+  it("does not prompt when the access level already answered", async () => {
     const view = await mount({ skipPermissions: true });
     await act(async () => ask(3, "Run tests"));
     await waitFor(() => expect(answered()).toHaveLength(1));
-    expect(judgeCalls()).toHaveLength(0);
     expect(view.result.current.pendingPermission).toBeNull();
-  });
-
-  it("prefixes a skill hint on send when Jev names one", async () => {
-    invoke.mockImplementation((command: string) => {
-      if (command === "acp_spawn") {
-        return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
-      }
-      if (command === "acp_session_new") return Promise.resolve(SESSION);
-      if (command === "skills_list") {
-        return Promise.resolve([
-          {
-            name: "fe-design",
-            description: "Lock a token brief",
-            differs: false,
-            sources: [{ skillDir: "/s", harnesses: ["grok"] }],
-          },
-        ]);
-      }
-      if (command === "typesafe_turn_prep") {
-        return Promise.resolve({ skill: "fe-design", injection: false });
-      }
-      return Promise.resolve(null);
-    });
-    const view = await mount();
-    await act(async () => view.result.current.send("make it look better"));
-    await waitFor(() =>
-      expect(
-        invoke.mock.calls.some(
-          ([name, args]) =>
-            name === "acp_prompt" &&
-            typeof (args as { text?: string }).text === "string" &&
-            (args as { text: string }).text.includes("fe-design")
-        )
-      ).toBe(true)
-    );
-    expect(view.result.current.messages[0]?.text).toBe("make it look better");
-  });
-
-  it("skips Jev when auto-approve is off", async () => {
-    localStorage.setItem(
-      "emberyx.settings",
-      JSON.stringify({ jevAutoApprove: false })
-    );
-    const view = await mount();
-    await act(async () => ask(3, "Run tests"));
-    await waitFor(() =>
-      expect(view.result.current.pendingPermission?.toolName).toBe("Run tests")
-    );
-    expect(judgeCalls()).toHaveLength(0);
-    localStorage.clear();
   });
 
   it("goes idle as soon as stop is clicked, not when the agent replies", async () => {
@@ -1044,31 +925,7 @@ describe("useAcpChat session status", () => {
   });
 });
 
-describe("useAcpChat snapshots", () => {
-  it("sends a snapshot's accessibility tree as a note beside its image", async () => {
-    const view = await mount();
-    await act(async () =>
-      view.result.current.send("look", [
-        {
-          id: "i1",
-          mediaType: "image/png",
-          data: "AAAA",
-          snapshot: { app: "Grok", title: "Chat", a11y: 'window "Chat" 0,0 100x100' },
-        },
-        { id: "i2", mediaType: "image/png", data: "BBBB" },
-      ])
-    );
 
-    const prompt = invoke.mock.calls.find(([name]) => name === "acp_prompt");
-    expect(prompt?.[1]).toMatchObject({
-      images: [
-        { mediaType: "image/png", data: "AAAA" },
-        { mediaType: "image/png", data: "BBBB" },
-      ],
-      notes: ['[Snapshot — Grok: Chat]\nwindow "Chat" 0,0 100x100', ""],
-    });
-  });
-});
 
 describe("useAcpChat plan-approval ext requests", () => {
   const planRequest = (requestId: number) => {

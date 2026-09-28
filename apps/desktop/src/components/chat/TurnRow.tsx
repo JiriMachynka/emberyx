@@ -1,8 +1,8 @@
 import { Fragment, memo, useMemo, useState } from "react";
-import { ChevronRight, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import { isTodoTool, lastTodos } from "@/lib/toolDisplay";
-import { isEmptyThought } from "@/lib/activityDisplay";
+import { isEmptyThought, isFileActivity, pathsForActivity } from "@/lib/activityDisplay";
 import type { ChatMessage } from "@/hooks/useAgentChat";
 import { summarizeWork } from "@/lib/workSummary";
 import { useAgentStore } from "@/lib/agentStore";
@@ -13,6 +13,7 @@ import {
   workLogOpen,
   type Turn,
 } from "@/components/chat/turns";
+import { Disclosure, DisclosureChevron } from "@/components/chat/Disclosure";
 import { TasksCard } from "@/components/chat/TasksCard";
 import { ChangedFilesCard } from "@/components/chat/ChangedFilesCard";
 import { MessageWork } from "@/components/chat/MessageWork";
@@ -52,6 +53,23 @@ export const TurnRow = memo(
           false)
     );
     const turnTodos = lastTodos(assistants.flatMap((a) => a.tools));
+    // Open the log only while a thought or tool is actually running. Answer
+    // text arriving is not enough — a finished pile of cards is not "current".
+    // File work is the exception: the tree accumulates, so a gap between a
+    // read and the next command must not fold it away and pop it back.
+    const working = assistants.some((a) => {
+      if (a.activities?.length) {
+        return a.activities.some(
+          (row) =>
+            (!row.complete && !isTodoTool(row.title) && !isEmptyThought(row)) ||
+            (isFileActivity(row) && pathsForActivity(row).length > 0)
+        );
+      }
+      return (
+        a.tools.some((t) => t.result == null && !isTodoTool(t.name)) ||
+        Boolean(a.streaming && a.thinking)
+      );
+    });
     // Background subagents outlive the turn that spawned them, so the work
     // accordion must not collapse over them while they're still running.
     const agentToolIds = useMemo(
@@ -97,7 +115,7 @@ export const TurnRow = memo(
               <TurnWork
                 label={turnWorkLabel(assistants)}
                 live={live}
-                answering={Boolean(last?.text)}
+                working={working}
                 agentsRunning={agentsRunning}
               >
                 {assistants.map((a, i) => (
@@ -133,7 +151,6 @@ export const TurnRow = memo(
             threadId={chat.sessionId}
             fromId={user.checkpointId}
             openEnded={newest}
-            review={user.jevReview}
           />
         )}
       </>
@@ -162,26 +179,26 @@ function turnWorkLabel(assistants: ChatMessage[]): string | null {
   return assistants.some((m) => m.thinking) ? "Ran 1 thought" : null;
 }
 
-/** A turn's work: one line over the rows. Live turns stay open until the
- *  answer starts writing, then collapse so the answer isn't buried. Settled
- *  turns start closed. `null` means the user hasn't decided. */
+/** A turn's work: one line over the rows. Open while a thought or tool is
+ *  still running; close when that work finishes. Settled turns start closed.
+ *  `null` means the user hasn't decided. */
 function TurnWork({
   label,
   live,
-  answering,
+  working,
   agentsRunning,
   children,
 }: {
   label: string | null;
   live?: boolean;
-  answering: boolean;
+  working: boolean;
   agentsRunning: number;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState<boolean | null>(null);
   const expanded = workLogOpen({
     live: live === true,
-    answering,
+    working,
     agentsRunning,
     override: open,
   });
@@ -193,38 +210,31 @@ function TurnWork({
   return (
     <div className="flex flex-col gap-2">
       {showHeader && (
-      <button
-        type="button"
-        aria-expanded={expanded}
-        onClick={() => setOpen(!expanded)}
-        className={cn(
-          "flex items-center gap-1.5 self-start text-xs font-medium transition-colors hover:text-foreground",
-          agentsRunning > 0 ? "text-violet-400" : "text-muted-foreground"
-        )}
-      >
-        {agentsRunning > 0 ? (
-          <>
-            <Loader2 className="size-3 animate-spin" />
-            {agentsRunning === 1
-              ? "1 agent running"
-              : `${agentsRunning} agents running`}
-          </>
-        ) : (
-          (label ?? "Work log")
-        )}
-        <ChevronRight
-          className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
-        />
-      </button>
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setOpen(!expanded)}
+          className={cn(
+            "flex items-center gap-1.5 self-start text-xs font-medium transition-colors hover:text-foreground",
+            agentsRunning > 0 ? "text-violet-400" : "text-muted-foreground"
+          )}
+        >
+          {agentsRunning > 0 ? (
+            <>
+              <Loader2 className="size-3 animate-spin" />
+              {agentsRunning === 1
+                ? "1 agent running"
+                : `${agentsRunning} agents running`}
+            </>
+          ) : (
+            (label ?? "Work log")
+          )}
+          <DisclosureChevron open={expanded} className="size-3.5 text-current" />
+        </button>
       )}
-      <div
-        className="grid transition-[grid-template-rows] duration-200 ease-out"
-        style={{ gridTemplateRows: expanded ? "1fr" : "0fr" }}
-      >
-        <div className="overflow-hidden">
-          <div className="flex flex-col gap-2">{children}</div>
-        </div>
-      </div>
+      <Disclosure open={expanded}>
+        <div className="flex flex-col gap-2">{children}</div>
+      </Disclosure>
     </div>
   );
 }

@@ -141,17 +141,13 @@ export const acpPrompt = (
   id: number,
   sessionId: string,
   text: string,
-  images?: { mediaType: string; data: string }[],
-  /** Per-image accessibility text ("" = none), aligned with `images` — a
-   *  snapshot's tree becomes its own text block right after that image. */
-  notes?: string[]
+  images?: { mediaType: string; data: string }[]
 ): Promise<void> =>
   invoke("acp_prompt", {
     id,
     sessionId,
     text,
     images: images ?? [],
-    notes: notes ?? [],
   });
 
 export const acpCancel = (id: number, sessionId: string): Promise<void> =>

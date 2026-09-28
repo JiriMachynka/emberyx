@@ -20,10 +20,7 @@ export const AppearanceSection = ({
   onUpdate: (patch: Partial<Settings>) => void;
 }) => (
   <>
-    <Group
-      title="Theme"
-      hint="Every theme is dark — Emberyx is terminal-first and has no light mode. A theme sets the surfaces and the single accent; type, spacing and borders never change."
-    >
+    <Group title="Theme">
       <div className="grid grid-cols-2 gap-2.5">
         {THEMES.map((t) => (
           <ThemeCard
@@ -39,7 +36,7 @@ export const AppearanceSection = ({
     <Group title="Layout">
       <Row
         label="Workspace"
-        hint="Column keeps a project rail and a workspace column with Sessions, Explorer, and Changes."
+        hint="Column adds a Sessions / Explorer / Changes column beside the project rail."
         control={
           <Select
             value={settings.workspaceLayout}
@@ -61,7 +58,6 @@ export const AppearanceSection = ({
       />
       <SwitchRow
         label="Right sidebar"
-        hint="Terminal, Preview, Review, and merge requests. Off hides the dock until you turn it back on."
         checked={settings.rightDock}
         onChange={(v) => onUpdate({ rightDock: v })}
       />
@@ -70,7 +66,6 @@ export const AppearanceSection = ({
     <Group title="Interface">
       <Row
         label="Chat font"
-        hint="Used by the chat transcript, the composer and the thread list."
         control={
           <FontSelect
             value={settings.chatFontFamily}
@@ -81,7 +76,6 @@ export const AppearanceSection = ({
       />
       <Row
         label="Terminal font"
-        hint="Used by the terminal, dev output and log panes."
         control={
           <FontSelect
             value={settings.fontFamily}
@@ -91,7 +85,6 @@ export const AppearanceSection = ({
       />
       <Row
         label="Font size"
-        hint="Terminal and chat text size, in pixels."
         control={
           <NumberStepper
             value={settings.fontSize}
@@ -103,7 +96,6 @@ export const AppearanceSection = ({
       />
       <Row
         label="Scrollback"
-        hint="Lines of terminal history kept per session."
         control={
           <NumberStepper
             value={settings.scrollback}
@@ -119,7 +111,6 @@ export const AppearanceSection = ({
     <Group title="Editor">
       <Row
         label="Font family"
-        hint="Used by the built-in editor, chat code blocks and diffs."
         control={
           <FontSelect
             value={settings.editorFontFamily}
@@ -129,7 +120,6 @@ export const AppearanceSection = ({
       />
       <Row
         label="Font size"
-        hint="Editor text size in pixels."
         control={
           <NumberStepper
             value={settings.editorFontSize}
@@ -141,7 +131,6 @@ export const AppearanceSection = ({
       />
       <SwitchRow
         label="Wrap long lines"
-        hint="The editor wraps instead of scrolling sideways."
         checked={settings.wordWrap}
         onChange={(v) => onUpdate({ wordWrap: v })}
       />

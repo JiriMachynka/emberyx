@@ -2,23 +2,26 @@
 //! instead of the window — the accelerator has to be claimed by a menu item,
 //! because AppKit consumes menu key equivalents before the webview sees them.
 
-use tauri::menu::{AboutMetadata, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Emitter, Runtime};
 
 /// Menu item id and the event the frontend listens for.
 pub const CLOSE_TAB: &str = "close-tab";
+pub const CHECK_FOR_UPDATES: &str = "check-for-updates";
+pub const SHOW_ABOUT: &str = "show-about";
 
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let pkg = app.package_info();
-    let about = AboutMetadata {
-        name: Some(pkg.name.clone()),
-        version: Some(pkg.version.to_string()),
-        copyright: app.config().bundle.copyright.clone(),
-        authors: app.config().bundle.publisher.clone().map(|p| vec![p]),
-        ..Default::default()
-    };
 
     let close_tab = MenuItem::with_id(app, CLOSE_TAB, "Close Tab", true, Some("CmdOrCtrl+W"))?;
+    let check_updates = MenuItem::with_id(
+        app,
+        CHECK_FOR_UPDATES,
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )?;
+    let info = MenuItem::with_id(app, SHOW_ABOUT, "Info", true, None::<&str>)?;
 
     let file = Submenu::with_items(
         app,
@@ -68,7 +71,9 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 pkg.name.clone(),
                 true,
                 &[
-                    &PredefinedMenuItem::about(app, None, Some(about.clone()))?,
+                    &info,
+                    &PredefinedMenuItem::separator(app)?,
+                    &check_updates,
                     &PredefinedMenuItem::separator(app)?,
                     &PredefinedMenuItem::services(app, None)?,
                     &PredefinedMenuItem::separator(app)?,
@@ -86,7 +91,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
                 app,
                 "Help",
                 true,
-                &[&PredefinedMenuItem::about(app, None, Some(about))?],
+                &[&info, &check_updates],
             )?,
         ],
     )
@@ -95,5 +100,9 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 pub fn on_event<R: Runtime>(app: &AppHandle<R>, event: MenuEvent) {
     if event.id() == CLOSE_TAB {
         let _ = app.emit(CLOSE_TAB, ());
+    } else if event.id() == CHECK_FOR_UPDATES {
+        let _ = app.emit(CHECK_FOR_UPDATES, ());
+    } else if event.id() == SHOW_ABOUT {
+        let _ = app.emit(SHOW_ABOUT, ());
     }
 }

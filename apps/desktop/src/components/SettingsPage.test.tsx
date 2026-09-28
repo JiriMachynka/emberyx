@@ -23,7 +23,6 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (cmd === "mcp_list" || cmd === "skills_list") return Promise.resolve([]);
     // The T3 import row hides itself unless a store exists.
     if (cmd === "t3_import_available") return Promise.resolve(false);
-    if (cmd === "typesafe_key_present") return Promise.resolve(false);
     if (cmd === "usage_summary") {
       return Promise.resolve({ rows: [], sessions: [], counted: [] });
     }
@@ -86,9 +85,8 @@ const openTab = async (host: HTMLElement, label: string) => {
 /** The column the active section renders into — below the page heading, so a
  *  sweep never reaches the header's Restore button or the tab list. */
 const content = () => {
-  const heading = screen.getByRole("heading", { level: 1 });
-  const column = heading.parentElement;
-  if (!column) throw new Error("no content column");
+  const column = document.querySelector("[data-settings-content]");
+  if (!(column instanceof HTMLElement)) throw new Error("no content column");
   return column;
 };
 
@@ -99,15 +97,12 @@ const LANDMARK: Record<string, string> = {
   appearance: "Chat font",
   shortcuts: "Reset all shortcuts",
   providers: "Default backend",
-  jev: "Jev judgments",
   mcp: "Servers",
   skills: "Skills",
   connections: "Keep agents running in the background",
-  snapshots: "Capture the frontmost window",
   sourceControl: "Commit message model",
-  notifications: "Notify on errors",
+  notifications: "Errors",
   usage: "Processed tokens",
-  about: "Check for updates",
 };
 
 /** Walk up from a row's label to the row that also holds its control. */
@@ -159,11 +154,15 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
-  it("lists every tab, and each one mounts its own section under its heading", async () => {
+  it("nests App and Agents, and each child mounts its own section", async () => {
     const { host } = await mount(FULL);
     expect(nav(host).getAllByRole("button").map((b) => b.textContent)).toEqual(
       TABS.map((t) => t.label)
     );
+    expect(host.textContent).toContain("App");
+    expect(host.textContent).toContain("Agents");
+    expect(host.textContent).toContain("Git");
+    expect(host.textContent).toContain("Account");
     for (const tab of TABS) {
       await openTab(host, tab.label);
       expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(tab.label);
@@ -179,8 +178,7 @@ describe("SettingsPage", () => {
       ["daemon", "Connections"],
       ["scrollback", "Appearance"],
       ["sandbox", "Providers"],
-      ["typesafe", "Jev"],
-      ["rebind", "Keyboard Shortcuts"],
+      ["rebind", "Shortcuts"],
       ["sound", "Notifications"],
       ["estimate", "Usage"],
       ["settle", "General"],
@@ -193,7 +191,6 @@ describe("SettingsPage", () => {
     expect(nav(host).queryAllByRole("button")).toEqual([]);
     expect(host.textContent).toContain("Nothing matches");
 
-    // A filtered result still opens its tab.
     fireEvent.change(search, { target: { value: "whitespace" } });
     await openTab(host, "Source Control");
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Source Control");
@@ -205,7 +202,6 @@ describe("SettingsPage", () => {
       await openTab(host, tab.label);
       const restore = screen.queryByRole("button", { name: "Restore defaults" });
       if (tab.keys.length === 0) {
-        // Nothing to reset — the action would be a no-op that claims otherwise.
         expect(restore).toBeNull();
         continue;
       }
@@ -230,9 +226,6 @@ describe("SettingsPage", () => {
     expect(patches).toEqual([]);
   });
 
-  // The invariant in CLAUDE.md: a control rendered in a tab whose `keys` omit
-  // its setting is a Restore that silently skips it. And the other way round —
-  // a key no control on the tab writes is one Restore resets behind your back.
   it.each(TABS.filter((t) => t.keys.length > 0).map((t) => [t.label, t] as const))(
     "%s: its controls write exactly the keys the tab declares",
     async (label, tab) => {
@@ -280,15 +273,6 @@ describe("SettingsPage", () => {
       await openTab(host, "Providers");
       fireEvent.change(controlFor("Agent command", "input"), { target: { value: "codex" } });
       expect(patches).toEqual([{ agentCommand: "codex" }]);
-    });
-
-    it("Jev: the judgments switch is there even with no key saved", async () => {
-      const { host, patches } = await mount();
-      await openTab(host, "Jev");
-      fireEvent.click(
-        screen.getByRole("switch", { name: /Jev judgments/ })
-      );
-      expect(patches).toEqual([{ jevAutoApprove: false }]);
     });
 
     it("Connections: the persistent-agents switch", async () => {

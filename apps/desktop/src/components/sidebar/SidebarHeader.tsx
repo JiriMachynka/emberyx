@@ -3,12 +3,13 @@ import { cn } from "@/lib/utils";
 import type { SidebarProps } from "./types";
 
 export function SidebarHeader(props: SidebarProps) {
-  const { collapsed, onToggleCollapse, threadView, onOpenSearch, onNewAgent } = props;
+  const { collapsed, onToggleCollapse, threadView, onOpenSearch, onNewAgent, settingsOpen } =
+    props;
 
   // The cross-project inbox is its own surface: search and compose belong at
   // the top of it. Collapse stays here too — a footer toggle is easy to miss
   // once the thread list is long.
-  if (threadView === "all" && !collapsed) {
+  if (threadView === "all" && !collapsed && !settingsOpen) {
     return (
       <header className="flex h-14 shrink-0 items-center gap-1 border-b border-white/[0.06] px-2">
         <button
@@ -51,17 +52,19 @@ export function SidebarHeader(props: SidebarProps) {
           </span>
         </div>
       )}
-      <button
-        onClick={onToggleCollapse}
-        className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
-      >
-        {collapsed ? (
-          <PanelLeftOpen className="size-4" />
-        ) : (
-          <PanelLeftClose className="size-4" />
-        )}
-      </button>
+      {!settingsOpen && (
+        <button
+          onClick={onToggleCollapse}
+          className="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
+        >
+          {collapsed ? (
+            <PanelLeftOpen className="size-4" />
+          ) : (
+            <PanelLeftClose className="size-4" />
+          )}
+        </button>
+      )}
     </header>
   );
 }

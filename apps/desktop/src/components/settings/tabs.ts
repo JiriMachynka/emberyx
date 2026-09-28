@@ -1,15 +1,12 @@
 import {
   Bell,
   Boxes,
-  Camera,
   CircleDollarSign,
   GitBranch,
-  Info,
   Keyboard,
   Palette,
   Plug,
   Puzzle,
-  Scale,
   SlidersHorizontal,
   Sparkles,
 } from "lucide-react";
@@ -19,19 +16,17 @@ import type { Settings } from "@/lib/settings";
 
 export type Tab =
   | "general"
-  | "themes"
   | "appearance"
   | "shortcuts"
   | "providers"
-  | "jev"
   | "mcp"
   | "skills"
   | "connections"
-  | "snapshots"
   | "sourceControl"
   | "notifications"
-  | "usage"
-  | "about";
+  | "usage";
+
+export type NavId = "app" | "agents" | "git" | "account";
 
 /** A tab owns the settings keys it edits, which is what "Restore defaults"
  *  resets, and the words that should find it from the search box — a setting
@@ -42,6 +37,12 @@ interface TabMeta {
   icon: LucideIcon;
   keys: (keyof Settings)[];
   finds: string;
+}
+
+export interface NavMeta {
+  id: NavId;
+  label: string;
+  tabs: Tab[];
 }
 
 export const TABS: TabMeta[] = [
@@ -79,10 +80,23 @@ export const TABS: TabMeta[] = [
   },
   {
     id: "shortcuts",
-    label: "Keyboard Shortcuts",
+    label: "Shortcuts",
     icon: Keyboard,
     keys: [],
-    finds: "keys keybindings chords shortcuts rebind",
+    finds: "keys keybindings chords shortcuts rebind keyboard",
+  },
+  {
+    id: "notifications",
+    label: "Notifications",
+    icon: Bell,
+    keys: [
+      "notifyOnDone",
+      "notifyOnError",
+      "notifyOnAccountIssue",
+      "notifyOnlyWhenUnfocused",
+      "notifySound",
+    ],
+    finds: "notify notification sound alert done error account unfocused",
   },
   {
     id: "providers",
@@ -96,13 +110,6 @@ export const TABS: TabMeta[] = [
       "codexSandbox",
     ],
     finds: "claude codex backend cli command installed version sandbox launch binary args model list hidden custom config dir env profile",
-  },
-  {
-    id: "jev",
-    label: "Jev",
-    icon: Scale,
-    keys: ["jevAutoApprove"],
-    finds: "jev typesafe type safe auto-approve permission judge skill diff screen cascade",
   },
   {
     id: "mcp",
@@ -130,34 +137,11 @@ export const TABS: TabMeta[] = [
     finds: "daemon emberyxd persistent background editor ide vscode",
   },
   {
-    id: "snapshots",
-    label: "SnapShots",
-    icon: Camera,
-    // `snapshotsShortcut` is deliberately absent: no control writes it yet (v1
-    // ships only the both-Shifts trigger), and a key no control writes is one
-    // Restore resets behind its users' backs.
-    keys: ["snapshotsEnabled", "snapshotsIncludeAppText"],
-    finds: "snapshot screenshot capture shift window accessibility screen recording input monitoring attach",
-  },
-  {
     id: "sourceControl",
     label: "Source Control",
     icon: GitBranch,
     keys: ["gitlabRemote", "diffIgnoreWhitespace", "commitMessageModel"],
     finds: "git github gitlab gh glab cli login remote pull request merge request diff whitespace commit message model generate ai claude codex opencode grok",
-  },
-  {
-    id: "notifications",
-    label: "Notifications",
-    icon: Bell,
-    keys: [
-      "notifyOnDone",
-      "notifyOnError",
-      "notifyOnAccountIssue",
-      "notifyOnlyWhenUnfocused",
-      "notifySound",
-    ],
-    finds: "notify notification sound alert done error account unfocused",
   },
   {
     id: "usage",
@@ -166,11 +150,34 @@ export const TABS: TabMeta[] = [
     keys: [],
     finds: "usage cost tokens spend estimate sessions chart history",
   },
-  { id: "about", label: "About", icon: Info, keys: [], finds: "version update release" },
+];
+
+/** Sidebar groups. Labels sit above the usual icon rows. */
+export const NAV: NavMeta[] = [
+  {
+    id: "app",
+    label: "App",
+    tabs: ["general", "appearance", "shortcuts", "notifications"],
+  },
+  {
+    id: "agents",
+    label: "Agents",
+    tabs: ["providers", "mcp", "skills", "connections"],
+  },
+  {
+    id: "git",
+    label: "Git",
+    tabs: ["sourceControl"],
+  },
+  {
+    id: "account",
+    label: "Account",
+    tabs: ["usage"],
+  },
 ];
 
 export const TAB_META = (id: Tab) => TABS.find((t) => t.id === id) as TabMeta;
 
-/** The subset of DEFAULT_SETTINGS a tab owns, for its Restore defaults action. */
+/** The subset of DEFAULT_SETTINGS a page owns, for its Restore defaults action. */
 export const defaultsFor = (keys: (keyof Settings)[]): Partial<Settings> =>
   Object.fromEntries(keys.map((k) => [k, DEFAULT_SETTINGS[k]]));

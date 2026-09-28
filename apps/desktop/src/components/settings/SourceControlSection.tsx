@@ -77,10 +77,7 @@ export const SourceControlSection = ({
 
   return (
     <>
-      <Group
-        title="CLIs"
-        hint="Reviews, clone, and publish use the GitHub (gh) and GitLab (glab) CLIs on your PATH. Log in with gh auth login or glab auth login — Emberyx never stores a PAT of its own."
-      >
+      <Group title="CLIs">
         <div className="grid gap-1.5">
           {forgeClis.map((p) => {
             const status = !p.installed
@@ -117,7 +114,6 @@ export const SourceControlSection = ({
       <Group title="Git">
         <Row
           label="Remote"
-          hint="Git remote used to fetch and check out review branches."
           control={
             <Input
               value={settings.gitlabRemote}
@@ -129,13 +125,12 @@ export const SourceControlSection = ({
         />
         <SwitchRow
           label="Hide whitespace changes"
-          hint="Working-tree diffs in the Changes panel skip whitespace-only edits (git -w)."
           checked={settings.diffIgnoreWhitespace}
           onChange={(v) => onUpdate({ diffIgnoreWhitespace: v })}
         />
         <Row
           label="Commit message model"
-          hint="Drafts a commit message from the diff when you press Generate in the commit box. The call goes to the provider you pick, so it doesn't have to spend Claude usage. OpenCode's free models only answer inside OpenCode itself — Codex, an OpenCode Go model, or Grok will draft from here."
+          hint="Uses this CLI's quota. OpenCode's free models only answer inside OpenCode."
           control={
             <Select
               value={selected || NO_COMMIT_MODEL}

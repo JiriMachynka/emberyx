@@ -100,7 +100,7 @@ live children it holds.
 
 ⌘K command palette · ⌘O open project · ⌘N new agent tab · ⌘B toggle sidebar ·
 ⇧⌘F project search · ⌃Tab / ⌃⇧Tab next / previous tab · ⌘W close tab ·
-⌘, settings. Rebind them in Settings → Keyboard Shortcuts — all but ⌘W and
+⌘, settings. Rebind them in Settings → Shortcuts — all but ⌘W and
 ⌘,, which are menu shortcuts macOS handles before the app sees them.
 
 ## Stack

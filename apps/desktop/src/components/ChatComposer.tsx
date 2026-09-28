@@ -35,7 +35,6 @@ import {
 } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import type { PromptQueue } from "@/lib/promptQueue";
-import { useAgentStore } from "@/lib/agentStore";
 import type { ChatImage, ChatUsage } from "@/hooks/useAgentChat";
 import { processImage } from "@/components/composer/processImage";
 import { BranchChip } from "@/components/composer/BranchChip";
@@ -81,8 +80,6 @@ interface ChatComposerProps {
   /** Full access = `--dangerously-skip-permissions`; off = Supervised. */
   access: AccessLevel;
   onAccessChange: (v: AccessLevel) => void;
-  jevAutoApprove?: boolean;
-  onJevAutoApproveChange?: (v: boolean) => void;
   /** Move the thread to another provider in place. */
   onSwitchBackend: (backend: AgentBackend) => void;
   /** Extra named Claude setups. Empty = the default Claude only. */
@@ -110,9 +107,8 @@ interface ChatComposerProps {
   onStop: () => void;
   /** Un-send the newest in-flight turn; returns its text/images to restore. */
   onRewind: () => { text: string; images?: ChatImage[] } | null;
-  /** Open the lightbox. The second argument carries a snapshot's
-   *  accessibility tree, which renders under the image. */
-  onPreview: (dataUrl: string, a11y?: string) => void;
+  /** Open the lightbox. */
+  onPreview: (dataUrl: string) => void;
 }
 
 /**
@@ -137,8 +133,6 @@ export const ChatComposer = memo(function ChatComposer({
   onEffortChange,
   access,
   onAccessChange,
-  jevAutoApprove,
-  onJevAutoApproveChange,
   onSwitchBackend,
   claudeProfiles = [],
   claudeProfileId = null,
@@ -202,18 +196,6 @@ export const ChatComposer = memo(function ChatComposer({
   useEffect(() => {
     if (active) inputRef.current?.focus();
   }, [active]);
-
-  // SnapShots: the store's one-slot inbox lands on the focused composer.
-  // `consumePendingSnapshot` check-and-clears atomically, so a second mounted
-  // composer can't take the same capture, and a capture made while this pane
-  // was backgrounded is here when it becomes active again.
-  const pendingSnapshot = useAgentStore((s) => s.pendingSnapshot);
-  const consumePendingSnapshot = useAgentStore((s) => s.consumePendingSnapshot);
-  useEffect(() => {
-    if (!active || exited) return;
-    const snap = consumePendingSnapshot();
-    if (snap) setImages((prev) => [...prev, snap]);
-  }, [active, exited, pendingSnapshot, consumePendingSnapshot]);
 
   // A handed-off message lands here rather than being sent, so the user reads
   // it before committing. Anything already typed is kept above it.
@@ -632,8 +614,6 @@ export const ChatComposer = memo(function ChatComposer({
             onEffortChange={onEffortChange}
             access={access}
             onAccessChange={onAccessChange}
-            jevAutoApprove={jevAutoApprove}
-            onJevAutoApproveChange={onJevAutoApproveChange}
             onSwitchBackend={onSwitchBackend}
             claudeProfiles={claudeProfiles}
             claudeProfileId={claudeProfileId}

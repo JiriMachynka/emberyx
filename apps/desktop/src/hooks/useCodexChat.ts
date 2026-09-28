@@ -75,7 +75,6 @@ import {
   notifyPlanNothing,
   type ChatSession,
 } from "@/lib/chatSession";
-import { snapshotTextBlock } from "@/lib/snapshotA11y";
 
 interface Options {
   cwd: string;
@@ -435,13 +434,7 @@ export function useCodexChat({
           status: turn && typeof turn.status === "string" ? turn.status : method,
         });
         // Freeze this turn's file delta under its checkpoint; see `settleTurn`.
-        settleTurn(cwd, emberyxSessionId, lastCheckpointIdRef.current, (fn) => {
-          stateRef.current = {
-            ...stateRef.current,
-            messages: fn(stateRef.current.messages),
-          };
-          publish();
-        });
+        settleTurn(cwd, lastCheckpointIdRef.current);
       }
       for (const c of changes) {
         addChange({
@@ -726,15 +719,6 @@ export function useCodexChat({
     if (text.trim()) input.push({ type: "text", text, text_elements: [] });
     for (const img of images ?? []) {
       input.push({ type: "image", url: `data:${img.mediaType};base64,${img.data}` });
-      // A snapshot's accessibility tree follows its image, the same shape the
-      // Claude transport sends — never into the composer's text.
-      if (img.snapshot) {
-        input.push({
-          type: "text",
-          text: snapshotTextBlock(img.snapshot),
-          text_elements: [],
-        });
-      }
     }
     const turnId = stateRef.current.turnId;
     const effort = effortRef.current;

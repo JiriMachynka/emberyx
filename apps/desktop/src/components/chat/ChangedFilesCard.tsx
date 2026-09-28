@@ -16,15 +16,12 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
   threadId,
   fromId,
   openEnded,
-  review,
 }: {
   projectPath: string;
   threadId: string;
   fromId: string;
   /** The newest turn's range ends at the working tree, so it alone re-reads. */
   openEnded: boolean;
-  /** Jev scored this delta as worth a look. */
-  review?: boolean;
 }) {
   const { data: files } = useTurnFiles(projectPath, threadId, fromId, true, openEnded);
   // Null until the user folds or unfolds something — the default (everything
@@ -67,11 +64,6 @@ export const ChangedFilesCard = memo(function ChangedFilesCard({
               {files.length === 1 ? "Changed 1 file" : `Changed ${files.length} files`}
             </span>
           </span>
-          {review && (
-            <span className="shrink-0 text-xs text-amber-400" title="Jev flagged auth, secrets, or a hard-to-undo change">
-              review
-            </span>
-          )}
           <span className="flex flex-none gap-2 text-xs tabular-nums">
             <span className="text-emerald-400">+{additions}</span>
             <span className="text-red-400">−{deletions}</span>

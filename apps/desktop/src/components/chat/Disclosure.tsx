@@ -33,7 +33,7 @@ export function Disclosure({
       style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
       onTransitionEnd={handleEnd}
     >
-      <div className="overflow-hidden">{children}</div>
+      <div className="min-h-0 overflow-hidden">{children}</div>
     </div>
   );
 }

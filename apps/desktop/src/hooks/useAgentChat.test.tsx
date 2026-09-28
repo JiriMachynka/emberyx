@@ -1602,39 +1602,8 @@ describe("useAgentChat reasoning effort", () => {
   });
 });
 
-describe("useAgentChat snapshots", () => {
-  it("sends a snapshot image followed by its accessibility text block", async () => {
-    const { result } = await mount();
-    act(() =>
-      result.current.send("look", [
-        {
-          id: "i1",
-          mediaType: "image/png",
-          data: "AAAA",
-          snapshot: {
-            app: "Safari",
-            title: "Start Page",
-            a11y: 'window "Start Page" 0,0 100x100',
-          },
-        },
-      ])
-    );
-
-    expect(sentLines()[0].message.content).toEqual([
-      { type: "text", text: "look" },
-      {
-        type: "image",
-        source: { type: "base64", media_type: "image/png", data: "AAAA" },
-      },
-      {
-        type: "text",
-        text: '[Snapshot — Safari: Start Page]\nwindow "Start Page" 0,0 100x100',
-      },
-    ]);
-  });
-
-  // A plain pasted image carries nothing extra — only the sidecar does.
-  it("leaves a plain image's content blocks alone", async () => {
+describe("useAgentChat images", () => {
+  it("sends a pasted image as a content block", async () => {
     const { result } = await mount();
     act(() =>
       result.current.send("look", [

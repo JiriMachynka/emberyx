@@ -2,12 +2,18 @@ import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { toast } from "sonner";
 
+/** Menu and launch share this path; a second click while one is in flight
+ *  would stack "up to date" toasts. */
+let inFlight = false;
+
 /**
  * Check GitHub releases for a newer signed build. On `silent` (launch) checks,
  * failures and "up to date" stay quiet; a manual check surfaces both. When an
  * update exists, prompt the user to install + relaunch.
  */
 export async function checkForUpdates({ silent }: { silent: boolean }) {
+  if (inFlight) return;
+  inFlight = true;
   try {
     const update = await check();
     if (!update) {
@@ -34,5 +40,7 @@ export async function checkForUpdates({ silent }: { silent: boolean }) {
   } catch (e) {
     if (silent) console.error("update check failed:", e);
     else toast.error("Update check failed", { description: String(e) });
+  } finally {
+    inFlight = false;
   }
 }

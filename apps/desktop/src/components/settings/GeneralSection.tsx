@@ -20,7 +20,6 @@ export const GeneralSection = ({
   <Group>
     <Row
       label="Thread list"
-      hint="Whether the sidebar groups threads by project or shows one list across every open project."
       control={
         <Select
           value={settings.threadView}
@@ -45,7 +44,6 @@ export const GeneralSection = ({
       <>
         <Row
           label="Group threads"
-          hint="Put one heading per repository above the active threads, with worktrees folded into their parent repo."
           control={
             <Select
               value={settings.threadGrouping}
@@ -70,7 +68,7 @@ export const GeneralSection = ({
 
         <Row
           label="Days of inactivity before a thread settles"
-          hint="Days a thread can go untouched before it folds into Settled. Set 0 to keep every thread listed until you settle it yourself."
+          hint="0 keeps every thread listed."
           control={
             <NumberStepper
               value={settings.threadSettleDays}
@@ -83,7 +81,6 @@ export const GeneralSection = ({
 
         <SwitchRow
           label="Settle merged branches"
-          hint="Fold a thread away once its branch has been merged into the default branch, however recent the thread is."
           checked={settings.threadAutoSettleOnMerge}
           onChange={(v) => onUpdate({ threadAutoSettleOnMerge: v })}
         />
@@ -92,14 +89,12 @@ export const GeneralSection = ({
 
     <SwitchRow
       label="Expand every project"
-      hint="Keep each project's own sessions listed in the sidebar, not just the active project's."
       checked={settings.expandAllProjects}
       onChange={(v) => onUpdate({ expandAllProjects: v })}
     />
 
     <SwitchRow
       label="Auto-open dev panel on run"
-      hint="Reveal the dev output panel whenever a dev, build, or start run begins."
       checked={settings.autoOpenDevPanel}
       onChange={(v) => onUpdate({ autoOpenDevPanel: v })}
     />

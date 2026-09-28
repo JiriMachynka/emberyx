@@ -59,23 +59,27 @@ describe("isAgentTool", () => {
 describe("workLogOpen", () => {
   const unset = { override: null as boolean | null, agentsRunning: 0 };
 
-  it("stays open while live work has no answer yet", () => {
-    expect(workLogOpen({ live: true, answering: false, ...unset })).toBe(true);
+  it("stays open while a thought or tool is still running", () => {
+    expect(workLogOpen({ live: true, working: true, ...unset })).toBe(true);
   });
 
-  it("collapses once the answer starts, unless a subagent is still running", () => {
-    expect(workLogOpen({ live: true, answering: true, ...unset })).toBe(false);
+  it("closes once that work finishes, unless a subagent is still running", () => {
+    expect(workLogOpen({ live: true, working: false, ...unset })).toBe(false);
     expect(
-      workLogOpen({ live: true, answering: true, override: null, agentsRunning: 1 })
+      workLogOpen({ live: true, working: false, override: null, agentsRunning: 1 })
     ).toBe(true);
+  });
+
+  it("starts closed once the turn has settled", () => {
+    expect(workLogOpen({ live: false, working: false, ...unset })).toBe(false);
   });
 
   it("lets a click stick, live or settled", () => {
     expect(
-      workLogOpen({ live: true, answering: true, override: true, agentsRunning: 0 })
+      workLogOpen({ live: true, working: false, override: true, agentsRunning: 0 })
     ).toBe(true);
     expect(
-      workLogOpen({ live: true, answering: false, override: false, agentsRunning: 0 })
+      workLogOpen({ live: true, working: true, override: false, agentsRunning: 0 })
     ).toBe(false);
   });
 });

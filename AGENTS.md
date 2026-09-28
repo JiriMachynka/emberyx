@@ -282,11 +282,10 @@ drops the frame and keeps the header row.
 
 ### Settings
 
-`SettingsPage.tsx` holds the tab, search and restore state and renders ten
-sections, one file each in `components/settings/` (MCP and Skills are
-`McpSection` / `SkillsSection`): General, Appearance, Keyboard Shortcuts,
-Providers, MCP, Skills, Connections, Source Control, Notifications, About. They
-are driven from `TABS` (`settings/tabs.ts`), the one declaration: a tab names the
+`SettingsPage.tsx` holds the tab, search and restore state and renders the
+sections in `components/settings/` (MCP and Skills are `McpSection` /
+`SkillsSection`). The sidebar groups them App / Agents / Git / Account from
+`TABS` (`settings/tabs.ts`), the one declaration: a tab names the
 settings keys it owns (what "Restore defaults" resets) and the words that find it
 from the search box, so a control rendered in a tab whose `keys` omit it is a
 Restore that silently skips it. Two sections are worth knowing about:
@@ -307,7 +306,7 @@ Restore that silently skips it. Two sections are worth knowing about:
   stream-json` is one conversation and the next draft would carry this diff with
   it. The Changes panel drafts on focus / wand (`git_draft_commit_message`)
   from the staged index when something is staged. Opening Git costs nothing.
-- **Keyboard Shortcuts** records a new chord per command, with `lib/commands.ts`
+- **Shortcuts** records a new chord per command, with `lib/commands.ts`
   as the one declaration and `lib/keybindings.ts` holding the overrides (under
   their own storage key, not `Settings`). Two things stay un-rebindable and say
   so: menu accelerators (⌘W, ⌘,), because AppKit consumes a menu key equivalent
@@ -344,9 +343,8 @@ with no rate and no recorded cost is unknown, never $0.
 ### Provider switching
 
 The model picker is the only way to move a thread to another provider — and
-the only thing that picks a model. Jev never changes it: a turn's depth does
-not upshift a small model, and a Jev judgment never swaps the pick. What the
-user selected is what runs, pinned or defaulted. It
+the only thing that picks a model. What the user selected is what runs,
+pinned or defaulted. It
 switches **in place**: `ChatPane` holds `activeBackend` (seeded from the
 session) and a `CarriedThread` of everything earlier providers produced.
 `lib/thread.ts` stamps those turns with who made them **at carry-over time** —
@@ -632,26 +630,6 @@ carries tauri's `unstable` feature: that is the price of the multiwebview API.
 The agent's `preview_screenshot` / `preview_snapshot` / `preview_console` tools
 still go through `browser.rs`, never this surface — they must work with the
 Preview tab closed, and a child webview cannot be photographed anyway.
-
-### SnapShots
-
-A user-triggered capture of *whatever window they are looking at* — distinct
-from the agent's own headless Chrome above, which photographs dev servers and
-stays that way. `snapshots.rs` holds a hand-rolled `CGEventTap` (listen-only,
-`flagsChanged`) watching the device-dependent left/right shift bits —
-`tauri-plugin-global-shortcut` cannot express "both Shift keys together", and
-no plugin was added for the chord path that isn't shipping. The tap runs only
-while `snapshotsEnabled` is on (App.tsx mirrors the settings keys into
-`snapshots_set_enabled`) and is killed on exit like every other child-owning
-module. A capture takes the frontmost layer-0 window — Emberyx included —
-through `CGWindowList` + `CGWindowListCreateImage`, plus an AX walk of that
-pid when "Include app text" is on (depth ≤ 4, ≤ 200 nodes, slow AX → image
-only). It lands as `snapshot-captured`, sits in `agentStore.pendingSnapshot`
-(one slot), and the focused composer consumes it: a thumb naming the app, and
-on send the image followed by a text block with the tree — never into the
-composer's text. Permissions are reported by name, never degraded around;
-Screen Recording gates the pixels, Accessibility the tree (and the tap).
-`Info.plist` beside `tauri.conf.json` carries the two usage strings.
 
 ### Process lifetime
 

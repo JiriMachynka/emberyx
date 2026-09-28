@@ -6,12 +6,10 @@ import { cn } from "@/lib/utils";
  * Shared label/control primitives for settings surfaces (the full-page settings
  * view and the per-project pane). Not shadcn — these live outside ui/.
  *
- * The surface reads as a spec plate rather than a stack of cards: prose on the
- * left, state on the right, hairlines only under a group heading. A card is one
- * solid `--card` fill with a hairline border; the active one keeps the app's
- * inset ember ring, which is the only thing that should read as state. Mono is
- * reserved for what is genuinely machine text (a path, a binary, a chord); a
- * select full of prose is prose.
+ * Spec plate: prose on the left, state on the right. Space separates groups;
+ * a hairline separates rows. A card is one solid `--card` fill with a hairline
+ * border; the active one keeps the app's inset ember ring. Mono is reserved
+ * for machine text (a path, a binary, a chord); a select full of prose is prose.
  */
 
 /** The control column: fixed, so it never shrinks to whatever the label left
@@ -79,7 +77,7 @@ export function Row({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="-mx-3 grid gap-2 rounded-lg px-3 py-2.5 transition-colors hover:bg-secondary/40">
+    <div className="grid gap-2 py-2.5">
       <div className="flex items-start justify-between gap-8">
         <div className="grid min-w-0 gap-1">
           <span className="text-sm font-medium text-foreground">{label}</span>
@@ -112,7 +110,7 @@ export function SwitchRow({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <label className="-mx-3 grid cursor-pointer gap-2 rounded-lg px-3 py-2.5 transition-colors hover:bg-secondary/40">
+    <label className="grid cursor-pointer gap-2 py-2.5">
       <div className="flex items-start justify-between gap-8">
         <div className="grid min-w-0 gap-1">
           <span className="text-sm font-medium text-foreground">{label}</span>
@@ -134,34 +132,20 @@ export function SwitchRow({
   );
 }
 
-/** A titled group of rows. The heading is a spec rule — a mono micro-label with
- *  a hairline running to the right edge — rather than a card around the rows:
- *  space separates rows, a rule separates groups. */
+/** A titled group of rows. Space separates groups; a hairline separates rows. */
 export function Group({
   title,
-  hint,
   children,
 }: {
   title?: string;
-  hint?: string;
   children: React.ReactNode;
 }) {
   return (
     <section className="grid gap-3">
       {title && (
-        <div className="grid gap-1">
-          <h2 className="flex items-center gap-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            <span className="shrink-0">{title}</span>
-            <span aria-hidden className="h-px min-w-0 flex-1 bg-border/60" />
-          </h2>
-          {hint && (
-            <p className="text-xs leading-relaxed text-muted-foreground">
-              {hint}
-            </p>
-          )}
-        </div>
+        <h2 className="text-sm font-medium text-foreground">{title}</h2>
       )}
-      <div className="grid gap-1">{children}</div>
+      <div className="grid divide-y divide-border/60">{children}</div>
     </section>
   );
 }

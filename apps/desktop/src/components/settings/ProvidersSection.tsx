@@ -57,10 +57,7 @@ export const ProvidersSection = ({
   "use no memo";
   return (
     <>
-      <Group
-        title="Installed"
-        hint="Detected from your login-shell PATH and each CLI's version probe. A provider that isn't installed is listed, not hidden — the absence is the useful part."
-      >
+      <Group title="Installed">
         <div className="grid gap-1.5">
           {providers.map((p) => (
             <Tile
@@ -86,7 +83,6 @@ export const ProvidersSection = ({
       <Group title="Defaults">
         <Row
           label="Default backend"
-          hint="Which CLI the command drives. Projects can pin their own in the project's Settings tab."
           control={
             <Select
               value={settings.agentBackend}
@@ -110,7 +106,6 @@ export const ProvidersSection = ({
 
         <Row
           label="Agent command"
-          hint="The agent CLI binary, e.g. claude or codex."
           control={
             <Input
               value={settings.agentCommand}
@@ -122,7 +117,7 @@ export const ProvidersSection = ({
 
         <Row
           label="Codex sandbox"
-          hint="How much of the machine a Codex thread can touch. Default follows the switches above: full access when permissions are skipped, workspace writes otherwise."
+          hint="Full access when permissions are skipped, workspace writes otherwise."
           control={
             <Select
               value={settings.codexSandbox}
@@ -145,13 +140,9 @@ export const ProvidersSection = ({
         />
       </Group>
 
-      <Group
-        title="Model list"
-        hint="What the composer's picker offers. Hidden models drop out of every rail; custom slugs join the provider you assign them to."
-      >
+      <Group title="Model list">
         <Row
           label="Hidden models"
-          hint="Model ids the picker never offers, whatever a catalog says."
           control={<span />}
         >
           <div className="flex items-center gap-1.5">
@@ -202,7 +193,6 @@ export const ProvidersSection = ({
 
         <Row
           label="Custom models"
-          hint="Extra slugs offered in the picker — new releases, proxies, private endpoints."
           control={<span />}
         >
           <div className="flex items-center gap-1.5">
@@ -279,10 +269,7 @@ export const ProvidersSection = ({
         </Row>
       </Group>
 
-      <Group
-        title="Launch"
-        hint="Per-backend binary and extra arguments for chat agents. Arguments run after the built-in flags, so a repeated flag wins. Empty means the CLI on PATH."
-      >
+      <Group title="Launch">
         {AGENT_BACKENDS.map((b) => {
           const launch = settings.providerLaunch[b];
           const setLaunch = (
@@ -306,10 +293,7 @@ export const ProvidersSection = ({
               },
             });
           return (
-            <div
-              key={b}
-              className="grid gap-3 border-b pb-5 last:border-0 last:pb-0"
-            >
+            <div key={b} className="grid gap-3 py-5 first:pt-2.5 last:pb-2.5">
               <div className="flex items-center gap-2">
                 <img
                   src={`/provider-icons/${b}.svg`}
@@ -364,10 +348,7 @@ export const ProvidersSection = ({
         })}
       </Group>
 
-      <Group
-        title="Claude profiles"
-        hint="Extra named Claudes — work vs personal, OpenRouter, a local router. The Launch section above is the default."
-      >
+      <Group title="Claude profiles">
         {settings.claudeProfiles.map((profile) => {
           const patch = (next: Partial<typeof profile>) =>
             onUpdate({
@@ -378,7 +359,7 @@ export const ProvidersSection = ({
           return (
             <div
               key={profile.id}
-              className="grid gap-3 border-b pb-5 last:border-0 last:pb-0"
+              className="grid gap-3 py-5 first:pt-2.5 last:pb-2.5"
             >
               <div className="flex items-center justify-between gap-2">
                 <Input

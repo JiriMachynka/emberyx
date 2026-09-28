@@ -204,16 +204,6 @@ export interface Settings {
   codexSandbox: CodexSandbox;
   /** Working-tree diffs hide whitespace-only changes. */
   diffIgnoreWhitespace: boolean;
-  /** Capture the frontmost window on a global shortcut and attach it to the
-   *  focused composer. macOS only; the trigger lives in Rust. */
-  snapshotsEnabled: boolean;
-  /** Which global trigger captures. Only "Shift+Shift" (both keys together)
-   *  ships today; the stored value is the preference a chord fallback would
-   *  read later. */
-  snapshotsShortcut: string;
-  /** Walk the captured window's accessibility tree and send it beside the
-   *  image, so the agent reads labels instead of guessing from pixels. */
-  snapshotsIncludeAppText: boolean;
   /** Model that drafts commit messages from the diff. "" turns drafting off.
    *  A bare id is Claude (`claude -p`). `codex:`, `opencode:` and `grok:` name
    *  another CLI — see `lib/commitDraft.ts`, which Rust parses the same way. */
@@ -225,9 +215,6 @@ export interface Settings {
   /** Right-hand dock (terminal, preview, review, merge requests). Off hides
    *  it until turned back on — those surfaces have nowhere else to go. */
   rightDock: boolean;
-  /** Let TypeSafe Jev auto-answer low-risk ACP permission prompts. Independent
-   *  of whether a key is saved — a key without this still prompts. */
-  jevAutoApprove: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -264,14 +251,10 @@ export const DEFAULT_SETTINGS: Settings = {
   claudeProfiles: [],
   codexSandbox: "",
   diffIgnoreWhitespace: false,
-  snapshotsEnabled: false,
-  snapshotsShortcut: "Shift+Shift",
-  snapshotsIncludeAppText: true,
   commitMessageModel: "claude-haiku-4-5",
   wordWrap: false,
   workspaceLayout: "classic",
   rightDock: true,
-  jevAutoApprove: true,
 };
 
 const KEY = "emberyx.settings";

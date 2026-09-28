@@ -4,14 +4,12 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ModelPicker } from "@/components/ModelPicker";
 import {
   CLAUDE_EFFORTS,
   capabilitiesOf,
-  isAcpBackend,
   type AgentBackend,
 } from "@/lib/agentBackend";
 import {
@@ -108,12 +106,9 @@ const EffortPicker = memo(function EffortPicker({
 const AccessChip = memo(function AccessChip({
   access,
   onChange,
-  jev,
 }: {
   access: AccessLevel;
   onChange: (v: AccessLevel) => void;
-  /** ACP only: TypeSafe Jev auto-answers low-risk prompts. */
-  jev?: { enabled: boolean; onChange: (v: boolean) => void };
 }) {
   return (
     <DropdownMenu>
@@ -137,21 +132,6 @@ const AccessChip = memo(function AccessChip({
             {access === level && <Check className="size-3.5" />}
           </DropdownMenuItem>
         ))}
-        {jev && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={(e) => {
-                e.preventDefault();
-                jev.onChange(!jev.enabled);
-              }}
-              className="justify-between gap-4"
-            >
-              Jev judgments
-              {jev.enabled && <Check className="size-3.5" />}
-            </DropdownMenuItem>
-          </>
-        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -210,8 +190,6 @@ interface UsageFooterProps {
   onEffortChange: (effort: string) => void;
   access: AccessLevel;
   onAccessChange: (v: AccessLevel) => void;
-  jevAutoApprove?: boolean;
-  onJevAutoApproveChange?: (v: boolean) => void;
   /** Move the thread to another provider in place — picking a model that
    *  belongs to one is how that happens. */
   onSwitchBackend: (backend: AgentBackend) => void;
@@ -240,8 +218,6 @@ export const UsageFooter = memo(function UsageFooter({
   onEffortChange,
   access,
   onAccessChange,
-  jevAutoApprove = true,
-  onJevAutoApproveChange,
   onSwitchBackend,
   claudeProfiles,
   claudeProfileId,
@@ -280,15 +256,7 @@ export const UsageFooter = memo(function UsageFooter({
         />
       )}
       {capabilitiesOf(backend).permissions && (
-        <AccessChip
-          access={access}
-          onChange={onAccessChange}
-          jev={
-            isAcpBackend(backend) && onJevAutoApproveChange
-              ? { enabled: jevAutoApprove, onChange: onJevAutoApproveChange }
-              : undefined
-          }
-        />
+        <AccessChip access={access} onChange={onAccessChange} />
       )}
       {/* Continue-on-idle lives in the Claude hook; askUser is the same gate. */}
       {onKeepGoingChange && capabilitiesOf(backend).askUser && (

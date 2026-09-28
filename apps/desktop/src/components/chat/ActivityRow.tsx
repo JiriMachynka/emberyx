@@ -7,8 +7,6 @@ import { StepEnter, useStepQueue } from "@/components/chat/StepEnter";
 import { Disclosure, DisclosureChevron } from "@/components/chat/Disclosure";
 import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { ToolBody } from "@/components/chat/ToolViews";
-import { guardActivity, guardOutput } from "@/lib/jev";
-import { RISK_LABEL, RISK_TITLE, useActivityRisk } from "@/lib/activityRisk";
 import { useAgentStore } from "@/lib/agentStore";
 import {
   groupActivities,
@@ -39,11 +37,9 @@ import type { ActivityItem } from "@/types";
  */
 export const ActivityRow = memo(function ActivityRow({
   activity,
-  live,
 }: {
   activity: ActivityItem;
-  /** This row belongs to the turn still streaming. Only a live row is worth a
-   *  Jev judgment: replaying an old thread must not bill one call per tool. */
+  /** This row belongs to the turn still streaming. */
   live?: boolean;
 }) {
   const Icon = TOOL_ICONS[iconForActivity(activity)];
@@ -51,15 +47,6 @@ export const ActivityRow = memo(function ActivityRow({
   const label = labelForActivity(activity);
   const title = titleForActivity(activity);
   const meta = metaForActivity(activity);
-  const risk = useActivityRisk(activity.id);
-
-  // Fire-and-forget, off the render path. `guardActivity`/`guardOutput` dedupe
-  // by id, so a row that updates as it streams judges at most once.
-  useEffect(() => {
-    if (!live) return;
-    guardActivity(activity);
-    guardOutput(activity);
-  }, [live, activity]);
   // A provider says when its work finished. The tool card had to infer it from
   // whether a result had landed, which left a tool that returns nothing
   // spinning forever.
@@ -138,11 +125,6 @@ export const ActivityRow = memo(function ActivityRow({
           </span>
         )}
         {meta && <span className="shrink-0 text-muted-foreground">{meta}</span>}
-        {risk && (
-          <span className="shrink-0 text-amber-400/90" title={RISK_TITLE[risk]}>
-            {RISK_LABEL[risk]}
-          </span>
-        )}
         {activity.autoApproved && (
           <span
             className="shrink-0 text-muted-foreground/70"
@@ -203,8 +185,8 @@ export function ActivityList({
    *  rather than this file reaching into the agent store for a second view of
    *  the same run. */
   renderAgent?: (activity: ActivityItem) => ReactNode;
-  /** Live and settled turns render the same rows now; the param names the
-   *  pane's turn state for callers that dispatch on it. */
+  /** Live turns only keep in-flight tools (and the accumulating file tree).
+   *  Settled turns render the full log inside the collapsed accordion. */
   live?: boolean;
   /** The panel is this list's own surface, unless the caller already provides
    *  one around it (the pane's replay fallback wraps tools in the same panel). */
@@ -279,7 +261,8 @@ export function ActivityList({
         const segmentActivities = segment.groups.flatMap((group) =>
           group.type === "files" ? group.activities : [group.activity]
         );
-        const summary = workSummaryLine(segmentActivities, live === true);
+        const summary =
+          live === true ? null : workSummaryLine(segmentActivities, false);
         return (
           <div key={key} className="flex flex-col gap-1.5">
             {summary && (

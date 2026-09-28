@@ -60,7 +60,6 @@ import {
 
 import { notifyNative } from "@/lib/notifications";
 import { loadSettings } from "@/lib/settings";
-import { snapshotTextBlock } from "@/lib/snapshotA11y";
 import { basename } from "@/lib/path";
 import { parseAttachments, usePromptQueue } from "@/lib/promptQueue";
 import {
@@ -935,7 +934,7 @@ export function useAgentChat({
         // since they never get a per-completion signal.
         endOpenSubagents(emberyxSessionId);
         // Freeze this turn's file delta under its checkpoint; see `settleTurn`.
-        settleTurn(cwd, emberyxSessionId, lastCheckpointIdRef.current, setMessages);
+        settleTurn(cwd, lastCheckpointIdRef.current);
         return;
       }
     },
@@ -1511,18 +1510,10 @@ export function useAgentChat({
     const content = hasImages
       ? [
           ...(text.trim() ? [{ type: "text", text }] : []),
-          ...images.flatMap((img) => [
-            {
-              type: "image",
-              source: { type: "base64", media_type: img.mediaType, data: img.data },
-            },
-            // A snapshot's accessibility tree follows its image, so the agent
-            // reads labels instead of guessing from pixels. A plain pasted
-            // image carries nothing extra.
-            ...(img.snapshot
-              ? [{ type: "text", text: snapshotTextBlock(img.snapshot) }]
-              : []),
-          ]),
+          ...images.map((img) => ({
+            type: "image",
+            source: { type: "base64", media_type: img.mediaType, data: img.data },
+          })),
         ]
       : text;
     setMessages((prev) => [

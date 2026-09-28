@@ -338,10 +338,9 @@ export interface ActivityItem {
   /** False while the work is still running — a tool with no result yet. */
   complete: boolean;
   /** The client answered this call's permission request for the user — the
-   *  access level said to, or TypeSafe Jev scored it as low-risk. Set by the
-   *  ACP transport only: Claude and Codex carry the level into the process,
-   *  so nothing is decided here for them and the Rust normalizer never sets
-   *  this. */
+   *  access level said to. Set by the ACP transport only: Claude and Codex
+   *  carry the level into the process, so nothing is decided here for them
+   *  and the Rust normalizer never sets this. */
   autoApproved?: boolean;
 }
 

@@ -35,17 +35,18 @@ export function groupTurns(messages: ChatMessage[]): Turn[] {
 export const isAgentTool = (name: string): boolean => name === "Task" || name === "Agent";
 
 /** Default open state of a turn's work log, before the user clicks.
- *  Live work stays open until the answer starts; running subagents keep it
- *  open so their log isn't buried under the answer. */
+ *  Open while a thought or tool is still running so the current work is on
+ *  screen; close as soon as that work finishes (the answer can start without
+ *  burying a wall of cards). Running subagents keep it open. */
 export function workLogOpen(opts: {
   live: boolean;
-  answering: boolean;
+  working: boolean;
   agentsRunning: number;
   override: boolean | null;
 }): boolean {
   if (opts.override != null) return opts.override;
   if (opts.agentsRunning > 0) return true;
-  return opts.live && !opts.answering;
+  return opts.live && opts.working;
 }
 
 /** Hide the work-log title while live work is already on screen — that title

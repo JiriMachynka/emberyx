@@ -35,13 +35,11 @@ mod queue;
 mod search;
 mod skills;
 mod slash;
-mod snapshots;
 mod store;
 pub mod supervisor;
 mod t3_import;
 mod threads;
 pub mod time;
-mod typesafe;
 mod usage;
 mod workspace;
 
@@ -85,7 +83,6 @@ pub fn run() {
         .manage(browser::BrowserManager::default())
         .manage(browser::PreviewUrl::default())
         .manage(draft::Drafter::default())
-        .manage(snapshots::SnapshotManager::default())
         .setup(|app| {
             // Install the panic reporter before anything else runs: a panic
             // during startup is exactly the kind that used to vanish into a
@@ -313,19 +310,6 @@ pub fn run() {
             preview::preview_webview_bounds,
             preview::preview_webview_hide,
             browser::preview_set_url,
-            snapshots::snapshots_status,
-            snapshots::snapshots_request_permission,
-            snapshots::snapshots_set_enabled,
-            snapshots::snapshots_capture,
-            typesafe::cmd::typesafe_key_set,
-            typesafe::cmd::typesafe_key_clear,
-            typesafe::cmd::typesafe_key_present,
-            typesafe::cmd::typesafe_judge,
-            typesafe::cmd::typesafe_turn_prep,
-            typesafe::cmd::typesafe_diff_risk,
-            typesafe::cmd::typesafe_screen,
-            typesafe::cmd::typesafe_call_risk,
-            typesafe::cmd::typesafe_output_risk,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -353,7 +337,6 @@ pub fn run() {
             app_handle.state::<PtyManager>().kill_all();
             app_handle.state::<browser::BrowserManager>().kill_all();
             app_handle.state::<draft::Drafter>().kill_all();
-            app_handle.state::<snapshots::SnapshotManager>().kill_all();
             app_handle.state::<Supervisor>().kill_all();
         }
     });

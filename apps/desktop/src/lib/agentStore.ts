@@ -113,14 +113,6 @@ interface AgentState {
   /** Text waiting to be dropped into a session's composer — an in-place
    *  provider switch prefills here so the user can edit before sending. */
   drafts: Record<string, string>;
-  /** One-slot inbox for a SnapShots capture. A capture while Settings is
-   *  showing, or before a composer mounts, waits here; the active project's
-   *  focused chat consumes it when it can. */
-  pendingSnapshot: ChatImage | null;
-  setPendingSnapshot: (image: ChatImage) => void;
-  /** Check-and-clear in one call, so two mounted composers can't both take
-   *  the same capture. */
-  consumePendingSnapshot: () => ChatImage | null;
   /** The provider a chat pane moved to in place, while it differs from the
    *  session's own backend — which a switch leaves alone, since it names the
    *  transport the session was spawned with. Read by the sidebar row. */
@@ -180,7 +172,7 @@ interface AgentState {
   clearNotifications: () => void;
 }
 
-export const useAgentStore = create<AgentState>()((set, get) => ({
+export const useAgentStore = create<AgentState>()((set) => ({
   statuses: {},
   statusSince: {},
   usages: {},
@@ -190,14 +182,6 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
   selectedAgent: null,
   senders: {},
   drafts: {},
-  pendingSnapshot: null,
-  setPendingSnapshot: (image) => set({ pendingSnapshot: image }),
-  consumePendingSnapshot: () => {
-    const image = get().pendingSnapshot;
-    if (!image) return null;
-    set({ pendingSnapshot: null });
-    return image;
-  },
   switchedBackends: {},
   notifications: loadNotifications(),
   setSwitchedBackend: (id, backend) =>

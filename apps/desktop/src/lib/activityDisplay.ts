@@ -282,11 +282,21 @@ export const groupActivities = (activities: ActivityItem[]): ActivityGroup[] => 
 export const isEmptyThought = (activity: ActivityItem): boolean =>
   activity.kind === "reasoning" && activity.complete && !activity.output?.trim();
 
-/** Settled rows stay in the live stream, collapsed — a tool that finished
- *  should not vanish from view mid-turn. Only a finished thought with nothing
- *  to read (a signature) is hidden, live or settled. */
+/** Live tool cards stay on screen only while they run — a finished command
+ *  is not a checkmark row. File work is the exception: the tree accumulates
+ *  for the turn, the way T3 shows consecutive reads and edits. Subagent rows
+ *  stay too; they are a doorway, and the child can outlive the tool call.
+ *  Once the turn settles, the full log is in the collapsed accordion. */
 export const visibleActivities = (
   activities: ActivityItem[],
-  /** Kept for the API — visibility no longer depends on turn liveness. */
-  _live: boolean
-): ActivityItem[] => activities.filter((a) => !isEmptyThought(a));
+  live: boolean
+): ActivityItem[] => {
+  const rows = activities.filter((a) => !isEmptyThought(a));
+  if (!live) return rows;
+  return rows.filter(
+    (a) =>
+      !a.complete ||
+      isAgentActivity(a) ||
+      (isFileActivity(a) && pathsForActivity(a).length > 0)
+  );
+};

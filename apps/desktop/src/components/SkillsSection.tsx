@@ -74,10 +74,7 @@ export function SkillsSection() {
 
   return (
     <>
-      <Group
-        title="Skills"
-        hint="Merged from each harness's skill folder. The shared ones (~/.claude/skills, ~/.agents/skills) are read by several harnesses — one folder, every reader listed."
-      >
+      <Group title="Skills">
         {list.length > 0 ? (
           <>
             <div className="flex items-center justify-between gap-4">
