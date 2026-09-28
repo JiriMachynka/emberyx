@@ -26,7 +26,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
+import { askQuestions, fetchPendingAsk } from "@/lib/approvals";
 import { parseAttachments, usePromptQueue } from "@/lib/promptQueue";
 import {
   cancelStreamPublish,
@@ -214,6 +216,9 @@ const rememberRefusal = (
 let nextMessageId = 0;
 const messageId = (prefix: string) => `acp-${prefix}-${(nextMessageId += 1)}`;
 
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
 export function useAcpChat({
   cwd,
   emberyxSessionId,
@@ -275,6 +280,12 @@ export function useAcpChat({
   const [pendingPlan, setPendingPlan] = useState<PendingPlanApproval | null>(null);
   const pendingPlanRef = useRef<PendingPlanApproval | null>(null);
   pendingPlanRef.current = pendingPlan;
+  /** An `ask_user` question the Emberyx MCP server is blocking the turn on.
+   *  It never rides the ACP wire — the server is handed to the agent at
+   *  `session/new` and the call parks in Rust — so it arrives as a Tauri event. */
+  const [pendingAsk, setPendingAsk] = useState<PendingAsk | null>(null);
+  const askRef = useRef<PendingAsk | null>(null);
+  askRef.current = pendingAsk;
   const [restartNonce, setRestartNonce] = useState(0);
   /** Set when the agent refused a model switch. The picker would otherwise go on
    *  showing the model you asked for while the session runs another one. */
@@ -370,6 +381,38 @@ export function useAcpChat({
     if (!enabled) return;
     return () => setSessionStatus(emberyxSessionId, "idle");
   }, [enabled, emberyxSessionId, setSessionStatus]);
+
+  // `ask_user` questions arrive as a Tauri event — the Emberyx MCP server is
+  // handed to the agent at `session/new`, and its call parks in Rust rather
+  // than riding the ACP wire. The event fires once, tagged with the session
+  // that asked, so a question raised while this pane was closed is read back
+  // from the supervisor on mount instead of leaving the agent blocked.
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    void fetchPendingAsk(emberyxSessionId)
+      .then((pending) => {
+        if (cancelled || !pending || askRef.current) return;
+        setPendingAsk(pending);
+      })
+      .catch((e) => console.error("[emberyx] pending ask read failed", e));
+    const unlisten = listen<unknown>("ask-user", (ev) => {
+      if (cancelled) return;
+      const payload = ev.payload;
+      if (!isRecord(payload) || payload.session !== emberyxSessionId) return;
+      if (typeof payload.id !== "string") return;
+      const questions = askQuestions(payload);
+      if (!questions) {
+        console.error("[emberyx] unanswerable ask-user payload", payload);
+        return;
+      }
+      setPendingAsk({ id: payload.id, questions });
+    });
+    return () => {
+      cancelled = true;
+      void unlisten.then((off) => off());
+    };
+  }, [enabled, emberyxSessionId]);
 
   const cancelFrame = useCallback(() => {
     cancelStreamPublish(frameRef.current);
@@ -712,6 +755,8 @@ export function useAcpChat({
         case "exit": {
           clearPermissions(false);
           setPendingPlan(null);
+          // Nothing is left to answer a question the process died holding.
+          setPendingAsk(null);
           // A turn the process died in the middle of is still over: committing
           // it stops the bubble rendering as live forever and lets its
           // checkpoint settle, which a bare status change never did.
@@ -798,6 +843,7 @@ export function useAcpChat({
         setReady(true);
       } catch (e) {
         if (disposed) return;
+        setPendingAsk(null);
         setExitReason(String(e));
         turnRef.current = { ...turnRef.current, status: "error" };
         publish();
@@ -1064,6 +1110,7 @@ export function useAcpChat({
     // mean nothing to the next one, which numbers its own from scratch.
     clearPermissions(false);
     setPendingPlan(null);
+    setPendingAsk(null);
     setExitReason(null);
     // A fresh session has not refused anything yet, and `session/new` picks the
     // model up again on its own.
@@ -1110,6 +1157,14 @@ export function useAcpChat({
     setPendingPlan(null);
   }, []);
 
+  /** Hand the user's choice back to the blocked `ask_user` call in Rust. */
+  const answerAsk = useCallback((answer: string) => {
+    const pending = askRef.current;
+    if (!pending) return;
+    setPendingAsk(null);
+    void invoke("answer_ask", { id: pending.id, answer });
+  }, []);
+
   return {
     messages,
     status,
@@ -1141,10 +1196,8 @@ export function useAcpChat({
     respond,
     pendingPlan,
     answerPlan,
-    // ACP has no `ask_user`: that is an Emberyx MCP tool wired for Claude. The
-    // pane only calls this while a question is showing, and none ever is.
-    pendingAsk: null as PendingAsk | null,
-    answerAsk: chatNoop,
+    pendingAsk,
+    answerAsk,
     hasMore: false,
     loadingOlder: false,
     loadOlder: loadNothing,

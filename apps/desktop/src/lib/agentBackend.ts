@@ -27,7 +27,9 @@ export interface AgentCapabilities {
   hookStatus: boolean;
   /** Tool calls can be approved or denied from the chat pane. */
   permissions: boolean;
-  /** The `ask_user` MCP option picker is wired in. */
+  /** The `ask_user` picker is wired in *and* the transport runs the keep-going
+   *  loop that auto-rejects its questions. Gates the composer's Keep-going
+   *  chip; the picker itself is wired on every live-chat transport. */
   askUser: boolean;
   /** Sigil-prefixed commands exist and can be listed. */
   slashCommands: boolean;
@@ -203,7 +205,8 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     usage: false,
     hookStatus: false,
     permissions: true,
-    // `ask_user` is an Emberyx MCP tool, wired for Claude only.
+    // The `ask_user` picker is wired over ACP too, but keep-going is not: a
+    // chip that starts a loop this transport never runs would be a dead control.
     askUser: false,
     // Skills and custom commands live in the same folders the CLI reads;
     // the composer lists them and inserts `/name`, which OpenCode registers

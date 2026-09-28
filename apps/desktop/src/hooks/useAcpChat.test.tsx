@@ -19,8 +19,15 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invoke(...args),
 }));
 
+const listeners = vi.hoisted(() => ({
+  ask: [] as ((ev: { payload: unknown }) => void)[],
+}));
+
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: () => Promise.resolve(() => {}),
+  listen: (_name: string, handler: (ev: { payload: unknown }) => void) => {
+    listeners.ask.push(handler);
+    return Promise.resolve(() => {});
+  },
 }));
 
 vi.mock("@tauri-apps/plugin-notification", () => ({
@@ -58,6 +65,7 @@ let queueSeq = 0;
 
 beforeEach(() => {
   channels.length = 0;
+  listeners.ask.length = 0;
   localStorage.clear();
   queueItems = [];
   queueSeq = 0;
@@ -989,5 +997,100 @@ describe("useAcpChat plan-approval ext requests", () => {
     await act(async () => view.result.current.stop());
     expect(view.result.current.pendingPlan).toBeNull();
     expect(planAnswered()[0]).toMatchObject({ requestId: 0, error: "cancelled by the user" });
+  });
+});
+
+describe("useAcpChat ask_user questions", () => {
+  const questions = [
+    {
+      question: "Which one?",
+      header: "Pick",
+      options: [{ label: "A" }, { label: "B" }],
+    },
+  ];
+
+  const askEvent = (payload: unknown) => {
+    for (const handler of listeners.ask) handler({ payload });
+  };
+
+  it("shows the picker when the Emberyx MCP server asks a question", async () => {
+    const view = await mount();
+    await act(async () => {
+      askEvent({ id: "ask-1", session: "emberyx-1", questions });
+    });
+    await waitFor(() => expect(view.result.current.pendingAsk).toBeTruthy());
+    expect(view.result.current.pendingAsk?.id).toBe("ask-1");
+    expect(view.result.current.pendingAsk?.questions).toEqual(questions);
+  });
+
+  it("ignores a question tagged for another session", async () => {
+    const view = await mount();
+    await act(async () => {
+      askEvent({ id: "ask-2", session: "someone-else", questions });
+    });
+    expect(view.result.current.pendingAsk).toBeNull();
+  });
+
+  it("rejects a payload the picker cannot render", async () => {
+    const view = await mount();
+    await act(async () => {
+      askEvent({ id: "ask-3", session: "emberyx-1", questions: [] });
+    });
+    expect(view.result.current.pendingAsk).toBeNull();
+  });
+
+  it("hands the choice back to the blocked tool call", async () => {
+    const view = await mount();
+    await act(async () => {
+      askEvent({ id: "ask-4", session: "emberyx-1", questions });
+    });
+    await waitFor(() => expect(view.result.current.pendingAsk).toBeTruthy());
+
+    await act(async () => view.result.current.answerAsk("A"));
+    expect(view.result.current.pendingAsk).toBeNull();
+    const answered = invoke.mock.calls.find(([name]) => name === "answer_ask");
+    expect(answered?.[1]).toEqual({ id: "ask-4", answer: "A" });
+  });
+
+  it("reads back a question raised while the pane was closed", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "acp_spawn") {
+        return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
+      }
+      if (command === "acp_session_new") return Promise.resolve(SESSION);
+      if (command === "agent_approvals_pending") {
+        return Promise.resolve([
+          {
+            approvalId: "ask-9",
+            threadId: "emberyx-1",
+            kind: "ask",
+            payload: JSON.stringify({
+              id: "ask-9",
+              session: "emberyx-1",
+              questions,
+            }),
+            createdAt: 0,
+            expiresAt: 0,
+          },
+        ]);
+      }
+      return Promise.resolve(null);
+    });
+
+    const view = await mount();
+    await waitFor(() => expect(view.result.current.pendingAsk?.id).toBe("ask-9"));
+  });
+
+  it("drops a question the process died holding", async () => {
+    const view = await mount();
+    await act(async () => {
+      askEvent({ id: "ask-5", session: "emberyx-1", questions });
+    });
+    await waitFor(() => expect(view.result.current.pendingAsk).toBeTruthy());
+
+    await act(async () => {
+      channels[0]?.onmessage?.({ type: "exit", data: 1 });
+    });
+    expect(view.result.current.pendingAsk).toBeNull();
   });
 });
