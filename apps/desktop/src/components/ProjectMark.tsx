@@ -7,10 +7,12 @@ export function ProjectMark({
   project,
   glyph,
   small,
+  className,
 }: {
-  project: Project;
+  project: Pick<Project, "icon">;
   glyph: ProjectGlyph;
   small?: boolean;
+  className?: string;
 }) {
   const size = small ? "size-3.5" : "size-4";
   if (project.icon) {
@@ -18,17 +20,19 @@ export function ProjectMark({
       <img
         src={project.icon}
         alt=""
-        className={cn("shrink-0 rounded-[5px] object-contain", size)}
+        className={cn("shrink-0 rounded-[5px] object-contain", size, className)}
       />
     );
   }
   return (
     <span
+      aria-hidden
       className={cn(
         "grid shrink-0 place-items-center rounded-[5px] font-semibold",
         size,
         small ? "text-[8px]" : "text-[9px]",
         glyph.tone,
+        className,
       )}
     >
       {glyph.letter}

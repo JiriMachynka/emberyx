@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   cacheSavingsOf,
@@ -94,16 +94,12 @@ const shareLabel = (spend: Spend, total: number): string => {
 const listLabels = (providers: Provider[]): string =>
   providers.map((p) => PROVIDER_LABEL[p]).join(", ");
 
-interface UsagePanelProps {
-  onBack: () => void;
-}
-
 /**
  * Cross-project spend across every provider that keeps a readable history
  * on disk (Claude and Codex JSONL, Grok `usage.json`, OpenCode and Kilo
  * sqlite). Costs are estimates — never billed.
  */
-export function UsagePanel({ onBack }: UsagePanelProps) {
+export function UsageSection() {
   const [days, setDays] = useState(30);
   const [metric, setMetric] = useState<Metric>("cost");
   const [breakdown, setBreakdown] = useState<Breakdown>("model");
@@ -111,14 +107,6 @@ export function UsagePanel({ onBack }: UsagePanelProps) {
   const rows = query.data?.rows ?? [];
   const sessionCounts = query.data?.sessions ?? [];
   const counted = query.data?.counted ?? [];
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onBack();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onBack]);
 
   const to = todayUtc();
   const from = addUtcDays(to, -(days - 1));
@@ -206,51 +194,39 @@ export function UsagePanel({ onBack }: UsagePanelProps) {
   );
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b px-4">
+    <div className="flex flex-col gap-10">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="mr-auto text-sm text-muted-foreground">
+          {formatRange(from, to)}
+        </span>
+        <PillGroup>
+          <Pill active={metric === "cost"} onClick={() => setMetric("cost")}>
+            Cost
+          </Pill>
+          <Pill active={metric === "tokens"} onClick={() => setMetric("tokens")}>
+            Tokens
+          </Pill>
+        </PillGroup>
+        <PillGroup>
+          {RANGES.map((r) => (
+            <Pill
+              key={r.days}
+              active={days === r.days}
+              onClick={() => setDays(r.days)}
+            >
+              {r.label}
+            </Pill>
+          ))}
+        </PillGroup>
         <button
           type="button"
-          onClick={onBack}
+          onClick={() => void query.refetch()}
+          title="Rescan transcripts"
           className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-          aria-label="Back"
         >
-          <ArrowLeft className="size-4" />
+          <RefreshCw className={cn("size-4", query.isFetching && "animate-spin")} />
         </button>
-        <h1 className="text-sm font-medium">Usage</h1>
-        <span className="text-sm text-muted-foreground">/ {formatRange(from, to)}</span>
-        <div className="ml-auto flex items-center gap-1">
-          <PillGroup>
-            <Pill active={metric === "cost"} onClick={() => setMetric("cost")}>
-              Cost
-            </Pill>
-            <Pill active={metric === "tokens"} onClick={() => setMetric("tokens")}>
-              Tokens
-            </Pill>
-          </PillGroup>
-          <PillGroup>
-            {RANGES.map((r) => (
-              <Pill
-                key={r.days}
-                active={days === r.days}
-                onClick={() => setDays(r.days)}
-              >
-                {r.label}
-              </Pill>
-            ))}
-          </PillGroup>
-          <button
-            type="button"
-            onClick={() => void query.refetch()}
-            title="Rescan transcripts"
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            <RefreshCw className={cn("size-4", query.isFetching && "animate-spin")} />
-          </button>
-        </div>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-auto px-8 py-8">
-        <div className="mx-auto flex max-w-6xl flex-col gap-10">
+      </div>
           <div className="grid gap-8 lg:grid-cols-[minmax(0,18rem)_1fr]">
             <div>
               <p className="text-4xl font-semibold tracking-tight tabular-nums">
@@ -419,8 +395,6 @@ export function UsagePanel({ onBack }: UsagePanelProps) {
               </p>
             </footer>
           )}
-        </div>
-      </div>
     </div>
   );
 }

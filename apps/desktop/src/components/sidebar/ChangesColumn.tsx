@@ -18,6 +18,7 @@ import {
   Sparkles,
   Trash2,
   Undo2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -47,7 +48,6 @@ import {
 import { useAgentStore } from "@/lib/agentStore";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { CommitPush, GitFile } from "@/types";
-import type { GitActionKind } from "@/lib/gitAction";
 
 /** Auto-resize cap for the commit-message textarea. */
 const MESSAGE_MAX = 160;
@@ -215,16 +215,6 @@ function MiniButton({
   );
 }
 
-const ACTION_ICON = {
-  commitPush: ArrowUpFromLine,
-  commit: Check,
-  commitPushPr: GitPullRequest,
-  push: ArrowUp,
-  pushPr: GitPullRequest,
-  openPr: GitPullRequest,
-  pull: ArrowDown,
-} as const;
-
 export function ChangesColumn({
   projectPath,
   rightDock,
@@ -264,11 +254,9 @@ export function ChangesColumn({
     !!forge && !!cliStatus.data?.find((c) => c.id === forge)?.authenticated;
   const noun = FORGE_NOUN[forge ?? "github"].one;
 
-  // Stage-first: the column's Commit is `git_commit` on the staged index only.
-  // It never stages implicitly — the top-bar GitCommitMenu keeps its own
-  // auto-stage rules in lib/gitAction.ts, this surface is the deliberate
-  // exception. A split item with an empty message of a model-less draft falls
-  // through to the no-model error path below.
+  // Stage-first: Commit writes the staged index only. A split item with an
+  // empty message of a model-less draft falls through to the no-model error
+  // path below.
   const canCommit = staged.length > 0;
   const hasMessage = message.trim() !== "";
 
@@ -460,15 +448,12 @@ export function ChangesColumn({
     }
   };
 
-  /** The split dropdown's run. Same three kinds as the top bar, but the column
-   *  never stages implicitly — commits write the staged index only. */
-  const runAction = async (kind: GitActionKind, label: string) => {
+  /** The split dropdown's run. This surface commits locally; Sync / Publish
+   *  handle the push. */
+  const runAction = async (kind: "commitPushPr" | "pushPr", label: string) => {
     if (busy || !branch) return;
     if (
-      (kind === "commitPush" ||
-        kind === "commitPushPr" ||
-        kind === "push" ||
-        kind === "pushPr") &&
+      (kind === "commitPushPr" || kind === "pushPr") &&
       defaultBranchQuery.data === branch.branch
     ) {
       const ok = await ask(
@@ -480,11 +465,11 @@ export function ChangesColumn({
     setBusy(true);
     try {
       let pushed = true;
-      if (kind === "commitPush" || kind === "commitPushPr") {
+      if (kind === "commitPushPr") {
         const text = await resolveMessage();
         pushed = await commitAndPush(text);
         if (pushed) setMessage("");
-      } else if (kind === "push" || kind === "pushPr") {
+      } else if (kind === "pushPr") {
         if (branch.upstream) {
           await invoke<string>("git_push", { path: projectPath });
         } else {
@@ -616,29 +601,15 @@ export function ChangesColumn({
 
   const empty = files.length === 0;
   const cleanNote = branch && empty ? syncCopy(branch) : null;
-  // The split dropdown, stage-first: commit moves need the staged index and
-  // (per MonoCode) a written message; the PR move needs somewhere to push.
+  // The split dropdown is the PR move only. Commit is the button; push is
+  // Sync / Publish below.
   const canPush = !!branch && (branch.ahead > 0 || !branch.upstream);
-  const prKind: GitActionKind = canCommit && hasMessage ? "commitPushPr" : "pushPr";
+  const prKind = canCommit && hasMessage ? "commitPushPr" : "pushPr";
   const dropdown: {
-    kind: GitActionKind;
+    kind: "commitPushPr" | "pushPr";
     label: string;
     reason?: string;
   }[] = [
-    {
-      kind: "commitPush",
-      label: "Commit & push",
-      reason: !canCommit
-        ? "Stage something first"
-        : !hasMessage
-          ? "Write a message first"
-          : undefined,
-    },
-    {
-      kind: "commit",
-      label: "Commit",
-      reason: !canCommit ? "Stage something first" : undefined,
-    },
     {
       kind: prKind,
       label: prKind === "commitPushPr" ? "Commit, push & open PR" : "Push & open PR",
@@ -654,11 +625,11 @@ export function ChangesColumn({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* Header row: title, branch + arrows, overflow. */}
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+      {/* Header row: title, branch chip, overflow. */}
+      <div className="flex h-9 shrink-0 items-center gap-2 px-3">
         <span className="text-sm font-medium">Changes</span>
         {branch && (
-          <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+          <span className="flex min-w-0 items-center gap-1 rounded-md bg-secondary/70 px-1.5 py-0.5 text-xs text-muted-foreground">
             <GitBranch className="size-3 shrink-0" />
             <span className="min-w-0 max-w-28 truncate">{branch.branch}</span>
             {branch.behind > 0 && (
@@ -686,7 +657,7 @@ export function ChangesColumn({
       </div>
 
       {/* Commit composer */}
-      <div className="grid shrink-0 gap-2 border-b px-3 py-2">
+      <div className="grid shrink-0 gap-2 px-3 pb-2">
         <div className="relative">
           <Textarea
             ref={textareaRef}
@@ -703,22 +674,39 @@ export function ChangesColumn({
             placeholder={
               canCommit ? "Message (⌘⏎ to commit)" : "Stage files to write a message"
             }
-            className="min-h-9 pr-8 text-xs"
+            className="min-h-9 bg-secondary/50 pr-8 text-xs shadow-none"
           />
-          <button
-            type="button"
-            title="Draft a commit message from the diff"
-            disabled={busy || wandBusy || files.length === 0}
-            onClick={() => void runWand()}
-            className="absolute right-1.5 top-1.5 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-          >
-            <Sparkles className="size-3.5" />
-          </button>
+          {message ? (
+            <button
+              type="button"
+              title="Clear message"
+              onClick={() => setMessage("")}
+              className="absolute right-1.5 top-1.5 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <X className="size-3.5" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              title="Draft a commit message from the diff"
+              disabled={busy || wandBusy || files.length === 0}
+              onClick={() => void runWand()}
+              className="absolute right-1.5 top-1.5 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            >
+              <Sparkles className="size-3.5" />
+            </button>
+          )}
         </div>
-        <div className="flex items-center gap-1">
+        <div
+          className={cn(
+            "flex overflow-hidden rounded-lg",
+            canCommit ? "bg-primary" : "bg-secondary",
+          )}
+        >
           <Button
             size="sm"
-            className="min-w-0 flex-1"
+            variant={canCommit ? "default" : "secondary"}
+            className="min-w-0 flex-1 rounded-none shadow-none disabled:opacity-100"
             disabled={busy || !canCommit}
             title={!canCommit ? "Stage something first" : undefined}
             onClick={() => void commit()}
@@ -734,28 +722,31 @@ export function ChangesColumn({
             <DropdownMenuTrigger asChild>
               <Button
                 size="sm"
-                variant="secondary"
+                variant={canCommit ? "default" : "secondary"}
                 disabled={busy}
                 title="More commit actions"
+                className={cn(
+                  "rounded-none px-2 shadow-none disabled:opacity-100",
+                  canCommit
+                    ? "border-l border-primary-foreground/20"
+                    : "border-l border-border",
+                )}
               >
                 <ChevronDown className="size-3.5" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52">
-              {dropdown.map((action) => {
-                const Icon = ACTION_ICON[action.kind];
-                return (
+              {dropdown.map((action) => (
                   <DropdownMenuItem
                     key={action.kind}
                     disabled={busy || !!action.reason}
                     title={action.reason}
                     onSelect={() => void runAction(action.kind, action.label)}
                   >
-                    <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                    <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
                     {action.label}
                   </DropdownMenuItem>
-                );
-              })}
+              ))}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -806,8 +797,13 @@ export function ChangesColumn({
           </div>
         )}
 
-      {/* File lists */}
-      <div className="min-h-0 flex-1 overflow-auto pb-1">
+      {/* File lists. Empty stays a short note so the graph can fill the rest. */}
+      <div
+        className={cn(
+          "overflow-auto pb-1",
+          empty ? "shrink-0" : "min-h-0 flex-1",
+        )}
+      >
         {empty ? (
           <div className="pt-2">
             <p className="px-3 py-2 text-center text-xs text-muted-foreground">

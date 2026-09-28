@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -16,24 +16,11 @@ import type { GraphCommit } from "@/types";
  *  288px column is the domain the surface is for; no virtualizer here. */
 const GRAPH_LIMIT = 80;
 
-/** The compact surface's geometry: 22px rows, 14px lanes, small dots. */
-const ROW_H = 22;
+/** Compact timeline rows: enough height for a subject + branch pill. */
+const ROW_H = 28;
 const LANE_W = 14;
 const DOT_R = 3.5;
 const SVG_PAD = 6;
-
-const HEIGHT_KEY = "emberyx.changes.graph.height";
-const DEFAULT_HEIGHT = 180;
-const MIN_HEIGHT = 120;
-
-const readHeight = (): number => {
-  try {
-    const raw = Number(sessionStorage.getItem(HEIGHT_KEY));
-    return raw >= MIN_HEIGHT ? raw : DEFAULT_HEIGHT;
-  } catch {
-    return DEFAULT_HEIGHT;
-  }
-};
 
 const laneWidth = (row: GraphRow) =>
   Math.max(
@@ -127,9 +114,8 @@ function LaneSvg({ row }: { row: GraphRow<GraphCommit> }) {
   );
 }
 
-/** Graph section of the Changes column: collapsible, drag-resizable, and
- *  drawing the shared lane layout as 22px swimlane rows. Click opens the
- *  whole-commit review. */
+/** Graph section of the Changes column: collapsible, filling leftover
+ *  height, drawing the shared lane layout. Click opens the whole-commit review. */
 export function ChangesGraph({
   projectPath,
   onPickCommit,
@@ -138,7 +124,6 @@ export function ChangesGraph({
   onPickCommit: (sha: string, subject: string) => void;
 }) {
   const [open, setOpen] = useState(true);
-  const [height, setHeight] = useState(readHeight);
   const graphQuery = useGraphPage(projectPath, GRAPH_LIMIT, 0);
   const commits = useMemo(() => graphQuery.data ?? [], [graphQuery.data]);
 
@@ -153,110 +138,63 @@ export function ChangesGraph({
     return { rows };
   }, [commits]);
 
-  const resizeRef = useRef<HTMLDivElement>(null);
-
-  const startResize = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const startY = e.clientY;
-    const startH = height;
-    let frame = 0;
-    let latest = startH;
-    const el = resizeRef.current;
-    if (el) el.style.willChange = "height";
-    const paint = () => {
-      frame = 0;
-      if (el) el.style.height = `${latest}px`;
-    };
-    const onMove = (ev: MouseEvent) => {
-      latest = Math.max(MIN_HEIGHT, startH + ev.clientY - startY);
-      if (!frame) frame = requestAnimationFrame(paint);
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      if (frame) cancelAnimationFrame(frame);
-      if (el) el.style.willChange = "";
-      setHeight(latest);
-      try {
-        sessionStorage.setItem(HEIGHT_KEY, String(Math.round(latest)));
-      } catch {
-        // No storage — the height just won't persist.
-      }
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-
   return (
-    <div className="flex min-h-0 flex-1 flex-col border-t">
+    <div className="flex min-h-0 flex-1 flex-col">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex shrink-0 items-center gap-1 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+        className="flex w-full shrink-0 items-center justify-between px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
       >
-        {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
         Graph
-        <span className="ml-1 tabular-nums">{rows.length}</span>
+        {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
       </button>
       {open && (
-        <>
-          <div
-            ref={resizeRef}
-            className="min-h-0 shrink-0 overflow-auto"
-            style={{ height }}
-          >
-            {rows.length === 0 ? (
-              <p className="px-3 py-2 text-[11px] text-muted-foreground">
-                No commits yet.
-              </p>
-            ) : (
-              <ul>
-                {rows.map((row) => {
-                  const c = row.commit;
-                  const pill = refPillOf(c.refs);
-                  return (
-                    <li key={c.sha}>
-                      <button
-                        type="button"
-                        onClick={() => onPickCommit(c.sha, c.subject)}
-                        title={`${c.subject} — opens the whole-commit review`}
-                        className="flex w-full items-center text-left hover:bg-accent"
-                        style={{ height: ROW_H }}
-                      >
-                        <LaneSvg row={row} />
-                        <span className="min-w-0 flex-1 truncate text-xs">
-                          {c.subject}
+        <div className="min-h-0 flex-1 overflow-auto">
+          {rows.length === 0 ? (
+            <p className="px-3 py-2 text-[11px] text-muted-foreground">
+              No commits yet.
+            </p>
+          ) : (
+            <ul>
+              {rows.map((row) => {
+                const c = row.commit;
+                const pill = refPillOf(c.refs);
+                const author = c.author.split(/[\s@]/)[0] ?? c.author;
+                return (
+                  <li key={c.sha}>
+                    <button
+                      type="button"
+                      onClick={() => onPickCommit(c.sha, c.subject)}
+                      title={`${c.subject} — opens the whole-commit review`}
+                      className="flex w-full items-center gap-1 pr-2 text-left hover:bg-accent"
+                      style={{ height: ROW_H }}
+                    >
+                      <LaneSvg row={row} />
+                      <span className="min-w-0 flex-1 truncate text-xs">
+                        {c.subject}
+                      </span>
+                      <span className="max-w-16 shrink-0 truncate text-[10px] text-muted-foreground">
+                        {author}
+                      </span>
+                      {pill && (
+                        <span
+                          className={cn(
+                            "max-w-24 shrink-0 truncate rounded-md px-1.5 py-0.5 text-[10px]",
+                            pill.remote
+                              ? "bg-secondary text-muted-foreground"
+                              : "bg-primary/20 font-medium text-primary",
+                          )}
+                        >
+                          {pill.label}
                         </span>
-                        <span className="shrink-0 px-1 text-[10px] text-muted-foreground">
-                          {c.author}
-                        </span>
-                        {pill && (
-                          <span
-                            className={cn(
-                              "shrink-0 whitespace-nowrap rounded px-1 text-[10px]",
-                              pill.remote
-                                ? "bg-secondary text-muted-foreground"
-                                : pill.head
-                                  ? "bg-primary/15 font-medium text-primary"
-                                  : "bg-secondary text-foreground"
-                            )}
-                          >
-                            {pill.label}
-                          </span>
-                        )}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-          <div
-            onMouseDown={startResize}
-            title="Drag to resize"
-            className="h-1.5 shrink-0 cursor-row-resize hover:bg-primary/30"
-          />
-        </>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       )}
     </div>
   );

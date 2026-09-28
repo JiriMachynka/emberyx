@@ -680,12 +680,15 @@ export const ChatComposer = memo(function ChatComposer({
               title={showStop ? "Stop" : busy ? "Queue message" : "Send"}
               aria-label={showStop ? "Stop" : busy ? "Queue message" : "Send"}
               disabled={!showStop && (!hasContent || exited)}
-              className="rounded-full"
+              className={cn(
+                "rounded-full text-foreground",
+                showStop ? "[&_svg]:size-3.5" : "[&_svg]:size-5",
+              )}
             >
               {showStop ? (
-                <Square className="size-3.5 fill-current" />
+                <Square className="fill-current" />
               ) : (
-                <ArrowUp className="size-4" />
+                <ArrowUp />
               )}
             </Button>
           </div>

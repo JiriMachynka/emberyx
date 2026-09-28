@@ -2,6 +2,7 @@ import {
   Bell,
   Boxes,
   Camera,
+  CircleDollarSign,
   GitBranch,
   Info,
   Keyboard,
@@ -29,6 +30,7 @@ export type Tab =
   | "snapshots"
   | "sourceControl"
   | "notifications"
+  | "usage"
   | "about";
 
 /** A tab owns the settings keys it edits, which is what "Restore defaults"
@@ -156,6 +158,13 @@ export const TABS: TabMeta[] = [
       "notifySound",
     ],
     finds: "notify notification sound alert done error account unfocused",
+  },
+  {
+    id: "usage",
+    label: "Usage",
+    icon: CircleDollarSign,
+    keys: [],
+    finds: "usage cost tokens spend estimate sessions chart history",
   },
   { id: "about", label: "About", icon: Info, keys: [], finds: "version update release" },
 ];

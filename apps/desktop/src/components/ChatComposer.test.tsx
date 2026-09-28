@@ -182,6 +182,21 @@ describe("ChatComposer", () => {
     expect(screen.getByTitle("Stop")).toBeTruthy();
   });
 
+  it("paints send and stop in the light foreground, with a larger send glyph", async () => {
+    const onStop = vi.fn();
+    await mount({ ...propsFor("claude"), busy: true, onStop });
+    expect(screen.getByTitle("Stop").className).toMatch(/text-foreground/);
+    expect(screen.getByTitle("Stop").className).not.toMatch(/text-primary-foreground/);
+    expect(screen.getByTitle("Stop").className).toMatch(/\[&_svg\]:size-3\.5/);
+
+    fireEvent.change(textarea(), { target: { value: "queue me" } });
+    const send = screen.getByTitle("Queue message");
+    expect(send.className).toMatch(/text-foreground/);
+    expect(send.className).not.toMatch(/text-primary-foreground/);
+    expect(send.className).toMatch(/\[&_svg\]:size-5/);
+    expect(send.className).not.toMatch(/\[&_svg\]:size-4(?:\s|$)/);
+  });
+
   // Chips are gated on the capability table, never on the backend's name —
   // otherwise Claude's controls leak into sessions that can't honour them.
   it.each([...AGENT_BACKENDS])("%s shows exactly the chips its capabilities allow", async (backend) => {

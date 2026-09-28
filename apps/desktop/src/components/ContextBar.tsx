@@ -3,11 +3,10 @@ import { Button } from "@/components/ui/button";
 import { ProjectMark } from "@/components/ProjectMark";
 import { ActionsMenu } from "@/components/ActionsMenu";
 import { OpenInIde } from "@/components/OpenInIde";
-import { GitCommitMenu } from "@/components/GitCommitMenu";
 import type { ProjectAction } from "@/lib/actions";
 import { basename } from "@/lib/path";
 import { glyphFor } from "@/lib/projectGlyph";
-import { gitStatusInterval, useGitBranch, useGitChanges, useGitRemoteHost } from "@/lib/queries";
+import { gitStatusInterval, useGitBranch, useGitChanges } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
 import type { Project, Session } from "@/types";
 
@@ -64,7 +63,6 @@ export function ContextBar({
   const working = useAgentStore((s) =>
     agentId ? s.statuses[agentId] === "working" : false
   );
-  const remoteHost = useGitRemoteHost(path).data;
   const branch = useGitBranch(path).data?.branch;
   const changeCount = useGitChanges(
     path,
@@ -139,12 +137,6 @@ export function ContextBar({
               </span>
             )}
           </Button>
-        )}
-        {activeProject && (
-          <GitCommitMenu
-            projectPath={activeProject.path}
-            remoteHost={remoteHost}
-          />
         )}
         {devCount > 0 && showDock && (
           <Button

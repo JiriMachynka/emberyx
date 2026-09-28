@@ -49,9 +49,6 @@ export interface SidebarProps {
   onOpenSettings: () => void;
   settingsOpen: boolean;
   onBackFromSettings: () => void;
-  onOpenUsage: () => void;
-  notificationCount: number;
-  onOpenNotifications: () => void;
 }
 
 export interface ThreadRowData {

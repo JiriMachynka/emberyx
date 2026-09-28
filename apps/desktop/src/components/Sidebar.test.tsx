@@ -103,9 +103,6 @@ const baseProps = (over: Partial<SidebarProps> = {}): SidebarProps => ({
   onOpenSettings: () => {},
   settingsOpen: false,
   onBackFromSettings: () => {},
-  onOpenUsage: () => {},
-  notificationCount: 0,
-  onOpenNotifications: () => {},
   ...over,
 });
 

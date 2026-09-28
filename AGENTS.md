@@ -305,11 +305,8 @@ Restore that silently skips it. Two sections are worth knowing about:
   because Haiku otherwise spends ~2000 thinking tokens on an 18-token subject
   line; and the warm child is spent after one draft, since `--input-format
   stream-json` is one conversation and the next draft would carry this diff with
-  it. `GitCommitMenu` warms on open and prefetches the draft itself only when
-  there is something to commit, so opening the menu for Pull bills nothing. It
-  also drafts **before** staging: with nothing staged `commit_diff` reads the
-  working tree, so drafting after staging would describe a different diff than
-  the prefetch did.
+  it. The Changes panel drafts on focus / wand (`git_draft_commit_message`)
+  from the staged index when something is staged. Opening Git costs nothing.
 - **Keyboard Shortcuts** records a new chord per command, with `lib/commands.ts`
   as the one declaration and `lib/keybindings.ts` holding the overrides (under
   their own storage key, not `Settings`). Two things stay un-rebindable and say

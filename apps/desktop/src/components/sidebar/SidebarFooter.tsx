@@ -1,4 +1,4 @@
-import { ArrowLeft, Bell, ChartColumn, Settings } from "lucide-react";
+import { ArrowLeft, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SidebarProps } from "./types";
 
@@ -7,66 +7,35 @@ export function SidebarFooter({
   onOpenSettings,
   settingsOpen,
   onBackFromSettings,
-  onOpenUsage,
-  notificationCount,
-  onOpenNotifications,
 }: SidebarProps) {
   const btn =
-    "flex items-center gap-1.5 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
+    "flex items-center gap-1.5 rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
 
   return (
     <footer
       className={cn(
         "flex shrink-0 items-center border-t",
-        collapsed
-          ? "flex-col justify-center gap-0.5 py-1.5"
-          : "justify-between px-2 py-1"
+        collapsed ? "justify-center py-1.5" : "px-2 py-1"
       )}
     >
-      <div className={cn("flex items-center", collapsed && "flex-col")}>
       {settingsOpen ? (
         <button
           onClick={onBackFromSettings}
           className={btn}
           title="Back"
         >
-          <ArrowLeft className="size-3.5" />
+          <ArrowLeft className="size-4" />
           {!collapsed && <span className="text-xs">Back</span>}
         </button>
       ) : (
-        <>
-          <button
-            onClick={onOpenSettings}
-            className={btn}
-            title="Settings"
-          >
-            <Settings className="size-3.5" />
-          </button>
-          <button
-            onClick={onOpenUsage}
-            className={btn}
-            title="Usage"
-          >
-            <ChartColumn className="size-3.5" />
-          </button>
-        </>
+        <button
+          onClick={onOpenSettings}
+          className={btn}
+          title="Settings"
+        >
+          <Settings className="size-5" />
+        </button>
       )}
-      </div>
-      <button
-        onClick={onOpenNotifications}
-        className={cn("relative", btn)}
-        title="Notifications"
-      >
-        <Bell className="size-3.5" />
-        {notificationCount > 0 &&
-          (collapsed ? (
-            <span className="absolute right-1 top-1 size-2 rounded-full bg-primary" />
-          ) : (
-            <span className="rounded bg-primary/20 px-1 text-[10px] tabular-nums text-primary">
-              {notificationCount}
-            </span>
-          ))}
-      </button>
     </footer>
   );
 }

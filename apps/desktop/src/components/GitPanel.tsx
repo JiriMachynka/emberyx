@@ -1,10 +1,10 @@
-import { GitActions } from "@/components/GitActions";
-import { RecentCommits } from "@/components/RecentCommits";
+import { ChangesColumn } from "@/components/sidebar/ChangesColumn";
 import { SidePanel } from "@/components/SidePanel";
-import { useAgentStore } from "@/lib/agentStore";
 
 interface GitPanelProps {
   projectPath: string;
+  remoteHost: string | undefined;
+  onOpenReview: () => void;
   onOpenWorktree: (path: string, repoRoot: string, branch: string) => void;
   onRemoveWorktree: (worktreePath: string, repoRoot: string) => void | Promise<void>;
   onClose: () => void;
@@ -13,51 +13,38 @@ interface GitPanelProps {
 }
 
 /**
- * The repository itself — branch, pull/push/stash/worktree, and the commit
- * history — as a dock surface.
- *
- * These used to sit on top of the diff panel, which meant the diff you opened
- * the panel for started halfway down it. They are about the repository rather
- * than the change in front of you, so they get their own tab beside it instead
- * of a popover you have to hold open while you read.
+ * The same Changes surface as the column layout — commit composer, file list,
+ * graph — in the Git dock tab. Branch/stash/worktree sit in the header overflow.
  */
 export function GitPanel({
   projectPath,
+  remoteHost,
+  onOpenReview,
   onOpenWorktree,
   onRemoveWorktree,
   onClose,
   embedded,
 }: GitPanelProps) {
-  const requestCommitReview = useAgentStore((s) => s.requestCommitReview);
   return (
     <SidePanel
       storageKey="git"
       flushHeader
       embedded={embedded}
       onClose={onClose}
-      // In the dock the tab strip already says Git; only the standalone aside
-      // needs a title of its own.
       header={
         embedded ? null : (
           <span className="px-2 text-xs font-medium text-muted-foreground">Git</span>
         )
       }
     >
-      <div className="flex min-h-0 flex-1 flex-col">
-        <GitActions
-          projectPath={projectPath}
-          onOpenWorktree={onOpenWorktree}
-          onRemoveWorktree={onRemoveWorktree}
-        />
-        {/* The diff renders in its own tab, so the pick travels through the
-            store and App is what opens it. */}
-        <RecentCommits
-          projectPath={projectPath}
-          onPickCommitFile={(sha, file, subject) =>
-            requestCommitReview({ projectPath, sha, file, subject })
-          }
-        />
-      </div>
+      <ChangesColumn
+        projectPath={projectPath}
+        rightDock
+        remoteHost={remoteHost}
+        onOpenReview={onOpenReview}
+        onOpenWorktree={onOpenWorktree}
+        onRemoveWorktree={onRemoveWorktree}
+      />
     </SidePanel>
   );
 }

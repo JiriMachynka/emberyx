@@ -24,6 +24,9 @@ vi.mock("@tauri-apps/api/core", () => ({
     // The T3 import row hides itself unless a store exists.
     if (cmd === "t3_import_available") return Promise.resolve(false);
     if (cmd === "typesafe_key_present") return Promise.resolve(false);
+    if (cmd === "usage_summary") {
+      return Promise.resolve({ rows: [], sessions: [], counted: [] });
+    }
     return Promise.resolve(null);
   },
 }));
@@ -103,6 +106,7 @@ const LANDMARK: Record<string, string> = {
   snapshots: "Capture the frontmost window",
   sourceControl: "Commit message model",
   notifications: "Notify on errors",
+  usage: "Processed tokens",
   about: "Check for updates",
 };
 
@@ -178,6 +182,7 @@ describe("SettingsPage", () => {
       ["typesafe", "Jev"],
       ["rebind", "Keyboard Shortcuts"],
       ["sound", "Notifications"],
+      ["estimate", "Usage"],
       ["settle", "General"],
     ];
     for (const [query, label] of cases) {

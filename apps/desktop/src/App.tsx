@@ -3,12 +3,10 @@ import { markSwitch, onRender } from "@/lib/perf";
 import { toast, Toaster } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { onOpenFileRequest } from "@/lib/openFileRequest";
 import { SessionPanes } from "@/components/SessionPanes";
 import { RightDock } from "@/components/RightDock";
 import { ProjectSettingsPane } from "@/components/ProjectSettingsPane";
-import { NotificationPanel } from "@/components/NotificationPanel";
 import { ContextBar } from "@/components/ContextBar";
 import { TimedRegion } from "@/lib/commitTiming";
 import { Sidebar } from "@/components/Sidebar";
@@ -40,7 +38,6 @@ import {
 } from "@/lib/dock";
 import {
   useAgentStore,
-  selectUnreadCount,
   type CommitReviewRequest,
   type TurnReviewRequest,
 } from "@/lib/agentStore";
@@ -94,9 +91,6 @@ const EditorPane = lazy(() =>
 const SettingsPage = lazy(() =>
   import("@/components/SettingsPage").then((m) => ({ default: m.SettingsPage }))
 );
-const UsagePanel = lazy(() =>
-  import("@/components/UsagePanel").then((m) => ({ default: m.UsagePanel }))
-);
 const GraphPane = lazy(() =>
   import("@/components/GraphPane").then((m) => ({ default: m.GraphPane }))
 );
@@ -139,9 +133,9 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [cloneSource, setCloneSource] = useState<CloneSource | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
-  const [usageOpen, setUsageOpen] = useState(false);
-  // Settings and usage cover the workspace column rather than replacing it.
-  const overlayOpen = settingsOpen || usageOpen;
+  const [settingsRevealTab, setSettingsRevealTab] = useState<"usage" | null>(null);
+  // Settings covers the workspace column rather than replacing it.
+  const overlayOpen = settingsOpen;
   // The commit-history graph is a full-window surface like Settings: it stays
   // mounted after its first open and is merely hidden, so the lanes, scroll
   // position and any expanded commit survive closing it.
@@ -160,12 +154,12 @@ function App() {
   const closeSettings = useCallback(() => {
     setSettingsOpen(false);
   }, []);
+  const consumeRevealTab = useCallback(() => setSettingsRevealTab(null), []);
   const settingsMountedRef = useRef(false);
   if (settingsOpen) settingsMountedRef.current = true;
   const settingsMounted = settingsMountedRef.current;
   const [slashOpen, setSlashOpen] = useState(false);
   const [conflictOpen, setConflictOpen] = useState(false);
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   // Once opened the editor stays mounted and is merely hidden, so open buffers,
   // scroll position and undo history survive closing it.
@@ -464,21 +458,6 @@ function App() {
     );
     for (const a of auto) ws.addDev(id, a.name, path, a.command);
   };
-  const unread = useAgentStore(selectUnreadCount);
-  const markNotificationsRead = useAgentStore((s) => s.markNotificationsRead);
-
-  // Mirror unread onto the macOS dock badge. Guarded — there's no window in
-  // tests or a plain browser.
-  useEffect(() => {
-    try {
-      void getCurrentWindow()
-        .setBadgeCount(unread > 0 ? unread : undefined)
-        .catch(() => {});
-    } catch {
-      // Not running under Tauri.
-    }
-  }, [unread]);
-
   // A backend command that panics rejects its invoke, but nothing forces the
   // caller to notice — a dropped rejection leaves a pane hanging with no
   // explanation. The Rust hook reports it here so it is never silent, and names
@@ -495,16 +474,6 @@ function App() {
       void unlisten.then((off) => off()).catch(() => {});
     };
   }, []);
-
-  const toggleNotifications = () => {
-    if (!notificationsOpen) markNotificationsRead();
-    setNotificationsOpen(!notificationsOpen);
-  };
-
-  const jumpToSession = (sessionId: string) => {
-    const target = sessions.find((s) => s.id === sessionId);
-    if (target) ws.activateSession(target.projectId, target.id);
-  };
 
   // Signing in is interactive (browser hand-off, then a code pasted back) —
   // that needs a real terminal, and the app no longer hosts one, so the flow
@@ -575,7 +544,6 @@ function App() {
     },
     onOpenGraph: () => {
       if (!activeProject) return;
-      setUsageOpen(false);
       setGraphOpen((v) => !v);
     },
   });
@@ -583,7 +551,6 @@ function App() {
   // toggles), so a re-pick from ⌘K lands you on the same surface.
   const openGraph = useCallback(() => {
     if (!activeProject) return;
-    setUsageOpen(false);
     setGraphOpen(true);
   }, [activeProject]);
   useSnapshots(settings);
@@ -663,6 +630,8 @@ function App() {
       <GitPanel
         embedded
         projectPath={activeProject.path}
+        remoteHost={remoteHostValue}
+        onOpenReview={() => showTab("diff")}
         onOpenWorktree={openWorktreeAndRun}
         onRemoveWorktree={ws.removeWorktree}
         onClose={() => hideTab("git")}
@@ -765,7 +734,6 @@ function App() {
           remoteHost={remoteHostValue}
           onSelectProject={(id) => {
             setSettingsOpen(false);
-            setUsageOpen(false);
             ws.setActiveProjectId(id);
             if (settings.workspaceLayout === "column") {
               setWorkspaceCollapsed(false);
@@ -785,34 +753,22 @@ function App() {
           onSelectSession={(projectId, id) => {
             markSwitch(id);
             setSettingsOpen(false);
-            setUsageOpen(false);
             ws.activateSession(projectId, id);
           }}
           onResumeThread={(projectId, path, thread) => {
             setSettingsOpen(false);
-            setUsageOpen(false);
             ws.resumeThreadIn(projectId, path, thread);
           }}
           onCloseSession={ws.closeSession}
           onMoveSession={ws.moveSession}
           onNewAgent={() => {
             setSettingsOpen(false);
-            setUsageOpen(false);
             ws.newAgent();
           }}
           onOpenSearch={() => setPaletteOpen(true)}
-          onOpenSettings={() => {
-            setUsageOpen(false);
-            setSettingsOpen(true);
-          }}
+          onOpenSettings={() => setSettingsOpen(true)}
            settingsOpen={settingsOpen}
            onBackFromSettings={closeSettings}
-          onOpenUsage={() => {
-            setSettingsOpen(false);
-            setUsageOpen(true);
-          }}
-          notificationCount={unread}
-          onOpenNotifications={toggleNotifications}
         />
         </Profiler>
       )}
@@ -964,12 +920,6 @@ function App() {
             }
           />
           )}
-          {notificationsOpen && (
-            <NotificationPanel
-              onClose={() => setNotificationsOpen(false)}
-              onSelect={jumpToSession}
-            />
-          )}
           {slashOpen && (
             <SlashCommandsPanel
               onClose={() => setSlashOpen(false)}
@@ -994,16 +944,10 @@ function App() {
                   onBack={closeSettings}
                   settings={settings}
                   onUpdate={updateSettings}
+                  revealTab={settingsRevealTab}
+                  onRevealTab={consumeRevealTab}
                 />
               </TimedRegion>
-            </Suspense>
-          </div>
-        )}
-
-        {usageOpen && (
-          <div className="absolute inset-0 z-20 flex flex-col bg-background">
-            <Suspense fallback={null}>
-              <UsagePanel onBack={() => setUsageOpen(false)} />
             </Suspense>
           </div>
         )}
@@ -1035,22 +979,18 @@ function App() {
         slashCommands={capabilities.slashCommands}
         onSelectSession={(projectId, id) => {
           setSettingsOpen(false);
-          setUsageOpen(false);
           ws.activateSession(projectId, id);
         }}
         onResumeThread={(projectId, path, thread) => {
           setSettingsOpen(false);
-          setUsageOpen(false);
           ws.resumeThreadIn(projectId, path, thread);
         }}
         onNewAgent={() => {
           setSettingsOpen(false);
-          setUsageOpen(false);
           ws.newAgent();
         }}
         onOpenMockup={() => {
           setSettingsOpen(false);
-          setUsageOpen(false);
           ws.openMockup();
         }}
         onPickProject={ws.pickProject}
@@ -1058,18 +998,14 @@ function App() {
         onCloneGitlab={() => setCloneSource("gitlab")}
         onCloneUrl={() => setCloneSource("url")}
         onPublish={() => setPublishOpen(true)}
-        onOpenSettings={() => {
-          setUsageOpen(false);
-          setSettingsOpen(true);
-        }}
+        onOpenSettings={() => setSettingsOpen(true)}
         onOpenEditor={openEditor}
         onToggleChanges={() => flipTab("diff")}
         onSearch={openSearch}
         onOpenUsage={() => {
-          setSettingsOpen(false);
-          setUsageOpen(true);
+          setSettingsRevealTab("usage");
+          setSettingsOpen(true);
         }}
-        onOpenNotifications={toggleNotifications}
         onOpenSlash={() => setSlashOpen(true)}
         onOpenGraph={openGraph}
       />

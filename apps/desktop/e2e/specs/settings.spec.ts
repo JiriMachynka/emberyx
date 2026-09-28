@@ -7,11 +7,14 @@ const TABS = [
   "Appearance",
   "Keyboard Shortcuts",
   "Providers",
+  "Jev",
   "MCP",
   "Skills",
   "Connections",
+  "SnapShots",
   "Source Control",
   "Notifications",
+  "Usage",
   "About",
 ];
 

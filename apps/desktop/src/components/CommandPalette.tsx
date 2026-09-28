@@ -1,7 +1,6 @@
 import { Command } from "cmdk";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
-  Bell,
   CircleDollarSign,
   CloudUpload,
   FileCode,
@@ -44,7 +43,6 @@ interface CommandPaletteProps {
   onToggleChanges: () => void;
   onSearch: () => void;
   onOpenUsage: () => void;
-  onOpenNotifications: () => void;
   onOpenSlash: () => void;
   onOpenGraph: () => void;
 }
@@ -72,7 +70,6 @@ export function CommandPalette({
   onToggleChanges,
   onSearch,
   onOpenUsage,
-  onOpenNotifications,
   onOpenSlash,
   onOpenGraph,
 }: CommandPaletteProps) {
@@ -205,13 +202,6 @@ export function CommandPalette({
                     Commands
                   </Item>
                 )}
-                <Item
-                  value="action notifications"
-                  onSelect={() => run(onOpenNotifications)}
-                >
-                  <Bell className="size-4 text-muted-foreground" />
-                  Notifications
-                </Item>
                 <Item value="action usage cost" onSelect={() => run(onOpenUsage)}>
                   <CircleDollarSign className="size-4 text-muted-foreground" />
                   Usage & cost

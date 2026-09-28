@@ -25,6 +25,7 @@ import { ConnectionsSection } from "@/components/settings/ConnectionsSection";
 import { SnapshotsSection } from "@/components/settings/SnapshotsSection";
 import { SourceControlSection } from "@/components/settings/SourceControlSection";
 import { NotificationsSection } from "@/components/settings/NotificationsSection";
+import { UsageSection } from "@/components/settings/UsageSection";
 import { AboutSection } from "@/components/settings/AboutSection";
 import type { AgentBackend } from "@/lib/agentBackend";
 import type { Settings } from "@/lib/settings";
@@ -38,6 +39,9 @@ interface SettingsPageProps {
   onBack: () => void;
   settings: Settings;
   onUpdate: (patch: Partial<Settings>) => void;
+  /** Jump to this tab when it changes — command palette "Usage & cost". */
+  revealTab?: Tab | null;
+  onRevealTab?: () => void;
 }
 
 /** Memoized because the page stays mounted once opened — it is merely hidden —
@@ -48,8 +52,15 @@ export const SettingsPage = memo(function SettingsPage({
   onBack,
   settings,
   onUpdate,
+  revealTab,
+  onRevealTab,
 }: SettingsPageProps) {
-  const [tab, setTab] = useState<Tab>("general");
+  const [tab, setTab] = useState<Tab>(revealTab ?? "general");
+  useEffect(() => {
+    if (!revealTab) return;
+    setTab(revealTab);
+    onRevealTab?.();
+  }, [revealTab, onRevealTab]);
   const [query, setQuery] = useState("");
   const [version, setVersion] = useState("");
   const [checking, setChecking] = useState(false);
@@ -258,7 +269,12 @@ export const SettingsPage = memo(function SettingsPage({
         <div className="min-h-0 flex-1 overflow-y-auto">
           {/* max-w-3xl, not 4xl: past this the label and its value stop reading
               as one row and the page turns into a table. */}
-          <div className="mx-auto grid w-full max-w-3xl content-start gap-7 px-6 pb-16 pt-4">
+          <div
+            className={cn(
+              "mx-auto grid w-full content-start gap-7 px-6 pb-16 pt-4",
+              tab === "usage" ? "max-w-6xl" : "max-w-3xl",
+            )}
+          >
             <h1 className="text-xl font-semibold tracking-tight">{meta.label}</h1>
 
 
@@ -321,6 +337,8 @@ export const SettingsPage = memo(function SettingsPage({
             {tab === "notifications" && (
               <NotificationsSection settings={settings} onUpdate={onUpdate} />
             )}
+
+            {tab === "usage" && <UsageSection />}
 
             {tab === "about" && (
               <AboutSection
