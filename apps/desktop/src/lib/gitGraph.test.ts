@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   arcPath,
+  dotColor,
+  edgeColor,
   isHeadRef,
   laneColor,
   layoutGraph,
@@ -220,6 +222,25 @@ describe("layoutGraph", () => {
     expect(colors(rows[2]).includes(1)).toBe(true);
     // The shared base folds both branches back onto one lane.
     expect(rows[3].dot).toBe(0);
+  });
+  it("colours a slid lane's dot and kink by identity, not column", () => {
+    // B's lane slides from column 1 into column 0 when A's lane drops. The dot
+    // and the kink must wear B's identity hue there, not the palette colour of
+    // column 0 — keying on the index recolours the branch mid-slide.
+    const { rows } = layoutGraph([
+      c("A", ["A0"]),
+      c("B", ["B0"]),
+      c("A0", ["A00"]),
+      c("B0", ["B00"]),
+      c("A00"),
+      c("B00"),
+    ]);
+    const slid = rows[rows.length - 1];
+    expect(slid.dot).toBe(0);
+    expect(slid.cells[0].color).toBe(1);
+    expect(dotColor(slid)).toBe(laneColor(1));
+    expect(dotColor(slid)).not.toBe(laneColor(slid.dot));
+    expect(edgeColor(slid, slid.edges[0])).toBe(laneColor(1));
   });
 });
 

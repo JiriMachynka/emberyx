@@ -76,6 +76,18 @@ export const LANE_PALETTE = [
 
 export const laneColor = (i: number) => LANE_PALETTE[i % LANE_PALETTE.length];
 
+/** The colour a row's dot wears. The dot sits in `row.dot`, but its colour is
+ *  the lane's identity key, never the column index — columns shift as lanes
+ *  compact, and keying on the index recolours a branch mid-slide. */
+export const dotColor = (row: GraphRow): string =>
+  laneColor(row.cells[row.dot]?.color ?? row.dot);
+
+/** The colour of a connector — the target lane's identity, so a merge arc or a
+ *  slide kink is drawn in the hue of the line it joins, not the column it
+ *  happens to land in. */
+export const edgeColor = (row: GraphRow, edge: { to: number }): string =>
+  laneColor(row.cells[edge.to]?.color ?? edge.to);
+
 /**
  * Compact-renderer helpers: the small arc + ring vocabulary the Changes
  * column's swimlane graph draws on top of the shared layout. Kept here so the

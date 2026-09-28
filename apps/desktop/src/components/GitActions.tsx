@@ -10,9 +10,9 @@ import {
   ArrowUpFromLine,
   GitBranchPlus,
   GitFork,
+  GitGraph,
   Archive,
   Check,
-  Ellipsis,
   Trash2,
   X,
 } from "lucide-react";
@@ -227,7 +227,7 @@ export function GitActions({
             title="Branch, stash, worktree"
             className="rounded text-muted-foreground transition-colors hover:text-foreground"
           >
-            <Ellipsis className="size-3.5" />
+            <GitGraph className="size-3.5" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-52">

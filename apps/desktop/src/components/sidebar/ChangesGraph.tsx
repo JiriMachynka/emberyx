@@ -3,6 +3,8 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   arcPath,
+  dotColor,
+  edgeColor,
   isHeadRef,
   laneColor,
   layoutGraph,
@@ -71,7 +73,7 @@ function LaneSvg({ row }: { row: GraphRow<GraphCommit> }) {
             key={i}
             d={arcPath(x1, x2, midY)}
             fill="none"
-            stroke={laneColor(edge.to)}
+            stroke={edgeColor(row, edge)}
             strokeWidth={1.5}
             opacity={0.7}
           />
@@ -83,7 +85,7 @@ function LaneSvg({ row }: { row: GraphRow<GraphCommit> }) {
             cx={row.dot * LANE_W + LANE_W / 2}
             cy={midY}
             r={DOT_R}
-            fill={laneColor(row.dot)}
+            fill={dotColor(row)}
             stroke="var(--background)"
             strokeWidth={1}
           />
@@ -93,7 +95,7 @@ function LaneSvg({ row }: { row: GraphRow<GraphCommit> }) {
               cy={midY}
               r={DOT_R + 2.5}
               fill="none"
-              stroke={laneColor(row.dot)}
+              stroke={dotColor(row)}
               strokeWidth={1.5}
             />
           )}
@@ -103,7 +105,7 @@ function LaneSvg({ row }: { row: GraphRow<GraphCommit> }) {
               cy={midY}
               r={DOT_R + 5}
               fill="none"
-              stroke={laneColor(row.dot)}
+              stroke={dotColor(row)}
               strokeWidth={1}
               opacity={0.5}
             />

@@ -9,7 +9,7 @@ import {
   useCommitPatch,
   useGraphRefs,
 } from "@/lib/queries";
-import { layoutGraph, laneColor, type GraphRow, type LayoutState } from "@/lib/gitGraph";
+import { dotColor, edgeColor, layoutGraph, laneColor, type GraphRow, type LayoutState } from "@/lib/gitGraph";
 import type { CommitDetail, GraphCommit, GraphRef } from "@/types";
 import { cn } from "@/lib/utils";
 import { WorkingDiffView } from "@/components/WorkingDiffView";
@@ -105,7 +105,7 @@ function LaneSvg({ row }: { row: GraphRow }) {
             x2={to}
             y1={midY}
             y2={midY}
-            stroke={laneColor(edge.to)}
+            stroke={edgeColor(row, edge)}
             strokeWidth={2}
             opacity={0.8}
           />
@@ -116,7 +116,7 @@ function LaneSvg({ row }: { row: GraphRow }) {
           cx={row.dot * LANE_W + LANE_W / 2}
           cy={midY}
           r={DOT_R}
-          fill={laneColor(row.dot)}
+          fill={dotColor(row)}
           stroke="var(--background)"
           strokeWidth={2}
         />
