@@ -659,6 +659,12 @@ too**, or orphaned agent processes and shells survive the app.
 
 - **Version lives in three files** — `src-tauri/tauri.conf.json`,
   `package.json`, `src-tauri/Cargo.toml`. All three must match the tag.
+  `src-tauri/Cargo.lock` carries a fourth copy under the `emberyx` package, and
+  `bun run release` does not write it — bump it by hand or the release commit
+  ships a stale lockfile. `release:check` only validates the three.
+- **Release flow**: feature commit first, then a version-only `Release X`
+  commit, then tag `vX` and push it. `release.yml` builds only for a tag whose
+  commit is already on `main`.
 - **Release builds are `aarch64-apple-darwin` only** and are **not
   Apple-notarized**; first manual install needs right-click → Open.
   Deliberate (2026-09-11): no Intel, Linux or Windows builds and no
