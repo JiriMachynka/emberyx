@@ -289,6 +289,7 @@ pub fn run() {
             gitlab::gitlab_mr_diff,
             gitlab::gitlab_mr_notes,
             usage::usage_summary,
+            usage::limits::cmd::provider_limits,
             threads::list_threads,
             threads::list_store_threads,
             threads::read_thread,
@@ -334,6 +335,7 @@ pub fn run() {
             app_handle.state::<AgentManager>().kill_all();
             app_handle.state::<CodexManager>().kill_all();
             app_handle.state::<acp::AcpManager>().kill_all();
+            usage::limits::kill_all();
             app_handle.state::<PtyManager>().kill_all();
             app_handle.state::<browser::BrowserManager>().kill_all();
             app_handle.state::<draft::Drafter>().kill_all();

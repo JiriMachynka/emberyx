@@ -40,10 +40,10 @@ export const fmtTokens = (n: number): string =>
     ? `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}m`
     : `${Math.round(n / 1000)}k`;
 
-const RING = 2 * Math.PI * 10; // r=10 in a 24 viewBox — matches the send button.
+const RING = 2 * Math.PI * 10; // r=10 in a 24 viewBox.
 
-/** Ring gauge beside the send button; its popover shows how full the context
- *  window is. Kept its own memo so typing never re-renders the SVG. */
+/** Ring gauge in the composer's top-right; its popover shows how full the
+ *  context window is. Kept its own memo so typing never re-renders the SVG. */
 export const ContextMeter = memo(function ContextMeter({
   contextTokens,
   model,
@@ -53,7 +53,6 @@ export const ContextMeter = memo(function ContextMeter({
   onCompact,
   compactDisabled,
   compactDisabledReason: disabledReason,
-  compact,
   className,
 }: {
   contextTokens?: number;
@@ -64,9 +63,6 @@ export const ContextMeter = memo(function ContextMeter({
   onCompact?: () => void;
   compactDisabled?: boolean;
   compactDisabledReason?: string | null;
-  /** In the session strip: a smaller ring, with the percentage spelled out —
-   *  a 24px ring alone is a shape, not a reading. */
-  compact?: boolean;
   className?: string;
 }) {
   const max = resolveContextWindow(model, backend, resolved, contextWindow);
@@ -78,15 +74,13 @@ export const ContextMeter = memo(function ContextMeter({
       <DropdownMenuTrigger
         title="Context window"
         className={cn(
-          compact
-            ? "flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground outline-none transition-colors hover:bg-white/[0.04] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
-            : "grid size-8 place-items-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground",
+          "grid size-6 place-items-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground",
           className
         )}
       >
         <svg
           viewBox="0 0 24 24"
-          className={cn("-rotate-90", compact ? "size-4" : "size-8")}
+          className="size-6 -rotate-90"
         >
           <circle
             cx="12"
@@ -112,11 +106,8 @@ export const ContextMeter = memo(function ContextMeter({
             }
           />
         </svg>
-        {compact && (
-          <span className="tabular-nums">{max > 0 ? `${pct}%` : fmtTokens(used)}</span>
-        )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="end" className="w-64 p-3">
+      <DropdownMenuContent side="bottom" align="end" className="w-64 p-3">
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm font-medium text-foreground">Context Window</span>
           <span className="font-mono text-xs tabular-nums text-muted-foreground">

@@ -47,7 +47,10 @@ const SESSION = {
   sessionId: "s1",
   models: {
     currentModelId: "grok-4",
-    availableModels: [{ modelId: "grok-4" }, { modelId: "grok-4-fast" }],
+    availableModels: [
+      { modelId: "grok-4", _meta: { totalContextTokens: 2_000_000 } },
+      { modelId: "grok-4-fast", _meta: { totalContextTokens: 128_000 } },
+    ],
   },
 };
 
@@ -130,6 +133,7 @@ describe("useAcpChat model switching", () => {
   it("reports the session's own model without asking for a switch", async () => {
     const view = await mount();
     expect(view.result.current.usage.model).toBe("grok-4");
+    expect(view.result.current.usage.contextWindow).toBe(2_000_000);
     expect(setModelCalls()).toHaveLength(0);
     expect(view.result.current.modelError).toBeNull();
   });
@@ -139,6 +143,7 @@ describe("useAcpChat model switching", () => {
     await waitFor(() =>
       expect(view.result.current.usage.model).toBe("grok-4-fast")
     );
+    expect(view.result.current.usage.contextWindow).toBe(128_000);
     expect(setModelCalls()).toHaveLength(1);
     expect(view.result.current.modelError).toBeNull();
   });
@@ -185,6 +190,48 @@ describe("useAcpChat model switching", () => {
     view.rerender();
     view.rerender();
     expect(setModelCalls()).toHaveLength(1);
+  });
+});
+
+describe("useAcpChat context usage", () => {
+  it("folds ACP usage_update into the session meter", async () => {
+    const view = await mount();
+    await act(async () => {
+      channels[0]?.onmessage?.({
+        type: "notification",
+        data: {
+          method: "session/update",
+          params: {
+            update: {
+              sessionUpdate: "usage_update",
+              used: 53_000,
+              size: 200_000,
+              cost: { amount: 0.045, currency: "USD" },
+            },
+          },
+        },
+      });
+    });
+    expect(view.result.current.usage.contextTokens).toBe(53_000);
+    expect(view.result.current.usage.contextWindow).toBe(200_000);
+    expect(view.result.current.usage.costUsd).toBe(0.045);
+  });
+
+  it("reads Grok's vendor-wrapped usage_update the same way", async () => {
+    const view = await mount();
+    await act(async () => {
+      channels[0]?.onmessage?.({
+        type: "notification",
+        data: {
+          method: "_x.ai/session_notification",
+          params: {
+            update: { sessionUpdate: "usage_update", used: 12_000, size: 2_000_000 },
+          },
+        },
+      });
+    });
+    expect(view.result.current.usage.contextTokens).toBe(12_000);
+    expect(view.result.current.usage.contextWindow).toBe(2_000_000);
   });
 });
 

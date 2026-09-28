@@ -44,6 +44,8 @@ import {
   grokTurnStop,
   permissionOutcome,
   readPermission,
+  readUsageUpdate,
+  sessionUpdateOf,
   type AcpPermission,
   type AcpTurn,
 } from "@/lib/acp/adapter";
@@ -67,6 +69,7 @@ import {
   type AcpEvent,
   type AcpServerRequest,
 } from "@/lib/acp/transport";
+import { contextForModel } from "@/lib/modelContext";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
 import { fetchThreadPage, type ProjectedMessageRow } from "@/lib/threadPage";
 import { threadTitleFrom } from "@/lib/threadTitle";
@@ -218,6 +221,12 @@ const messageId = (prefix: string) => `acp-${prefix}-${(nextMessageId += 1)}`;
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
+
+const windowOf = (
+  modelId: string,
+  models: { value: string; context?: number }[] | undefined
+): number | undefined =>
+  contextForModel(modelId, models?.find((m) => m.value === modelId)?.context);
 
 export function useAcpChat({
   cwd,
@@ -653,12 +662,21 @@ export function useAcpChat({
   );
 
   const applyNotification = useCallback((method: string, params: unknown) => {
+    const update = sessionUpdateOf(method, params);
+    if (!update) return;
+    const usage = readUsageUpdate(update);
+    if (usage) {
+      setUsage((prev) => ({
+        ...prev,
+        contextTokens: usage.contextTokens,
+        contextWindow: usage.contextWindow,
+        ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
+      }));
+    }
     if (method !== "session/update") return;
-    const payload = params as AcpSessionUpdate;
-    if (!payload?.update) return;
     turnRef.current = applyUpdate(
       turnRef.current,
-      payload.update,
+      update as AcpSessionUpdate["update"],
       turnRef.current.message?.id ?? messageId("a"),
       autoApprovedRef.current
     );
@@ -835,10 +853,13 @@ export function useAcpChat({
         setLiveThreadId(session.sessionId);
         appliedModelRef.current = currentModel(session);
         modelRef.current = currentModel(session);
+        const models = modelOptions(session);
+        const modelId = currentModel(session);
         setUsage((u) => ({
           ...u,
-          model: currentModel(session),
-          models: modelOptions(session),
+          model: modelId,
+          models,
+          contextWindow: windowOf(modelId, models) ?? u.contextWindow,
         }));
         setReady(true);
       } catch (e) {
@@ -924,7 +945,12 @@ export function useAcpChat({
     void acpSetModel(id, sessionId, model)
       .then(() => {
         modelRef.current = model;
-        setUsage((u) => ({ ...u, model }));
+        setUsage((u) => ({
+          ...u,
+          model,
+          contextWindow: windowOf(model, u.models) ?? u.contextWindow,
+          contextTokens: undefined,
+        }));
         setModelError(null);
       })
       .catch((e) => setModelError(`${provider} refused ${model}: ${String(e)}`));

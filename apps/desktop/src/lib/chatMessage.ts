@@ -126,8 +126,9 @@ export interface QuotaWindow {
   windowDurationMins: number | null;
 }
 
-/** Plan quota for the account driving a session. Only backends that report it
- *  (Codex) populate this; Claude Code exposes nothing equivalent. */
+/** Plan quota a live session reported mid-turn (Claude's `rate_limit_event`,
+ *  Codex's `account/rateLimits/updated`). `lib/limits.ts` folds it into the
+ *  account-wide readout. */
 export interface ChatQuota {
   primary: QuotaWindow | null;
   secondary: QuotaWindow | null;
@@ -157,7 +158,7 @@ export const sameQuota = (
 
 export interface ChatUsage {
   /** Models offered by a provider session, when its protocol exposes a catalog. */
-  models?: { value: string; label: string }[];
+  models?: { value: string; label: string; context?: number }[];
   costUsd?: number;
   /** `costUsd` was derived from token counts here, not reported by the
    *  backend. Presenting an estimate as a billed figure would mislead. */

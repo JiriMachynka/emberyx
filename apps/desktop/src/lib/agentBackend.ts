@@ -21,7 +21,8 @@ export interface AgentCapabilities {
    *  are history only — the provider keeps no resumable store, so reopening
    *  one shows the recorded conversation under a fresh agent. */
   threads: boolean;
-  /** Token counts and USD cost are reported per turn and per day. */
+  /** Token counts and context-window fill are reported live. Claude and Codex
+   *  in-band; ACP via `usage_update`. */
   usage: boolean;
   /** Live session status arrives over the local hook server. */
   hookStatus: boolean;
@@ -202,7 +203,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     // no cross-session store (`loadSession` is advertised per agent at
     // initialize), so a reopened thread is history under a fresh agent.
     threads: true,
-    usage: false,
+    usage: true,
     hookStatus: false,
     permissions: true,
     // The `ask_user` picker is wired over ACP too, but keep-going is not: a
@@ -235,7 +236,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
   grok: {
     // Same story as OpenCode: the event log is the thread store.
     threads: true,
-    usage: false,
+    usage: true,
     hookStatus: false,
     permissions: true,
     askUser: false,

@@ -43,6 +43,8 @@ glob = "0.3"
 regex = "1"
 tiny_http = "0.12"
 ureq = { version = "2", features = ["json"] }
+# RFC 3339 reset instants from the plan-limit endpoints (usage/limits).
+chrono = "0.4"
 # Harness MCP config files: Codex/Grok TOML (format-preserving writes via
 # toml_edit) and OpenCode/Kilo JSONC (comments allowed, so serde_json alone
 # can't read what their CLIs write).
@@ -63,6 +65,11 @@ e2e = ["dep:tauri-plugin-wdio-webdriver"]
 # Updater is desktop-only (no Android/iOS build).
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]
 tauri-plugin-updater = "2"
+
+# Claude Code keeps its OAuth token in the login Keychain; plan limits read it
+# (usage/limits/claude.rs). Already in the tree through tauri.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
 
 # Optimize release builds: full LTO + single codegen unit for faster hot paths
 # (PTY read loop, JSONL usage parsing) and a smaller, stripped binary.

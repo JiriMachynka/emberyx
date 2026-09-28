@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeClaudeQuota, quotaAlert, quotaMessage } from "./quota";
+import { decodeClaudeQuota, quotaAlert, quotaMessage, quotaWindows } from "./quota";
 
 const NOW = 1_700_000_000_000;
 const w = (usedPercent: number, mins: number | null = 300, resetsAt: number | null = null) => ({
@@ -10,22 +10,22 @@ const w = (usedPercent: number, mins: number | null = 300, resetsAt: number | nu
 
 describe("quotaAlert", () => {
   it("stays quiet while there is room left", () => {
-    expect(quotaAlert({ primary: w(79), secondary: null }, NOW)).toBeNull();
+    expect(quotaAlert([w(79), null], NOW)).toBeNull();
     expect(quotaAlert(undefined, NOW)).toBeNull();
-    expect(quotaAlert({ primary: null, secondary: null }, NOW)).toBeNull();
+    expect(quotaAlert([null, null], NOW)).toBeNull();
   });
 
   it("escalates through warn, critical and exhausted", () => {
-    expect(quotaAlert({ primary: w(80), secondary: null }, NOW)?.level).toBe("warn");
-    expect(quotaAlert({ primary: w(96), secondary: null }, NOW)?.level).toBe("critical");
-    expect(quotaAlert({ primary: w(100), secondary: null }, NOW)?.level).toBe("exhausted");
+    expect(quotaAlert([w(80), null], NOW)?.level).toBe("warn");
+    expect(quotaAlert([w(96), null], NOW)?.level).toBe("critical");
+    expect(quotaAlert([w(100), null], NOW)?.level).toBe("exhausted");
   });
 
   // The window about to stop the work is the one worth naming, not the one with
   // the most room.
   it("reports the tightest window, not the first", () => {
     const alert = quotaAlert(
-      { primary: w(20, 10080), secondary: w(96, 300) },
+      [w(20, 10080), w(96, 300)],
       NOW
     );
     expect(alert?.percent).toBe(96);
@@ -34,16 +34,16 @@ describe("quotaAlert", () => {
 
   it("carries the reset instant when one was reported", () => {
     const resetsAt = NOW / 1000 + 7200;
-    expect(quotaAlert({ primary: w(90, 300, resetsAt), secondary: null }, NOW)?.resets).toBe(
+    expect(quotaAlert([w(90, 300, resetsAt), null], NOW)?.resets).toBe(
       "resets in 2h"
     );
-    expect(quotaAlert({ primary: w(90), secondary: null }, NOW)?.resets).toBeNull();
+    expect(quotaAlert([w(90), null], NOW)?.resets).toBeNull();
   });
 
   // A backend can report over 100 after the limit lands; the bar and the copy
   // both stop at full rather than reading "104%".
   it("clamps a percentage past full", () => {
-    expect(quotaAlert({ primary: w(104), secondary: null }, NOW)?.percent).toBe(100);
+    expect(quotaAlert([w(104), null], NOW)?.percent).toBe(100);
   });
 });
 
@@ -103,7 +103,7 @@ describe("decodeClaudeQuota", () => {
         },
       },
     };
-    const alert = quotaAlert(decodeClaudeQuota(spent) ?? undefined, 0);
+    const alert = quotaAlert(quotaWindows(decodeClaudeQuota(spent) ?? undefined), 0);
     expect(alert?.level).toBe("critical");
     expect(alert?.window).toBe("5h");
   });

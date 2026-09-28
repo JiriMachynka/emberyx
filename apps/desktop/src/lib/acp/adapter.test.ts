@@ -9,6 +9,8 @@ import {
   permissionOutcome,
   planEntriesOf,
   readPermission,
+  readUsageUpdate,
+  sessionUpdateOf,
   toolResultText,
   type AcpTurn,
 } from "@/lib/acp/adapter";
@@ -225,6 +227,58 @@ describe("grokTurnStop", () => {
       })
     ).toBeNull();
     expect(grokTurnStop("session/update", { sessionUpdate: "agent_message_chunk" })).toBeNull();
+  });
+});
+
+describe("readUsageUpdate", () => {
+  it("reads used, size, and USD cost", () => {
+    expect(
+      readUsageUpdate({
+        sessionUpdate: "usage_update",
+        used: 53_000,
+        size: 200_000,
+        cost: { amount: 0.045, currency: "USD" },
+      })
+    ).toEqual({
+      contextTokens: 53_000,
+      contextWindow: 200_000,
+      costUsd: 0.045,
+    });
+  });
+
+  it("drops a cost that is not USD", () => {
+    expect(
+      readUsageUpdate({
+        sessionUpdate: "usage_update",
+        used: 10,
+        size: 100_000,
+        cost: { amount: 1, currency: "EUR" },
+      })
+    ).toEqual({ contextTokens: 10, contextWindow: 100_000 });
+  });
+
+  it("rejects a window of zero or a missing used count", () => {
+    expect(
+      readUsageUpdate({ sessionUpdate: "usage_update", used: 10, size: 0 })
+    ).toBeNull();
+    expect(
+      readUsageUpdate({ sessionUpdate: "usage_update", size: 200_000 })
+    ).toBeNull();
+    expect(readUsageUpdate({ sessionUpdate: "agent_message_chunk" })).toBeNull();
+  });
+});
+
+describe("sessionUpdateOf", () => {
+  it("unwraps the standard session/update and Grok's vendor wrap", () => {
+    expect(
+      sessionUpdateOf("session/update", { update: { sessionUpdate: "usage_update" } })
+    ).toEqual({ sessionUpdate: "usage_update" });
+    expect(
+      sessionUpdateOf("_x.ai/session_notification", {
+        update: { sessionUpdate: "usage_update", used: 1, size: 2 },
+      })
+    ).toEqual({ sessionUpdate: "usage_update", used: 1, size: 2 });
+    expect(sessionUpdateOf("_x.ai/queue/changed", { entries: [] })).toBeNull();
   });
 });
 

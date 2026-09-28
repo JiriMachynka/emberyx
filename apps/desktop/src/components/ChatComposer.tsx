@@ -28,18 +28,15 @@ import {
 import { pasteInsertion } from "@/lib/fileRef";
 import { mimeForImageFile } from "@/lib/chatImage";
 import { applySlash, filterCommands, slashAt, type SlashToken } from "@/lib/slash";
-import {
-  useGitBranch,
-  useProjectFiles,
-  useSlashCommands,
-} from "@/lib/queries";
+import { useProjectFiles, useSlashCommands } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import type { PromptQueue } from "@/lib/promptQueue";
 import type { ChatImage, ChatUsage } from "@/hooks/useAgentChat";
 import { processImage } from "@/components/composer/processImage";
 import { BranchChip } from "@/components/composer/BranchChip";
 import { ContextMeter } from "@/components/composer/ContextMeter";
-import { QuotaChip } from "@/components/composer/QuotaChip";
+import { LimitsStrip } from "@/components/limits/LimitsStrip";
+import type { LimitsTarget } from "@/lib/limits";
 import { UsageFooter } from "@/components/composer/UsageFooter";
 import { ImageStrip } from "@/components/composer/ImageStrip";
 import {
@@ -71,6 +68,8 @@ interface ChatComposerProps {
   exited: boolean;
   /** True while a permission prompt owns the keyboard. */
   usage: ChatUsage;
+  /** Whose plan limits the toolbar shows: this chat's provider and account. */
+  limitsTarget: LimitsTarget;
   /** Selected `--model` alias for this session; "" = default. */
   model: string;
   onModelChange: (model: string) => void;
@@ -127,6 +126,7 @@ export const ChatComposer = memo(function ChatComposer({
   queued,
   exited,
   usage,
+  limitsTarget,
   model,
   onModelChange,
   effort,
@@ -297,11 +297,6 @@ export const ChatComposer = memo(function ChatComposer({
   };
 
   const canCompact = caps.compact && onCompact;
-  // Read here too, so the strip under the input can stay out of the DOM
-  // entirely for a project that is not a git repo. Same query key as the
-  // chip's, so it costs a cache read rather than a second `git branch`.
-  const branch = useGitBranch(cwd).data?.branch;
-  const hasStrip = !!branch || caps.usage;
   const compactBlocked = compactDisabledReason({
     busy,
     ready: ready && !exited,
@@ -478,6 +473,21 @@ export const ChatComposer = memo(function ChatComposer({
           onPreview={onPreview}
           onRemove={(id) => setImages((prev) => prev.filter((i) => i.id !== id))}
         />
+        <div className="relative">
+        {caps.usage && (
+          <div className="absolute right-5 top-5 z-10">
+            <ContextMeter
+              contextTokens={usage.contextTokens}
+              model={model}
+              backend={backend}
+              resolved={usage.model}
+              contextWindow={usage.contextWindow}
+              onCompact={canCompact ? onCompact : undefined}
+              compactDisabled={!!compactBlocked}
+              compactDisabledReason={compactBlocked}
+            />
+          </div>
+        )}
         <Textarea
           ref={inputRef}
           value={input}
@@ -563,8 +573,9 @@ export const ChatComposer = memo(function ChatComposer({
           // padding + text with no slack under the placeholder. The shadcn
           // base ships `min-h-16`, which is where the old blank strip came
           // from. It still grows to max-h-40 and then scrolls.
-          className="block w-full max-h-40 min-h-0 shrink-0 resize-none overscroll-contain overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent px-5 pb-2 pt-3 text-base leading-6 shadow-none transition-[height] duration-150 ease-out placeholder:text-muted-foreground/80 focus-visible:ring-0 motion-reduce:transition-none"
+          className="block w-full max-h-40 min-h-0 shrink-0 resize-none overscroll-contain overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent p-5 text-base leading-6 shadow-none transition-[height] duration-150 ease-out placeholder:text-muted-foreground/80 focus-visible:ring-0 motion-reduce:transition-none"
         />
+        </div>
           {resumeOffer && (
             <div className="flex flex-col gap-2 border-t border-border px-4 py-2">
               <p className="text-sm">{formatResumeCompactionQuestion(resumeOffer)}</p>
@@ -625,9 +636,6 @@ export const ChatComposer = memo(function ChatComposer({
             onOpenWorktree={onOpenWorktree}
           />
           <div className="flex shrink-0 items-center gap-1.5">
-            {caps.usage && usage.quota && (
-              <QuotaChip quota={usage.quota} />
-            )}
             <input
               ref={fileRef}
               type="file"
@@ -675,33 +683,14 @@ export const ChatComposer = memo(function ChatComposer({
         </div>
       </div>
 
-      {/* Session strip. The branch you are on and how full the window is
-          describe the run, not the message being written — they were competing
-          for room with send inside the input. Its own quieter box under it,
-          rendered only when it has something to say. */}
-      {hasStrip && (
-        // A centred shelf slightly narrower than the input, tucked behind its
-        // rounded bottom edge: the negative margin is covered by the composer's
-        // own opaque surface, so the two read as one object without the input
-        // giving up its corners.
-        <div className="chat-composer-shelf relative z-0 -mt-3 flex items-center gap-3 rounded-b-xl border border-border/60 bg-card/40 px-2 pb-1 pt-4">
-          <BranchChip cwd={cwd} busy={busy} compact />
-          {caps.usage && (
-            <ContextMeter
-              contextTokens={usage.contextTokens}
-              model={model}
-              backend={backend}
-              resolved={usage.model}
-              contextWindow={usage.contextWindow}
-              onCompact={canCompact ? onCompact : undefined}
-              compactDisabled={!!compactBlocked}
-              compactDisabledReason={compactBlocked}
-              compact
-              className="ml-auto"
-            />
-          )}
-        </div>
-      )}
+      {/* Toolbar. The branch is the checkout; plan limits sit on the right.
+          Tucked behind the input's rounded bottom edge: the negative margin
+          is covered by the composer's own opaque surface, so the two read as
+          one object without the input giving up its corners. */}
+      <div className="relative z-0 -mt-3 flex w-full min-w-0 items-center gap-2 rounded-b-xl border border-border/60 bg-card/40 px-2 pb-1 pt-4">
+        <BranchChip cwd={cwd} busy={busy} compact />
+        <LimitsStrip target={limitsTarget} className="ml-auto" />
+      </div>
     </>
   );
 });

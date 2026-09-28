@@ -21,6 +21,7 @@ mod agent_db;
 mod claude;
 mod codex;
 mod grok;
+pub mod limits;
 
 /// Every provider this module reads. The panel names the rest as uncounted,
 /// so a provider whose history can't be read never reads as "spent nothing".

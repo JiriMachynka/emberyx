@@ -20,9 +20,11 @@ import { AccountBanner } from "@/components/AccountBanner";
 import { cn } from "@/lib/utils";
 import {
   accessLevelToSettings,
+  launchFor,
   useSettings,
   type AccessLevel,
 } from "@/lib/settings";
+import { prefetchLimits } from "@/lib/limits";
 import {
   EMPTY_DOCK,
   closeTab,
@@ -58,7 +60,7 @@ import type { CloneSource } from "@/lib/clone";
 import { useGitRemoteHost } from "@/lib/queries";
 import { useDevServers } from "@/hooks/useDevServers";
 import { useAgentBackend } from "@/hooks/useAgentBackend";
-import { resolveLoginCommand, type AgentBackend } from "@/lib/agentBackend";
+import { AGENT_BACKENDS, resolveLoginCommand, type AgentBackend } from "@/lib/agentBackend";
 import { useProjectActions } from "@/hooks/useProjectActions";
 import { ActionDialog } from "@/components/ActionDialog";
 import { AboutDialog } from "@/components/AboutDialog";
@@ -431,6 +433,18 @@ function App() {
     remoteHostValue && isRemoteHost(remoteHostValue) ? remoteHostValue : "gitlab";
   const agentBackend = useAgentBackend(activeProject, settings.agentBackend);
   const capabilities = agentBackend.capabilities;
+  // Plan limits for every provider's default account, once per launch, so
+  // switching a chat to any of them paints numbers instead of a spinner.
+  useEffect(() => {
+    prefetchLimits(
+      AGENT_BACKENDS.map((provider) => {
+        const launch = launchFor(settings, provider);
+        return { provider, command: launch.command, configDir: launch.configDir };
+      })
+    );
+    // Launch only: the settings here decide which binary to ask, and a later
+    // edit is picked up by the chat that uses it.
+  }, []);
   const dev = useDevServers(activeProject, ws.addDev);
   const projectActions = useProjectActions(activeProject);
   const [actionEdit, setActionEdit] = useState<{

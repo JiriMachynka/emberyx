@@ -56,7 +56,7 @@ describe("capabilitiesOf", () => {
       const caps = capabilitiesOf(backend);
       expect(caps.threads).toBe(true);
       expect(caps.conversationRewind).toBe(false);
-      expect(caps.usage).toBe(false);
+      expect(caps.usage).toBe(true);
       expect(caps.sessionModelCatalog).toBe(true);
       expect(caps.slashCommands).toBe(true);
     }

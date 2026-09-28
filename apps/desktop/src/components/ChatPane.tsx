@@ -31,6 +31,7 @@ import {
   type ProviderSwitchMark,
 } from "@/lib/thread";
 import { quotaAlert, type QuotaAlert } from "@/lib/quota";
+import { recordLiveQuota, useProviderLimits } from "@/lib/limits";
 import {
   accessLevelFrom,
   accessLevelToSettings,
@@ -211,6 +212,16 @@ export const ChatPane = memo(function ChatPane({
       launchFor({ providerLaunch, claudeProfiles }, activeBackend, claudeProfileId),
     [providerLaunch, claudeProfiles, activeBackend, claudeProfileId]
   );
+  // Plan limits follow the provider and account this thread runs on now.
+  const limitsTarget = useMemo(
+    () => ({
+      provider: activeBackend,
+      command: launch.command,
+      configDir: launch.configDir,
+    }),
+    [activeBackend, launch.command, launch.configDir]
+  );
+  const { data: limits } = useProviderLimits(limitsTarget);
   const [carried, setCarried] = useState<CarriedThread>(EMPTY_THREAD);
   const { 
     messages,
@@ -263,6 +274,11 @@ export const ChatPane = memo(function ChatPane({
     if (!id) return;
     setThreadMeta(threadMetaKey(cwd, id), { keepGoing });
   }, [cwd, keepGoing, resume, threadId]);
+  // A mid-turn quota is the freshest reading there is; `usage.quota` keeps
+  // its identity until the numbers change, so this fires once per change.
+  useEffect(() => {
+    if (usage.quota) recordLiveQuota(activeBackend, launch.configDir, usage.quota);
+  }, [usage.quota, activeBackend, launch.configDir]);
   const keepGoingOn = isKeepGoingOn(keepGoing, usage);
   const stopKeepGoing = useCallback(() => {
     setKeepGoing(undefined);
@@ -729,8 +745,8 @@ export const ChatPane = memo(function ChatPane({
   // in the composer is passive. Recomputed per usage frame — the numbers only
   // move when the backend sends new ones.
   const quotaWarning = useMemo(
-    () => quotaAlert(usage.quota, Date.now()),
-    [usage.quota]
+    () => quotaAlert(limits?.windows, Date.now()),
+    [limits?.windows]
   );
   // Dismissal is per level, so waving off "80% used" does not also silence the
   // message that the window is actually gone.
@@ -985,6 +1001,7 @@ export const ChatPane = memo(function ChatPane({
                   queued={queued}
                   exited={terminal}
                   usage={usage}
+                  limitsTarget={limitsTarget}
                   model={activeModel}
                   onModelChange={changeModel}
                   effort={activeEffort}

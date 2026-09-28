@@ -49,16 +49,10 @@ export interface QuotaAlert {
  * is the point, the label is decoration.
  */
 export function quotaAlert(
-  quota:
-    | {
-        primary: { usedPercent: number; resetsAt: number | null; windowDurationMins: number | null } | null;
-        secondary: { usedPercent: number; resetsAt: number | null; windowDurationMins: number | null } | null;
-      }
-    | undefined,
+  all: readonly (QuotaWindow | null)[] | undefined,
   now: number
 ): QuotaAlert | null {
-  if (!quota) return null;
-  const windows = [quota.primary, quota.secondary].filter((w) => w !== null);
+  const windows = (all ?? []).filter((w) => w !== null);
   if (!windows.length) return null;
   const worst = windows.reduce((a, b) => (b.usedPercent > a.usedPercent ? b : a));
   const percent = Math.min(100, Math.round(worst.usedPercent));
@@ -75,6 +69,10 @@ export function quotaAlert(
     resets: formatResetsIn(worst.resetsAt, now),
   };
 }
+
+/** A session quota as the window list the alert reads. */
+export const quotaWindows = (quota: ChatQuota | undefined): (QuotaWindow | null)[] =>
+  quota ? [quota.primary, quota.secondary] : [];
 
 /** What the strip says. Phrased around the window, not the percentage, because
  *  "your 5h window" is the thing the user actually plans around. */

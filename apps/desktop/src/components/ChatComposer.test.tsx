@@ -45,6 +45,7 @@ const propsFor = (backend: AgentBackend, sent: [string, ChatImage[]][] = []): Pr
   queued: 0,
   exited: false,
   usage: backend === "claude" ? { contextTokens: 12_000, model: "claude-sonnet-4-5" } : {},
+  limitsTarget: { provider: backend, command: null, configDir: null },
   model: backend === "codex" ? CODEX_MODEL.id : "",
   onModelChange: () => {},
   effort: "high",
@@ -244,6 +245,14 @@ describe("ChatComposer", () => {
     expect(menuChips().some((c) => c.includes("Work Account"))).toBe(false);
     // The rest of Claude's row is unaffected.
     expect(menuChips().some((c) => c.includes("Full access"))).toBe(true);
+  });
+
+  it("the context meter is a ring in the composer top-right, with no label", async () => {
+    await mount(propsFor("claude"));
+    const meter = screen.getByTitle("Context window");
+    expect(meter.textContent?.trim()).toBe("");
+    expect(meter.closest(".chat-composer-surface")).not.toBeNull();
+    expect(meter.closest("div.absolute.right-5.top-5")).not.toBeNull();
   });
 
 });

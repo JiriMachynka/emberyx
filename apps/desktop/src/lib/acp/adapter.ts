@@ -126,6 +126,43 @@ export const grokTurnStop = (method: string, params: unknown): string | null => 
   return null;
 };
 
+/** The `session/update` payload, including Grok's vendor-wrapped copy. */
+export const sessionUpdateOf = (method: string, params: unknown): unknown => {
+  if (!isRecord(params)) return null;
+  if (method === "session/update") return params.update ?? null;
+  if (method === "_x.ai/session_notification" && isRecord(params.update)) {
+    return params.update;
+  }
+  return null;
+};
+
+/** Live context fill from ACP `usage_update`. `size` is the window; `used` is
+ *  how full it is. Cost is taken only in USD — any other currency would need
+ *  a conversion we do not have. */
+export interface AcpUsage {
+  contextTokens: number;
+  contextWindow: number;
+  costUsd?: number;
+}
+
+export const readUsageUpdate = (update: unknown): AcpUsage | null => {
+  if (!isRecord(update) || update.sessionUpdate !== "usage_update") return null;
+  const used = update.used;
+  const size = update.size;
+  if (typeof used !== "number" || !Number.isFinite(used) || used < 0) return null;
+  if (typeof size !== "number" || !Number.isFinite(size) || size <= 0) return null;
+  const cost = isRecord(update.cost) ? update.cost : null;
+  const amount = cost && typeof cost.amount === "number" && Number.isFinite(cost.amount)
+    ? cost.amount
+    : undefined;
+  const currency = cost && typeof cost.currency === "string" ? cost.currency : undefined;
+  return {
+    contextTokens: used,
+    contextWindow: size,
+    ...(amount !== undefined && currency === "USD" ? { costUsd: amount } : {}),
+  };
+};
+
 /** Fold a row into a message's ordered stream. */
 const withActivity = (message: ChatMessage, item: ActivityItem): ChatMessage => ({
   ...message,

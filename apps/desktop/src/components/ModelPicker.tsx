@@ -172,6 +172,7 @@ export const ModelPicker = memo(function ModelPicker({
         label: entry.label,
         provider: backend,
         legacy: false,
+        context: entry.context,
       })),
     ];
     // A cached ACP catalog and the live session catalog name the same

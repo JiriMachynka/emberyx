@@ -340,6 +340,25 @@ Cost is always an estimate, never billed: Claude/Codex from the local rate
 table, Grok/OpenCode/Kilo as the agent recorded it (`reportsOwnCost`). A row
 with no rate and no recorded cost is unknown, never $0.
 
+Plan limits (5-hour / weekly windows) are a separate read, `usage/limits/`, one
+file per provider, each trying its sources in order and reporting which one
+answered (`source`: live API, the CLI, or the CLI's cache):
+Claude → `api/oauth/usage` with the token from Keychain `Claude Code-credentials`
+(`~/.claude/.credentials.json` can hold a revoked token — never a source), else
+`.claude.json` `cachedUsageUtilization`; Codex → `backend-api/wham/usage` with
+`auth.json`, else a one-shot `codex app-server`; Grok → `_x.ai/billing` on a
+one-shot `grok agent stdio` (the un-prefixed name is "Method not found"); OpenCode
+→ the Go usage endpoint with the `opencode-go` key, nothing for other providers.
+Tokens are only ever read — refreshing one rotates the CLI's refresh token and
+signs it out. The Keychain is read once per launch and a denial holds until
+restart. `lib/limits.ts` is the one readout (React Query, keyed by provider +
+Claude config dir): the composer toolbar's strip, its card and the chat's quota
+warning all read it, and a session's mid-turn quota is folded in by
+`recordLiveQuota`. The last good reading per account is kept in localStorage
+and served as `initialData` (dated by `fetchedAt`, so it refetches behind
+itself), and `App` prefetches all four providers at launch — a provider switch
+paints numbers on its first frame instead of waiting ~0.3–0.75s on a fetch.
+
 ### Provider switching
 
 The model picker is the only way to move a thread to another provider — and
