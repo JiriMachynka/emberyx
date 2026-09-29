@@ -20,8 +20,6 @@
   "type": "module",
   "workspaces": ["apps/*"],
   "resolutions": {
-    "mocha/diff": "^8.0.3",
-    "mocha/serialize-javascript": "^7.0.5",
     "deepmerge-ts": "^8.0.2"
   }
 }
