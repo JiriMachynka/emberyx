@@ -13,7 +13,7 @@
 
 import { buildActivityRow, kindForToolName } from "@/lib/activities";
 import { splitUnifiedDiff } from "@/lib/codex/adapter";
-import type { ActivityFileChange, ActivityItem, ActivityKind } from "@/types";
+import type { ActivityFileChange, ActivityItem, ActivityKind, Json } from "@/types";
 import type { CodexItem } from "./protocol";
 
 /** Count the lines a unified diff adds and removes.
@@ -73,7 +73,7 @@ const titleFor = (item: CodexItem): string => {
   }
 };
 
-const inputFor = (item: CodexItem): unknown => {
+const inputFor = (item: CodexItem): Json => {
   switch (item.type) {
     case "commandExecution":
       return { command: item.command };
@@ -107,7 +107,7 @@ const fileChangesFor = (item: CodexItem): ActivityFileChange[] => {
   }));
 };
 
-const asText = (value: unknown): string =>
+const asText = (value: Json): string =>
   typeof value === "string" ? value : value == null ? "" : JSON.stringify(value);
 
 /** Result text and whether it failed, once the item has settled. */

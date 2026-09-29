@@ -252,10 +252,10 @@ export function PreviewPanel({
             spellCheck={false}
             className="h-8 text-xs"
           />
-          {error && <p className="text-[11px] text-red-400">{error}</p>}
+          {error && <p className="text-2xs text-red-400">{error}</p>}
           <div className="flex flex-wrap items-center gap-1">
             {ports.length === 0 ? (
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-2xs text-muted-foreground">
                 No dev server found on the usual ports.
               </span>
             ) : (
@@ -264,7 +264,7 @@ export function PreviewPanel({
                   key={port}
                   onClick={() => go(String(port))}
                   className={cn(
-                    "rounded px-1.5 py-0.5 text-[11px] tabular-nums",
+                    "rounded px-1.5 py-0.5 text-2xs tabular-nums",
                     url === portUrl(port)
                       ? "bg-secondary text-foreground"
                       : "text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -276,7 +276,7 @@ export function PreviewPanel({
             )}
           </div>
           {url && !isLocalUrl(url) && (
-            <p className="text-[11px] text-amber-400">
+            <p className="text-2xs text-amber-400">
               Not a local address — this is a live site, not your branch.
             </p>
           )}
@@ -289,7 +289,7 @@ export function PreviewPanel({
               <div className="shrink-0 border-t">
                 <button
                   onClick={() => setShowConsole((s) => !s)}
-                  className="flex w-full items-center gap-1.5 px-2 py-1.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                  className="flex w-full items-center gap-1.5 px-2 py-1.5 text-2xs text-muted-foreground hover:bg-accent hover:text-foreground"
                 >
                   <Terminal className="size-3" />
                   Console
@@ -304,7 +304,7 @@ export function PreviewPanel({
                   />
                 </button>
                 {showConsole && (
-                  <div className="max-h-40 overflow-y-auto border-t px-2 py-1 font-mono text-[10px] leading-relaxed">
+                  <div className="max-h-40 overflow-y-auto border-t px-2 py-1 font-mono text-3xs leading-relaxed">
                     {consoleLines.length === 0 ? (
                       <p className="text-muted-foreground">Nothing logged yet.</p>
                     ) : (

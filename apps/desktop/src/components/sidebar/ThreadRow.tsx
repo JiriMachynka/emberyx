@@ -121,7 +121,7 @@ export const ThreadRow = memo(function ThreadRow({
               <span className="grid shrink-0 justify-items-end">
                 <span
                   className={cn(
-                    "col-start-1 row-start-1 flex items-center text-[10px] text-muted-foreground/80",
+                    "col-start-1 row-start-1 flex items-center text-3xs text-muted-foreground/80",
                     "group-hover/row:invisible"
                   )}
                 >
@@ -169,7 +169,7 @@ export const ThreadRow = memo(function ThreadRow({
                       snoozedUntil: undefined,
                     })
                   }
-                  className="flex items-center gap-1 rounded px-1 py-0.5 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+                  className="flex items-center gap-1 rounded px-1 py-0.5 text-2xs text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <Check className="size-3" />
                   {settled ? "Unsettle" : "Settle"}
@@ -224,7 +224,7 @@ export const ThreadRow = memo(function ThreadRow({
 
             <div className="flex min-w-0 items-center gap-1.5">
               {branch ? (
-                <span className="flex min-w-0 flex-1 items-center gap-1 text-[11px] text-muted-foreground/70">
+                <span className="flex min-w-0 flex-1 items-center gap-1 text-2xs text-muted-foreground/70">
                   <GitBranch className="size-3 shrink-0" />
                   <span className="truncate">{branch}</span>
                 </span>
@@ -232,7 +232,7 @@ export const ThreadRow = memo(function ThreadRow({
                 <span className="min-w-0 flex-1" />
               )}
               {linkedPr && (
-                <span className="flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground/70">
+                <span className="flex shrink-0 items-center gap-0.5 text-2xs text-muted-foreground/70">
                   <GitPullRequest className="size-3 shrink-0" />
                   #{linkedPr.iid}
                 </span>
@@ -320,7 +320,7 @@ const WorkingChip = memo(function WorkingChip({
 
   if (!working) return <>{idle}</>;
   return (
-    <span className="flex items-center gap-1 text-[11px] font-medium text-primary">
+    <span className="flex items-center gap-1 text-2xs font-medium text-primary">
       <LoaderCircle className="size-3 animate-spin" />
       <span className="tabular-nums">Working {formatElapsed(since)}</span>
     </span>

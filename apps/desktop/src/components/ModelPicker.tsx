@@ -284,7 +284,7 @@ export const ModelPicker = memo(function ModelPicker({
         <span className="truncate">{label}</span>
         <ChevronsUpDown className="size-3.5 shrink-0 opacity-50" />
       </PopoverTrigger>
-      <PopoverContent className="flex h-96 w-[26rem] p-0" onKeyDown={onKeyDown}>
+      <PopoverContent className="flex h-96 w-104 p-0" onKeyDown={onKeyDown}>
         <nav className="flex w-14 shrink-0 flex-col items-center gap-1 border-r bg-secondary/20 py-2">
           <RailButton
             active={rail === FAVORITES}
@@ -539,7 +539,7 @@ function Row({
           </span>
         )}
         {shortcut && (
-          <kbd className="h-4 shrink-0 rounded-sm border border-border bg-background/60 px-1.5 font-mono text-[10px] leading-4 text-muted-foreground">
+          <kbd className="h-4 shrink-0 rounded-sm border border-border bg-background/60 px-1.5 font-mono text-3xs leading-4 text-muted-foreground">
             {shortcut}
           </kbd>
         )}

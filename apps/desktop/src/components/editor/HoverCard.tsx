@@ -19,7 +19,7 @@ export function HoverCard({
         top: above ? hover.y - 12 : hover.y + 18,
         transform: above ? "translateY(-100%)" : undefined,
       }}
-      className="pointer-events-auto fixed z-30 max-h-80 w-[34rem] max-w-[80vw] overflow-auto rounded-md border bg-popover shadow-xl"
+      className="pointer-events-auto fixed z-30 max-h-80 w-136 max-w-[80vw] overflow-auto rounded-md border bg-popover shadow-xl"
     >
       <button
         onClick={onJump}

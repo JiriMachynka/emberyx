@@ -96,7 +96,7 @@ export function SearchPanel({
             <Regex className="size-3.5" />
           </Toggle>
         </div>
-        <p className="px-0.5 text-[11px] text-muted-foreground">
+        <p className="px-0.5 text-2xs text-muted-foreground">
           {results.isError ? (
             <span className="text-destructive">{String(results.error)}</span>
           ) : results.isFetching ? (
@@ -177,7 +177,7 @@ function FileHeader({
       <FileTypeIcon path={path} />
       <span className="truncate">{basename(path)}</span>
       {dir !== path && <span className="truncate text-muted-foreground">{dir}</span>}
-      <span className="ml-auto shrink-0 rounded bg-secondary px-1 text-[10px] tabular-nums text-muted-foreground">
+      <span className="ml-auto shrink-0 rounded bg-secondary px-1 text-3xs tabular-nums text-muted-foreground">
         {count}
       </span>
     </button>
@@ -188,7 +188,7 @@ function HitRow({ hit, onClick }: { hit: SearchHit; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className="flex h-full w-full items-center gap-2 pl-7 pr-2 text-left font-mono text-[11px] hover:bg-accent"
+      className="flex h-full w-full items-center gap-2 pl-7 pr-2 text-left font-mono text-2xs hover:bg-accent"
     >
       <span className="w-8 shrink-0 text-right text-muted-foreground/60 tabular-nums">
         {hit.line}

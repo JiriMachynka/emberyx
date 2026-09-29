@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ChatImage } from "@/hooks/useAgentChat";
+import type { Json } from "@/types";
 
 export interface QueuedPrompt {
   queueId: string;
@@ -52,7 +53,7 @@ export const parseAttachments = (
 ): ChatImage[] | undefined => {
   if (!raw) return undefined;
   try {
-    const parsed: unknown = JSON.parse(raw);
+    const parsed: Json = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as ChatImage[]) : undefined;
   } catch {
     return undefined;

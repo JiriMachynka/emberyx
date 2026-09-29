@@ -247,5 +247,7 @@ export async function writeLog(sessionId: string, data: string): Promise<void> {
   // A dead PTY has nothing to receive keystrokes — writing is an unhandled
   // rejection waiting for the next keypress, so the state flow ends here.
   if (entry?.ptyId == null || entry.status === "exited") return;
-  await invoke("pty_write", { id: entry.ptyId, data }).catch(() => {});
+  await invoke("pty_write", { id: entry.ptyId, data }).catch((e) =>
+    console.error("[emberyx] pty_write failed", e)
+  );
 }

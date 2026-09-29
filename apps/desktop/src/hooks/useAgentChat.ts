@@ -44,7 +44,7 @@ import {
   syncOwnerIndex,
   upsertActivities,
 } from "@/lib/activities";
-import type { ActivityItem } from "@/types";
+import type { ActivityItem, Json, JsonObject } from "@/types";
 import {
   classifyFailure,
   issueTitle,
@@ -183,8 +183,8 @@ const STDERR_CAP = 8192;
 
 /** Build a SubagentRun from a Task/Agent tool_use input. Shared by the top-level
  *  streamed dispatch and the nested case (an agent spawned inside another). */
-function agentRunFrom(id: string, session: string, input: unknown) {
-  const i = (input ?? {}) as Record<string, unknown>;
+function agentRunFrom(id: string, session: string, input: Json) {
+  const i = (input ?? {}) as JsonObject;
   return {
     id,
     session,
@@ -618,7 +618,7 @@ export function useAgentChat({
 
   const handleLine = useCallback(
     (raw: string) => {
-      let msg: Record<string, unknown>;
+      let msg: JsonObject;
       try {
         msg = JSON.parse(raw);
       } catch {
@@ -648,13 +648,13 @@ export function useAgentChat({
       }
 
       if (type === "control_request") {
-        const req = msg.request as Record<string, unknown> | undefined;
+        const req = msg.request as JsonObject | undefined;
         if (req?.subtype === "can_use_tool") {
           setPending({
             requestId: msg.request_id as string,
             toolName: req.tool_name as string,
             input: req.input,
-            suggestions: (req.permission_suggestions as unknown[]) ?? [],
+            suggestions: (req.permission_suggestions as Json[]) ?? [],
             toolUseId: req.tool_use_id as string,
           });
           applyStatus("awaiting_permission");
@@ -683,7 +683,7 @@ export function useAgentChat({
             startedAt: Date.now(),
           };
           blockToolRef.current = {};
-          const message = ev.message as Record<string, unknown> | undefined;
+          const message = ev.message as JsonObject | undefined;
           const model = message?.model as string | undefined;
           // A fresh usage object per assistant message would defeat the
           // composer's memo once a turn, for a model that almost never changes.
@@ -788,12 +788,12 @@ export function useAgentChat({
       const parent = msg.parent_tool_use_id;
       if (typeof parent === "string" && parent) {
         if (type === "assistant") {
-          const inner = (msg.message as Record<string, unknown>)?.content;
+          const inner = (msg.message as JsonObject)?.content;
           addSubagentActivity(parent, ...readActivity(inner));
           // A Task/Agent tool_use *inside* a subagent turn is a nested run —
           // register it so it gets its own chip and captures its own activity.
           if (Array.isArray(inner)) {
-            for (const b of inner as Array<Record<string, unknown>>) {
+            for (const b of inner as Array<JsonObject>) {
               if (b.type === "tool_use" && isAgentTool(b.name) && typeof b.id === "string") {
                 startSubagent(agentRunFrom(b.id, emberyxSessionId, b.input));
               }
@@ -802,10 +802,10 @@ export function useAgentChat({
         } else if (type === "user") {
           // A nested run's result closes out here — it never reaches the
           // top-level tool_result branch below.
-          const content = (msg.message as Record<string, unknown>)?.content;
+          const content = (msg.message as JsonObject)?.content;
           if (Array.isArray(content)) {
             for (const block of content) {
-              if (block?.type === "tool_result") {
+              if (isRecord(block) && block.type === "tool_result") {
                 endSubagent(block.tool_use_id as string, Boolean(block.is_error));
               }
             }
@@ -816,10 +816,10 @@ export function useAgentChat({
 
       // Tool results arrive as a `user` message with tool_result content blocks.
       if (type === "user") {
-        const content = (msg.message as Record<string, unknown>)?.content;
+        const content = (msg.message as JsonObject)?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
-            if (block?.type === "tool_result") {
+            if (isRecord(block) && block.type === "tool_result") {
               // Background runs have no correlatable completion signal — their
               // launch-ack tool_result must NOT end them (that pins duration to
               // ~0s). They resolve on the turn's `result` instead. Foreground
@@ -1466,7 +1466,7 @@ export function useAgentChat({
         applyStatus("awaiting_answer");
       })
       .catch((e) => console.error("[emberyx] pending ask read failed", e));
-    const unlisten = listen<unknown>("ask-user", (ev) => {
+    const unlisten = listen<Json>("ask-user", (ev) => {
       if (cancelled) return;
       const payload = ev.payload;
       if (!isRecord(payload) || payload.session !== emberyxSessionId) return;

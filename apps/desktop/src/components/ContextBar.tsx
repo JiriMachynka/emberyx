@@ -132,7 +132,7 @@ export function ContextBar({
             />
             Git
             {changeCount > 0 && (
-              <span className="rounded bg-warning/20 px-1 text-[10px] tabular-nums text-warning">
+              <span className="rounded bg-warning/20 px-1 text-3xs tabular-nums text-warning">
                 {changeCount}
               </span>
             )}
@@ -147,7 +147,7 @@ export function ContextBar({
           >
             <Terminal className="size-3.5" />
             Output
-            <span className="rounded bg-success/20 px-1 text-[10px] tabular-nums text-success">
+            <span className="rounded bg-success/20 px-1 text-3xs tabular-nums text-success">
               {devCount}
             </span>
           </Button>

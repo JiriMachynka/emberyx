@@ -1,3 +1,4 @@
+import type { Json } from "@/types";
 /**
  * Which agent CLI a session drives, and what that CLI can do. Every
  * Claude-only surface (threads, usage, hook status, permissions, the ask-user
@@ -265,7 +266,7 @@ export const capabilitiesOf = (backend: AgentBackend): AgentCapabilities =>
   CAPABILITIES[backend];
 
 // Membership, not `in`: "toString" is on every object's prototype chain.
-export const isAgentBackend = (value: unknown): value is AgentBackend =>
+export const isAgentBackend = (value: Json | undefined): value is AgentBackend =>
   AGENT_BACKENDS.some((b) => b === value);
 
 /** The backend a stored agent command implies. Only used to migrate settings

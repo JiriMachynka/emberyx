@@ -209,7 +209,7 @@ mcp__emberyx__preview_snapshot",
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         self.sessions
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(id, AgentSession { child, stdin });
 
         // Declare the client to the control protocol (matches the Agent SDK
@@ -259,7 +259,7 @@ mcp__emberyx__preview_snapshot",
             let reap = || {
                 sessions
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(|e| e.into_inner())
                     .remove(&id)
                     .and_then(|mut s| s.child.wait().ok())
                     .and_then(|status| status.code())

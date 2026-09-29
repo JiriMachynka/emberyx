@@ -15,6 +15,7 @@
  */
 
 import type { AgentBackend } from "@/lib/agentBackend";
+import type { Json } from "@/types";
 
 export type Provider =
   | "claude"
@@ -41,7 +42,7 @@ export const PROVIDER_LABEL: Record<Provider, string> = {
   kilo: "Kilo",
 };
 
-export const isProvider = (value: unknown): value is Provider =>
+export const isProvider = (value: Json | undefined): value is Provider =>
   typeof value === "string" &&
   Object.prototype.hasOwnProperty.call(PROVIDER_LABEL, value);
 

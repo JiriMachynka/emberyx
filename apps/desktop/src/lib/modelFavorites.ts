@@ -10,6 +10,7 @@
 
 import { isAgentBackend, type AgentBackend } from "@/lib/agentBackend";
 import type { UnavailableProviders } from "@/lib/modelCatalog";
+import type { Json } from "@/types";
 
 const KEY = "emberyx.modelFavorites";
 const HIDDEN_KEY = "emberyx.hiddenModels";
@@ -19,7 +20,7 @@ const UNAVAILABLE_KEY = "emberyx.unavailableProviders";
 export function getFavorites(): string[] {
   try {
     const raw = localStorage.getItem(KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    const parsed: Json = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
   } catch {
     return [];
@@ -49,7 +50,7 @@ export const shortcutFor = (index: number): string | null =>
 export function getHiddenModels(): string[] {
   try {
     const raw = localStorage.getItem(HIDDEN_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    const parsed: Json = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
   } catch {
     return [];
@@ -69,7 +70,7 @@ export function setHiddenModels(list: string[]): void {
 export function getCustomModels(): Partial<Record<AgentBackend, string[]>> {
   try {
     const raw = localStorage.getItem(CUSTOM_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    const parsed: Json = raw ? JSON.parse(raw) : {};
     if (typeof parsed !== "object" || parsed === null) return {};
     const out: Partial<Record<AgentBackend, string[]>> = {};
     for (const [provider, ids] of Object.entries(parsed)) {
@@ -102,7 +103,7 @@ export function setCustomModels(
 export function getUnavailableProviders(): UnavailableProviders {
   try {
     const raw = localStorage.getItem(UNAVAILABLE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    const parsed: Json = raw ? JSON.parse(raw) : {};
     if (typeof parsed !== "object" || parsed === null) return {};
     const out: UnavailableProviders = {};
     for (const [key, label] of Object.entries(parsed)) {

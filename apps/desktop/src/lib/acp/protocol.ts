@@ -1,3 +1,4 @@
+import type { Json } from "@/types";
 /**
  * Agent Client Protocol wire types, narrowed to what the chat pane consumes.
  *
@@ -33,8 +34,8 @@ export interface AcpToolCallUpdate {
   kind?: AcpToolKind;
   status?: AcpToolStatus;
   content?: AcpContentBlock[];
-  rawInput?: unknown;
-  rawOutput?: unknown;
+  rawInput?: Json;
+  rawOutput?: Json;
 }
 
 export interface AcpPlanEntry {
@@ -47,7 +48,7 @@ export interface AcpPlanEntry {
 export interface AcpPlanUpdate {
   sessionUpdate: "plan" | "plan_update";
   entries?: AcpPlanEntry[];
-  plan?: { entries?: AcpPlanEntry[] };
+  plan?: { entries?: AcpPlanEntry[]; planId?: string; id?: string };
 }
 
 export interface AcpChunkUpdate {

@@ -16,14 +16,11 @@ import {
   useGitConflicts,
   useGitMergeState,
 } from "@/lib/queries";
+import { errorText } from "@/lib/errorText";
 
 /** True when the buffer still carries `<<<<<<<` / `>>>>>>>` merge markers. */
 function hasMarkers(text: string): boolean {
   return text.includes("<<<<<<<") && text.includes(">>>>>>>");
-}
-
-function errorText(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /**
@@ -136,7 +133,7 @@ function PaneFrame({
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex h-7 shrink-0 items-center justify-between gap-2 border-b px-2">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
           {label}
         </span>
         {action}
@@ -252,7 +249,7 @@ function Resolver({
 
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex h-8 shrink-0 items-center justify-between gap-2 border-b px-2">
-          <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
             Merged
           </span>
           <Button size="sm" onClick={() => void markResolved()} disabled={busy}>

@@ -145,7 +145,7 @@ export function ChangesGraph({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full shrink-0 items-center justify-between px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+        className="flex w-full shrink-0 items-center justify-between px-3 py-1.5 text-3xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
       >
         Graph
         {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
@@ -153,7 +153,7 @@ export function ChangesGraph({
       {open && (
         <div className="min-h-0 flex-1 overflow-auto">
           {rows.length === 0 ? (
-            <p className="px-3 py-2 text-[11px] text-muted-foreground">
+            <p className="px-3 py-2 text-2xs text-muted-foreground">
               No commits yet.
             </p>
           ) : (
@@ -175,13 +175,13 @@ export function ChangesGraph({
                       <span className="min-w-0 flex-1 truncate text-xs">
                         {c.subject}
                       </span>
-                      <span className="max-w-16 shrink-0 truncate text-[10px] text-muted-foreground">
+                      <span className="max-w-16 shrink-0 truncate text-3xs text-muted-foreground">
                         {author}
                       </span>
                       {pill && (
                         <span
                           className={cn(
-                            "max-w-24 shrink-0 truncate rounded-md px-1.5 py-0.5 text-[10px]",
+                            "max-w-24 shrink-0 truncate rounded-md px-1.5 py-0.5 text-3xs",
                             pill.remote
                               ? "bg-secondary text-muted-foreground"
                               : "bg-primary/20 font-medium text-primary",

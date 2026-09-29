@@ -74,7 +74,9 @@ pub fn read(config_dir: Option<String>) -> ProviderLimits {
                     }
                 }
                 // The CLI refreshes its token on its next run; re-read then.
-                Err(HttpError::Unauthorized) => *CREDENTIALS.lock().unwrap() = None,
+                Err(HttpError::Unauthorized) => {
+                    *CREDENTIALS.lock().unwrap_or_else(|e| e.into_inner()) = None
+                }
                 Err(HttpError::Other(_)) => {}
             }
         }
@@ -104,7 +106,7 @@ fn from_cache(state: &Value, email: Option<String>) -> ProviderLimits {
 }
 
 fn credentials() -> Option<(String, Option<String>)> {
-    let mut slot = CREDENTIALS.lock().unwrap();
+    let mut slot = CREDENTIALS.lock().unwrap_or_else(|e| e.into_inner());
     let fresh = slot
         .as_ref()
         .is_some_and(|c| c.expires_at.is_none_or(|t| t > now_ms()));

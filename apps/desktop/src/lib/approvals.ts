@@ -10,6 +10,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type { AskQuestion, PendingAsk } from "@/hooks/useAgentChat";
+import type { Json, JsonObject } from "@/types";
 
 export interface PendingApproval {
   approvalId: string;
@@ -27,10 +28,10 @@ export interface PendingApproval {
  * for anything that isn't an answerable question — a request whose payload no
  * longer parses is one the pane must not offer an answer for.
  */
-const isRecord = (v: unknown): v is Record<string, unknown> =>
+const isRecord = (v: Json): v is JsonObject =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-const isOption = (v: unknown): v is AskQuestion["options"][number] =>
+const isOption = (v: Json): v is AskQuestion["options"][number] =>
   isRecord(v) && typeof v.label === "string";
 
 /**
@@ -40,7 +41,7 @@ const isOption = (v: unknown): v is AskQuestion["options"][number] =>
  * boundary rather than trusted. Applies to the live event too, not just the
  * read-back: payloads written by an older runtime are the likely bad case.
  */
-export const isAskQuestion = (v: unknown): v is AskQuestion =>
+export const isAskQuestion = (v: Json): v is AskQuestion =>
   isRecord(v) &&
   typeof v.question === "string" &&
   Array.isArray(v.options) &&
@@ -48,7 +49,7 @@ export const isAskQuestion = (v: unknown): v is AskQuestion =>
   v.options.every(isOption);
 
 /** Validate an `ask-user` payload into the shape the picker can render. */
-export function askQuestions(value: unknown): AskQuestion[] | null {
+export function askQuestions(value: Json): AskQuestion[] | null {
   if (!isRecord(value)) return null;
   const { questions } = value;
   if (!Array.isArray(questions) || questions.length === 0) return null;

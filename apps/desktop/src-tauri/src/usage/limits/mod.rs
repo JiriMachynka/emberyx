@@ -170,7 +170,11 @@ struct Probe(Child);
 impl Probe {
     fn spawn(mut cmd: Command) -> Result<Self> {
         let child = cmd.spawn().map_err(|e| crate::err!("{e}"))?;
-        PROBES.lock().unwrap().get_or_insert_with(HashSet::new).insert(child.id());
+        PROBES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_or_insert_with(HashSet::new)
+            .insert(child.id());
         Ok(Self(child))
     }
 }
@@ -179,14 +183,19 @@ impl Drop for Probe {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
-        if let Some(set) = PROBES.lock().unwrap().as_mut() {
+        if let Some(set) = PROBES.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             set.remove(&self.0.id());
         }
     }
 }
 
 pub fn kill_all() {
-    let pids: Vec<u32> = PROBES.lock().unwrap().as_ref().map(|s| s.iter().copied().collect()).unwrap_or_default();
+    let pids: Vec<u32> = PROBES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|s| s.iter().copied().collect())
+        .unwrap_or_default();
     for pid in pids {
         // SAFETY: plain signal to a pid this module spawned and still tracks.
         unsafe {

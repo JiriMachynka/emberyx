@@ -24,6 +24,7 @@ import { highlightCached } from "@/lib/highlight";
 import { DIFF_PREVIEW_LINES, diffPreview, type DiffRow } from "@/lib/toolDiff";
 import { cn } from "@/lib/utils";
 import type { ToolCall } from "@/hooks/useAgentChat";
+import type { Json } from "@/types";
 
 const TODO_MARK: Record<TodoItem["status"], { mark: string; className: string }> = {
   completed: { mark: "✓", className: "text-emerald-400 line-through opacity-60" },
@@ -82,7 +83,7 @@ export const ToolDiff = memo(function ToolDiff({
       <pre
         ref={tail.ref}
         onScroll={tail.onScroll}
-        className="max-h-64 overflow-auto whitespace-pre font-mono text-[0.7rem] leading-relaxed"
+        className="max-h-64 overflow-auto whitespace-pre font-mono text-2xs leading-relaxed"
       >
         <div className="w-max min-w-full">
           {rows.map((row) =>
@@ -103,7 +104,7 @@ export const ToolDiff = memo(function ToolDiff({
         <button
           type="button"
           onClick={() => setShowAll(true)}
-          className="mt-1 text-[0.7rem] text-muted-foreground hover:text-foreground"
+          className="mt-1 text-2xs text-muted-foreground hover:text-foreground"
         >
           Show {hidden} more {hidden === 1 ? "line" : "lines"}
         </button>
@@ -144,7 +145,7 @@ const ToolText = ({ text, streaming }: { text: string; streaming: boolean }) => 
     <div
       ref={tail.ref}
       onScroll={tail.onScroll}
-      className="max-h-64 overflow-auto whitespace-pre-wrap text-[0.7rem] leading-relaxed text-muted-foreground"
+      className="max-h-64 overflow-auto whitespace-pre-wrap text-2xs leading-relaxed text-muted-foreground"
     >
       {text}
     </div>
@@ -160,14 +161,14 @@ export function ToolBody({
   streaming?: boolean;
 }) {
   const label = "label" in part && part.label && (
-    <div className="mb-1 text-[0.65rem] uppercase tracking-wide text-muted-foreground">
+    <div className="mb-1 text-3xs uppercase tracking-wide text-muted-foreground">
       {part.label}
     </div>
   );
 
   if (part.kind === "fields") {
     return (
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[0.7rem]">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-2xs">
         {part.rows.map((row) => (
           <Fragment key={row.key}>
             <dt className="text-muted-foreground">{row.key}</dt>
@@ -180,7 +181,7 @@ export function ToolBody({
 
   if (part.kind === "todos") {
     return (
-      <ul className="flex flex-col gap-1 text-[0.7rem]">
+      <ul className="flex flex-col gap-1 text-2xs">
         {part.items.map((item, idx) => {
           const style = TODO_MARK[item.status];
           return (
@@ -301,18 +302,18 @@ export const ToolCard = memo(function ToolCard({ tool }: { tool: ToolCall }) {
           <span
             className={cn(
               "min-w-0 truncate text-muted-foreground",
-              display.mono && "font-mono text-[0.7rem]"
+              display.mono && "font-mono text-2xs"
             )}
           >
             {display.title}
           </span>
         )}
         {display.meta && (
-          <span className="shrink-0 text-[0.65rem] text-muted-foreground">{display.meta}</span>
+          <span className="shrink-0 text-3xs text-muted-foreground">{display.meta}</span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-2 pl-2">
           {!running && tool.isError && (
-            <span className="text-[0.7rem] text-red-400">error</span>
+            <span className="text-2xs text-red-400">error</span>
           )}
           {expandable && !isAgent && (
             <DisclosureChevron
@@ -348,16 +349,16 @@ export const ToolCard = memo(function ToolCard({ tool }: { tool: ToolCall }) {
 });
 
 /** What the agent is asking to run, in the same shape the tool cards use. */
-export function PermissionSummary({ toolName, input }: { toolName: string; input: unknown }) {
+export function PermissionSummary({ toolName, input }: { toolName: string; input: Json }) {
   const display = describeTool(toolName, input);
   return (
     <div className="mb-2 flex flex-col gap-1.5 rounded-md bg-muted/40 p-2 text-xs">
       {display.title && (
-        <div className={cn("break-all", display.mono && "font-mono text-[0.7rem]")}>
+        <div className={cn("break-all", display.mono && "font-mono text-2xs")}>
           {display.title}
         </div>
       )}
-      {display.meta && <div className="text-[0.65rem] text-muted-foreground">{display.meta}</div>}
+      {display.meta && <div className="text-3xs text-muted-foreground">{display.meta}</div>}
       {display.body.map((part, idx) => (
         <ToolBody key={idx} part={part} />
       ))}
@@ -386,7 +387,7 @@ export const ToolCode = memo(function ToolCode({
       ref={tail.ref}
       onScroll={tail.onScroll}
       className={cn(
-        "overflow-x-auto whitespace-pre-wrap font-mono text-[0.7rem]",
+        "overflow-x-auto whitespace-pre-wrap font-mono text-2xs",
         className
       )}
     >

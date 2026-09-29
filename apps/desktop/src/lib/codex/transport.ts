@@ -7,7 +7,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { SpawnLaunch } from "@/lib/acp/transport";
 import { launchFor, loadSettings } from "@/lib/settings";
-import type { SlashCommand, Thread } from "@/types";
+import type { Json, JsonObject, SlashCommand, Thread } from "@/types";
 import type { CodexModel } from "./protocol";
 import {
   decodeAgentMessage,
@@ -22,19 +22,19 @@ import {
 export type CodexEvent =
   | { type: "notification"; data: CodexNotification }
   | { type: "notifications"; data: CodexNotification[] }
-  | { type: "request"; data: { id: number; method: string; params: unknown } }
+  | { type: "request"; data: { id: number; method: string; params: Json } }
   | { type: "stderr"; data: string }
   | { type: "warning"; data: string }
   | { type: "exit"; data: number | null };
 
 export interface CodexNotification {
   method: string;
-  params: unknown;
+  params: Json;
 }
 
 export interface CodexSpawnResult {
   id: number;
-  initialize: unknown;
+  initialize: Json;
   version: string | null;
   /** True when the daemon already had this process running and replayed its
    *  output: the replay is the transcript, and no thread open/resume runs. */
@@ -72,47 +72,47 @@ export const codexKill = (id: number) => invoke("codex_kill", { id });
  *  running in the daemon, and a reopened window reattaches to it. */
 export const codexDetach = (id: number) => invoke("codex_detach", { id });
 
-type Params = Record<string, unknown>;
+type Params = JsonObject;
 
 export const codexThreadStart = (id: number, params: Params) =>
-  invoke<unknown>("codex_thread_start", { id, params });
+  invoke<Json>("codex_thread_start", { id, params });
 
 export const codexThreadResume = (id: number, params: Params) =>
-  invoke<unknown>("codex_thread_resume", { id, params });
+  invoke<Json>("codex_thread_resume", { id, params });
 
 export const codexTurnStart = (id: number, params: Params) =>
-  invoke<unknown>("codex_turn_start", { id, params });
+  invoke<Json>("codex_turn_start", { id, params });
 
 export const codexThreadCompact = (id: number, params: Params) =>
-  invoke<unknown>("codex_thread_compact", { id, params });
+  invoke<Json>("codex_thread_compact", { id, params });
 
 export const codexThreadRollback = (
   id: number,
   threadId: string,
   numTurns: number
 ) =>
-  invoke<unknown>("codex_request", {
+  invoke<Json>("codex_request", {
     id,
     method: "thread/rollback",
     params: { threadId, numTurns },
   });
 
 export const codexTurnSteer = (id: number, params: Params) =>
-  invoke<unknown>("codex_turn_steer", { id, params });
+  invoke<Json>("codex_turn_steer", { id, params });
 
 export const codexTurnInterrupt = (id: number, threadId: string, turnId: string) =>
-  invoke<unknown>("codex_turn_interrupt", { id, threadId, turnId });
+  invoke<Json>("codex_turn_interrupt", { id, threadId, turnId });
 
 /** The long tail of app-server methods, none of which need their own command. */
 export const codexRequest = (id: number, method: string, params: Params) =>
-  invoke<unknown>("codex_request", { id, method, params });
+  invoke<Json>("codex_request", { id, method, params });
 
 /** Name a thread in Codex's own store, so `thread/list` shows it too. */
 export const codexSetThreadName = (id: number, threadId: string, name: string) =>
   codexRequest(id, "thread/name/set", { threadId, name });
 
 /** Answer a server->client request. `result` is the method's response payload. */
-export const codexRespond = (id: number, requestId: number, result: unknown) =>
+export const codexRespond = (id: number, requestId: number, result: Json) =>
   invoke("codex_respond", { id, requestId, result });
 
 /** How many past threads the project menu offers. */
@@ -127,7 +127,7 @@ export async function listCodexThreads(cwd: string): Promise<Thread[]> {
   const channel = new Channel<CodexEvent>();
   const { id } = await codexSpawn(cwd, codexProbeLaunch(), channel);
   try {
-    const result = await invoke<unknown>("codex_thread_list", {
+    const result = await invoke<Json>("codex_thread_list", {
       id,
       params: { cwd, limit: THREAD_PAGE },
     });

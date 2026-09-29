@@ -1,4 +1,6 @@
 import type { Provider } from "@/lib/providers";
+import { isRecord } from "@/lib/chatMessage";
+import type { Json } from "@/types";
 
 /** Token usage summed from a Claude Code transcript (mirrors Rust `Usage`). */
 export interface Usage {
@@ -10,7 +12,7 @@ export interface Usage {
   messages: number;
 }
 
-interface Rate {
+type Rate = {
   input: number;
   output: number;
   cacheRead: number;
@@ -122,7 +124,7 @@ const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const CACHE_KEY = "emberyx.pricing.litellm.v2";
 
-interface PricingCache {
+type PricingCache = {
   fetchedAt: number;
   rates: Record<string, Rate>;
   contexts: Record<string, number>;
@@ -142,7 +144,7 @@ type ModelsDevCatalog = Record<string, { models?: Record<string, ModelsDevEntry>
 
 let devContexts: Record<string, number> | undefined = (() => {
   try {
-    const parsed: unknown = JSON.parse(
+    const parsed: Json = JSON.parse(
       localStorage.getItem(DEV_CACHE_KEY) ?? "null"
     );
     if (typeof parsed !== "object" || parsed === null) return undefined;
@@ -198,12 +200,9 @@ function readCache(): PricingCache | undefined {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return undefined;
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return undefined;
-    const { rates, contexts } = parsed as Partial<PricingCache>;
-    const isTable = (v: unknown) =>
-      typeof v === "object" && v !== null && !Array.isArray(v);
-    if (!isTable(rates) || !isTable(contexts)) return undefined;
+    const parsed: Json = JSON.parse(raw);
+    if (!isRecord(parsed)) return undefined;
+    if (!isRecord(parsed.rates) || !isRecord(parsed.contexts)) return undefined;
     return parsed as PricingCache;
   } catch {
     return undefined;

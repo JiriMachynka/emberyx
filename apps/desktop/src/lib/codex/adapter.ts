@@ -44,7 +44,7 @@ import type {
   ToolUserInputQuestion,
 } from "./protocol";
 import { statusForEvent } from "@/lib/status";
-import type { ActivityItem, SessionStatus } from "@/types";
+import type { ActivityItem, Json, JsonObject, SessionStatus } from "@/types";
 
 /** One file the turn touched, in the shape the changes feed diffs. */
 export interface CodexFileChange {
@@ -208,7 +208,7 @@ const writeReasoning = (
 /** Codex tool items rendered under the tool names the pane already draws. */
 const toolShapeFor = (
   item: CodexItem
-): { name: string; input: unknown } | null => {
+): { name: string; input: Json } | null => {
   switch (item.type) {
     case "commandExecution":
       return { name: "Bash", input: { command: item.command } };
@@ -230,7 +230,7 @@ const toolShapeFor = (
   }
 };
 
-const asText = (value: unknown): string =>
+const asText = (value: Json): string =>
   typeof value === "string" ? value : value == null ? "" : JSON.stringify(value);
 
 const resultFor = (
@@ -333,7 +333,7 @@ function subagentFrame(
   state: CodexChatState,
   runId: string,
   method: string,
-  params: unknown
+  params: Json
 ): CodexApply {
   const empty: CodexApply = { state, changes: [], subagents: [] };
   if (method !== "item/completed") return empty;
@@ -456,7 +456,7 @@ const endTurn = (state: CodexChatState, status: ChatStatus): CodexChatState => {
 export function applyCodexNotification(
   state: CodexChatState,
   method: string,
-  params: unknown
+  params: Json
 ): CodexApply {
   const none = (next: CodexChatState): CodexApply => ({
     state: next,
@@ -692,7 +692,7 @@ export function applyCodexNotification(
 export interface CodexServerRequest {
   id: number;
   method: string;
-  params: unknown;
+  params: Json;
 }
 
 export const APPROVAL_METHODS = [
@@ -728,7 +728,7 @@ export function permissionFromRequest(
     .flatMap((m) => m.tools)
     .find((t) => t.id === itemId);
   const base = isRecord(known?.input) ? known.input : {};
-  const extra: Record<string, unknown> = {};
+  const extra: JsonObject = {};
   if (typeof p.reason === "string") extra.reason = p.reason;
   if (typeof p.command === "string") extra.command = p.command;
   if (typeof p.cwd === "string") extra.cwd = p.cwd;
@@ -757,8 +757,8 @@ const DECISIONS: Record<PermissionDecision, CodexApprovalDecision> = {
 export function approvalResult(
   method: string,
   decision: PermissionDecision,
-  requested: unknown
-): Record<string, unknown> {
+  requested: Json | undefined
+): JsonObject {
   if (method === "item/permissions/requestApproval") {
     return decision === "deny"
       ? { permissions: {}, scope: "turn" }
@@ -834,7 +834,7 @@ export function askFromRequest(
  * emits one line per question in order, prefixed with the header when there is
  * more than one, and joins a multi-select with ", ".
  */
-export function askResult(ask: CodexAsk, answer: string): Record<string, unknown> {
+export function askResult(ask: CodexAsk, answer: string): JsonObject {
   if (ask.method === "mcpServer/elicitation/request") {
     const action = answer.trim().toLowerCase().startsWith("accept")
       ? "accept"

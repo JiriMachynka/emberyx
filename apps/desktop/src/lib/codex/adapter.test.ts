@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyCodexNotification, initialCodexState } from "./adapter";
+import type { JsonObject } from "@/types";
 
 const THREAD = "019fe0f3-f2b7-7792-89d6-d7371a2c2f20";
 const CHILD = "019fe0f4-1a4c-73b1-ae38-ad1a4821ea56";
@@ -14,7 +15,7 @@ const openTurn = () =>
   }).state;
 
 /** The `collabAgentToolCall` frames a live spawn_agent call produced. */
-const spawn = (done: boolean) => ({
+const spawn = (done: boolean): JsonObject => ({
   threadId: THREAD,
   turnId: "turn-1",
   item: {

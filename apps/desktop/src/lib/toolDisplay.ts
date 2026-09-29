@@ -1,4 +1,5 @@
 import { langFromPath } from "./highlight";
+import type { Json, JsonObject } from "@/types";
 
 export type ToolIcon =
   | "task"
@@ -46,13 +47,13 @@ export interface ToolDisplay {
   mono?: boolean;
 }
 
-const rec = (v: unknown): Record<string, unknown> =>
-  typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+const rec = (v: Json): JsonObject =>
+  typeof v === "object" && v !== null ? (v as JsonObject) : {};
 
-const str = (v: unknown): string | undefined =>
+const str = (v: Json): string | undefined =>
   typeof v === "string" && v.length > 0 ? v : undefined;
 
-const num = (v: unknown): number | undefined =>
+const num = (v: Json): number | undefined =>
   typeof v === "number" && Number.isFinite(v) ? v : undefined;
 
 /** Trailing two path segments, enough to identify a file without the noise. */
@@ -82,7 +83,7 @@ const MONO_TITLE_KEYS = new Set(["url", "uri", "path", "file_path", "id", "comma
 
 /** The one argument worth reading while collapsed — picked by priority so a
  *  bespoke-less tool still gets a meaningful headline instead of a bare name. */
-function argTitle(i: Record<string, unknown>): {
+function argTitle(i: JsonObject): {
   title?: string;
   key?: string;
   mono?: boolean;
@@ -94,7 +95,7 @@ function argTitle(i: Record<string, unknown>): {
   return {};
 }
 
-function lineRange(i: Record<string, unknown>): string | undefined {
+function lineRange(i: JsonObject): string | undefined {
   const offset = num(i.offset);
   const limit = num(i.limit);
   if (offset == null && limit == null) return undefined;
@@ -109,7 +110,7 @@ const isLong = (s: string): boolean => s.length > 120 || s.includes("\n");
  * prose, nested structures become labelled JSON. Beats one undifferentiated
  * JSON dump for tools we have no bespoke layout for.
  */
-function genericBody(input: unknown, skip: string[] = []): ToolBodyPart[] {
+function genericBody(input: Json, skip: string[] = []): ToolBodyPart[] {
   const rows: FieldRow[] = [];
   const parts: ToolBodyPart[] = [];
   for (const [key, value] of Object.entries(rec(input))) {
@@ -132,7 +133,7 @@ function genericBody(input: unknown, skip: string[] = []): ToolBodyPart[] {
  *  The bespoke `Write`/`Edit` cases above only catch Claude's tool names; the
  *  ACP backends title rows with a path or a lowercase tool name, so the shape
  *  is what is left to go on. */
-function fileDisplay(i: Record<string, unknown>): ToolDisplay | null {
+function fileDisplay(i: JsonObject): ToolDisplay | null {
   if (Array.isArray(i.changes)) {
     const changes = i.changes.map(rec).filter((c) => str(c.path));
     if (changes.length > 0) {
@@ -182,7 +183,7 @@ function fileDisplay(i: Record<string, unknown>): ToolDisplay | null {
 }
 
 /** Map a tool call to header + body chunks. Pure; the component picks icons. */
-export function describeTool(name: string, input: unknown): ToolDisplay {
+export function describeTool(name: string, input: Json): ToolDisplay {
   const i = rec(input);
 
   switch (name) {
@@ -412,7 +413,7 @@ export const isTodoTool = (name: string): boolean => name === "TodoWrite";
 
 /** Latest TodoWrite list in a tool run — each call replaces the plan. */
 export const lastTodos = (
-  tools: ReadonlyArray<{ name: string; input: unknown }>,
+  tools: ReadonlyArray<{ name: string; input: Json }>,
 ): TodoItem[] | null => {
   for (let i = tools.length - 1; i >= 0; i--) {
     const t = tools[i];
@@ -444,7 +445,7 @@ export const detectResult = (result: string): { code: string; lang: string | nul
   const trimmed = result.trim();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
-      const parsed: unknown = JSON.parse(trimmed);
+      const parsed: Json = JSON.parse(trimmed);
       const blocks = Array.isArray(parsed) ? parsed : null;
       if (
         blocks &&
@@ -453,8 +454,8 @@ export const detectResult = (result: string): { code: string; lang: string | nul
           (b): b is { type: string; text: string } =>
             typeof b === "object" &&
             b !== null &&
-            (b as { type?: unknown }).type === "text" &&
-            typeof (b as { text?: unknown }).text === "string"
+            (b as { type?: Json }).type === "text" &&
+            typeof (b as { text?: Json }).text === "string"
         )
       ) {
         return { code: blocks.map((b) => b.text).join("\n").trim(), lang: null };
@@ -471,7 +472,7 @@ const RASTER_MIME = /^image\/(png|jpe?g|gif|webp)$/i;
 
 /** A data URL for an MCP or Anthropic image block. `null` if the shape is
  *  not a raster we can put in an `<img>`. */
-const imageSrcFromBlock = (block: Record<string, unknown>): string | null => {
+const imageSrcFromBlock = (block: JsonObject): string | null => {
   if (typeof block.url === "string" && block.url.startsWith("data:image/")) {
     return block.url;
   }
@@ -493,7 +494,7 @@ const imageSrcFromBlock = (block: Record<string, unknown>): string | null => {
 /** MCP / Claude tool results arrive as a content-block array. All-text arrays
  *  keep the existing unwrap-to-mono path; an image in the mix becomes an
  *  `<img>` plus the text, not a JSON dump of the base64. */
-const contentBlockParts = (parsed: unknown): ToolBodyPart[] | null => {
+const contentBlockParts = (parsed: Json): ToolBodyPart[] | null => {
   if (!Array.isArray(parsed) || parsed.length === 0) return null;
   const parts: ToolBodyPart[] = [];
   let sawImage = false;
@@ -524,7 +525,7 @@ export function describeResult(result: string): ToolBodyPart[] {
   const trimmed = result.trim();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
-      const parsed: unknown = JSON.parse(trimmed);
+      const parsed: Json = JSON.parse(trimmed);
       const fromBlocks = contentBlockParts(parsed);
       if (fromBlocks) return fromBlocks;
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {

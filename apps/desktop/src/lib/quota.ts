@@ -1,6 +1,7 @@
 /** Formatting for the plan-quota readout. Pure so the composer stays dumb. */
 
 import type { ChatQuota, QuotaWindow } from "@/hooks/useAgentChat";
+import type { Json, JsonObject } from "@/types";
 
 /** Compact length of a rolling window: 43200 minutes → "30d". */
 export function formatWindowLength(mins: number | null): string {
@@ -95,9 +96,9 @@ const CLAUDE_WINDOW_MINS: Record<string, number> = {
 const percentOf = (utilization: number): number =>
   utilization <= 1 ? utilization * 100 : utilization;
 
-const claudeWindow = (value: unknown, mins: number): QuotaWindow | null => {
+const claudeWindow = (value: Json, mins: number): QuotaWindow | null => {
   if (typeof value !== "object" || value === null) return null;
-  const w = value as { utilization?: unknown; resetsAt?: unknown };
+  const w = value as { utilization?: Json; resetsAt?: Json };
   if (typeof w.utilization !== "number") return null;
   return {
     usedPercent: percentOf(w.utilization),
@@ -118,13 +119,13 @@ const claudeWindow = (value: unknown, mins: number): QuotaWindow | null => {
  * No plan tier is reported on this line, so `planType` stays null; showing a
  * guessed tier next to real percentages would be the one misleading part.
  */
-export function decodeClaudeQuota(msg: unknown): ChatQuota | null {
+export function decodeClaudeQuota(msg: Json): ChatQuota | null {
   if (typeof msg !== "object" || msg === null) return null;
-  const info = (msg as { rate_limit_info?: unknown }).rate_limit_info;
+  const info = (msg as { rate_limit_info?: Json }).rate_limit_info;
   if (typeof info !== "object" || info === null) return null;
-  const windows = (info as { unifiedWindows?: unknown }).unifiedWindows;
+  const windows = (info as { unifiedWindows?: Json }).unifiedWindows;
   if (typeof windows !== "object" || windows === null) return null;
-  const w = windows as Record<string, unknown>;
+  const w = windows as JsonObject;
   const primary = claudeWindow(w.five_hour, CLAUDE_WINDOW_MINS.five_hour);
   const secondary = claudeWindow(w.seven_day, CLAUDE_WINDOW_MINS.seven_day);
   if (!primary && !secondary) return null;

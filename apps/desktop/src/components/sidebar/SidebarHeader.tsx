@@ -46,7 +46,7 @@ export function SidebarHeader(props: SidebarProps) {
     >
       {!collapsed && (
         <div className="flex items-center gap-2">
-          <img src="/emberyx.png" alt="" className="size-5 rounded-[5px] shadow" />
+          <img src="/emberyx.png" alt="" className="size-5 rounded shadow" />
           <span className="ember-text text-sm font-semibold tracking-tight">
             Emberyx
           </span>

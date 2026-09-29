@@ -203,7 +203,7 @@ export function GitRewind({ projectPath, file, onClose }: GitRewindProps) {
                 {commitType(selected.subject) && (
                   <span
                     className={cn(
-                      "shrink-0 rounded px-1 text-[10px] font-medium text-background",
+                      "shrink-0 rounded px-1 text-3xs font-medium text-background",
                       TYPE_COLOR[commitType(selected.subject)!] ?? "bg-zinc-500"
                     )}
                   >
@@ -216,7 +216,7 @@ export function GitRewind({ projectPath, file, onClose }: GitRewindProps) {
                   {selected.author} · {selected.relativeDate} · {selected.shortSha}
                 </span>
                 {selected.oldPath && (
-                  <span className="shrink-0 rounded bg-violet-500/20 px-1 text-[10px] text-violet-300">
+                  <span className="shrink-0 rounded bg-violet-500/20 px-1 text-3xs text-violet-300">
                     renamed from {selected.oldPath}
                   </span>
                 )}
@@ -247,7 +247,7 @@ export function GitRewind({ projectPath, file, onClose }: GitRewindProps) {
             )}
           </div>
 
-          <footer className="flex h-8 shrink-0 items-center gap-3 border-t px-3 text-[11px] text-muted-foreground">
+          <footer className="flex h-8 shrink-0 items-center gap-3 border-t px-3 text-2xs text-muted-foreground">
             <span>←/j older · →/k newer</span>
             <span>n/p next/prev change</span>
             <span>⌥-click a commit to pin a compare base</span>
@@ -304,8 +304,8 @@ function Timeline({
                 type ? TYPE_COLOR[type] ?? "bg-zinc-500" : "bg-zinc-700"
               )}
             />
-            <span className="truncate text-[11px]">{c.subject}</span>
-            <span className="flex items-center gap-1 truncate font-mono text-[10px] text-muted-foreground">
+            <span className="truncate text-2xs">{c.subject}</span>
+            <span className="flex items-center gap-1 truncate font-mono text-3xs text-muted-foreground">
               {c.shortSha}
               {c.oldPath && (
                 <span className="rounded bg-violet-500/30 px-0.5 text-violet-200">

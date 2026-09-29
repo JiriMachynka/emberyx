@@ -147,7 +147,7 @@ export function AskPrompt({
               {q.header || `Question ${i + 1}`}
             </button>
           ))}
-          <span className="ml-auto text-[0.65rem] text-muted-foreground">←→ to switch</span>
+          <span className="ml-auto text-3xs text-muted-foreground">←→ to switch</span>
         </div>
       )}
 
@@ -155,7 +155,7 @@ export function AskPrompt({
         <MessageCircleQuestionMark className="mt-0.5 size-3.5 shrink-0 text-primary" />
         <span className="font-medium">{question.question}</span>
         {questions.length === 1 && question.header && (
-          <span className="ml-auto shrink-0 rounded bg-secondary px-1.5 text-[10px] text-muted-foreground">
+          <span className="ml-auto shrink-0 rounded bg-secondary px-1.5 text-3xs text-muted-foreground">
             {question.header}
           </span>
         )}
@@ -293,7 +293,7 @@ export function PlanPrompt({
         <span className="text-xs text-muted-foreground">
           the agent is blocked until you answer
         </span>
-        <span className="ml-auto text-[0.65rem] text-muted-foreground">
+        <span className="ml-auto text-3xs text-muted-foreground">
           {mode === "notes" ? "type below, Enter sends" : "1 approve · 2 changes · 3 abandon"}
         </span>
       </div>

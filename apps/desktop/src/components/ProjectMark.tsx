@@ -20,7 +20,7 @@ export function ProjectMark({
       <img
         src={project.icon}
         alt=""
-        className={cn("shrink-0 rounded-[5px] object-contain", size, className)}
+        className={cn("shrink-0 rounded object-contain", size, className)}
       />
     );
   }
@@ -28,9 +28,9 @@ export function ProjectMark({
     <span
       aria-hidden
       className={cn(
-        "grid shrink-0 place-items-center rounded-[5px] font-semibold",
+        "grid shrink-0 place-items-center rounded font-semibold",
         size,
-        small ? "text-[8px]" : "text-[9px]",
+        small ? "text-3xs" : "text-3xs",
         glyph.tone,
         className,
       )}

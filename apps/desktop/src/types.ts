@@ -1,6 +1,11 @@
 import type { AgentBackend } from "@/lib/agentBackend";
 import type { Provider } from "@/lib/providers";
 
+/** Anything `JSON.parse` can return — the shape of every frame an agent
+ *  protocol (stream-json, Codex JSON-RPC, ACP) and every tool input carries. */
+export type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
+export type JsonObject = { [key: string]: Json };
+
 export interface PackageInfo {
   name: string;
   relPath: string;

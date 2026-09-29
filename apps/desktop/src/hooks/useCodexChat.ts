@@ -75,6 +75,7 @@ import {
   notifyPlanNothing,
   type ChatSession,
 } from "@/lib/chatSession";
+import type { Json, JsonObject } from "@/types";
 
 interface Options {
   cwd: string;
@@ -120,7 +121,7 @@ const approvalFor = (skipPermissions: boolean, sandbox: string) => ({
     sandbox || (skipPermissions ? "danger-full-access" : "workspace-write"),
 });
 
-const userText = (content: unknown): string =>
+const userText = (content: Json): string =>
   (Array.isArray(content) ? content : [])
     .flatMap((c) =>
       isRecord(c) && c.type === "text" && typeof c.text === "string" ? [c.text] : []
@@ -133,14 +134,14 @@ const userText = (content: unknown): string =>
  * the adapter ignores them on the wire, because the pane has already drawn the
  * message it just sent.
  */
-export function replayThread(state: CodexChatState, thread: unknown): CodexChatState {
+export function replayThread(state: CodexChatState, thread: Json | undefined): CodexChatState {
   if (!isRecord(thread) || !Array.isArray(thread.turns)) return state;
   let next = state;
   for (const turn of thread.turns) {
     if (!isRecord(turn) || typeof turn.id !== "string") continue;
     const items = Array.isArray(turn.items) ? turn.items : [];
     const asked = items.filter(
-      (i): i is Record<string, unknown> => isRecord(i) && i.type === "userMessage"
+      (i): i is JsonObject => isRecord(i) && i.type === "userMessage"
     );
     const messages = asked.flatMap((i) => {
       const text = userText(i.content);
@@ -373,7 +374,7 @@ export function useCodexChat({
   );
 
   const applyNotification = useCallback(
-    (method: string, params: unknown) => {
+    (method: string, params: Json) => {
       if (
         interruptedRef.current &&
         method !== "turn/completed" &&
@@ -497,7 +498,7 @@ export function useCodexChat({
     // A reattached daemon session rebuilds its transcript from the replayed
     // notifications, which carry the thread id in their params — the fallback
     // for when `resume` doesn't already name it.
-    const captureThreadId = (params: unknown) => {
+    const captureThreadId = (params: Json) => {
       if (threadRef.current) return;
       if (isRecord(params) && typeof params.threadId === "string") {
         threadRef.current = params.threadId;
@@ -715,7 +716,7 @@ export function useCodexChat({
     const id = idRef.current;
     const threadId = threadRef.current;
     if (id === null || !threadId) return;
-    const input: Record<string, unknown>[] = [];
+    const input: JsonObject[] = [];
     if (text.trim()) input.push({ type: "text", text, text_elements: [] });
     for (const img of images ?? []) {
       input.push({ type: "image", url: `data:${img.mediaType};base64,${img.data}` });

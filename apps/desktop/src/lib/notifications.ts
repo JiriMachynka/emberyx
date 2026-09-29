@@ -3,6 +3,7 @@ import {
   sendNotification,
 } from "@tauri-apps/plugin-notification";
 import type { Settings } from "@/lib/settings";
+import type { Json, JsonObject } from "@/types";
 
 const KEY = "emberyx.notifications";
 
@@ -21,7 +22,7 @@ const KINDS: readonly NotificationKind[] = [
   "logged-out",
 ];
 
-export interface AppNotification {
+export type AppNotification = {
   id: string;
   session: string;
   /** Basename of the session's cwd — used for grouping and display. */
@@ -36,9 +37,9 @@ export interface AppNotification {
 /** Max entries kept, newest first. */
 export const MAX_NOTIFICATIONS = 200;
 
-const isNotification = (value: unknown): value is AppNotification => {
+const isNotification = (value: Json): value is AppNotification => {
   if (typeof value !== "object" || value === null) return false;
-  const n = value as Record<string, unknown>;
+  const n = value as JsonObject;
   return (
     typeof n.id === "string" &&
     typeof n.session === "string" &&
@@ -51,7 +52,7 @@ export function loadNotifications(): AppNotification[] {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return [];
-    const parsed: unknown = JSON.parse(raw);
+    const parsed: Json = JSON.parse(raw);
     // Guard against a well-formed but wrong-shaped value from an older build.
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(isNotification);

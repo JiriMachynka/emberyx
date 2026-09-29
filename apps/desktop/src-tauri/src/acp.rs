@@ -526,7 +526,7 @@ impl Inner {
             inner
                 .sessions
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .remove(&id)
                 .and_then(|mut s| s.child.take())
                 .and_then(|mut child| child.wait().ok())

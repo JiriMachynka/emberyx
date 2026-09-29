@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { applyCodexNotification, initialCodexState } from "./adapter";
 import { diffCounts } from "./activities";
+import type { JsonObject } from "@/types";
 
 const THREAD = "019fe0f3-f2b7-7792-89d6-d7371a2c2f20";
 
@@ -11,7 +12,7 @@ const openTurn = () =>
     turn: { id: "turn-1", status: "inProgress" },
   }).state;
 
-const frame = (item: Record<string, unknown>) => ({
+const frame = (item: JsonObject) => ({
   threadId: THREAD,
   turnId: "turn-1",
   item,

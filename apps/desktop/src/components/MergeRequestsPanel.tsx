@@ -173,7 +173,7 @@ export function MergeRequestsPanel({
 /** Minimal slice of a react-query result — the panel only reacts to these. */
 interface QueryLike {
   isPending: boolean;
-  error: unknown;
+  error: Error | null;
 }
 
 function MrList({
@@ -214,18 +214,18 @@ function MrList({
               <span className="min-w-0 flex-1 text-xs font-medium leading-snug">
                 {mr.title}
               </span>
-              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+              <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">
                 {numberLabel(host, mr.iid)}
               </span>
             </div>
-            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+            <div className="flex flex-wrap items-center gap-1.5 text-2xs text-muted-foreground">
               <span className="truncate font-mono">
                 {mr.sourceBranch} → {mr.targetBranch}
               </span>
               {mr.draft && <Badge>Draft</Badge>}
               {mr.hasConflicts && <Badge warning>Conflicts</Badge>}
             </div>
-            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
               <span className="truncate">{mr.authorName}</span>
               <span>•</span>
               <span className="shrink-0">{relativeTime(mr.updatedAt)}</span>
@@ -326,7 +326,7 @@ function MrDetail({
           <h2 className="min-w-0 flex-1 text-sm font-medium leading-snug">
             {mr.title}
           </h2>
-          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+          <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">
             {numberLabel(host, mr.iid)}
           </span>
           <button
@@ -337,14 +337,14 @@ function MrDetail({
             <ExternalLink className="size-3.5" />
           </button>
         </div>
-        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-1.5 text-2xs text-muted-foreground">
           <span className="font-mono">
             {mr.sourceBranch} → {mr.targetBranch}
           </span>
           {mr.draft && <Badge>Draft</Badge>}
           {mr.hasConflicts && <Badge warning>Conflicts</Badge>}
         </div>
-        <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
           <span className="truncate">{mr.authorName}</span>
           <span>•</span>
           <span>{relativeTime(mr.updatedAt)}</span>
@@ -385,7 +385,7 @@ function MrDetail({
       </div>
 
       {error && (
-        <p className="whitespace-pre-wrap border-b p-2 text-[11px] text-red-400">
+        <p className="whitespace-pre-wrap border-b p-2 text-2xs text-red-400">
           {error}
         </p>
       )}
@@ -402,7 +402,7 @@ function MrDetail({
         loading={diffQuery.isPending}
       />
       {diffQuery.error && (
-        <p className="px-3 py-1.5 text-[11px] text-red-400">
+        <p className="px-3 py-1.5 text-2xs text-red-400">
           {String(diffQuery.error)}
         </p>
       )}
@@ -437,14 +437,14 @@ function MrDetail({
         loading={notesQuery.isPending}
       />
       {notes.length === 0 && !notesQuery.isPending && (
-        <p className="flex items-center gap-1.5 px-3 py-2 text-[11px] text-muted-foreground">
+        <p className="flex items-center gap-1.5 px-3 py-2 text-2xs text-muted-foreground">
           <MessageSquare className="size-3.5" />
           No comments.
         </p>
       )}
       {notes.map((note) => (
         <div key={note.id} className="border-b px-3 py-2">
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
             <span className="truncate font-medium text-foreground">
               {note.authorName}
             </span>
@@ -510,7 +510,7 @@ function SectionHeader({
   loading: boolean;
 }) {
   return (
-    <div className="sticky top-0 z-10 flex items-center justify-between bg-card px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+    <div className="sticky top-0 z-10 flex items-center justify-between bg-card px-3 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground">
       <span>{label}</span>
       {loading ? (
         <RefreshCw className="size-3 animate-spin" />
@@ -531,7 +531,7 @@ function Badge({
   return (
     <span
       className={cn(
-        "shrink-0 rounded px-1 text-[10px] font-medium",
+        "shrink-0 rounded px-1 text-3xs font-medium",
         warning
           ? "bg-amber-500/15 text-amber-400"
           : "bg-secondary text-muted-foreground"

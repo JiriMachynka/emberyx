@@ -98,6 +98,7 @@ import {
   revertNothing,
   type ChatSession,
 } from "@/lib/chatSession";
+import type { Json, JsonObject } from "@/types";
 
 /** Keep the tail of stderr for an exit message; the rest is diagnostics. */
 const STDERR_CAP = 4000;
@@ -129,7 +130,7 @@ const messagesFromPage = (rows: ProjectedMessageRow[]): ChatMessage[] => {
       try {
         const parsed = JSON.parse(row.payloadJson ?? "{}") as {
           name?: string;
-          input?: unknown;
+          input?: Json;
           result?: string | null;
           isError?: boolean;
         };
@@ -225,7 +226,7 @@ const rememberRefusal = (
 let nextMessageId = 0;
 const messageId = (prefix: string) => `acp-${prefix}-${(nextMessageId += 1)}`;
 
-const isRecord = (v: unknown): v is Record<string, unknown> =>
+const isRecord = (v: Json): v is JsonObject =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
 const windowOf = (
@@ -421,7 +422,7 @@ export function useAcpChat({
         setPendingAsk(pending);
       })
       .catch((e) => console.error("[emberyx] pending ask read failed", e));
-    const unlisten = listen<unknown>("ask-user", (ev) => {
+    const unlisten = listen<Json>("ask-user", (ev) => {
       if (cancelled) return;
       const payload = ev.payload;
       if (!isRecord(payload) || payload.session !== emberyxSessionId) return;
@@ -541,7 +542,7 @@ export function useAcpChat({
           nativeThreadId: threadId,
         },
         payload,
-      }).catch(() => {});
+      }).catch((e) => console.error("[emberyx] timeline append failed", e));
     },
     [provider]
   );
@@ -622,7 +623,7 @@ export function useAcpChat({
     async (request: AcpServerRequest) => {
       const id = processRef.current;
       if (id === null) return;
-      const params = (request.params ?? {}) as Record<string, unknown>;
+      const params = (request.params ?? {}) as JsonObject;
 
       if (request.method === "session/request_permission") {
         const permission = readPermission(request.id, params);
@@ -677,7 +678,7 @@ export function useAcpChat({
     [publish, showHeadPermission]
   );
 
-  const applyNotification = useCallback((method: string, params: unknown) => {
+  const applyNotification = useCallback((method: string, params: Json) => {
     const update = sessionUpdateOf(method, params);
     if (!update) return;
     const usage = readUsageUpdate(update);
@@ -708,13 +709,13 @@ export function useAcpChat({
     // A reattached daemon session rebuilds its transcript from the replayed
     // notifications, which carry the session id in their params — the
     // fallback for when `resume` doesn't already name it.
-    const captureSessionId = (params: unknown) => {
+    const captureSessionId = (params: Json) => {
       if (sessionRef.current !== null) return;
       if (
         typeof params === "object" &&
         params !== null &&
         "sessionId" in params &&
-        typeof (params as { sessionId: unknown }).sessionId === "string"
+        typeof (params as { sessionId: Json }).sessionId === "string"
       ) {
         const id = (params as { sessionId: string }).sessionId;
         sessionRef.current = id;

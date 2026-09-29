@@ -109,11 +109,11 @@ export function QueueChip({ queued, queue }: { queued: number; queue: PromptQueu
                       {p.text}
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-[0.65rem] text-muted-foreground">
+                      <span className="font-mono text-3xs text-muted-foreground">
                         #{i + 1}
                       </span>
                       {i === 0 && !queue.paused && (
-                        <span className="text-[0.65rem] text-emerald-400">next</span>
+                        <span className="text-3xs text-emerald-400">next</span>
                       )}
                     </div>
                   </div>

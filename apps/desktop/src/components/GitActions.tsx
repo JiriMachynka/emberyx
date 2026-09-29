@@ -369,7 +369,7 @@ export function GitActions({
           {branch.branch}
         </span>
         {(ahead > 0 || behind > 0) && (
-          <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          <span className="flex items-center gap-1 text-2xs text-muted-foreground">
             {behind > 0 && (
               <span className="flex items-center">
                 <ArrowDown className="size-3" />

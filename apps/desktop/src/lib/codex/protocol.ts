@@ -1,3 +1,4 @@
+import type { Json, JsonObject } from "@/types";
 /**
  * Codex app-server protocol, vendored from the ts-rs output of codex-cli
  * 0.155.0 (its `v2` surface). Only the subset the chat transport reads or
@@ -26,7 +27,7 @@ export type PatchChangeKind =
   | { type: "delete" }
   | { type: "update"; move_path: string | null };
 
-export interface FileUpdateChange {
+export type FileUpdateChange = {
   path: string;
   kind: PatchChangeKind;
   diff: string;
@@ -54,17 +55,17 @@ export type CodexItem =
       server: string;
       tool: string;
       status: ToolCallStatus;
-      arguments: unknown;
-      result: unknown;
-      error: unknown;
+      arguments: Json;
+      result: Json;
+      error: Json;
     }
   | {
       type: "dynamicToolCall";
       id: string;
       tool: string;
-      arguments: unknown;
+      arguments: Json;
       status: ToolCallStatus;
-      contentItems: unknown;
+      contentItems: Json;
     }
   | { type: "userMessage"; id: string }
   | {
@@ -78,7 +79,7 @@ export type CodexItem =
       agentsStates: Record<string, CollabAgentState>;
     }
   /** Anything the client has no bespoke shape for. */
-  | { type: "unknown"; id: string; kind: string; raw: Record<string, unknown> };
+  | { type: "unknown"; id: string; kind: string; raw: JsonObject };
 
 export type CollabAgentTool =
   | "spawnAgent"

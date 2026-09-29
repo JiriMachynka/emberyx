@@ -360,7 +360,7 @@ export const ChatPane = memo(function ChatPane({
       kind: "providerSwitch",
       attribution: { provider: to, model: null, nativeThreadId: sessionId },
       payload: JSON.stringify({ from: activeBackend, to, inPlace: true }),
-    }).catch(() => {});
+    }).catch((e) => console.error("[emberyx] timeline append failed", e));
     },
     [activeBackend, activeModel, cwd, sessionId]
   );

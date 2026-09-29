@@ -83,5 +83,5 @@ export const parsePrUrl = (href: string): LinkedPr | null => {
  * A repo whose remote isn't on this service is a normal state, not a failure.
  * Both backends phrase it the same way, so one check covers them.
  */
-export const isMissingRemote = (error: unknown): boolean =>
+export const isMissingRemote = (error: string | Error): boolean =>
   /Not a (github|gitlab)\.com repository/.test(String(error));

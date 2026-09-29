@@ -68,7 +68,7 @@ export function RecentCommits({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col border-b">
-      <div className="group sticky top-0 z-10 flex items-center justify-between bg-card px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="group sticky top-0 z-10 flex items-center justify-between bg-card px-3 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground">
         <button
           onClick={() => setOpen((o) => !o)}
           className="flex items-center gap-1 hover:text-foreground"
@@ -86,7 +86,7 @@ export function RecentCommits({
       {open && (
         <div className="min-h-0 flex-1 overflow-auto" onScroll={onScroll}>
           {commits.length === 0 ? (
-            <div className="px-3 py-2 text-[11px] text-muted-foreground">
+            <div className="px-3 py-2 text-2xs text-muted-foreground">
               No commits yet.
             </div>
           ) : (
@@ -111,7 +111,7 @@ export function RecentCommits({
                             {c.subject}
                           </span>
                           {badge && (
-                            <span className="shrink-0 rounded bg-secondary px-1 text-[10px] text-muted-foreground">
+                            <span className="shrink-0 rounded bg-secondary px-1 text-3xs text-muted-foreground">
                               {badge}
                             </span>
                           )}

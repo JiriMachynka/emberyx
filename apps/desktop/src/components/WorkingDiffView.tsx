@@ -388,7 +388,7 @@ function TreeRowView({
       )}
       <span
         className={cn(
-          "shrink-0 rounded bg-secondary px-1 text-[10px] text-muted-foreground",
+          "shrink-0 rounded bg-secondary px-1 text-3xs text-muted-foreground",
           onAction && "group-hover:hidden"
         )}
       >
@@ -411,7 +411,7 @@ function HunkButton({
     <button
       onClick={onClick}
       title={title}
-      className="flex items-center gap-1 rounded border bg-card px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      className="flex items-center gap-1 rounded border bg-card px-1.5 py-0.5 text-2xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
     >
       {children}
     </button>

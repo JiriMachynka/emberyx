@@ -13,6 +13,7 @@ import type { AgentBackend } from "@/lib/agentBackend";
 import type { ChatQuota, QuotaWindow } from "@/lib/chatMessage";
 import { queryClient } from "@/lib/queries";
 import { formatPlan } from "@/lib/quota";
+import type { Json } from "@/types";
 
 export interface LimitWindow extends QuotaWindow {
   /** "5-hour limit", "Weekly limit" — how the plan names it. */
@@ -56,7 +57,7 @@ const storeSlot = (provider: string, configDir: string | null) =>
 
 const readStore = (): Record<string, ProviderLimits> => {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(STORE_KEY) ?? "{}");
+    const parsed: Json = JSON.parse(localStorage.getItem(STORE_KEY) ?? "{}");
     if (typeof parsed !== "object" || parsed === null) return {};
     const out: Record<string, ProviderLimits> = {};
     for (const [slot, value] of Object.entries(parsed)) {
@@ -69,11 +70,11 @@ const readStore = (): Record<string, ProviderLimits> => {
   }
 };
 
-const text = (v: unknown) => (typeof v === "string" ? v : null);
-const count = (v: unknown) => (typeof v === "number" ? v : null);
-const isRecord = (v: unknown) => typeof v === "object" && v !== null;
+const text = (v: Json) => (typeof v === "string" ? v : null);
+const count = (v: Json) => (typeof v === "number" ? v : null);
+const isRecord = (v: Json) => typeof v === "object" && v !== null;
 
-const storedWindow = (v: unknown): LimitWindow[] => {
+const storedWindow = (v: Json): LimitWindow[] => {
   if (!isRecord(v) || !("label" in v) || !("usedPercent" in v)) return [];
   const label = text(v.label);
   const usedPercent = count(v.usedPercent);
@@ -90,7 +91,7 @@ const storedWindow = (v: unknown): LimitWindow[] => {
 
 /** Shape-checks one stored reading; anything an older build wrote that doesn't
  *  match is dropped rather than rendered half-right. */
-const storedLimits = (v: unknown): ProviderLimits | undefined => {
+const storedLimits = (v: Json): ProviderLimits | undefined => {
   if (!isRecord(v) || !("provider" in v) || !("windows" in v) || !("fetchedAt" in v)) {
     return undefined;
   }

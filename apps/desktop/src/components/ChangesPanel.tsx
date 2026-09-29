@@ -47,7 +47,7 @@ import {
 import { buildTurnReviewOptions, contentsToLoader } from "@/lib/diffView";
 import { PANEL_REVIEW_WIDTH } from "@/lib/panels";
 import type { CommitReviewRequest, TurnReviewRequest } from "@/lib/agentStore";
-import type { CommitDetail } from "@/types";
+import type { CommitDetail, Json } from "@/types";
 import type { GitFile } from "@/types";
 // File history is a drill-down, not part of the changes list — and it carries
 // its own diff rendering. Only a session that opens it pays for it.
@@ -82,7 +82,7 @@ function CommitHeaderRow({
   onExit: () => void;
 }) {
   return (
-    <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-card px-3 py-1 text-[11px] text-muted-foreground">
+    <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-card px-3 py-1 text-2xs text-muted-foreground">
       <span className="truncate">{label}</span>
       <button
         onClick={onExit}
@@ -273,7 +273,7 @@ export function ChangesPanel({
   const invalidateGit = useInvalidateGit();
 
   /** Run a git mutation, refresh every git view, and toast on failure. */
-  async function run(fn: () => Promise<unknown>, what: string) {
+  async function run(fn: () => Promise<Json>, what: string) {
     try {
       await fn();
       invalidateGit(projectPath);
@@ -401,7 +401,7 @@ export function ChangesPanel({
             />
             <button
               onClick={scope === "staged" ? unstageAll : stageAll}
-              className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-2xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
               {scope === "staged" ? (
                 <>
@@ -593,7 +593,7 @@ function TurnReview({
           </span>
         )}
         {truncated && (
-          <span className="truncate text-[11px] text-amber-400">
+          <span className="truncate text-2xs text-amber-400">
             Large diff · showing the start
           </span>
         )}

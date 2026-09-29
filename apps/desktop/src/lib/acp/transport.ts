@@ -8,16 +8,17 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { AgentBackend } from "@/lib/agentBackend";
 import { launchFor, loadSettings } from "@/lib/settings";
 import type { AcpConfigOption } from "./protocol";
+import type { Json, JsonObject } from "@/types";
 
 export interface AcpNotify {
   method: string;
-  params: unknown;
+  params: Json;
 }
 
 export interface AcpServerRequest {
   id: number;
   method: string;
-  params: unknown;
+  params: Json;
 }
 
 /** Mirrors `AcpEvent` in `src-tauri/src/acp.rs`. */
@@ -25,7 +26,7 @@ export type AcpEvent =
   | { type: "notification"; data: AcpNotify }
   | { type: "notifications"; data: AcpNotify[] }
   | { type: "request"; data: AcpServerRequest }
-  | { type: "turnEnded"; data: { sessionId: string; result: unknown } }
+  | { type: "turnEnded"; data: { sessionId: string; result: Json } }
   | { type: "turnFailed"; data: { sessionId: string; message: string } }
   | { type: "stderr"; data: string }
   | { type: "exit"; data: number | null };
@@ -41,7 +42,7 @@ export interface AcpSpawnResult {
   id: number;
   initialize: {
     protocolVersion?: number;
-    agentCapabilities?: Record<string, unknown>;
+    agentCapabilities?: JsonObject;
     agentInfo?: { name?: string; version?: string };
   };
   /** True when the daemon already had this process running and replayed its
@@ -74,7 +75,7 @@ export interface AcpSessionResult {
   sessionId: string;
   models?: AcpGrokModelState;
   configOptions?: AcpConfigOption[];
-  _meta?: Record<string, unknown> & {
+  _meta?: JsonObject & {
     "x.ai/sessionConfig"?: AcpVendorSessionConfig;
     modelState?: AcpGrokModelState;
   };
@@ -156,7 +157,7 @@ export const acpCancel = (id: number, sessionId: string): Promise<void> =>
 export const acpRespond = (
   id: number,
   requestId: number,
-  result: unknown,
+  result: Json,
   error?: string
 ): Promise<void> =>
   invoke("acp_respond", { id, requestId, result: result ?? null, error: error ?? null });

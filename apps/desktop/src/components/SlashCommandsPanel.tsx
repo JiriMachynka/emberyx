@@ -63,7 +63,7 @@ export function SlashCommandsPanel({
             className="h-8 text-xs"
           />
           {!send && (
-            <p className="mt-2 text-[0.7rem] text-muted-foreground">
+            <p className="mt-2 text-2xs text-muted-foreground">
               Open a chat session to run a command.
             </p>
           )}
@@ -97,7 +97,7 @@ export function SlashCommandsPanel({
                 {command.description && (
                   <span className="truncate text-muted-foreground">{command.description}</span>
                 )}
-                <span className="ml-auto shrink-0 text-[10px] text-muted-foreground/70">
+                <span className="ml-auto shrink-0 text-3xs text-muted-foreground/70">
                   {command.source}
                 </span>
               </button>

@@ -421,7 +421,7 @@ function ScopeRow({
 }
 
 const SectionLabel = ({ children }: { children: React.ReactNode }) => (
-  <div className="px-2 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+  <div className="px-2 pt-1 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
     {children}
   </div>
 );

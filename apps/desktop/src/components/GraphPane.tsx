@@ -154,7 +154,7 @@ function CommitRow({
           <span className="flex items-center gap-2">
             <span className="truncate text-sm font-medium">{c.subject}</span>
             {isMerge && (
-              <span className="shrink-0 rounded bg-secondary px-1 text-[10px] text-muted-foreground">
+              <span className="shrink-0 rounded bg-secondary px-1 text-3xs text-muted-foreground">
                 merge
               </span>
             )}
@@ -162,7 +162,7 @@ function CommitRow({
               <span
                 key={i}
                 className={cn(
-                  "shrink-0 rounded px-1 text-[10px]",
+                  "shrink-0 rounded px-1 text-3xs",
                   BADGE_STYLE[b.kind]
                 )}
               >
@@ -443,7 +443,7 @@ export function GraphPane({ path, active, onBack }: GraphPaneProps) {
                           <span
                             key={i}
                             className={cn(
-                              "shrink-0 rounded px-1 text-[10px]",
+                              "shrink-0 rounded px-1 text-3xs",
                               BADGE_STYLE[b.kind]
                             )}
                           >
@@ -515,7 +515,7 @@ function RefChip({ ref_ }: { ref_: GraphRef }) {
     <span
       title={`${ref_.targetSha.slice(0, 10)}${ref_.upstream ? ` · tracks ${ref_.upstream}` : ""}`}
       className={cn(
-        "shrink-0 rounded px-1.5 py-0.5 text-[10px]",
+        "shrink-0 rounded px-1.5 py-0.5 text-3xs",
         ref_.isHead
           ? "bg-card font-semibold text-foreground ring-1 ring-border"
           : ref_.kind === "tag"

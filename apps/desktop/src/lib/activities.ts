@@ -1,4 +1,4 @@
-import type { ActivityItem, ActivityKind } from "@/types";
+import type { ActivityItem, ActivityKind, Json, JsonObject } from "@/types";
 
 /** Anything that can carry a turn's activity rows — a live draft or a settled
  *  message. Structural on purpose, so this stays free of the chat hook. */
@@ -176,12 +176,12 @@ export const kindForToolName = (name: string): ActivityKind => {
  * tool, so the input is the fallback: a command field is a command, and old/new
  * text or newly written content is a file change.
  */
-export const kindForTool = (name: string, input: unknown): ActivityKind => {
+export const kindForTool = (name: string, input: Json): ActivityKind => {
   const named = kindForToolName(name);
   if (named !== "tool") return named;
   const i =
     typeof input === "object" && input !== null
-      ? (input as Record<string, unknown>)
+      ? (input as JsonObject)
       : {};
   if (typeof i.command === "string" || typeof i.cmd === "string") return "command";
   if (
@@ -212,9 +212,9 @@ const TARGET_KEYS: Record<ActivityKind, readonly string[]> = {
   reasoning: [],
 };
 
-export const targetForInput = (kind: ActivityKind, input: unknown): string | undefined => {
+export const targetForInput = (kind: ActivityKind, input: Json | undefined): string | undefined => {
   if (typeof input !== "object" || input === null) return undefined;
-  const record = input as Record<string, unknown>;
+  const record = input as JsonObject;
   for (const key of TARGET_KEYS[kind]) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) return value.trim();
@@ -230,7 +230,7 @@ export interface ActivityRowSource {
   title: string;
   /** The tool's raw input. `undefined` means the backend sent none — not the
    *  same as an empty object, which is an input that happens to be empty. */
-  input: unknown;
+  input: Json | undefined;
   /** The result so far, or `undefined` while there is none. An empty string is
    *  no result: pass `undefined` rather than blanking what already streamed in. */
   output?: string;

@@ -47,7 +47,7 @@ import {
 } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { CommitPush, GitFile } from "@/types";
+import type { CommitPush, GitFile, Json } from "@/types";
 
 /** Auto-resize cap for the commit-message textarea. */
 const MESSAGE_MAX = 160;
@@ -119,7 +119,7 @@ function FileRow({
       </button>
       <span
         className={cn(
-          "w-4 shrink-0 text-center font-mono text-[10px]",
+          "w-4 shrink-0 text-center font-mono text-3xs",
           statusColor(letter)
         )}
       >
@@ -167,7 +167,7 @@ function FileSection({
   if (files.length === 0) return null;
   return (
     <>
-      <div className="flex items-center gap-1 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="flex items-center gap-1 px-3 py-1 text-3xs font-semibold uppercase tracking-wide text-muted-foreground">
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
@@ -290,7 +290,7 @@ export function ChangesColumn({
     }
   };
 
-  async function runGit(fn: () => Promise<unknown>, fail: string) {
+  async function runGit(fn: () => Promise<Json | void>, fail: string) {
     try {
       await fn();
       invalidateGit(projectPath);
@@ -751,7 +751,7 @@ export function ChangesColumn({
           </DropdownMenu>
         </div>
         {!canCommit && files.length > 0 && (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             Stage files to commit
           </p>
         )}
@@ -810,7 +810,7 @@ export function ChangesColumn({
               No uncommitted changes
             </p>
             {cleanNote && (
-              <p className="px-3 pb-2 text-center text-[11px] text-muted-foreground">
+              <p className="px-3 pb-2 text-center text-2xs text-muted-foreground">
                 {cleanNote}
               </p>
             )}

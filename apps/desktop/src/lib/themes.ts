@@ -1,3 +1,4 @@
+import type { Json } from "@/types";
 /**
  * Dark themes.
  *
@@ -144,7 +145,7 @@ export const THEMES: Theme[] = [
 export const DEFAULT_THEME: ThemeId = "ember";
 
 // Membership, not `in`: "toString" is on every object's prototype chain.
-export const isThemeId = (value: unknown): value is ThemeId =>
+export const isThemeId = (value: Json | undefined): value is ThemeId =>
   typeof value === "string" && THEMES.some((t) => t.id === value);
 
 export const themeById = (id: ThemeId): Theme =>

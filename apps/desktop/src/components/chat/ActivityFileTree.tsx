@@ -226,7 +226,7 @@ const FileTreeFile = memo(function FileTreeFile({
         {edit?.state != null && (
           <span
             className={cn(
-              "shrink-0 text-[0.65rem] leading-none",
+              "shrink-0 text-3xs leading-none",
               live && !failed
                 ? "tool-running-label"
                 : failed

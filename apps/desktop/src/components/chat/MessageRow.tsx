@@ -194,7 +194,7 @@ function RevertTurnButton({
           changes: changes.length,
           conversation: rewindConversation,
         }),
-      }).catch(() => {});
+      }).catch((e) => console.error("[emberyx] timeline append failed", e));
       toast.success("Reverted to before this turn");
     } catch (e) {
       toast.error("Revert failed", { description: String(e) });

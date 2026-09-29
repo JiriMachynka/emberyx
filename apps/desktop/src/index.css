@@ -31,6 +31,11 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  /* Dense chrome (badges, meta rows) sits below Tailwind's `text-xs`. No
+     line-height on purpose: these inherit the row's, as the old arbitrary
+     sizes did. */
+  --text-2xs: 0.6875rem;
+  --text-3xs: 0.625rem;
   /* Runtime-overridden from Appearance. Streamdown and `font-mono` read these. */
   --font-sans: var(--chat-font);
   --font-mono: var(--code-font);

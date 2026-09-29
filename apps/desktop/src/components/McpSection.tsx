@@ -26,6 +26,7 @@ import {
 } from "@/lib/mcp";
 import { McpAddDialog } from "@/components/McpAddDialog";
 import { Group, StatusDot, Tile } from "@/components/SettingsFields";
+import { errorText } from "@/lib/errorText";
 
 /** Settings → MCP: every MCP server across the harness configs, merged by
  *  name. The harness files stay the source of truth — this surface reads them
@@ -335,5 +336,3 @@ function HarnessChip({
   );
 }
 
-const errorText = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);

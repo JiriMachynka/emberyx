@@ -16,7 +16,7 @@
 
 import type { ChatMessage, ChatStatus, ToolCall } from "@/hooks/useAgentChat";
 import { upsertActivities } from "@/lib/activities";
-import type { ActivityItem } from "@/types";
+import type { ActivityItem, Json, JsonObject } from "@/types";
 import { acpActivity } from "./activities";
 import type {
   AcpContentBlock,
@@ -27,15 +27,15 @@ import type {
 } from "./protocol";
 import type { AccessLevel } from "@/lib/settings";
 
-const isRecord = (v: unknown): v is Record<string, unknown> =>
+const isRecord = (v: Json | undefined): v is JsonObject =>
   typeof v === "object" && v !== null;
 
-const asString = (v: unknown): string | undefined =>
+const asString = (v: Json | undefined): string | undefined =>
   typeof v === "string" ? v : undefined;
 
 /** A tool call as either revision states it: `{ toolCallId, title, kind }`. */
 const readToolCall = (
-  v: unknown
+  v: Json | undefined
 ): { toolCallId?: string; title?: string; kind?: string } | null => {
   if (!isRecord(v)) return null;
   return {
@@ -57,8 +57,8 @@ export const planToolId = (planKey: string) => `acp-plan-${planKey}`;
 
 /** Which plan an update is about. v2 gives a plan its own id; v1 has one plan
  *  per session, so everything without an id is the same plan being revised. */
-export function planKeyOf(update: unknown): string {
-  const plan = isRecord(update) && isRecord(update.plan) ? update.plan : null;
+export function planKeyOf(update: AcpUpdate): string {
+  const plan = "plan" in update ? update.plan : undefined;
   const id = plan?.planId ?? plan?.id;
   return typeof id === "string" ? id : "0";
 }
@@ -78,14 +78,15 @@ export function planTool(entries: AcpPlanEntry[], planKey: string): ToolCall {
 }
 
 /** Plan entries from either revision's shape. */
-export const planEntriesOf = (update: unknown): AcpPlanEntry[] | null => {
-  if (!isRecord(update)) return null;
-  const kind = update.sessionUpdate;
-  if (kind !== "plan" && kind !== "plan_update") return null;
-  const inline = update.entries;
-  if (Array.isArray(inline)) return inline as AcpPlanEntry[];
-  const nested = isRecord(update.plan) ? update.plan.entries : undefined;
-  return Array.isArray(nested) ? (nested as AcpPlanEntry[]) : [];
+export const planEntriesOf = (update: AcpUpdate): AcpPlanEntry[] | null => {
+  if (update.sessionUpdate !== "plan" && update.sessionUpdate !== "plan_update") {
+    return null;
+  }
+  // Frames are not trusted: a non-array is no plan, not a crash.
+  const inline = "entries" in update ? update.entries : undefined;
+  if (Array.isArray(inline)) return inline;
+  const nested = "plan" in update ? update.plan?.entries : undefined;
+  return Array.isArray(nested) ? nested : [];
 };
 
 /** Result text for a finished tool call: its content blocks, else raw output. */
@@ -112,7 +113,7 @@ export const statusForStop = (reason: AcpStopReason | string): ChatStatus =>
  * "Responding…". `stopReason` / `stop_reason` is `end_turn` when the agent
  * says; anything else is still a completed turn.
  */
-export const grokTurnStop = (method: string, params: unknown): string | null => {
+export const grokTurnStop = (method: string, params: Json): string | null => {
   if (!isRecord(params)) return null;
   if (method === "_x.ai/session/prompt_complete") {
     return typeof params.stopReason === "string" ? params.stopReason : "end_turn";
@@ -127,7 +128,7 @@ export const grokTurnStop = (method: string, params: unknown): string | null => 
 };
 
 /** The `session/update` payload, including Grok's vendor-wrapped copy. */
-export const sessionUpdateOf = (method: string, params: unknown): unknown => {
+export const sessionUpdateOf = (method: string, params: Json): Json => {
   if (!isRecord(params)) return null;
   if (method === "session/update") return params.update ?? null;
   if (method === "_x.ai/session_notification" && isRecord(params.update)) {
@@ -145,7 +146,7 @@ export interface AcpUsage {
   costUsd?: number;
 }
 
-export const readUsageUpdate = (update: unknown): AcpUsage | null => {
+export const readUsageUpdate = (update: Json): AcpUsage | null => {
   if (!isRecord(update) || update.sessionUpdate !== "usage_update") return null;
   const used = update.used;
   const size = update.size;
@@ -219,7 +220,7 @@ export function applyUpdate(
    *  hook owns the set, since it is the side that answers. */
   autoApproved?: ReadonlySet<string>
 ): AcpTurn {
-  if (!isRecord(update)) return turn;
+  if (typeof update !== "object" || update === null) return turn;
   const kind = update.sessionUpdate;
   const message = turn.message ?? newAssistant(id);
 
@@ -350,7 +351,7 @@ export interface AcpPermission {
 /** Read a permission request from either revision's shape. */
 export function readPermission(
   requestId: number,
-  params: unknown
+  params: Json
 ): AcpPermission | null {
   if (!isRecord(params)) return null;
   // v1 states the tool call at the top level; the v2 draft wraps it in a
@@ -425,7 +426,7 @@ export const autoPermission = (
 };
 
 /** The reply body for a chosen option, or for backing out. */
-export const permissionOutcome = (optionId: string | null) =>
+export const permissionOutcome = (optionId: string | null): JsonObject =>
   optionId === null
     ? { outcome: { outcome: "cancelled" } }
     : { outcome: { outcome: "selected", optionId } };

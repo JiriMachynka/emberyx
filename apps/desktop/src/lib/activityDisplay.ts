@@ -9,7 +9,7 @@
 
 import { isFileReference } from "@/lib/fileRef";
 import type { ToolIcon } from "@/lib/toolDisplay";
-import type { ActivityFileEdit, ActivityItem, ActivityKind } from "@/types";
+import type { ActivityFileEdit, ActivityItem, ActivityKind, Json } from "@/types";
 
 const ICON: Record<ActivityKind, ToolIcon> = {
   reasoning: "tool",
@@ -81,29 +81,29 @@ export const isMonoActivity = (activity: ActivityItem): boolean =>
 const looksLikeGlob = (value: string): boolean => /[*?]/.test(value);
 
 interface FileToolInput {
-  file_path?: unknown;
+  file_path?: Json;
   // ACP backends (OpenCode, Grok) spell the same fields in camelCase.
-  filePath?: unknown;
-  path?: unknown;
-  content?: unknown;
-  old_string?: unknown;
-  oldString?: unknown;
-  new_string?: unknown;
-  newString?: unknown;
-  edits?: unknown;
-  changes?: unknown;
-  oldText?: unknown;
-  newText?: unknown;
+  filePath?: Json;
+  path?: Json;
+  content?: Json;
+  old_string?: Json;
+  oldString?: Json;
+  new_string?: Json;
+  newString?: Json;
+  edits?: Json;
+  changes?: Json;
+  oldText?: Json;
+  newText?: Json;
 }
 
 interface ChangeVerb {
-  type?: unknown;
-  path?: unknown;
-  oldText?: unknown;
-  newText?: unknown;
+  type?: Json;
+  path?: Json;
+  oldText?: Json;
+  newText?: Json;
 }
 
-const asText = (value: unknown): string | null =>
+const asText = (value: Json | undefined): string | null =>
   typeof value === "string" ? value : null;
 
 /**
@@ -132,7 +132,7 @@ export const fileEditsFor = (
   if (input != null && Array.isArray(input.changes)) {
     for (const raw of input.changes) {
       if (typeof raw !== "object" || raw == null) continue;
-      const change = raw as ChangeVerb & { kind?: unknown };
+      const change = raw as ChangeVerb & { kind?: Json };
       const path = typeof change.path === "string" ? change.path : null;
       if (!path) continue;
       const kind =

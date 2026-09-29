@@ -100,7 +100,7 @@ export function CommandPalette({
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm data-[state=closed]:animate-out data-[state=closed]:fade-out data-[state=open]:animate-in data-[state=open]:fade-in" />
         <Dialog.Content
           aria-describedby={undefined}
-          className="fixed left-1/2 top-[15%] z-50 w-full max-w-lg -translate-x-1/2 px-4 data-[state=closed]:animate-out data-[state=closed]:fade-out data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95"
+          className="fixed left-1/2 top-1/6 z-50 w-full max-w-lg -translate-x-1/2 px-4 data-[state=closed]:animate-out data-[state=closed]:fade-out data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95"
         >
           <Dialog.Title className="sr-only">Command palette</Dialog.Title>
           <Command

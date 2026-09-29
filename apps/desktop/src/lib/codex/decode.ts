@@ -28,20 +28,21 @@ import type {
   TurnPlanStepStatus,
   TurnStatus,
 } from "./protocol";
+import type { Json, JsonObject } from "@/types";
 
-export const isRecord = (v: unknown): v is Record<string, unknown> =>
+export const isRecord = (v: Json | undefined): v is JsonObject =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
-const numOr = (v: unknown, fallback: number): number =>
+const str = (v: Json): string | undefined => (typeof v === "string" ? v : undefined);
+const numOr = (v: Json, fallback: number): number =>
   typeof v === "number" && Number.isFinite(v) ? v : fallback;
-const nullableNum = (v: unknown): number | null =>
+const nullableNum = (v: Json): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
-const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
-const strings = (v: unknown): string[] =>
+const list = (v: Json): Json[] => (Array.isArray(v) ? v : []);
+const strings = (v: Json): string[] =>
   list(v).filter((x): x is string => typeof x === "string");
 
-export const decodeDelta = (params: unknown): ItemDelta | null => {
+export const decodeDelta = (params: Json): ItemDelta | null => {
   if (!isRecord(params)) return null;
   const turnId = str(params.turnId);
   const itemId = str(params.itemId);
@@ -56,30 +57,30 @@ export interface TurnFrame {
 }
 
 // Literal comparison rather than a Set lookup: it narrows, so no cast is needed.
-const turnStatus = (v: unknown): TurnStatus =>
+const turnStatus = (v: Json): TurnStatus =>
   v === "completed" || v === "interrupted" || v === "failed" ? v : "inProgress";
 
-const execStatus = (v: unknown): CommandExecutionStatus =>
+const execStatus = (v: Json): CommandExecutionStatus =>
   v === "completed" || v === "failed" || v === "declined" ? v : "inProgress";
 
-const callStatus = (v: unknown): ToolCallStatus =>
+const callStatus = (v: Json): ToolCallStatus =>
   v === "completed" || v === "failed" ? v : "inProgress";
 
 /** `turn/started` and `turn/completed` both carry `{ threadId, turn }`. */
-export const decodeTurn = (params: unknown): TurnFrame | null => {
+export const decodeTurn = (params: Json): TurnFrame | null => {
   if (!isRecord(params) || !isRecord(params.turn)) return null;
   const id = str(params.turn.id);
   if (id === undefined) return null;
   return { id, status: turnStatus(params.turn.status) };
 };
 
-const decodeChangeKind = (v: unknown): PatchChangeKind => {
+const decodeChangeKind = (v: Json): PatchChangeKind => {
   const type = isRecord(v) ? str(v.type) : undefined;
   if (type === "add" || type === "delete") return { type };
   return { type: "update", move_path: isRecord(v) ? (str(v.move_path) ?? null) : null };
 };
 
-const decodeChanges = (v: unknown): FileUpdateChange[] =>
+const decodeChanges = (v: Json): FileUpdateChange[] =>
   list(v).flatMap((c) => {
     if (!isRecord(c)) return [];
     const path = str(c.path);
@@ -99,7 +100,7 @@ const COLLAB_TOOLS: CollabAgentTool[] = [
   "listAgents",
 ];
 
-const collabTool = (v: unknown): CollabAgentTool =>
+const collabTool = (v: Json): CollabAgentTool =>
   COLLAB_TOOLS.find((t) => t === v) ?? "spawnAgent";
 
 const COLLAB_STATUSES: CollabAgentStatus[] = [
@@ -112,7 +113,7 @@ const COLLAB_STATUSES: CollabAgentStatus[] = [
   "notFound",
 ];
 
-const decodeAgentStates = (v: unknown): Record<string, CollabAgentState> => {
+const decodeAgentStates = (v: Json): Record<string, CollabAgentState> => {
   if (!isRecord(v)) return {};
   const out: Record<string, CollabAgentState> = {};
   for (const [threadId, state] of Object.entries(v)) {
@@ -128,11 +129,11 @@ const decodeAgentStates = (v: unknown): Record<string, CollabAgentState> => {
 /** The thread a notification belongs to. Subagent turns stream over the same
  *  connection, so this is the only thing separating them from the session's
  *  own transcript. */
-export const frameThreadId = (params: unknown): string | undefined =>
+export const frameThreadId = (params: Json): string | undefined =>
   isRecord(params) ? str(params.threadId) : undefined;
 
 /** `item/started` / `item/completed` payloads wrap the item in `{ item }`. */
-export const decodeItem = (params: unknown): CodexItem | null => {
+export const decodeItem = (params: Json): CodexItem | null => {
   if (!isRecord(params)) return null;
   const item = isRecord(params.item) ? params.item : params;
   const id = str(item.id);
@@ -205,7 +206,7 @@ export const decodeItem = (params: unknown): CodexItem | null => {
   }
 };
 
-const decodeBreakdown = (v: unknown): TokenUsageBreakdown => {
+const decodeBreakdown = (v: Json): TokenUsageBreakdown => {
   const o = isRecord(v) ? v : {};
   return {
     totalTokens: numOr(o.totalTokens, 0),
@@ -215,7 +216,7 @@ const decodeBreakdown = (v: unknown): TokenUsageBreakdown => {
   };
 };
 
-export const decodeTokenUsage = (params: unknown): ThreadTokenUsage | null => {
+export const decodeTokenUsage = (params: Json): ThreadTokenUsage | null => {
   if (!isRecord(params) || !isRecord(params.tokenUsage)) return null;
   const u = params.tokenUsage;
   return {
@@ -225,10 +226,10 @@ export const decodeTokenUsage = (params: unknown): ThreadTokenUsage | null => {
   };
 };
 
-const planStatus = (v: unknown): TurnPlanStepStatus =>
+const planStatus = (v: Json): TurnPlanStepStatus =>
   v === "inProgress" || v === "completed" ? v : "pending";
 
-export const decodePlan = (params: unknown): TurnPlanStep[] | null => {
+export const decodePlan = (params: Json): TurnPlanStep[] | null => {
   if (!isRecord(params)) return null;
   return list(params.plan).flatMap((s) => {
     if (!isRecord(s)) return [];
@@ -246,13 +247,13 @@ export interface ErrorFrame {
 
 /** `codexErrorInfo` is a string for unit variants and a single-key object for
  *  the data-carrying ones; both reduce to the variant name. */
-const errorCode = (v: unknown): string => {
+const errorCode = (v: Json): string => {
   if (typeof v === "string") return v;
   if (isRecord(v)) return Object.keys(v)[0] ?? "other";
   return "other";
 };
 
-export const decodeError = (params: unknown): ErrorFrame | null => {
+export const decodeError = (params: Json): ErrorFrame | null => {
   if (!isRecord(params) || !isRecord(params.error)) return null;
   return {
     message: str(params.error.message) ?? "Codex reported an error",
@@ -261,7 +262,7 @@ export const decodeError = (params: unknown): ErrorFrame | null => {
   };
 };
 
-const decodeWindow = (v: unknown): RateLimitWindow | null => {
+const decodeWindow = (v: Json): RateLimitWindow | null => {
   if (!isRecord(v)) return null;
   return {
     usedPercent: numOr(v.usedPercent, 0),
@@ -270,7 +271,7 @@ const decodeWindow = (v: unknown): RateLimitWindow | null => {
   };
 };
 
-export const decodeRateLimits = (params: unknown): RateLimitSnapshot | null => {
+export const decodeRateLimits = (params: Json): RateLimitSnapshot | null => {
   if (!isRecord(params) || !isRecord(params.rateLimits)) return null;
   const r = params.rateLimits;
   return {
@@ -281,7 +282,7 @@ export const decodeRateLimits = (params: unknown): RateLimitSnapshot | null => {
   };
 };
 
-export const decodeThreads = (result: unknown): CodexThread[] => {
+export const decodeThreads = (result: Json): CodexThread[] => {
   if (!isRecord(result)) return [];
   return list(result.data).flatMap((t) => {
     if (!isRecord(t)) return [];
@@ -298,7 +299,7 @@ export const decodeThreads = (result: unknown): CodexThread[] => {
   });
 };
 
-export const decodeModels = (result: unknown): CodexModel[] => {
+export const decodeModels = (result: Json): CodexModel[] => {
   if (!isRecord(result)) return [];
   return list(result.data).flatMap((m) => {
     if (!isRecord(m)) return [];
@@ -320,7 +321,7 @@ export const decodeModels = (result: unknown): CodexModel[] => {
 };
 
 /** `skills/list` answers per cwd, each with its own skill array. */
-export const decodeSkills = (result: unknown): CodexSkill[] => {
+export const decodeSkills = (result: Json): CodexSkill[] => {
   if (!isRecord(result)) return [];
   return list(result.data).flatMap((entry) => {
     if (!isRecord(entry)) return [];
@@ -340,7 +341,7 @@ export const decodeSkills = (result: unknown): CodexSkill[] => {
 };
 
 /** `hook/started` and `hook/completed` both carry `{ threadId, turnId, run }`. */
-export const decodeHookRun = (params: unknown): CodexHookRun | null => {
+export const decodeHookRun = (params: Json): CodexHookRun | null => {
   if (!isRecord(params) || !isRecord(params.run)) return null;
   const eventName = str(params.run.eventName);
   if (eventName === undefined) return null;
@@ -348,13 +349,13 @@ export const decodeHookRun = (params: unknown): CodexHookRun | null => {
 };
 
 /** The assistant text an `item/completed` frame carries, when it is one. */
-export const decodeAgentMessage = (params: unknown): string | null => {
+export const decodeAgentMessage = (params: Json): string | null => {
   if (!isRecord(params) || !isRecord(params.item)) return null;
   if (params.item.type !== "agentMessage") return null;
   return str(params.item.text) ?? null;
 };
 
-export const decodeQuestions = (params: unknown): ToolUserInputQuestion[] => {
+export const decodeQuestions = (params: Json): ToolUserInputQuestion[] => {
   if (!isRecord(params)) return [];
   return list(params.questions).flatMap((q) => {
     if (!isRecord(q)) return [];
@@ -381,7 +382,7 @@ export const decodeQuestions = (params: unknown): ToolUserInputQuestion[] => {
 
 /** The thread id every thread/start and thread/resume response carries. */
 export const decodeThreadStart = (
-  result: unknown
+  result: Json
 ): { threadId: string; model?: string } | null => {
   if (!isRecord(result) || !isRecord(result.thread)) return null;
   const threadId = str(result.thread.id);

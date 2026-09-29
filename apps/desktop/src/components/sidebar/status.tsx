@@ -14,7 +14,7 @@ export const SessionStatusLabel = memo(function SessionStatusLabel({ id }: { id:
   return (
     <span
       className={cn(
-        "shrink-0 text-[10px] font-medium uppercase tracking-wide",
+        "shrink-0 text-3xs font-medium uppercase tracking-wide",
         meta.text
       )}
     >

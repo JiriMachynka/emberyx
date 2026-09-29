@@ -1,5 +1,5 @@
 import type { SubagentActivity } from "@/lib/agentStore";
-import type { ActivityItem, SessionStatus } from "@/types";
+import type { ActivityItem, Json, JsonObject, SessionStatus } from "@/types";
 import type { Provider } from "@/lib/providers";
 import { describeTool } from "@/lib/toolDisplay";
 import type { MessageActivities } from "@/lib/threadPage";
@@ -7,7 +7,7 @@ import type { MessageActivities } from "@/lib/threadPage";
 export interface ToolCall {
   id: string;
   name: string;
-  input: unknown;
+  input: Json;
   /** Raw partial JSON accumulated from input_json_delta while streaming. */
   partial: string;
   result?: string;
@@ -48,7 +48,7 @@ export interface ChatMessage {
 }
 
 /** A pasted image, base64-encoded for a stream-json image content block. */
-export interface ChatImage {
+export type ChatImage = {
   id: string;
   mediaType: string;
   /** base64 payload without the data: URL prefix. */
@@ -85,15 +85,15 @@ export type PermissionDecision = "allow_once" | "allow_always" | "deny";
 export interface PendingPermission {
   requestId: string;
   toolName: string;
-  input: unknown;
+  input: Json;
   /** CLI-computed permission_suggestions, echoed back for "allow always". */
-  suggestions: unknown[];
+  suggestions: Json[];
   toolUseId: string;
 }
 
 /** A question raised by the agent's `ask_user` MCP tool. The call is blocked in
  *  the backend until `answerAsk` sends a choice back. */
-export interface AskQuestion {
+export type AskQuestion = {
   question: string;
   header: string;
   options: { label: string; description: string }[];
@@ -179,7 +179,7 @@ export const localId = () => `m${++counter}`;
 
 /** Wire frames are decoded, not trusted. Mirrors `lib/codex/decode.ts`; kept
  *  here so the Claude transport doesn't import a Codex module. */
-export const isRecord = (v: unknown): v is Record<string, unknown> =>
+export const isRecord = (v: Json | undefined): v is JsonObject =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
 /**
@@ -201,14 +201,14 @@ export function parseTranscript(text: string): ChatMessage[] {
   };
   for (const [index, line] of text.split("\n").entries()) {
     if (!line.trim()) continue;
-    let o: Record<string, unknown>;
+    let o: JsonObject;
     try {
       o = JSON.parse(line);
     } catch {
       continue;
     }
     if (o.isSidechain === true) continue;
-    const msg = o.message as Record<string, unknown> | undefined;
+    const msg = o.message as JsonObject | undefined;
 
     if (o.type === "user" && msg) {
       const content = msg.content;
@@ -286,14 +286,14 @@ export function parseTranscriptUsage(text: string): ChatUsage {
   let model: string | undefined;
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
-    let o: Record<string, unknown>;
+    let o: JsonObject;
     try {
       o = JSON.parse(line);
     } catch {
       continue;
     }
     if (o.isSidechain === true || o.type !== "assistant") continue;
-    const m = o.message as Record<string, unknown> | undefined;
+    const m = o.message as JsonObject | undefined;
     if (!m) continue;
     if (typeof m.model === "string") model = m.model;
     const u = m.usage as Record<string, number> | undefined;
@@ -328,14 +328,14 @@ function isSynthetic(text: string): boolean {
   );
 }
 
-export const isAgentTool = (name: unknown): boolean =>
+export const isAgentTool = (name: Json): boolean =>
   name === "Task" || name === "Agent";
 
 /** Flatten one subagent turn into the lines the agent panel shows. */
-export function readActivity(content: unknown): SubagentActivity[] {
+export function readActivity(content: Json): SubagentActivity[] {
   const out: SubagentActivity[] = [];
   if (!Array.isArray(content)) return out;
-  for (const b of content as Array<Record<string, unknown>>) {
+  for (const b of content as Array<JsonObject>) {
     if (b.type === "tool_use") {
       const d = describeTool(b.name as string, b.input);
       out.push({ kind: "tool", name: d.label, detail: d.title ?? "", icon: d.icon });

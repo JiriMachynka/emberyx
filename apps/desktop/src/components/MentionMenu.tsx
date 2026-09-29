@@ -81,7 +81,7 @@ export function MentionMenu({
           </button>
         );
       })}
-      <p className="border-t border-border px-3 py-1 text-[10px] text-muted-foreground">
+      <p className="border-t border-border px-3 py-1 text-3xs text-muted-foreground">
         ↑↓ to choose · Enter or Tab to insert · Esc to dismiss
       </p>
     </div>

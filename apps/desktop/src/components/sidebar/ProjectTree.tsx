@@ -49,7 +49,7 @@ export function ProjectTree(props: SidebarProps) {
         >
           <Search className="size-3.5" />
           <span className="flex-1 text-left">Search</span>
-          <kbd className="rounded bg-background/60 px-1 text-[10px] tabular-nums">
+          <kbd className="rounded bg-background/60 px-1 text-3xs tabular-nums">
             ⌘K
           </kbd>
         </button>
@@ -78,13 +78,13 @@ export function ProjectTree(props: SidebarProps) {
       >
         <Search className="size-3.5" />
         <span className="flex-1 text-left">Search</span>
-        <kbd className="rounded bg-background/60 px-1 text-[10px] tabular-nums">
+        <kbd className="rounded bg-background/60 px-1 text-3xs tabular-nums">
           ⌘K
         </kbd>
       </button>
 
       <div className="mb-0.5 flex items-center justify-between px-2 pt-1">
-        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        <span className="text-3xs font-medium uppercase tracking-wide text-muted-foreground">
           Projects
         </span>
         <button

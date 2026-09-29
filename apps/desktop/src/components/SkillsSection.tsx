@@ -29,6 +29,7 @@ import {
 } from "@/lib/mcp";
 import { SkillsAddDialog } from "@/components/SkillsAddDialog";
 import { Group, StatusDot, Tile } from "@/components/SettingsFields";
+import { errorText } from "@/lib/errorText";
 
 /** Settings → Skills: every skill folder across the harness skill homes,
  *  merged by name. Folders are shared surfaces — `~/.claude/skills` is read
@@ -334,5 +335,3 @@ function HarnessChip({
 const folderName = (skillDir: string): string =>
   skillDir.split("/").filter(Boolean).pop() ?? skillDir;
 
-const errorText = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);

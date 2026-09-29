@@ -317,7 +317,10 @@ impl Drain {
             if now >= deadline {
                 return;
             }
-            let (next, _timeout) = self.done.wait_timeout(state, deadline - now).unwrap();
+            let (next, _timeout) = self
+                .done
+                .wait_timeout(state, deadline - now)
+                .unwrap_or_else(|e| e.into_inner());
             state = next;
         }
     }
@@ -637,7 +640,7 @@ impl Inner {
             inner
                 .sessions
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .remove(&id)
                 .and_then(|mut s| s.child.take())
                 .and_then(|mut child| child.wait().ok())
@@ -1182,7 +1185,7 @@ pub fn codex_respond(
     if !handle
         .open_server_requests
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .remove(&request_id)
     {
         return Err(crate::err!("no open codex request {request_id}"));

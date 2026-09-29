@@ -67,7 +67,7 @@ export function FileFinder({ projectPath, onPick, onClose }: FileFinderProps) {
     <div className="absolute inset-0 z-40 flex justify-center bg-black/40" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="mt-12 h-fit max-h-[70%] w-[32rem] max-w-[90%] overflow-hidden rounded-md border bg-popover shadow-xl"
+        className="mt-12 h-fit max-h-2/3 w-128 max-w-11/12 overflow-hidden rounded-md border bg-popover shadow-xl"
       >
         <div className="flex items-center gap-2 border-b px-3">
           <Search className="size-3.5 shrink-0 text-muted-foreground" />
