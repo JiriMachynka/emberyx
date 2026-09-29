@@ -98,12 +98,15 @@ export const ThreadRow = memo(function ThreadRow({
           className={cn(
             "group/row relative w-full min-w-0 overflow-hidden rounded-lg transition-colors",
             open
-              ? "bg-primary/5 text-foreground ring-1 ring-inset ring-primary/20"
+              ? "bg-primary/20 text-foreground ring-1 ring-inset ring-primary/40"
               : "bg-card/40 hover:bg-secondary/40"
           )}
           onMouseEnter={enter}
           onMouseLeave={leave}
         >
+          {open && (
+            <span className="absolute inset-y-1.5 left-0 z-10 w-0.5 rounded-full bg-primary" />
+          )}
           <button
             type="button"
             onClick={() => onResume(data)}

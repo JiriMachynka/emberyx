@@ -296,16 +296,19 @@ function SessionList({
               setOverId(null);
             }}
             className={cn(
-              "group flex cursor-grab items-center gap-2 rounded-md px-2.5 py-2 text-sm active:cursor-grabbing",
+              "group relative flex cursor-grab items-center gap-2 rounded-md px-2.5 py-2 text-sm active:cursor-grabbing",
               // Only the session on screen gets the filled treatment;
               // hover stays deliberately fainter so it can't be mistaken for it.
               active
-                ? "bg-primary/10 font-medium text-foreground ring-1 ring-inset ring-primary/20"
+                ? "bg-primary/20 font-medium text-foreground ring-1 ring-inset ring-primary/40"
                 : "text-muted-foreground hover:bg-secondary/40",
               dragId === s.id && "opacity-40",
               overId === s.id && "ring-1 ring-primary/60"
             )}
           >
+            {active && (
+              <span className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-primary" />
+            )}
             {s.kind === "chat" ? (
               <ChatStatusBullet id={s.id} />
             ) : (

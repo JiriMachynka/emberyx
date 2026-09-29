@@ -17,9 +17,11 @@ const PROVIDERS: ProviderStatus[] = [
 
 vi.mock("@tauri-apps/api/core", () => ({
   Channel: class {},
+  isTauri: () => false,
   invoke: (cmd: string) => {
     if (cmd === "provider_status") return Promise.resolve(PROVIDERS);
     if (cmd === "forge_cli_status") return Promise.resolve([]);
+    if (cmd === "wallpaper_import") return Promise.resolve("wallpaper-1.png");
     if (cmd === "mcp_list" || cmd === "skills_list") return Promise.resolve([]);
     // The T3 import row hides itself unless a store exists.
     if (cmd === "t3_import_available") return Promise.resolve(false);
@@ -39,7 +41,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
     asked.push(message);
     return Promise.resolve(askAnswer);
   },
-  open: () => Promise.resolve(null),
+  open: () => Promise.resolve("/tmp/pic.png"),
 }));
 
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: () => Promise.resolve(null) }));
@@ -177,6 +179,8 @@ describe("SettingsPage", () => {
       ["whitespace", "Source Control"],
       ["daemon", "Connections"],
       ["scrollback", "Appearance"],
+      ["translucent", "Appearance"],
+      ["glass", "Appearance"],
       ["sandbox", "Providers"],
       ["rebind", "Shortcuts"],
       ["sound", "Notifications"],
@@ -258,6 +262,21 @@ describe("SettingsPage", () => {
       await openTab(host, "Appearance");
       await pickOtherOption(controlFor("Workspace", "button[role=combobox]"));
       expect(patches).toEqual([{ workspaceLayout: "column" }]);
+    });
+
+    it("Appearance: the window-opacity select", async () => {
+      const { host, patches } = await mount();
+      await openTab(host, "Appearance");
+      await pickOtherOption(controlFor("Opacity", "button[role=combobox]"));
+      expect(patches).toEqual([{ windowOpacity: 90 }]);
+    });
+
+    it("Appearance: choosing a background image", async () => {
+      const { host, patches } = await mount();
+      await openTab(host, "Appearance");
+      fireEvent.click(within(content()).getByRole("button", { name: "Choose image…" }));
+      await flush();
+      expect(patches).toEqual([{ windowBackground: "wallpaper-1.png" }]);
     });
 
     it("Appearance: a theme card", async () => {

@@ -244,7 +244,7 @@ export const SettingsPage = memo(function SettingsPage({
     <div className="flex min-h-0 min-w-0 flex-1 bg-background">
       {navigationTarget &&
         createPortal(
-          <nav className="flex min-h-full w-full flex-col bg-sidebar">
+          <nav className="flex min-h-full w-full flex-col">
         <div className="px-3 pb-2">
           <div className="flex h-9 items-center gap-2 rounded-lg bg-secondary px-2.5">
             <Search className="size-4 shrink-0 text-muted-foreground" />

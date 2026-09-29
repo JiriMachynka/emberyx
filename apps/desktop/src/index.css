@@ -133,9 +133,14 @@
   #root {
     height: 100%;
     margin: 0;
+    background-color: transparent;
+  }
+  html {
+    background-image: var(--wallpaper, none);
+    background-size: cover;
+    background-position: center;
   }
   body {
-    background-color: var(--background);
     color: var(--foreground);
     font-family: var(--chat-font);
     overflow: hidden;
@@ -304,7 +309,9 @@
     color: transparent;
   }
 
-  /* Terminal canvas: darkest surface with a subtle top-center warm lift. */
+  /* Terminal canvas: darkest surface with a subtle top-center warm lift.
+     A chat pane already paints --chat-canvas; stacking both at <100% opacity
+     would hide the desktop, so drop this fill while a transcript is up. */
   .canvas-lit {
     background-color: var(--canvas);
     background-image: radial-gradient(
@@ -313,8 +320,15 @@
       transparent 60%
     );
   }
+  .canvas-lit:has(.chat-pane) {
+    background-color: transparent;
+    background-image: none;
+  }
 
   /* Chat markdown: restore block spacing that Tailwind's reset strips. */
+  .chat-md {
+    overflow-wrap: break-word;
+  }
   .chat-md pre,
   .chat-md code,
   .chat-md kbd,
@@ -332,11 +346,14 @@
   .chat-md ol,
   .chat-md blockquote,
   .chat-md table {
-    margin: 0.5rem 0;
+    margin: 0.65rem 0;
+  }
+  .chat-md p {
+    text-wrap: pretty;
   }
   .chat-md ul,
   .chat-md ol {
-    padding-left: 1.25rem;
+    padding-left: 1.5rem;
   }
   .chat-md ul {
     list-style: disc;
@@ -344,27 +361,61 @@
   .chat-md ol {
     list-style: decimal;
   }
+  .chat-md ul ul {
+    list-style: circle;
+    margin: 0.2rem 0;
+  }
+  .chat-md ul ul ul {
+    list-style: square;
+  }
+  .chat-md ol ol {
+    list-style: lower-alpha;
+    margin: 0.2rem 0;
+  }
   .chat-md li {
-    margin: 0.15rem 0;
+    margin: 0.2rem 0;
+  }
+  .chat-md li > p {
+    margin: 0.2rem 0;
+  }
+  .chat-md li > p:first-child {
+    margin-top: 0;
+  }
+  .chat-md li > p:last-child {
+    margin-bottom: 0;
   }
   .chat-md li:has(> input[type="checkbox"]) {
     list-style: none;
   }
   .chat-md h1,
   .chat-md h2,
-  .chat-md h3 {
-    margin: 0.9rem 0 0.4rem;
+  .chat-md h3,
+  .chat-md h4,
+  .chat-md h5,
+  .chat-md h6 {
+    margin: 1.15rem 0 0.45rem;
     font-weight: 600;
-    line-height: 1.3;
+    line-height: 1.25;
+    text-wrap: balance;
   }
   .chat-md h1 {
-    font-size: 1.15em;
+    font-size: 1.35em;
   }
   .chat-md h2 {
-    font-size: 1.05em;
+    font-size: 1.2em;
   }
   .chat-md h3 {
+    font-size: 1.1em;
+  }
+  .chat-md h4,
+  .chat-md h5,
+  .chat-md h6 {
     font-size: 1em;
+  }
+  .chat-md hr {
+    margin: 1rem 0;
+    border: 0;
+    border-top: 1px solid var(--border);
   }
   .chat-md blockquote {
     border-left: 2px solid var(--border);

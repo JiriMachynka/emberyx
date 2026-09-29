@@ -707,7 +707,7 @@ function App() {
   };
 
   return (
-    <div className="flex h-full bg-background text-foreground">
+    <div className="flex h-full text-foreground">
       {revealed && projects.length > 0 && (
         <Profiler id="Sidebar" onRender={onRender}>
         <Sidebar

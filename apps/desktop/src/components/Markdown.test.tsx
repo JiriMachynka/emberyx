@@ -53,6 +53,14 @@ describe("Markdown code rendering", () => {
 });
 
 describe("Markdown GFM", () => {
+  it("renders headings, nested lists and a rule", () => {
+    const el = md("## Title\n\n- a\n  - b\n\n---\n\n#### Sub");
+    expect(el.querySelector("h2")?.textContent).toBe("Title");
+    expect(el.querySelector("ul ul li")?.textContent).toBe("b");
+    expect(el.querySelector("hr")).not.toBeNull();
+    expect(el.querySelector("h4")?.textContent).toBe("Sub");
+  });
+
   it("renders tables, strikethrough and task lists", () => {
     const el = md("| a |\n|---|\n| 1 |\n\n~~gone~~\n\n- [x] done");
     expect(el.querySelector("table td")?.textContent).toBe("1");

@@ -176,7 +176,7 @@ function turnWorkLabel(assistants: ChatMessage[]): string | null {
   const tools = assistants.flatMap((m) => m.tools.filter((t) => !isTodoTool(t.name)));
   if (tools.length)
     return `Used ${tools.length} ${tools.length === 1 ? "tool" : "tools"}`;
-  return assistants.some((m) => m.thinking) ? "Ran 1 thought" : null;
+  return assistants.some((m) => m.thinking) ? "Thought process" : null;
 }
 
 /** A turn's work: one line over the rows. Open while a thought or tool is

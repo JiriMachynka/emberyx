@@ -91,6 +91,26 @@ describe("useSettings", () => {
     expect(loadSettings().workspaceLayout).toBe("classic");
   });
 
+  it("clamps a stored window opacity into range", () => {
+    localStorage.setItem("emberyx.settings", JSON.stringify({ windowOpacity: 5 }));
+    expect(loadSettings().windowOpacity).toBe(50);
+    localStorage.setItem(
+      "emberyx.settings",
+      JSON.stringify({ windowOpacity: 140 })
+    );
+    expect(loadSettings().windowOpacity).toBe(100);
+  });
+
+  it("persists window opacity", () => {
+    const { result } = renderHook(() => useSettings());
+    expect(result.current.settings.windowOpacity).toBe(100);
+    act(() => result.current.update({ windowOpacity: 70 }));
+    expect(result.current.settings.windowOpacity).toBe(70);
+    expect(JSON.parse(localStorage.getItem("emberyx.settings")!).windowOpacity).toBe(
+      70
+    );
+  });
+
   it("persists an update and merges it into the current settings", () => {
     const { result } = renderHook(() => useSettings());
     act(() => result.current.update({ fontSize: 16 }));

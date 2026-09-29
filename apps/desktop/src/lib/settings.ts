@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import {
   backendFromCommand,
   capabilitiesOf,
@@ -13,6 +13,11 @@ import {
   isThemeId,
   type ThemeId,
 } from "@/lib/themes";
+import {
+  applyWindowOpacity,
+  clampWindowOpacity,
+} from "@/lib/windowOpacity";
+import { applyWallpaper } from "@/lib/wallpaper";
 
 /** Claude Code's own permission modes, in increasing order of autonomy. */
 export const PERMISSION_MODES = [
@@ -215,6 +220,12 @@ export interface Settings {
   /** Right-hand dock (terminal, preview, review, merge requests). Off hides
    *  it until turned back on — those surfaces have nowhere else to go. */
   rightDock: boolean;
+  /** Window chrome opacity, 50–100. 100 is fully solid; lower lets the
+   *  desktop (or the background image) show through the sidebar and chat
+   *  canvas. */
+  windowOpacity: number;
+  /** File name of the custom background in the app data dir; "" for none. */
+  windowBackground: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -255,6 +266,8 @@ export const DEFAULT_SETTINGS: Settings = {
   wordWrap: false,
   workspaceLayout: "classic",
   rightDock: true,
+  windowOpacity: 100,
+  windowBackground: "",
 };
 
 const KEY = "emberyx.settings";
@@ -289,6 +302,19 @@ const coerceLayout = (s: Settings): Settings => ({
   rightDock: s.rightDock !== false,
 });
 
+const coerceWindowOpacity = (s: Settings): Settings => ({
+  ...s,
+  windowOpacity: clampWindowOpacity(
+    typeof s.windowOpacity === "number"
+      ? s.windowOpacity
+      : DEFAULT_SETTINGS.windowOpacity
+  ),
+  windowBackground:
+    typeof s.windowBackground === "string"
+      ? s.windowBackground
+      : DEFAULT_SETTINGS.windowBackground,
+});
+
 /** Dropped settings: OpenRouter commit generate, first-party Dokploy API. */
 const dropStoredRemovedKeys = (
   s: Settings & {
@@ -313,11 +339,13 @@ export function loadSettings(): Settings {
     const raw = localStorage.getItem(KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const stored = JSON.parse(raw) as Partial<Settings>;
-    const merged = coerceLayout(
-      dropStoredRemovedKeys(
-        dropStoredUnknownTheme(
-          dropStoredPlanMode(
-            splitStoredEffort({ ...DEFAULT_SETTINGS, ...stored })
+    const merged = coerceWindowOpacity(
+      coerceLayout(
+        dropStoredRemovedKeys(
+          dropStoredUnknownTheme(
+            dropStoredPlanMode(
+              splitStoredEffort({ ...DEFAULT_SETTINGS, ...stored })
+            )
           )
         )
       )
@@ -398,7 +426,16 @@ export function useSettings() {
 
   useLayoutEffect(() => {
     applyTheme(settings.theme);
-  }, [settings.theme]);
+    applyWindowOpacity(
+      settings.windowOpacity,
+      settings.theme,
+      settings.windowBackground !== ""
+    );
+  }, [settings.theme, settings.windowOpacity, settings.windowBackground]);
+
+  useEffect(() => {
+    void applyWallpaper(settings.windowBackground);
+  }, [settings.windowBackground]);
 
   // Identity-stable: it is a prop on every settings surface, and a fresh
   // closure per render defeats their memos — the mounted-but-hidden Settings

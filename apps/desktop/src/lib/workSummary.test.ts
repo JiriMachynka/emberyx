@@ -16,22 +16,22 @@ const row = (
 
 describe("summarizeWork", () => {
   it("counts one kind", () => {
-    expect(summarizeWork([row("reasoning")])).toBe("Ran 1 thought");
+    expect(summarizeWork([row("reasoning")])).toBe("Thought process");
     expect(summarizeWork([row("command", "a"), row("command", "b")])).toBe(
       "Ran 2 commands"
     );
   });
 
-  // One phrase, not a list of sentences — the leading verb comes from the first
-  // group present and the rest are bare counts.
-  it("joins kinds in a fixed order with one verb", () => {
+  // Thoughts are the lid; every other kind keeps its own verb, so a mixed
+  // turn reads like Zeron's "Thought process · Ran 5 commands".
+  it("leads with thought process, then each kind with its verb", () => {
     const rows = [
       row("reasoning", "r1"),
       row("command", "c1"),
       row("reasoning", "r2"),
       row("command", "c2"),
     ];
-    expect(summarizeWork(rows)).toBe("Ran 2 commands · 2 thoughts");
+    expect(summarizeWork(rows)).toBe("Thought process · Ran 2 commands");
   });
 
   it("collapses every kind of looking at a file into one count", () => {
@@ -39,9 +39,9 @@ describe("summarizeWork", () => {
     expect(summarizeWork(rows)).toBe("Read 3 files");
   });
 
-  it("leads with the first kind present when commands are absent", () => {
+  it("keeps a verb on every kind when thoughts are absent", () => {
     expect(summarizeWork([row("fileChange", "a"), row("tool", "b")])).toBe(
-      "Edited 1 file · 1 tool"
+      "Edited 1 file · Used 1 tool"
     );
   });
 

@@ -28,7 +28,9 @@ tauri-build = { version = "2", features = [] }
 # `unstable` is the multiwebview API the native preview surface (preview.rs)
 # is built on — child webviews, bounds, show/hide. Tauri marks these free to
 # change between minor versions; the app accepts that explicitly.
-tauri = { version = "2", features = ["unstable"] }
+# `macos-private-api` is required for a transparent window on macOS, which is
+# how Appearance's opacity slider lets the desktop show through the chrome.
+tauri = { version = "2", features = ["unstable", "macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"

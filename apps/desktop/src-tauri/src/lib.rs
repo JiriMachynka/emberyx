@@ -41,6 +41,7 @@ mod t3_import;
 mod threads;
 pub mod time;
 mod usage;
+mod wallpaper;
 mod workspace;
 
 use agent::AgentManager;
@@ -208,6 +209,9 @@ pub fn run() {
             defs::cmd::hover_info,
             files::cmd::read_text_file,
             files::write_text_file,
+            wallpaper::cmd::wallpaper_import,
+            wallpaper::cmd::wallpaper_read,
+            wallpaper::cmd::wallpaper_clear,
             search::search_text,
             slash::slash_commands,
             icon::cmd::project_icon,

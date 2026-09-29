@@ -75,8 +75,10 @@ export const TABS: TabMeta[] = [
       "wordWrap",
       "workspaceLayout",
       "rightDock",
+      "windowOpacity",
+      "windowBackground",
     ],
-    finds: "theme themes color colour accent dark palette ember graphite phosphor crimson sandstone font family size chat terminal editor scrollback typography wrap layout workspace column classic sidebar dock rail sessions explorer changes",
+    finds: "theme themes color colour accent dark palette ember graphite phosphor crimson sandstone font family size chat terminal editor scrollback typography wrap layout workspace column classic sidebar dock rail sessions explorer changes opacity translucent transparent glass window background",
   },
   {
     id: "shortcuts",
