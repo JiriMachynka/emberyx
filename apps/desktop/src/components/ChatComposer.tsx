@@ -687,7 +687,7 @@ export const ChatComposer = memo(function ChatComposer({
           Tucked behind the input's rounded bottom edge: the negative margin
           is covered by the composer's own opaque surface, so the two read as
           one object without the input giving up its corners. */}
-      <div className="relative z-0 -mt-3 flex w-full min-w-0 items-center gap-2 rounded-b-xl border border-border/60 bg-card/40 px-2 pb-1 pt-4">
+      <div className="chat-composer-shelf relative z-0 -mt-3 flex min-w-0 items-center gap-2 rounded-b-xl border border-border/60 bg-card/40 px-2 pb-1 pt-4">
         <BranchChip cwd={cwd} busy={busy} compact />
         <LimitsStrip target={limitsTarget} className="ml-auto" />
       </div>

@@ -49,29 +49,33 @@ export function ThinkingBlock({
   const tail = useTailScroll<HTMLDivElement>(active && open, text);
 
   return (
-    <div className="text-xs">
+    <div className="work-row group/row text-xs">
       <button
         type="button"
         aria-expanded={expandable ? open : undefined}
         disabled={!expandable}
         onClick={() => setOverride(!open)}
         className={cn(
-          "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-muted-foreground transition-colors",
+          "flex w-full items-center gap-2 py-2 pl-8 pr-3 text-left text-muted-foreground transition-colors",
           expandable && "hover:bg-secondary"
         )}
       >
-        <Sparkle
-          className={cn(
-            "size-3.5 shrink-0 text-muted-foreground",
-            active && "animate-pulse"
-          )}
-        />
+        <span className="grid size-6 shrink-0 place-items-center rounded-md border border-border/60 bg-card/40">
+          <Sparkle
+            className={cn("size-3.5 text-muted-foreground", active && "animate-pulse")}
+          />
+        </span>
         <span className="shrink-0 font-medium text-foreground">Think</span>
         <span className="tabular-nums">{label}</span>
         {expandable && (
           <DisclosureChevron
             open={open}
-            className="ml-auto shrink-0 text-muted-foreground"
+            className={cn(
+              "ml-auto shrink-0 text-muted-foreground",
+              // Quiet until hovered or open, like the tool rows — the tree has
+              // no per-row affordance in the reference.
+              !open && "opacity-0 transition-opacity group-hover/row:opacity-100"
+            )}
           />
         )}
       </button>
@@ -80,7 +84,7 @@ export function ThinkingBlock({
           ref={tail.ref}
           onScroll={tail.onScroll}
           className={cn(
-            "overflow-y-auto whitespace-pre-wrap pb-2 pl-9 pr-3 leading-5 text-muted-foreground/80",
+            "overflow-y-auto whitespace-pre-wrap pb-2 pl-16 pr-3 leading-5 text-muted-foreground/80",
             BODY_MAX
           )}
         >

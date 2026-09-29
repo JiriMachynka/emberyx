@@ -221,6 +221,45 @@
     box-shadow: inset 0 1px 0 0 oklch(1 0 0 / 4%);
   }
 
+  /* The work log as a light tree: a hairline runs down the left of the column
+     and every row curves off it to its icon. Each row draws its own stretch of
+     the line (`::before`, full height, so an expanded row's output stays on
+     it) and a rounded elbow to its icon (`::after`); the last row draws only
+     the elbow, so the line ends there instead of trailing past the list.
+     Drawn on the row root so it paints over the row's own hover fill. The
+     border that used to say "this group is one thing" is gone; enclosed
+     content (a diff, output, the file tree) keeps its own surface. */
+  .work-row {
+    --rail-x: 0.8125rem;
+    /* The icon tile's vertical centre: py-2 plus half of size-6. */
+    --rail-branch: 1.25rem;
+    --rail-color: color-mix(in oklch, var(--border) 70%, transparent);
+    position: relative;
+  }
+  .work-rail .work-row::before {
+    content: "";
+    position: absolute;
+    left: var(--rail-x);
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background-color: var(--rail-color);
+  }
+  .work-rail .work-row::after {
+    content: "";
+    position: absolute;
+    left: var(--rail-x);
+    top: 0;
+    width: 0.9375rem;
+    height: var(--rail-branch);
+    border-left: 1px solid var(--rail-color);
+    border-bottom: 1px solid var(--rail-color);
+    border-bottom-left-radius: 0.5rem;
+  }
+  .work-rail > :last-child > .work-row:last-child::before {
+    display: none;
+  }
+
   /* Chat sits on its own softer canvas rather than the terminal-first black
      used by the rest of the application, lifted by a faint ember glow in the
      top corner — the accent breathes into the void instead of the canvas

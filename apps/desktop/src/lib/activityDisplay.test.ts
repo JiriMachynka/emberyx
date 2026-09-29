@@ -48,6 +48,19 @@ describe("labelForActivity", () => {
     expect(labelForActivity(row({ title: "mcp__codedb__read_file" }))).toBe("read_file");
     expect(labelForActivity(row({ title: "Bash" }))).toBe("Bash");
   });
+
+  it("labels an ACP command row Run, keeping the command as its subject", () => {
+    // ACP titles a command row with the command itself; the label is the verb.
+    expect(
+      labelForActivity(
+        row({ kind: "command", title: "cd /repo && ls", displayTarget: "cd /repo && ls" })
+      )
+    ).toBe("Run");
+    // Claude's command rows already carry the tool name — leave them alone.
+    expect(
+      labelForActivity(row({ kind: "command", title: "Bash", displayTarget: "ls" }))
+    ).toBe("Bash");
+  });
 });
 
 describe("titleForActivity", () => {
@@ -271,6 +284,33 @@ describe("fileEditsFor", () => {
       arguments: JSON.stringify({ file_path: "log.ts", old_string: "", new_string: "tail" }),
     });
     expect(fileEditsFor(appended).get("log.ts")?.state).toBe("created");
+  });
+
+  it("reads the camelCase an ACP backend sends for the same edit", () => {
+    // OpenCode and Grok spell the input `filePath`/`oldString`/`newString`.
+    // Without this the tree only knows the file changed, never the code.
+    const edited = row({
+      kind: "fileChange",
+      arguments: JSON.stringify({
+        filePath: "/repo/src/b.ts",
+        oldString: "old",
+        newString: "new",
+      }),
+    });
+    expect(fileEditsFor(edited).get("/repo/src/b.ts")).toEqual({
+      state: "modified",
+      before: "old",
+      after: "new",
+    });
+    const written = row({
+      kind: "fileChange",
+      arguments: JSON.stringify({ filePath: "/repo/src/a.ts", content: "const a = 1;\n" }),
+    });
+    expect(fileEditsFor(written).get("/repo/src/a.ts")).toEqual({
+      state: "created",
+      before: "",
+      after: "const a = 1;\n",
+    });
   });
 
   it("reads a half-streamed Write so the tree can paint the growing file", () => {

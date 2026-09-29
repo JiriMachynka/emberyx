@@ -17,7 +17,10 @@ export function QuotaNotice({
   return (
     <div
       className={cn(
-        "mb-2 flex items-start gap-2 rounded-lg border border-border/60 px-3 py-2 text-xs",
+        // pt-2 pb-4, not py-2: this rides the 95% shelf above the composer and
+        // is pulled 16px in behind its rounded top edge, so the bottom padding
+        // is what keeps the last line clear of the overlap instead of clipped.
+        "flex items-start gap-2 rounded-lg border border-border/60 px-3 pt-2 pb-4 text-xs",
         // The icon carries the severity; a filled status box is costume.
         spent ? "text-red-400" : "text-amber-400"
       )}

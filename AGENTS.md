@@ -416,10 +416,11 @@ Each switch appends a `providerSwitch` timeline event to this thread.
    calling `ask_user` at an address nothing answered.
 
    Two things to know before touching it:
-   - **Persistent mode skips the on-disk transcript prefill.** The daemon replay
-     and the CLI's own transcript carry the same turns; rendering both would
-     duplicate the conversation. So resuming an *older* thread in persistent
-     mode starts visually empty and fills from the next turn on. Codex and ACP
+   - **Persistent mode skips the on-disk transcript prefill on a reattach.** The
+     daemon replay and the CLI's own transcript carry the same turns; rendering
+     both would duplicate the conversation. A daemon that started the agent
+     fresh (`reattached: false`) has nothing to replay, so an *older* thread
+     still prefills from the store. Codex and ACP
      follow the same rule their own way: on a reattach the hook resets its
      state and the replayed frames rebuild the transcript, so no thread
      open/resume round trip runs — the process still holds the thread.
@@ -484,11 +485,18 @@ forever. A message with no `activities` falls back to the old
 `thinking` + `ToolList` shape rather than being given an order it never
 recorded.
 
-Live tool cards are boxes that only stay on screen while they run — no
-checkmark row after they finish. The turn clock (`Working for 3.2s`) sits under
-the transcript, not on each card. Consecutive file reads and edits group into a
-folder tree (`ActivityFileTree`) the way T3 Code shows them, and that tree
-accumulates for the turn instead of vanishing as each read settles.
+Work renders as a light tree, not a boxed panel: `ActivityList` puts thoughts,
+commands and file work on one left hairline with an elbow per row (`.work-rail`
+in `index.css`), and reasoning is a row in that order rather than prose split
+out of it — `ThinkingBlock` is reused for the row and kept for the message with
+no recorded order. The border survives only where something is genuinely
+enclosed (a diff, command output, the file tree), so the sequence stays one
+rhythm and the answer text reads as the thing outside it. Live rows stay on
+screen only while they run — no checkmark row after they finish. The turn clock
+(`Working for 3.2s`) sits under the transcript, not on each row. Consecutive
+file reads and edits group into a folder tree (`ActivityFileTree`) the way T3
+Code shows them, and that tree accumulates for the turn instead of vanishing as
+each read settles.
 
 ### Backends and capabilities
 

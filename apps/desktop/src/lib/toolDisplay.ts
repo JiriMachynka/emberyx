@@ -126,6 +126,61 @@ function genericBody(input: unknown, skip: string[] = []): ToolBodyPart[] {
   return rows.length > 0 ? [{ kind: "fields", rows }, ...parts] : parts;
 }
 
+/** A file write or edit described by *any* backend's naming — Claude's
+ *  `file_path`/`old_string`, OpenCode and Grok's camelCase `filePath`/
+ *  `oldString`, Codex's `changes` list — or null when the input is not one.
+ *  The bespoke `Write`/`Edit` cases above only catch Claude's tool names; the
+ *  ACP backends title rows with a path or a lowercase tool name, so the shape
+ *  is what is left to go on. */
+function fileDisplay(i: Record<string, unknown>): ToolDisplay | null {
+  if (Array.isArray(i.changes)) {
+    const changes = i.changes.map(rec).filter((c) => str(c.path));
+    if (changes.length > 0) {
+      const body = changes
+        .filter((c) => str(c.oldText) != null || str(c.newText) != null)
+        .map((c) => ({
+          kind: "diff" as const,
+          label: changes.length > 1 ? str(c.path) : undefined,
+          before: str(c.oldText) ?? "",
+          after: str(c.newText) ?? "",
+          lang: langFromPath(str(c.path) ?? ""),
+        }));
+      return {
+        icon: "edit",
+        label: changes.length > 1 ? `Edit ×${changes.length}` : "Edit",
+        title: changes.length === 1 ? shortPath(str(changes[0].path) ?? "") : undefined,
+        mono: true,
+        body,
+      };
+    }
+  }
+  const file = str(i.file_path) ?? str(i.filePath);
+  if (!file) return null;
+  const lang = langFromPath(file);
+  const oldText = str(i.old_string) ?? str(i.oldString);
+  const newText = str(i.new_string) ?? str(i.newString);
+  if (oldText != null || newText != null) {
+    return {
+      icon: "edit",
+      label: "Edit",
+      title: shortPath(file),
+      mono: true,
+      body: [{ kind: "diff", before: oldText ?? "", after: newText ?? "", lang }],
+    };
+  }
+  const content = str(i.content);
+  if (content != null) {
+    return {
+      icon: "write",
+      label: "Write",
+      title: shortPath(file),
+      mono: true,
+      body: [{ kind: "code", code: content, lang }],
+    };
+  }
+  return null;
+}
+
 /** Map a tool call to header + body chunks. Pure; the component picks icons. */
 export function describeTool(name: string, input: unknown): ToolDisplay {
   const i = rec(input);
@@ -331,6 +386,10 @@ export function describeTool(name: string, input: unknown): ToolDisplay {
     }
 
     default: {
+      // A file tool whose name this table does not know (the ACP backends
+      // title by path, Codex by `ApplyPatch`) still has a shape we can read.
+      const file = fileDisplay(i);
+      if (file) return file;
       const { title, key, mono } = argTitle(i);
       const skip = key ? [key] : [];
       const mcp = mcpParts(name);

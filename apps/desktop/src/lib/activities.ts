@@ -166,6 +166,37 @@ export const kindForToolName = (name: string): ActivityKind => {
   }
 };
 
+/**
+ * Classify a tool by name, then by the shape of its input.
+ *
+ * A reopened ACP thread is rebuilt from the event log, where the tool's *name*
+ * is the title the agent gave it — OpenCode titles a command row with the
+ * command and an edit row with the file path, neither of which is a tool name.
+ * The `kindForToolName` table misses both and the row would come back as a bare
+ * tool, so the input is the fallback: a command field is a command, and old/new
+ * text or newly written content is a file change.
+ */
+export const kindForTool = (name: string, input: unknown): ActivityKind => {
+  const named = kindForToolName(name);
+  if (named !== "tool") return named;
+  const i =
+    typeof input === "object" && input !== null
+      ? (input as Record<string, unknown>)
+      : {};
+  if (typeof i.command === "string" || typeof i.cmd === "string") return "command";
+  if (
+    typeof i.old_string === "string" ||
+    typeof i.oldString === "string" ||
+    typeof i.new_string === "string" ||
+    typeof i.newString === "string"
+  ) {
+    return "fileChange";
+  }
+  const hasPath = typeof i.file_path === "string" || typeof i.filePath === "string";
+  if (hasPath && typeof i.content === "string") return "fileChange";
+  return "tool";
+};
+
 /** The compact subject for a tool call, by kind. Mirrors `target_for` in
  *  `activity.rs`: each backend spells its input keys differently enough that
  *  guessing one key is wrong, so the list per kind is short and explicit. */

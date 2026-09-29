@@ -295,6 +295,7 @@ pub fn run() {
             threads::read_thread,
             ingest::transcripts_ingest,
             ingest::thread_messages_page,
+            ingest::thread_history,
             ingest::thread_turns_page,
             t3_import::cmd::t3_import_available,
             t3_import::t3_import_run,

@@ -54,11 +54,15 @@ export const acpActivity = (
   // A tool call's title is what the agent chose to call it; the kind is the
   // fallback, because an untitled row reading "other" says nothing.
   const title = call.title ?? previous?.title ?? call.kind ?? "tool";
+  // A completion update often carries no `kind` (OpenCode's does not), and the
+  // title alone — a shell command, say — classifies as a bare tool. Keep what
+  // the first frame decided rather than re-deriving it from the title.
+  const kind = call.kind ? acpKind(call, title) : previous?.kind ?? acpKind(call, title);
   return {
     ...buildActivityRow(
       {
         id: call.toolCallId,
-        kind: acpKind(call, title),
+        kind,
         title,
         input: call.rawInput,
         output,

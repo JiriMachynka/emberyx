@@ -37,7 +37,15 @@ export const iconForActivity = (activity: ActivityItem): ToolIcon => {
 /** The short name in front of the row. An MCP tool's server segments say who
  *  provides it, not what it does, so only the last one is worth the width. */
 export const labelForActivity = (activity: ActivityItem): string => {
-  if (!activity.title.startsWith("mcp__")) return activity.title;
+  if (!activity.title.startsWith("mcp__")) {
+    // ACP titles a command row with the command itself, which would leave the
+    // subject as the label and nothing as the row. The verb is the label then,
+    // and the command is the title beside it ("Run  cd …").
+    if (activity.kind === "command" && activity.title === activity.displayTarget) {
+      return "Run";
+    }
+    return activity.title;
+  }
   const segments = activity.title.split("__");
   return segments[segments.length - 1] ?? activity.title;
 };
@@ -74,10 +82,14 @@ const looksLikeGlob = (value: string): boolean => /[*?]/.test(value);
 
 interface FileToolInput {
   file_path?: unknown;
+  // ACP backends (OpenCode, Grok) spell the same fields in camelCase.
+  filePath?: unknown;
   path?: unknown;
   content?: unknown;
   old_string?: unknown;
+  oldString?: unknown;
   new_string?: unknown;
+  newString?: unknown;
   edits?: unknown;
   changes?: unknown;
   oldText?: unknown;
@@ -140,7 +152,7 @@ export const fileEditsFor = (
   }
   const path =
     (input != null
-      ? asText(input.file_path) ?? asText(input.path)
+      ? asText(input.file_path) ?? asText(input.filePath) ?? asText(input.path)
       : null) ??
     // Without a parsed input the path is wherever the normalizer put it.
     (activity.displayTarget && !looksLikeGlob(activity.displayTarget)
@@ -155,8 +167,8 @@ export const fileEditsFor = (
     for (const raw of input.edits) {
       if (typeof raw !== "object" || raw == null) continue;
       const e = raw as FileToolInput;
-      const nextBefore = asText(e.old_string);
-      const nextAfter = asText(e.new_string);
+      const nextBefore = asText(e.old_string) ?? asText(e.oldString);
+      const nextAfter = asText(e.new_string) ?? asText(e.newString);
       if (nextBefore != null || nextAfter != null) {
         before = nextBefore;
         after = nextAfter;
@@ -164,12 +176,15 @@ export const fileEditsFor = (
     }
   } else if (
     input != null &&
-    (asText(input.old_string) != null || asText(input.new_string) != null)
+    (asText(input.old_string) != null ||
+      asText(input.oldString) != null ||
+      asText(input.new_string) != null ||
+      asText(input.newString) != null)
   ) {
     // A single Edit keeps its own old/new pair at the top level.
     state = "modified";
-    before = asText(input.old_string);
-    after = asText(input.new_string);
+    before = asText(input.old_string) ?? asText(input.oldString);
+    after = asText(input.new_string) ?? asText(input.newString);
   } else if (input != null && asText(input.content) != null) {
     state = "created";
     before = "";

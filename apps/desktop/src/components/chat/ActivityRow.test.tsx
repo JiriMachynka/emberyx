@@ -66,3 +66,26 @@ describe("ActivityList file groups", () => {
     expect(view.getByRole("button", { expanded: true })).toBeTruthy();
   });
 });
+
+describe("ActivityList work rail", () => {
+  it("renders thoughts and commands on one rail, in order", () => {
+    const think: ActivityItem = {
+      id: "t1",
+      kind: "reasoning",
+      title: "Thinking",
+      output: "weighing the options",
+      failed: false,
+      complete: true,
+    };
+    const view = render(
+      <ActivityList activities={[think, row({ id: "b1", complete: true, output: "ok" })]} />
+    );
+    // One rail holds both rows — reasoning is no longer split out of the list.
+    const rail = view.container.querySelector(".work-rail");
+    expect(rail).toBeTruthy();
+    expect(rail?.textContent).toContain("Think");
+    expect(rail?.textContent).toContain("Bash");
+    // The old boxed panel is gone.
+    expect(view.container.querySelector(".chat-work-panel")).toBeNull();
+  });
+});

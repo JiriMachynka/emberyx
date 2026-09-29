@@ -65,6 +65,41 @@ describe("describeTool", () => {
     ]);
   });
 
+  it("renders a file edit the ACP backends spell in camelCase", () => {
+    // OpenCode and Grok title the row by path, so no `Edit` case matches; the
+    // shape has to be enough to draw the diff.
+    const edited = describeTool("src/lib/app.ts", {
+      filePath: "src/lib/app.ts",
+      oldString: "const a = 1",
+      newString: "const a = 2",
+    });
+    expect(edited.body).toEqual([
+      {
+        kind: "diff",
+        before: "const a = 1",
+        after: "const a = 2",
+        lang: "typescript",
+      },
+    ]);
+    const written = describeTool("write", {
+      filePath: "src/a.ts",
+      content: "const a = 1;\n",
+    });
+    expect(written.body).toEqual([{ kind: "code", code: "const a = 1;\n", lang: "typescript" }]);
+  });
+
+  it("renders Codex's patch list as one diff per file", () => {
+    const d = describeTool("ApplyPatch", {
+      changes: [
+        { path: "a.ts", kind: { type: "add" }, oldText: "", newText: "a" },
+        { path: "b.ts", kind: { type: "update" }, oldText: "b", newText: "c" },
+      ],
+    });
+    expect(d.label).toBe("Edit ×2");
+    expect(d.body[0]).toMatchObject({ kind: "diff", before: "", after: "a" });
+    expect(d.body[1]).toMatchObject({ kind: "diff", before: "b", after: "c" });
+  });
+
   it("labels and counts multi-edits", () => {
     const d = describeTool("MultiEdit", {
       file_path: "a.ts",

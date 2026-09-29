@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildActivityRow,
   emptyOwnerIndex,
+  kindForTool,
   routeActivities,
   syncOwnerIndex,
   upsertActivities,
@@ -116,6 +117,28 @@ describe("routeActivities", () => {
     const index = syncOwnerIndex(emptyOwnerIndex(), [draft]);
     const routing = routeActivities([row("t1", { complete: true })], draft, index);
     expect(routing.draft.map((r) => r.id)).toEqual(["t1"]);
+  });
+});
+
+describe("kindForTool", () => {
+  it("classifies a reopened ACP row from its input when the title is not a name", () => {
+    // OpenCode titles a command row with the command, an edit with the path.
+    expect(kindForTool("cd /repo && ls", { command: "cd /repo && ls" })).toBe("command");
+    expect(
+      kindForTool("src/app.ts", {
+        filePath: "src/app.ts",
+        oldString: "a",
+        newString: "b",
+      })
+    ).toBe("fileChange");
+    expect(kindForTool("src/new.ts", { filePath: "src/new.ts", content: "x" })).toBe(
+      "fileChange"
+    );
+  });
+
+  it("keeps the name table's answer when the name is a real tool", () => {
+    expect(kindForTool("Bash", {})).toBe("command");
+    expect(kindForTool("read_file", { file_path: "a" })).toBe("fileRead");
   });
 });
 

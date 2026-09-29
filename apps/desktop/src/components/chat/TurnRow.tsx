@@ -215,10 +215,14 @@ function TurnWork({
           aria-expanded={expanded}
           onClick={() => setOpen(!expanded)}
           className={cn(
-            "flex items-center gap-1.5 self-start text-xs font-medium transition-colors hover:text-foreground",
+            // Chevron on the left, sitting on the work rail's line; the label
+            // starts where the row icons do, so the header reads as the tree's
+            // own title rather than a control beside it.
+            "flex items-center gap-2 self-start pl-1.5 text-xs font-medium transition-colors hover:text-foreground",
             agentsRunning > 0 ? "text-violet-400" : "text-muted-foreground"
           )}
         >
+          <DisclosureChevron open={expanded} className="size-3.5 shrink-0 text-current" />
           {agentsRunning > 0 ? (
             <>
               <Loader2 className="size-3 animate-spin" />
@@ -229,7 +233,6 @@ function TurnWork({
           ) : (
             (label ?? "Work log")
           )}
-          <DisclosureChevron open={expanded} className="size-3.5 text-current" />
         </button>
       )}
       <Disclosure open={expanded}>

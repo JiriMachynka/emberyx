@@ -512,7 +512,7 @@ describe("useAcpChat thread durability", () => {
         return Promise.resolve({ id: 3, initialize: { agentCapabilities: {} } });
       }
       if (command === "acp_session_new") return Promise.resolve(SESSION);
-      if (command === "thread_messages_page") {
+      if (command === "thread_history") {
         return Promise.resolve({
           rows: [
             {
@@ -558,8 +558,43 @@ describe("useAcpChat thread durability", () => {
     );
     await waitFor(() => expect(view.result.current.ready).toBe(true));
     expect(
-      invoke.mock.calls.filter(([name]) => name === "thread_messages_page")
+      invoke.mock.calls.filter(([name]) => name === "thread_history")
     ).toHaveLength(0);
+  });
+
+  // A reopened thread used to drop its whole history when the user's first
+  // message landed before the read did.
+  it("keeps the history when the user sends before it lands", async () => {
+    let land: (page: unknown) => void = () => {};
+    const base = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === "thread_history") return new Promise((resolve) => (land = resolve));
+      return base(command, args);
+    });
+    const view = await mount({ resume: "s9" });
+    await act(async () => view.result.current.send("new question"));
+    await act(async () =>
+      land({
+        rows: [
+          {
+            messageId: "s9:1",
+            threadId: "s9",
+            role: "user",
+            text: "earlier question",
+            createdAt: 1,
+            payloadJson: null,
+          },
+        ],
+        hasMore: false,
+        activities: [],
+      })
+    );
+    await waitFor(() =>
+      expect(view.result.current.messages.map((m) => m.text)).toEqual([
+        "earlier question",
+        "new question",
+      ])
+    );
   });
 });
 
@@ -840,6 +875,64 @@ describe("useAcpChat resuming", () => {
     expect(calls("acp_session_load")).toHaveLength(0);
     expect(calls("acp_session_new")).toHaveLength(1);
     expect(view.result.current.exitReason).toBeNull();
+  });
+
+  // Showing a reopened thread's history while the agent behind it remembers
+  // none of it is the failure; the session it was opened on is loadable.
+  it("loads the session a reopened thread was opened on, without replaying it", async () => {
+    let replay: () => void = () => {};
+    invoke.mockImplementation((command: string) => {
+      if (command === "acp_spawn") {
+        return Promise.resolve({
+          id: 3,
+          initialize: { agentCapabilities: { loadSession: true } },
+        });
+      }
+      if (command === "acp_session_load") {
+        // The agent restates the conversation as updates while it loads.
+        replay();
+        return Promise.resolve({ ...SESSION, sessionId: "s9" });
+      }
+      if (command === "thread_history") {
+        return Promise.resolve({ rows: [], hasMore: false, activities: [] });
+      }
+      return Promise.resolve(null);
+    });
+    replay = () =>
+      channels[0]?.onmessage?.({
+        type: "notification",
+        data: {
+          method: "session/update",
+          params: {
+            sessionId: "s9",
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { text: "replayed answer" },
+            },
+          },
+        },
+      });
+
+    const view = await mount({ resume: "s9", resumeOwned: true });
+
+    expect(calls("acp_session_load")).toHaveLength(1);
+    expect(calls("acp_session_new")).toHaveLength(0);
+    expect(view.result.current.messages).toEqual([]);
+  });
+
+  it("never loads imported history", async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === "acp_spawn") {
+        return Promise.resolve({
+          id: 3,
+          initialize: { agentCapabilities: { loadSession: true } },
+        });
+      }
+      if (command === "acp_session_new") return Promise.resolve(SESSION);
+      return Promise.resolve(null);
+    });
+    await mount({ resume: "t3-thread", resumeOwned: true, imported: true });
+    expect(calls("acp_session_load")).toHaveLength(0);
   });
 
   it("falls back to a new session when loading its own id fails", async () => {

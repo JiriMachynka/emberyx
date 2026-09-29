@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { FileTypeIcon } from "@/components/FileTypeIcon";
@@ -15,13 +15,11 @@ import {
   isMonoActivity,
   labelForActivity,
   metaForActivity,
-  segmentWork,
   titleForActivity,
   visibleActivities,
   type ActivityGroup,
 } from "@/lib/activityDisplay";
 import { TOOL_ICONS, TOOL_TINT } from "@/lib/toolIcons";
-import { workSummaryLine } from "@/lib/workSummary";
 import { isFileReference } from "@/lib/fileRef";
 import { describeResult, describeTool, stripReminders } from "@/lib/toolDisplay";
 import { cn } from "@/lib/utils";
@@ -90,7 +88,7 @@ export const ActivityRow = memo(function ActivityRow({
   );
 
   return (
-    <div className="text-xs">
+    <div className="work-row group/row text-xs">
       <button
         type="button"
         aria-expanded={expandable && !isAgent ? open : undefined}
@@ -101,15 +99,17 @@ export const ActivityRow = memo(function ActivityRow({
         }
         disabled={!clickable}
         className={cn(
-          // Square, on purpose: these are rows in a divided panel, and a
-          // rounded hover bg leaves notches at every seam. The panel's own
-          // rounded corners clip the outermost rows.
-          "flex w-full items-center gap-2 px-3 py-2 text-left transition-colors",
+          // A row on the work rail: the left padding is the rail's gutter and
+          // the icon sits in a tile at its end. Square hover — these are rows
+          // on a hairline now, not cards in a box.
+          "flex w-full items-center gap-2 py-2 pl-8 pr-3 text-left transition-colors",
           clickable && "hover:bg-secondary",
           selected && "bg-primary/10"
         )}
       >
-        <Icon className={cn("size-3.5 shrink-0", activity.failed ? "text-red-400" : tint)} />
+        <span className="grid size-6 shrink-0 place-items-center rounded-md border border-border/60 bg-card/40">
+          <Icon className={cn("size-3.5", activity.failed ? "text-red-400" : tint)} />
+        </span>
         <span className={cn("shrink-0 font-medium", running && "tool-running-label")}>
           {label}
         </span>
@@ -140,14 +140,20 @@ export const ActivityRow = memo(function ActivityRow({
           {expandable && !isAgent && (
             <DisclosureChevron
               open={open}
-              className="text-muted-foreground duration-200"
+              className={cn(
+                // Quiet until the row is hovered or open: the reference tree
+                // carries no per-row affordance, and seven chevrons down the
+                // right edge is noise, not information.
+                "text-muted-foreground duration-200",
+                !open && "opacity-0 transition-opacity group-hover/row:opacity-100"
+              )}
             />
           )}
         </div>
       </button>
       <Disclosure open={open} onClosed={() => setBodyMounted(false)}>
           {bodyMounted && (
-            <div className="flex flex-col gap-2 pb-2 pl-9 pr-3">
+            <div className="flex flex-col gap-2 pb-2 pl-16 pr-3">
               {bodyParts.map((part, idx) => (
                 <ToolBody key={idx} part={part} streaming={running} />
               ))}
@@ -169,10 +175,14 @@ export const ActivityRow = memo(function ActivityRow({
 });
 
 /**
- * A turn's work, in the order it happened. Thoughts are their own line;
- * commands and files share a panel so Think is never the lid on a box of
- * tools. Consecutive thoughts still collapse; a thought, then work, then
- * another thought still renders as two Think rows around the panel.
+ * A message's work, in the order it happened, as one rail of rows rather than
+ * a boxed panel. Thoughts, commands and file work share the column so the
+ * sequence reads as one tree — the left hairline and its elbows carry the
+ * grouping the border used to. Content that is genuinely enclosed (a diff, code
+ * output, the file tree) keeps its own surface inside a row's disclosure.
+ *
+ * Consecutive thoughts collapse into one `ThinkingBlock` row; consecutive file
+ * work into a tree while live and plain rows once settled.
  */
 export function ActivityList({
   activities,
@@ -186,10 +196,9 @@ export function ActivityList({
    *  the same run. */
   renderAgent?: (activity: ActivityItem) => ReactNode;
   /** Live turns only keep in-flight tools (and the accumulating file tree).
-   *  Settled turns render the full log inside the collapsed accordion. */
+   *  Settled turns render the full log. */
   live?: boolean;
-  /** The panel is this list's own surface, unless the caller already provides
-   *  one around it (the pane's replay fallback wraps tools in the same panel). */
+  /** Draw the rail. A caller that already provides its own surface drops it. */
   framed?: boolean;
 }) {
   const rows = visibleActivities(activities, live === true);
@@ -204,94 +213,73 @@ export function ActivityList({
     for (const row of rows) seen.current.add(row.id);
   });
   const isNew = (id: string) => mounted.current && !seen.current.has(id);
+
   if (rows.length === 0) return null;
-  const renderPanelGroup = (
-    group: Extract<ActivityGroup, { type: "files" | "single" }>
-  ) => {
+
+  const groups = groupActivities(rows);
+
+  const renderGroup = (group: ActivityGroup): ReactNode => {
+    if (group.type === "reasoning") {
+      const thoughts = group.activities;
+      return (
+        <ThinkingBlock
+          text={thoughts
+            .map((thought) => thought.output ?? "")
+            .filter((chunk) => chunk.length > 0)
+            .join("\n\n")}
+          active={thoughts.some((thought) => !thought.complete)}
+          timingKey={thoughts[0].id}
+        />
+      );
+    }
     if (group.type === "files") {
       // A live turn folds consecutive file work into a tree that accumulates.
       // Settled, the "Changed N files" card summarizes the turn, so the tree
       // would read twice its own summary — settled file work is plain rows.
       if (live === true) {
         return (
-          <ActivityFileTree
-            key={`files:${group.activities[0].id}`}
-            activities={group.activities}
-            live
-          />
+          <div className="work-row pl-8">
+            <ActivityFileTree activities={group.activities} live />
+          </div>
         );
       }
       return (
-        <Fragment key={`files:${group.activities[0].id}`}>
+        <>
           {group.activities.map((activity) => (
             <ActivityRow key={activity.id} activity={activity} live={live} />
           ))}
-        </Fragment>
+        </>
       );
     }
     const activity = group.activity;
     const agent = isAgentActivity(activity) ? renderAgent?.(activity) : undefined;
     return agent ? (
-      <Fragment key={activity.id}>{agent}</Fragment>
+      <div className="work-row">{agent}</div>
     ) : (
       <ActivityRow key={activity.id} activity={activity} live={live} />
     );
   };
+
   return (
-    <div className="flex flex-col gap-2">
-      {segmentWork(groupActivities(rows)).map((segment) => {
-        if (segment.type === "reasoning") {
-          const thoughts = segment.activities;
+    <div className="flex flex-col gap-1.5">
+      <div className={cn("flex flex-col", framed && "work-rail")}>
+        {groups.map((group) => {
+          const id =
+            group.type === "files"
+              ? `files:${group.activities[0].id}`
+              : group.type === "reasoning"
+                ? `think:${group.activities[0].id}`
+                : group.activity.id;
           return (
-            <ThinkingBlock
-              key={thoughts[0].id}
-              text={thoughts
-                .map((thought) => thought.output ?? "")
-                .filter((chunk) => chunk.length > 0)
-                .join("\n\n")}
-              active={thoughts.some((thought) => !thought.complete)}
-              timingKey={thoughts[0].id}
-            />
-          );
-        }
-        const key =
-          segment.groups[0].type === "files"
-            ? `files:${segment.groups[0].activities[0].id}`
-            : segment.groups[0].activity.id;
-        const segmentActivities = segment.groups.flatMap((group) =>
-          group.type === "files" ? group.activities : [group.activity]
-        );
-        const summary =
-          live === true ? null : workSummaryLine(segmentActivities, false);
-        return (
-          <div key={key} className="flex flex-col gap-1.5">
-            {summary && (
-              <p className="px-1 text-xs text-muted-foreground">{summary}</p>
-            )}
-            <div
-              className={cn(
-                "flex flex-col divide-y divide-border/50",
-                framed && "chat-work-panel overflow-hidden rounded-xl border"
-              )}
+            <StepEnter
+              key={id}
+              turn={live === true && isNew(id) ? turnFor(id) : undefined}
             >
-              {segment.groups.map((group) => {
-                const id =
-                  group.type === "files"
-                    ? group.activities[0].id
-                    : group.activity.id;
-                return (
-                  <StepEnter
-                    key={id}
-                    turn={live === true && isNew(id) ? turnFor(id) : undefined}
-                  >
-                    {renderPanelGroup(group)}
-                  </StepEnter>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
+              {renderGroup(group)}
+            </StepEnter>
+          );
+        })}
+      </div>
     </div>
   );
 }

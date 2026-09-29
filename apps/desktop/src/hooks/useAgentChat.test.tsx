@@ -99,7 +99,7 @@ let openApprovals: Record<string, unknown>[] = [];
 /** Overrides for what `agent_spawn` answers, per test. */
 let spawnReply: Record<string, unknown> = {};
 
-/** Scripted replies for `thread_messages_page`, shifted oldest-first per call. */
+/** Scripted replies for `thread_history` / `thread_messages_page`, shifted per call. */
 type FakePage = {
   rows: {
     messageId: string;
@@ -133,7 +133,7 @@ beforeEach(() => {
   invoke.mockImplementation((command: string, args: Record<string, unknown>) => {
     if (command === "agent_spawn")
       return Promise.resolve({ id: 1, reattached: false, truncated: false, ...spawnReply });
-    if (command === "thread_messages_page")
+    if (command === "thread_history" || command === "thread_messages_page")
       return Promise.resolve({
         activities: [],
         ...(messagePages.shift() ?? { rows: [], hasMore: false }),
@@ -206,7 +206,7 @@ describe("useAgentChat lifecycle", () => {
     const view = renderHook(() =>
       useAgentChat({ ...options, resume: "sess-9" })
     );
-    await waitFor(() => expect(sentTo("thread_messages_page")).toHaveLength(1));
+    await waitFor(() => expect(sentTo("thread_history")).toHaveLength(1));
     expect(sentTo("agent_spawn")).toHaveLength(0);
     act(() => view.result.current.wake());
     await waitFor(() => expect(view.result.current.ready).toBe(true));
@@ -220,7 +220,7 @@ describe("useAgentChat lifecycle", () => {
     const view = renderHook(() =>
       useAgentChat({ ...options, resume: "sess-9" })
     );
-    await waitFor(() => expect(sentTo("thread_messages_page")).toHaveLength(1));
+    await waitFor(() => expect(sentTo("thread_history")).toHaveLength(1));
     expect(view.result.current.ready).toBe(false);
     expect(view.result.current.asleep).toBe(true);
     act(() => view.result.current.wake());
@@ -705,32 +705,53 @@ describe("useAgentChat persistent agents", () => {
   // The daemon's replay and the on-disk transcript carry the same turns; taking
   // both would render the conversation twice.
   it("does not prefill from the event store when the daemon replays", async () => {
+    spawnReply = { reattached: true };
     await mount({ persistent: true, resume: "old-thread" });
-    expect(sentTo("thread_messages_page")).toEqual([]);
+    expect(sentTo("thread_history")).toEqual([]);
+  });
+
+  // A daemon agent spawned fresh for an older thread holds no buffer, so the
+  // replay is empty — the store is the only place its history lives.
+  it("prefills from the event store when the daemon had nothing to replay", async () => {
+    messagePages = [{ rows: [userRow("m1", "from-disk", 1000)], hasMore: false }];
+    const { result } = await mount({ persistent: true, resume: "old-thread" });
+    await waitFor(() =>
+      expect(result.current.messages.map((m) => m.text)).toEqual(["from-disk"])
+    );
   });
 
   it("still prefills from the event store when the agent is window-scoped", async () => {
     await mount({ resume: "old-thread" });
-    await waitFor(() => expect(sentTo("thread_messages_page")).toHaveLength(1));
-    expect(sentTo("thread_messages_page")[0][1]).toMatchObject({
+    await waitFor(() => expect(sentTo("thread_history")).toHaveLength(1));
+    expect(sentTo("thread_history")[0][1]).toMatchObject({
       cwd: "/repo",
       threadId: "old-thread",
-      limit: 60,
+      fresh: false,
     });
   });
 
-  it("hydrates the newest page of raw transcript lines", async () => {
+  it("opens on the whole thread, not just its newest page", async () => {
     messagePages = [
       {
-        rows: [userRow("m2", "from-disk", 1000)],
-        hasMore: true,
+        rows: [
+          userRow("m2", "old", 2000),
+          userRow("m3", "older", 3000),
+          userRow("m5", "new", 5000),
+        ],
+        hasMore: false,
       },
     ];
     const { result } = await mount({ resume: "old-thread" });
     await waitFor(() =>
-      expect(result.current.messages.map((m) => m.text)).toEqual(["from-disk"])
+      expect(result.current.messages.map((m) => m.text)).toEqual([
+        "old",
+        "older",
+        "new",
+      ])
     );
-    expect(result.current.hasMore).toBe(true);
+    // Everything is in hand, so there is nothing left to page.
+    expect(result.current.hasMore).toBe(false);
+    expect(sentTo("thread_history")).toHaveLength(1);
   });
 
   it("hydrates a resumed thread under StrictMode's double-mount", async () => {
@@ -799,30 +820,19 @@ describe("useAgentChat persistent agents", () => {
     expect(sentTo("transcript_activities_read")).toEqual([]);
   });
 
-  it("prepends older pages using the keyset cursor, without a seam gap", async () => {
+  it("has nothing left to page once the whole thread is loaded", async () => {
     messagePages = [
-      { rows: [userRow("m5", "new", 5000)], hasMore: true },
-      { rows: [userRow("m2", "old", 2000), userRow("m3", "older", 3000)], hasMore: false },
+      { rows: [userRow("m2", "old", 2000), userRow("m5", "new", 5000)], hasMore: false },
     ];
     const { result } = await mount({ resume: "old-thread" });
-    await waitFor(() => expect(result.current.hasMore).toBe(true));
+    await waitFor(() => expect(result.current.messages).toHaveLength(2));
     await act(async () => {
-      await result.current.loadOlder();
+      expect(await result.current.loadOlder()).toBe(false);
     });
-
-    // Cursor for the second call came from the oldest row held, and the
-    // stitched history keeps every message exactly once, in order.
-    const calls = sentTo("thread_messages_page");
-    expect(calls[1][1]).toMatchObject({
-      beforeCreatedAt: 5000,
-      beforeMessageId: "m5",
-    });
-    expect(result.current.messages.map((m) => m.text)).toEqual([
-      "old",
-      "older",
-      "new",
-    ]);
-    expect(result.current.hasMore).toBe(false);
+    // The drain's one read; the no-op paged nothing.
+    expect(sentTo("thread_history")).toHaveLength(1);
+    expect(sentTo("thread_messages_page")).toEqual([]);
+    expect(result.current.messages.map((m) => m.text)).toEqual(["old", "new"]);
   });
 
   // A partial transcript has to say so; silently starting mid-conversation is

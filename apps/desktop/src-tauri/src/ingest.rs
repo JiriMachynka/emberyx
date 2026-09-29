@@ -152,6 +152,85 @@ fn serve_message_page(
     Ok(page)
 }
 
+/// Rows per query while draining a whole thread (the store's own cap).
+const HISTORY_PAGE_LIMIT: u32 = 500;
+
+/// Stop-gap against a cursor that never reaches the start: 100k rows. Hitting
+/// it leaves `has_more` set, so the pane still offers to load earlier.
+const MAX_HISTORY_PAGES: usize = 200;
+
+/// A thread's whole history, oldest first, in one reply.
+///
+/// The drain lives here rather than in the frontend because activities must be
+/// normalized over *all* the lines at once: per page, a tool call at the end of
+/// one page never met the result that starts the next and spun forever, and
+/// the positional `line-N` ids of id-less (imported) messages restarted at 0
+/// on every page and matched the wrong message.
+#[tauri::command]
+pub async fn thread_history(
+    supervisor: tauri::State<'_, crate::supervisor::Supervisor>,
+    cwd: String,
+    thread_id: String,
+    fresh: Option<bool>,
+) -> Result<crate::store::MessagePage> {
+    let store = supervisor.store().ok_or("event log not attached")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        serve_thread_history(
+            &store,
+            &cwd,
+            &thread_id,
+            HISTORY_PAGE_LIMIT,
+            fresh.unwrap_or(false),
+        )
+    })
+    .await
+    .map_err(|e| crate::err!("thread_history join failed: {e}"))?
+}
+
+fn serve_thread_history(
+    store: &Store,
+    cwd: &str,
+    thread_id: &str,
+    page_limit: u32,
+    fresh: bool,
+) -> Result<crate::store::MessagePage> {
+    if fresh {
+        ensure_fresh(store, cwd)?;
+    } else {
+        store.run_projectors()?;
+    }
+    // Pages arrive newest first; collected in that order and flipped once.
+    let mut pages: Vec<Vec<crate::store::ProjectedMessage>> = Vec::new();
+    let mut cursor: Option<(u64, String)> = None;
+    let mut has_more = true;
+    while has_more && pages.len() < MAX_HISTORY_PAGES {
+        let page = store.messages_page(
+            thread_id,
+            cursor.as_ref().map(|c| c.0),
+            cursor.as_ref().map(|c| c.1.as_str()),
+            page_limit,
+        )?;
+        has_more = page.has_more;
+        let Some(oldest) = page.rows.first() else {
+            has_more = false;
+            break;
+        };
+        cursor = Some((oldest.created_at, oldest.message_id.clone()));
+        pages.push(page.rows);
+    }
+    let rows: Vec<_> = pages.into_iter().rev().flatten().collect();
+    let lines: Vec<&str> = rows
+        .iter()
+        .filter_map(|row| row.payload_json.as_deref())
+        .collect();
+    let activities = crate::activity::transcript_activities(&lines);
+    Ok(crate::store::MessagePage {
+        rows,
+        has_more,
+        activities,
+    })
+}
+
 /// Same keyset contract over a thread's turns.
 #[tauri::command]
 pub async fn thread_turns_page(
@@ -574,6 +653,71 @@ mod tests {
         let page = serve_message_page(&store, "/repo", "acp-1", None, None, 60, false).unwrap();
         assert_eq!(page.rows.len(), 1);
         assert_eq!(page.rows[0].text, "hello");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A drain that normalized each page on its own left a call whose result
+    /// landed on the next page incomplete (a spinner forever), and restarted
+    /// the id-less `line-N` keys per page so imported messages matched the
+    /// wrong bucket.
+    #[test]
+    fn history_normalizes_activities_across_page_boundaries() {
+        let (store, dir) = store_in("history-drain");
+        store.attach_thread_context("t", "/repo", 42).unwrap();
+        let line = |kind, raw: &str| (kind, raw.to_string());
+        let lines = [
+            line(
+                TimelineEventKind::UserPrompt,
+                r#"{"type":"user","message":{"role":"user","content":"go"}}"#,
+            ),
+            // No message id: keyed positionally, like imported history.
+            line(
+                TimelineEventKind::AssistantResponse,
+                r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"ls"}}]}}"#,
+            ),
+            line(
+                TimelineEventKind::ToolResult,
+                r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"ok"}]}}"#,
+            ),
+            line(
+                TimelineEventKind::AssistantResponse,
+                r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"b","name":"Bash","input":{"command":"pwd"}}]}}"#,
+            ),
+            line(
+                TimelineEventKind::ToolResult,
+                r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b","content":"/repo"}]}}"#,
+            ),
+        ];
+        let events: Vec<TimelineEvent> = lines
+            .iter()
+            .enumerate()
+            .map(|(i, (kind, raw))| TimelineEvent {
+                seq: i as u64 + 1,
+                thread_id: "t".into(),
+                kind: kind.clone(),
+                attribution: None,
+                timestamp: 42,
+                payload: String::new(),
+                raw_line: Some(raw.clone()),
+            })
+            .collect();
+        store.append_events(&events).unwrap();
+
+        // Two rows a page: call `a` ends page one, its result starts page two.
+        let page = serve_thread_history(&store, "/repo", "t", 2, false).unwrap();
+        assert_eq!(page.rows.len(), 5);
+        assert!(!page.has_more);
+        let bucket = |id: &str| {
+            page.activities
+                .iter()
+                .find(|m| m.message_id == id)
+                .unwrap_or_else(|| panic!("no bucket {id}"))
+        };
+        // Indexes are over the whole thread, as the frontend parser sees it.
+        assert!(bucket("line-1").activities.iter().all(|a| a.complete));
+        assert!(bucket("line-3").activities.iter().all(|a| a.complete));
+        assert_eq!(page.activities.len(), 2);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

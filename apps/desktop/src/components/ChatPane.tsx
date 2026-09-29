@@ -255,6 +255,9 @@ export const ChatPane = memo(function ChatPane({
     emberyxSessionId: sessionId,
     resume,
     imported,
+    // The session was opened on `resume` under its own backend; after an
+    // in-place switch the id belongs to another provider.
+    resumeOwned: activeBackend === backend,
     backend: activeBackend,
     skipPermissions: spawnAccess.skipPermissions,
     persistent,
@@ -930,12 +933,6 @@ export const ChatPane = memo(function ChatPane({
                 )}
               </div>
             ))}
-          {showQuota && quotaWarning && (
-            <QuotaNotice
-              alert={quotaWarning}
-              onDismiss={() => setQuotaDismissed(quotaWarning.level)}
-            />
-          )}
           {/* The picker keeps showing the model you asked for, so a refusal has
               to say what is actually running or the two quietly disagree. */}
           {modelError && !terminal && (
@@ -964,17 +961,26 @@ export const ChatPane = memo(function ChatPane({
                 <AskPrompt pending={pendingAsk} onAnswer={answerAsk} />
               ) : (
                 <>
-                  {/* Sits *behind* the composer's rounded top edge rather than
-                      above it — the extra bottom padding is what the composer
-                      covers, so the two read as one surface. */}
-                  {liveTodos && !tasksHidden && (
-                    <div className="chat-composer-shelf relative z-0 -mb-4">
-                      <TasksCard
-                        items={liveTodos.items}
-                        planKey={liveTodos.planKey}
-                        collapsible
-                        onDismiss={() => setTasksHidden(true)}
-                      />
+                  {/* Both ride the shelf above the composer — the same centred,
+                      95% width and tuck behind the rounded top edge as the
+                      toolbar below, so each reads as part of the box rather
+                      than a card floating in the transcript. */}
+                  {((showQuota && quotaWarning) || (liveTodos && !tasksHidden)) && (
+                    <div className="chat-composer-shelf relative z-0 -mb-4 flex flex-col gap-1.5">
+                      {showQuota && quotaWarning && (
+                        <QuotaNotice
+                          alert={quotaWarning}
+                          onDismiss={() => setQuotaDismissed(quotaWarning.level)}
+                        />
+                      )}
+                      {liveTodos && !tasksHidden && (
+                        <TasksCard
+                          items={liveTodos.items}
+                          planKey={liveTodos.planKey}
+                          collapsible
+                          onDismiss={() => setTasksHidden(true)}
+                        />
+                      )}
                     </div>
                   )}
                   <div className="relative z-10">

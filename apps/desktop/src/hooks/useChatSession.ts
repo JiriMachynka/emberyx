@@ -25,6 +25,9 @@ interface Options {
   /** `resume` names imported history rather than a live provider thread. Only
    *  the Claude transport can render it; the others ignore the flag. */
   imported?: boolean;
+  /** `resume` was issued by `backend` itself rather than carried over from an
+   *  in-place provider switch. Only ACP reads it: it gates `session/load`. */
+  resumeOwned?: boolean;
   skipPermissions?: boolean;
   /** Run the agent in `emberyxd` so it survives closing the window. */
   persistent?: boolean;

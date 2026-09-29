@@ -75,7 +75,7 @@ import {
 } from "@/lib/keepGoing";
 
 /** Paging over the local event store, plus the sidebar's hover prefetch. */
-import { fetchThreadPage, takePrefetchedPage } from "@/lib/threadPage";
+import { fetchThreadPage, loadThreadHistory, takePrefetchedPage } from "@/lib/threadPage";
 import { markPage } from "@/lib/perf";
 
 /** A stream-json line from the headless `claude` process (Rust AgentEvent). */
@@ -118,10 +118,9 @@ export {
  *  knowingly partial and the transcript's start is missing.
  *
  *  `reattached` says the daemon already held this agent and replayed its buffer.
- *  This transport does not branch on it: `agent_spawn` owns resume internally,
- *  and `persistent` already suppresses the disk prefill so the replay stays the
- *  sole source. Codex and ACP branch on the same field to skip their own
- *  thread-open round trip — Claude has no equivalent round trip to skip. */
+ *  Claude branches on it only for the disk prefill: a reattach's replay is the
+ *  transcript, a fresh daemon spawn replays nothing. Codex and ACP branch on the
+ *  same field to skip their own thread-open round trip. */
 interface AgentHandle {
   id: number;
   reattached: boolean;
@@ -237,6 +236,10 @@ export function useAgentChat({
   );
   /** `cwd::resume` this pane has already hydrated, so the page is read once. */
   const hydratedRef = useRef<string | null>(null);
+  /** The daemon's replay is the whole transcript, so the disk prefill must stay
+   *  out. True until a persistent spawn says the daemon started the agent fresh:
+   *  then the replay is empty and the store is the only history there is. */
+  const [replayOnly, setReplayOnly] = useState(persistent && !imported);
   const loadingOlderRef = useRef(false);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
@@ -960,14 +963,13 @@ export function useAgentChat({
   // `parseTranscript` — the same parser the live stream feeds — rebuilds rich
   // messages (tools, thinking) without a second implementation.
   //
-  // Skipped in persistent mode: the daemon replays its own buffer, and the two
-  // overlap — the CLI writes the same turns to disk as they stream. Rendering
-  // both would duplicate the conversation, so the daemon's replay is the single
-  // source and resuming an older thread starts visually empty. Imported history
-  // is the exception: no daemon buffer can hold turns this app never ran, so
-  // there is nothing to double up with.
+  // Skipped when the daemon replays its own buffer: the two overlap — the CLI
+  // writes the same turns to disk as they stream — and rendering both would
+  // duplicate the conversation. A daemon that started the agent fresh has no
+  // buffer to replay, so the store fills in (`replayOnly`). Imported history is
+  // never replay-only: no daemon buffer can hold turns this app never ran.
   useEffect(() => {
-    if (!enabled || !resume || (persistent && !imported)) return;
+    if (!enabled || !resume || replayOnly) return;
     // Prepending is not idempotent, so a re-run for a target already hydrated
     // (a dependency identity change, StrictMode's second mount) must not
     // stack the same page on top of itself.
@@ -979,10 +981,14 @@ export function useAgentChat({
     void (async () => {
       try {
         // The sidebar starts this page on hover; when it did, the switch pays
-        // no round trip at all. Either way the read skips the freshness pass —
-        // `transcripts_ingest` below does it after the thread is on screen.
-        const page = await (takePrefetchedPage(cwd, resume) ??
-          fetchThreadPage(cwd, resume, { fresh: false }));
+        // no round trip at all. `loadThreadHistory` then walks the rest of the
+        // thread, so the pane opens on the whole conversation rather than its
+        // newest page.
+        const page = await loadThreadHistory(
+          cwd,
+          resume,
+          takePrefetchedPage(cwd, resume)
+        );
         if (cancelled) return;
         const lines = page.rows
           .map((row) => row.payloadJson)
@@ -1040,7 +1046,7 @@ export function useAgentChat({
           { cwd }
         ).catch(() => null);
         if (cancelled || !summary?.filesChanged) return;
-        const fresher = await fetchThreadPage(cwd, resume);
+        const fresher = await loadThreadHistory(cwd, resume);
         if (cancelled) return;
         const freshLines = fresher.rows
           .map((row) => row.payloadJson)
@@ -1072,10 +1078,13 @@ export function useAgentChat({
       // set and skip the retry — leaving a resumed thread permanently blank.
       if (!completed) hydratedRef.current = null;
     };
-  }, [enabled, resume, imported, cwd, persistent]);
+  }, [enabled, resume, cwd, replayOnly]);
 
   const loadOlder = useCallback(async () => {
-    if (!enabled || !resume || (persistent && !imported)) return false;
+    if (!enabled || !resume || replayOnly) return false;
+    // The whole thread loads on open, so this only runs for a history the
+    // drain capped — and not at all once there is nothing left.
+    if (!hasMore) return false;
     // No cursor yet means hydration hasn't run (or the thread has no history).
     if (loadingOlderRef.current || !oldestCursorRef.current) return false;
     loadingOlderRef.current = true;
@@ -1107,7 +1116,7 @@ export function useAgentChat({
       loadingOlderRef.current = false;
       setLoadingOlder(false);
     }
-  }, [enabled, resume, imported, cwd, persistent]);
+  }, [enabled, resume, cwd, replayOnly, hasMore]);
 
   // Spawn the process once per (cwd, resume) target, once the pane is awake.
   useEffect(() => {
@@ -1218,6 +1227,7 @@ export function useAgentChat({
           void invoke(persistent ? "agent_detach" : "agent_kill", { id });
           return;
         }
+        if (persistent && !handle.reattached) setReplayOnly(false);
         if (handle.truncated) {
           setExitReason(
             "The agent ran longer than the daemon keeps output for — the start of this transcript is missing."

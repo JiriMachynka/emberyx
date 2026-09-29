@@ -6,7 +6,7 @@ import { TOOL_ICONS } from "@/lib/toolIcons";
 import { isEmptyThought } from "@/lib/activityDisplay";
 import { useAgentStore } from "@/lib/agentStore";
 import { cn } from "@/lib/utils";
-import { buildActivityRow, kindForToolName } from "@/lib/activities";
+import { buildActivityRow, kindForTool } from "@/lib/activities";
 import { usePaneVisible } from "@/components/chat/PaneVisible";
 import { isAgentTool } from "@/components/chat/turns";
 import { ActivityList } from "@/components/chat/ActivityRow";
@@ -29,7 +29,7 @@ function ToolList({
   const activities = rest.map((t) =>
     buildActivityRow({
       id: t.id,
-      kind: kindForToolName(t.name),
+      kind: kindForTool(t.name, t.input),
       title: t.name,
       input: t.input,
       output: t.result,

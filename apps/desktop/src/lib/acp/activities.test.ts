@@ -111,6 +111,30 @@ describe("acp activities", () => {
     expect(rows(turn)[0].failed).toBe(true);
   });
 
+  it("keeps the kind the first frame set when a completion drops it", () => {
+    // OpenCode's completed `tool_call_update` carries no `kind`; the title is
+    // the command, which classifies as a bare tool unless the first frame's
+    // kind is kept. That flip is the wrench icon on every finished command.
+    const turn = fold([
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "t1",
+        title: "cd /repo && ls",
+        kind: "execute",
+        status: "in_progress",
+        rawInput: { command: "cd /repo && ls" },
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "t1",
+        title: "cd /repo && ls",
+        status: "completed",
+        content: [{ type: "text", text: "done" }],
+      },
+    ]);
+    expect(rows(turn)[0].kind).toBe("command");
+  });
+
   it("puts a plan in the stream as one row that later revisions replace", () => {
     const turn = fold([
       { sessionUpdate: "plan", entries: [{ content: "step one", status: "pending" }] },

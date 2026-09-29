@@ -46,6 +46,29 @@ export interface MessagePage {
 export const THREAD_PAGE_LIMIT = 60;
 
 /**
+ * Every message in a thread, oldest first.
+ *
+ * A thread opens showing its *whole* history, not just the newest page — the
+ * newest page is 60 rows including tool calls, so a tool-heavy tail could leave
+ * a reopen with almost none of the conversation. `first` is a page the sidebar
+ * already started on hover: when it holds the whole thread it is the answer,
+ * and a hover that failed is retried here rather than failing the open.
+ *
+ * The drain itself is Rust's (`thread_history`): activities have to be
+ * normalized over every line at once, or a tool call whose result sits on the
+ * next page never completes and imported `line-N` keys match the wrong message.
+ */
+export const loadThreadHistory = async (
+  cwd: string,
+  threadId: string,
+  first?: Promise<MessagePage>
+): Promise<MessagePage> => {
+  const head = first ? await first.catch(() => null) : null;
+  if (head && !head.hasMore) return head;
+  return invoke<MessagePage>("thread_history", { cwd, threadId, fresh: false });
+};
+
+/**
  * How long a prefetched page is worth reusing.
  *
  * It is a *hover*, so this only has to outlive the trip from the sidebar row to

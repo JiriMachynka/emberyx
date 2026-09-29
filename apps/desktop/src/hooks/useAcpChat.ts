@@ -71,7 +71,7 @@ import {
 } from "@/lib/acp/transport";
 import { contextForModel } from "@/lib/modelContext";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
-import { fetchThreadPage, type ProjectedMessageRow } from "@/lib/threadPage";
+import { loadThreadHistory, type ProjectedMessageRow } from "@/lib/threadPage";
 import { threadTitleFrom } from "@/lib/threadTitle";
 import { deniedVendor, splitModelLabel } from "@/lib/modelCatalog";
 import { markProviderUnavailable } from "@/lib/modelFavorites";
@@ -174,6 +174,12 @@ interface Options {
   provider: string;
   /** ACP session id to resume; omit to open a fresh one. */
   resume?: string;
+  /** `resume` is an id this provider issued — the session was opened on it,
+   *  not switched to it from another provider — so it is safe to `session/load`
+   *  on a fresh mount. */
+  resumeOwned?: boolean;
+  /** `resume` names imported history, which no provider can load. */
+  imported?: boolean;
   /** Model to run, from the picker; "" lets the agent decide. Applied over
    *  `session/set_model` — ACP has no model parameter on `session/new`. */
   model?: string;
@@ -233,6 +239,8 @@ export function useAcpChat({
   emberyxSessionId,
   provider,
   resume,
+  resumeOwned = false,
+  imported = false,
   model,
   launch,
   skipPermissions = false,
@@ -358,6 +366,14 @@ export function useAcpChat({
    *  be asked to load back. Survives a restart of the child within this pane;
    *  nothing outside it stores an ACP session id. */
   const issuedSessionRef = useRef<string | null>(null);
+  /** Set while a `session/load` may still be replaying the conversation. The
+   *  pane already shows that history from the event log, so replayed turns are
+   *  dropped until the user sends — the agent speaks unprompted for no other
+   *  reason, and the replay can trail the load reply on the channel. */
+  const replayingRef = useRef(false);
+  /** `cwd::resume` whose history has been read, so a re-run never prepends it
+   *  twice. */
+  const seededRef = useRef<string | null>(null);
   /** The model the session is actually on, so a re-render never re-sends
    *  `session/set_model` for a switch that already took. */
   const appliedModelRef = useRef("");
@@ -673,7 +689,7 @@ export function useAcpChat({
         ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
       }));
     }
-    if (method !== "session/update") return;
+    if (method !== "session/update" || replayingRef.current) return;
     turnRef.current = applyUpdate(
       turnRef.current,
       update as AcpSessionUpdate["update"],
@@ -825,18 +841,18 @@ export function useAcpChat({
           return;
         }
         // Resuming is only offered by agents that report `loadSession`, and only
-        // for an id *this provider* issued — a load is attempted only when a
-        // previous session in this pane produced the id, so a foreign id (say a
-        // Claude thread the pane was switched away from) is never handed to
-        // `grok agent stdio`, which would fail the whole spawn with
-        // "session/load failed: Path not found." rather than opening a chat.
-        // The id the hook publishes for the sidebar is not resume credit: it
-        // crosses remounts via the persisted session, and `issuedSessionRef`
-        // starts empty every mount, so only this pane's own id can match.
+        // for an id *this provider* issued: one a previous session in this pane
+        // produced, or one the session was opened on (`resumeOwned`). A foreign
+        // id (say a Claude thread the pane was switched away from) is never
+        // handed to `grok agent stdio`, which answers it with "session/load
+        // failed: Path not found." Without the load a reopened thread showed
+        // its history while the agent behind it remembered none of it.
         const canLoad =
           spawned.initialize?.agentCapabilities?.loadSession === true &&
           resume !== undefined &&
-          resume === issuedSessionRef.current;
+          !imported &&
+          (resumeOwned || resume === issuedSessionRef.current);
+        if (canLoad) replayingRef.current = true;
         // Even an id this provider issued can go stale — the agent prunes its own
         // session store, and a load failure must cost the history, not the chat.
         const session = canLoad
@@ -890,6 +906,8 @@ export function useAcpChat({
     provider,
     cwd,
     resume,
+    resumeOwned,
+    imported,
     launch,
     persistent,
     restartNonce,
@@ -902,30 +920,43 @@ export function useAcpChat({
   ]);
 
   // Reopening a thread the event log owns: the turns it recorded are the
-  // history. The agent behind the pane starts fresh — the provider's session
-  // died with its process — but the conversation itself is not lost. A first
-  // page (the tail) is what the pane paints; the user's own first message
-  // beats a late-arriving page, so a seed is skipped if anything is committed.
+  // history, whether or not the agent could `session/load` its own copy. The
+  // whole thread is read, not just its newest page: a page is 60 rows
+  // *including* tool calls, so a tool-heavy tail used to reopen to almost no
+  // conversation.
+  //
+  // Prepended, never skipped: anything already committed was sent after the
+  // pane opened, so it is strictly newer. Dropping the page because the user
+  // typed first is how a reopened thread lost its whole history.
   //
   // Skipped in persistent mode, same as the Claude transport: the daemon's
   // replay is the single source there, and seeding the store on top of it
   // races the replay into duplicated turns.
   useEffect(() => {
     if (!enabled || !resume || persistent) return;
+    const target = `${cwd}::${resume}`;
+    if (seededRef.current === target) return;
+    seededRef.current = target;
     let cancelled = false;
-    void fetchThreadPage(cwd, resume, { fresh: false })
+    let landed = false;
+    void loadThreadHistory(cwd, resume)
       .then((page) => {
-        if (cancelled || committedRef.current.length > 0) return;
+        if (cancelled) return;
+        landed = true;
         const seeded = messagesFromPage(page.rows);
         if (!seeded.length) return;
-        committedRef.current = seeded;
+        committedRef.current = [...seeded, ...committedRef.current];
         publish();
       })
-      .catch((e) =>
-        console.error("[emberyx] thread_messages_page failed", e)
-      );
+      .catch((e) => {
+        if (!cancelled) seededRef.current = null;
+        console.error("[emberyx] thread_history failed", e);
+      });
     return () => {
       cancelled = true;
+      // A read torn down before it landed (StrictMode's phantom unmount) must
+      // not leave the target looking seeded.
+      if (!landed && seededRef.current === target) seededRef.current = null;
     };
   }, [enabled, resume, cwd, publish, persistent]);
 
@@ -974,6 +1005,7 @@ export function useAcpChat({
       const sessionId = sessionRef.current;
       const channel = channelRef.current;
       const hasImages = !!images && images.length > 0;
+      replayingRef.current = false;
       committedRef.current = [
         ...committedRef.current,
         {

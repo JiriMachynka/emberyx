@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(
 const {
   clearPrefetchedPages,
   fetchThreadPage,
+  loadThreadHistory,
   prefetchThreadPage,
   takePrefetchedPage,
 } = await import("./threadPage");
@@ -42,6 +43,51 @@ describe("fetchThreadPage", () => {
       "thread_messages_page",
       expect.objectContaining({ fresh: false })
     );
+  });
+});
+
+describe("loadThreadHistory", () => {
+  const row = (id: string, createdAt: number) => ({
+    messageId: id,
+    threadId: "t1",
+    role: "user",
+    text: id,
+    createdAt,
+    payloadJson: "{}",
+  });
+
+  const whole = { rows: [row("m2", 2000), row("m5", 5000)], hasMore: false, activities: [] };
+
+  it("reads the whole thread in one Rust drain", async () => {
+    invoke.mockResolvedValueOnce(whole);
+    const page = await loadThreadHistory("/repo", "t1");
+    expect(page).toBe(whole);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith("thread_history", {
+      cwd: "/repo",
+      threadId: "t1",
+      fresh: false,
+    });
+  });
+
+  it("serves a prefetched page that already holds the whole thread", async () => {
+    const head = { rows: [row("m5", 5000)], hasMore: false, activities: [] };
+    const page = await loadThreadHistory("/repo", "t1", Promise.resolve(head));
+    expect(page).toBe(head);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("drains when the prefetched page is only the tail", async () => {
+    invoke.mockResolvedValueOnce(whole);
+    const head = { rows: [row("m5", 5000)], hasMore: true, activities: [] };
+    const page = await loadThreadHistory("/repo", "t1", Promise.resolve(head));
+    expect(page).toBe(whole);
+  });
+
+  it("retries a hover prefetch that failed instead of failing the open", async () => {
+    invoke.mockResolvedValueOnce(whole);
+    const page = await loadThreadHistory("/repo", "t1", Promise.reject(new Error("boom")));
+    expect(page).toBe(whole);
   });
 });
 
