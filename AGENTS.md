@@ -705,4 +705,10 @@ too**, or orphaned agent processes and shells survive the app.
 - **`[profile.release]` is deliberately `lto = "thin"` + `codegen-units = 16`.**
   The Rust side is I/O-bound; fat LTO buys nothing at runtime and costs CI link
   time. Don't "optimize" it.
+- **Lockfile comes from the pinned bun, not the local one.** `packageManager`
+  pins `bun@1.3.13` and CI installs `--frozen-lockfile` with it; a newer local
+  bun (1.4.x) writes `lockfileVersion: 3`, which 1.3.13 cannot parse, and every
+  workflow dies at install. After touching dependencies run
+  `bunx bun@1.3.13 install` so `bun.lock` stays `lockfileVersion: 1`. That bun
+  also ignores nested `resolutions` (`mocha/diff`), so only top-level pins work.
 - `codedb.snapshot` is gitignored build output, not source.
