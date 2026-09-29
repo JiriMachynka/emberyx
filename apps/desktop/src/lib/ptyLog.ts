@@ -30,6 +30,10 @@ interface Entry {
   status: PtyLogStatus;
   rawSubs: Set<(chunk: string) => void>;
   onExit?: (code: number | null) => void;
+  /** Terminal views that announce the exit in their own grid. Carried across
+   *  a respawn next to rawSubs, which is why respawn is a rebuild, not a
+   *  mutation of the old entry. */
+  exitSubs: Set<(code: number | null) => void>;
   /** False on the placeholder a subscriber creates ahead of the spawn. */
   spawned: boolean;
   /** Kill requested before the spawn resolved — honored as soon as it does. */
@@ -98,6 +102,7 @@ export async function spawnLog(opts: SpawnLogOptions): Promise<void> {
     decoder: new TextDecoder(),
     status: "starting",
     rawSubs: existing?.rawSubs ?? new Set(),
+    exitSubs: existing?.exitSubs ?? new Set(),
     onExit: opts.onExit,
     spawned: true,
     killWhenSpawned: false,
@@ -114,6 +119,7 @@ export async function spawnLog(opts: SpawnLogOptions): Promise<void> {
     } else {
       entry.status = "exited";
       entry.onExit?.(event.data);
+      for (const cb of entry.exitSubs) cb(event.data);
     }
   };
 
@@ -184,6 +190,27 @@ export const subscribeRaw = (
   };
 };
 
+/** True once the child is gone — a view that mounts after the exit renders
+ *  its dead state immediately instead of waiting on an event that already
+ *  fired. */
+export const isExited = (sessionId: string): boolean =>
+  sessions.get(sessionId)?.status === "exited";
+
+/** Stream exit events to a terminal grid, `_next_` to whatever subscribeRaw
+ *  is for output. Fires beside onExit, which stays for useWorkspace's dev
+ *  servers. */
+export const subscribeExit = (
+  sessionId: string,
+  cb: (code: number | null) => void
+): (() => void) => {
+  const entry = sessions.get(sessionId);
+  if (!entry) return () => {};
+  entry.exitSubs.add(cb);
+  return () => {
+    sessions.get(sessionId)?.exitSubs.delete(cb);
+  };
+};
+
 /** Kill the child (SIGTERM, then SIGKILL) and forget the buffer. */
 export async function killLog(sessionId: string): Promise<void> {
   const entry = sessions.get(sessionId);
@@ -216,6 +243,9 @@ export async function resizeLog(
 }
 
 export async function writeLog(sessionId: string, data: string): Promise<void> {
-  const id = sessions.get(sessionId)?.ptyId;
-  if (id != null) await invoke("pty_write", { id, data });
+  const entry = sessions.get(sessionId);
+  // A dead PTY has nothing to receive keystrokes — writing is an unhandled
+  // rejection waiting for the next keypress, so the state flow ends here.
+  if (entry?.ptyId == null || entry.status === "exited") return;
+  await invoke("pty_write", { id: entry.ptyId, data }).catch(() => {});
 }

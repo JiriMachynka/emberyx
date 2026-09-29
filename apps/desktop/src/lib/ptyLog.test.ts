@@ -31,11 +31,14 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 import {
   disposeLog,
+  isExited,
   killLog,
   rawLog,
   resizeLog,
   spawnLog,
+  subscribeExit,
   subscribeRaw,
+  writeLog,
 } from "@/lib/ptyLog";
 
 const b64 = (s: string) => btoa(s);
@@ -154,6 +157,40 @@ describe("ptyLog", () => {
     await spawnLog({ sessionId: "dev-6", cwd: "/p" });
     expect(calls.filter(([c]) => c === "pty_spawn")).toHaveLength(2);
     disposeLog("dev-6");
+  });
+
+  it("exit subscribers fire, and writes after exit invoke nothing", async () => {
+    await spawnLog({ sessionId: "sh-exit", cwd: "/p" });
+    const exits: (number | null)[] = [];
+    const stop = subscribeExit("sh-exit", (code) => exits.push(code));
+
+    channels[0].onmessage?.({ type: "exit", data: 3 });
+    expect(exits).toEqual([3]);
+    expect(isExited("sh-exit")).toBe(true);
+    stop();
+
+    calls.length = 0;
+    await writeLog("sh-exit", "ls\r");
+    expect(calls).toEqual([]);
+    disposeLog("sh-exit");
+  });
+
+  it("respawn after exit keeps exit subscribers and buffer", async () => {
+    await spawnLog({ sessionId: "sh-respawn", cwd: "/p" });
+    channels[0].onmessage?.({ type: "output", data: b64("old\r\n") });
+    channels[0].onmessage?.({ type: "exit", data: 0 });
+
+    const exits: (number | null)[] = [];
+    subscribeExit("sh-respawn", (code) => exits.push(code));
+    await spawnLog({ sessionId: "sh-respawn", cwd: "/p" });
+    expect(rawLog("sh-respawn")).toContain("old\r\n");
+
+    channels[1].onmessage?.({ type: "output", data: b64("new\r\n") });
+    expect(rawLog("sh-respawn")).toContain("new\r\n");
+    // The respawned session reports its own exit through the old subscriber.
+    channels[1].onmessage?.({ type: "exit", data: 2 });
+    expect(exits).toEqual([2]);
+    disposeLog("sh-respawn");
   });
 
   it("replaces a spawn cancelled before it resolves", async () => {

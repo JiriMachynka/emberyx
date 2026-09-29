@@ -394,6 +394,10 @@ enum ProcChild {
     },
     Pty {
         session: crate::pty::PtySession,
+        /// Kept beside the session: it runs inline in this process (a daemon
+        /// write is never on the window's main thread) so it stays a plain
+        /// writer, unlike the window's queued one.
+        writer: Box<dyn std::io::Write + Send>,
         child: Box<dyn portable_pty::Child + Send + Sync>,
     },
 }
@@ -404,10 +408,7 @@ impl ProcChild {
     fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
         match self {
             ProcChild::Pipe { stdin, .. } => stdin.write_all(data).and_then(|_| stdin.flush()),
-            ProcChild::Pty { session, .. } => session
-                .writer
-                .write_all(data)
-                .and_then(|_| session.writer.flush()),
+            ProcChild::Pty { writer, .. } => writer.write_all(data).and_then(|_| writer.flush()),
         }
     }
 
@@ -610,6 +611,7 @@ fn open_child(spec: &ProcSpec) -> Result<OpenedProc, String> {
         Ok(OpenedProc {
             child: ProcChild::Pty {
                 session: spawned.session,
+                writer: spawned.writer,
                 child: spawned.child,
             },
             terminal: spawned.reader,

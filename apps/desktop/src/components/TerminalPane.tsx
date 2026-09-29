@@ -2,13 +2,16 @@ import { useEffect, useRef } from "react";
 import type { FitAddon, Terminal } from "ghostty-web";
 import { loadGhostty, terminalTheme } from "@/lib/ghostty";
 import {
+  isExited,
   rawLog,
   resizeLog,
   shellSessionId,
   spawnLog,
+  subscribeExit,
   subscribeRaw,
   writeLog,
 } from "@/lib/ptyLog";
+import { createTerminalFeed } from "@/lib/terminalFeed";
 import { withGlyphFallback } from "@/lib/terminalFont";
 
 interface TerminalPaneProps {
@@ -41,6 +44,9 @@ export function TerminalPane({
   // Read at mount only: scrollback is a live setting, and a shell must not be
   // restarted because a number in Settings changed.
   const scrollbackRef = useRef(scrollback);
+  // Keystrokes of a dead shell must not land anywhere — until Enter restarts,
+  // every key but \r is dropped.
+  const exitedRef = useRef(false);
 
   // Spawn only — never kill. The dock unmounts this pane when its tab closes
   // and the path changes whenever a thread in another project is opened; both
@@ -53,9 +59,9 @@ export function TerminalPane({
     const root = rootRef.current;
     if (!root) return;
     let disposed = false;
-    let unsubscribe: (() => void) | null = null;
-    let frame: number | null = null;
-    let pending = "";
+    let unsubscribeRaw: (() => void) | null = null;
+    let unsubscribeExit: (() => void) | null = null;
+    let feed: ReturnType<typeof createTerminalFeed> | null = null;
 
     void loadGhostty().then(({ Terminal, FitAddon }) => {
       if (disposed || !rootRef.current) return;
@@ -71,8 +77,18 @@ export function TerminalPane({
       term.open(rootRef.current);
 
       // Keys go to the child, and the child's echo comes back as output — the
-      // grid never draws a keystroke it hasn't been told to.
-      term.onData((data) => void writeLog(sessionId, data));
+      // grid never draws a keystroke it hasn't been told to. While the shell
+      // is dead, Enter is the restart action and nothing else passes through.
+      term.onData((data) => {
+        if (exitedRef.current) {
+          if (data === "\r") {
+            exitedRef.current = false;
+            void spawnLog({ sessionId, cwd });
+          }
+          return;
+        }
+        void writeLog(sessionId, data);
+      });
       // Registered before the first fit: the fit that lands on open is the one
       // that matters, and a resize the child never hears leaves it writing for
       // a screen of a different width — which is how a prompt draws twice.
@@ -80,37 +96,39 @@ export function TerminalPane({
       fit.fit();
       // fit() is a no-op when the size is already right, so it can also emit
       // nothing at all. The child still has to be told what it is attached to.
-      void resizeLog(sessionId, term.cols, term.rows);
+      const cols = term.cols;
+      const rows = term.rows;
+      void resizeLog(sessionId, cols, rows);
       fit.observeResize();
 
-      // The backlog can be megabytes, and writing it whole freezes the window
-      // on remount (a thread switch re-enters here) — so it streams through
-      // write's callback chain instead, a chunk at a time. Writes queue in
-      // call order, so live chunks queued behind it still land after the
-      // history — replay stays first without blocking the frame.
-      const backlog = rawLog(sessionId);
-      const CHUNK = 64 * 1024;
-      let written = 0;
-      const drain = () => {
-        const slice = backlog.slice(written, written + CHUNK);
-        if (slice.length > 0)
-          term.write(slice, () => {
-            written += slice.length;
-            drain();
-          });
-      };
-      drain();
-      // One write per frame, not per chunk: a build's output arrives as
-      // hundreds of small chunks and each write is a wasm call plus a repaint.
-      unsubscribe = subscribeRaw(sessionId, (chunk) => {
-        pending += chunk;
-        frame ??= requestAnimationFrame(() => {
-          frame = null;
-          const data = pending;
-          pending = "";
-          if (data.length > 0) term.write(data);
-        });
+      // One queue, one path into the terminal: backlog and live output share
+      // the same pending string emptied by one frame loop, so ordering is
+      // correct by construction — and a big backlog still never freezes a
+      // frame, because backlog and live share the per-frame budget.
+      feed = createTerminalFeed(
+        (data) => term.write(data),
+        (cb) => requestAnimationFrame(cb),
+        (id) => cancelAnimationFrame(id)
+      );
+
+      // Backlog and subscription must land in the same tick: a chunk that
+      // arrives between rawLog and subscribeRaw would never be replayed and
+      // never streamed — the gap is a lost line.
+      feed.push(rawLog(sessionId));
+      unsubscribeRaw = subscribeRaw(sessionId, (chunk) => feed!.push(chunk));
+
+      unsubscribeExit = subscribeExit(sessionId, (code) => {
+        exitedRef.current = true;
+        const what =
+          code === null ? "exited" : `exited with code ${code}`;
+        void resizeLog(sessionId, term.cols, term.rows);
+        feed!.push(`\r\n\x1b[2m[Process ${what} — press Enter to restart]\x1b[0m\r\n`);
       });
+      // A view that mounts after the exit never gets an event — say it now.
+      if (isExited(sessionId)) {
+        exitedRef.current = true;
+        feed.push("\r\n\x1b[2m[Process exited — press Enter to restart]\x1b[0m\r\n");
+      }
 
       termRef.current = term;
       fitRef.current = fit;
@@ -118,8 +136,9 @@ export function TerminalPane({
 
     return () => {
       disposed = true;
-      if (frame !== null) cancelAnimationFrame(frame);
-      unsubscribe?.();
+      unsubscribeRaw?.();
+      unsubscribeExit?.();
+      feed?.dispose();
       fitRef.current?.dispose();
       termRef.current?.dispose();
       termRef.current = null;

@@ -36,11 +36,46 @@ const HANDLE_BASE: u32 = 1_000_000;
 
 #[derive(Default, Clone)]
 pub struct Daemon {
-    /// Frontend handle → daemon agent id, for the agents this window attached.
-    handles: Arc<Mutex<HashMap<u32, String>>>,
+    /// Frontend handle → what the frontend is talking to, for the attaches this
+    /// window made. They live in the same number space as `AgentManager`'s ids
+    /// from the frontend's point of view, but start high so a mix-up shows up
+    /// as "no such agent" rather than silently addressing the wrong process.
+    handles: Arc<Mutex<HashMap<u32, HandleRoute>>>,
     /// Arc'd so a clone shares both fields: `agent_spawn` hands a cloned daemon
     /// to a blocking thread, and parallel spawns must share the handle space.
     next_handle: Arc<AtomicU32>,
+}
+
+enum HandleRoute {
+    Agent(String),
+    /// A generic child process, carrying its own writer queue — see `ProcRoute`.
+    Proc(ProcRoute),
+}
+
+struct ProcRoute {
+    proc_id: String,
+    /// Bytes a per-handle thread drains into daemon requests, so a keystroke
+    /// costs a channel send instead of a socket round trip on the main thread.
+    tx: std::sync::mpsc::Sender<ProcInput>,
+}
+
+/// Ordered input for a proc handle. Resize rides the same queue so it cannot
+/// overtake the bytes typed before it.
+enum ProcInput {
+    Write(Vec<u8>),
+    Resize(u16, u16),
+}
+
+impl Clone for HandleRoute {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Agent(id) => Self::Agent(id.clone()),
+            Self::Proc(proc) => Self::Proc(ProcRoute {
+                proc_id: proc.proc_id.clone(),
+                tx: proc.tx.clone(),
+            }),
+        }
+    }
 }
 
 impl Daemon {
@@ -194,7 +229,7 @@ impl Daemon {
         self.handles
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(handle, agent_id);
+            .insert(handle, HandleRoute::Agent(agent_id));
         Ok((handle, outcome))
     }
 
@@ -229,8 +264,26 @@ impl Daemon {
         Ok(())
     }
 
-    /// The daemon agent behind a frontend handle, if this window opened one.
+    /// The daemon agent or proc behind a frontend handle's id, if this window
+    /// opened one — the identifier `pty_write` routes on.
     pub fn agent_for(&self, handle: u32) -> Option<String> {
+        self.route(handle).map(|route| match route {
+            HandleRoute::Agent(id) => id,
+            HandleRoute::Proc(proc) => proc.proc_id,
+        })
+    }
+
+    /// The writer queue behind a proc handle.
+    fn proc_route(&self, handle: u32) -> Option<ProcRoute> {
+        match self.route(handle) {
+            Some(HandleRoute::Proc(proc)) => Some(proc),
+            _ => None,
+        }
+    }
+
+    /// The handle's route — `String` clones, tie-free, under the lock only
+    /// long enough to clone.
+    fn route(&self, handle: u32) -> Option<HandleRoute> {
         self.handles
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -271,10 +324,38 @@ impl Daemon {
                 .map_err(|e| e.to_string())?;
         Self::attach_proc(&proc_id, after_frame_id, sink)?;
         let handle = self.next_handle.fetch_add(1, Ordering::SeqCst);
+        // One thread per handle drains a queue of writes and resizes into
+        // daemon requests. A keystroke is a channel send; resize rides the
+        // same queue so the bytes typed before a resize reach the child
+        // before the resize itself does.
+        let (tx, rx) = std::sync::mpsc::channel::<ProcInput>();
+        let route = ProcRoute { proc_id: proc_id.clone(), tx };
+        let writer_proc_id = route.proc_id.clone();
+        std::thread::spawn(move || {
+            use base64::Engine;
+            while let Ok(input) = rx.recv() {
+                let request = match input {
+                    ProcInput::Write(data) => Request::ProcWrite {
+                        proc_id: writer_proc_id.clone(),
+                        data: base64::engine::general_purpose::STANDARD.encode(data),
+                    },
+                    ProcInput::Resize(cols, rows) => Request::ProcResize {
+                        proc_id: writer_proc_id.clone(),
+                        cols,
+                        rows,
+                    },
+                };
+                // A dead reader ends the loop; the handle will be dropped
+                // with the next kill attempt.
+                if Self::request(&request).is_err() {
+                    return;
+                }
+            }
+        });
         self.handles
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(handle, proc_id);
+            .insert(handle, HandleRoute::Proc(route));
         Ok((handle, outcome))
     }
 
@@ -304,36 +385,42 @@ impl Daemon {
         Ok(())
     }
 
-    /// Write raw bytes to a proc's stdin. Encoded here because the wire is
-    /// newline-delimited JSON and the bytes are neither lines nor UTF-8.
+    /// Write raw bytes to a proc's stdin — enqueue them; the handle's thread
+    /// does the socket round trip. Never blocks on a wedged daemon.
     pub fn proc_write(&self, handle: u32, data: &[u8]) -> Result<()> {
-        use base64::Engine;
-        let proc_id = self.agent_for(handle).ok_or("no such daemon agent")?;
-        let data = base64::engine::general_purpose::STANDARD.encode(data);
-        Self::request(&Request::ProcWrite { proc_id, data })?;
-        Ok(())
+        let proc = self.proc_route(handle).ok_or("no such daemon agent")?;
+        proc.tx
+            .send(ProcInput::Write(data.to_vec()))
+            .map_err(|_| crate::err!("no such daemon agent"))
     }
 
     pub fn proc_resize(&self, handle: u32, cols: u16, rows: u16) -> Result<()> {
-        let proc_id = self.agent_for(handle).ok_or("no such daemon agent")?;
-        Self::request(&Request::ProcResize {
-            proc_id,
-            cols,
-            rows,
-        })?;
-        Ok(())
+        let proc = self.proc_route(handle).ok_or("no such daemon agent")?;
+        proc.tx
+            .send(ProcInput::Resize(cols, rows))
+            .map_err(|_| crate::err!("no such daemon agent"))
     }
 
     /// Stop a proc for good. Same rules as `kill`: detaching happens on its
     /// own when the pane unmounts, this is the explicit "kill it" path.
+    /// Dropping the queue ends the handle's writer thread; the wire round trip
+    /// itself runs on its own thread — this command is sync, so it would
+    /// otherwise hold the main thread for a socket write and read.
     pub fn proc_kill(&self, handle: u32) -> Result<()> {
-        let proc_id = self
-            .handles
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&handle)
-            .ok_or("no such daemon agent")?;
-        Self::request(&Request::ProcKill { proc_id })?;
+        let dropped = {
+            let mut handles = self.handles.lock().unwrap_or_else(|e| e.into_inner());
+            handles.remove(&handle)
+        };
+        let proc_id = match dropped {
+            Some(HandleRoute::Proc(route)) => route.proc_id,
+            Some(HandleRoute::Agent(id)) => id,
+            None => return Err(crate::err!("no such daemon agent")),
+        };
+        std::thread::spawn(move || {
+            // A kill that was not delivered costs a dead child that is already
+            // gone — not worth blocking the window over.
+            let _ = Self::request(&Request::ProcKill { proc_id });
+        });
         Ok(())
     }
 
@@ -359,12 +446,14 @@ impl Daemon {
     /// Stop a daemon agent for good. Detaching happens on its own when the pane
     /// unmounts; this is the explicit "kill it" path.
     pub fn kill(&self, handle: u32) -> Result<()> {
-        let agent_id = self
-            .handles
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&handle)
-            .ok_or("no such daemon agent")?;
+        let HandleRoute::Agent(agent_id) = {
+            let mut handles = self.handles.lock().unwrap_or_else(|e| e.into_inner());
+            handles.remove(&handle)
+        }
+        .ok_or("no such daemon agent")?
+        else {
+            return Err(crate::err!("no such daemon agent"));
+        };
         Self::request(&Request::AgentKill { agent_id })?;
         Ok(())
     }

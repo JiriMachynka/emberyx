@@ -188,7 +188,6 @@ pub enum PtyEvent {
 
 pub(crate) struct PtySession {
     pub(crate) master: Box<dyn MasterPty + Send>,
-    pub(crate) writer: Box<dyn Write + Send>,
     /// The shell we spawned. Its descendants are reached through the
     /// terminal's foreground process group instead.
     pub(crate) shell_pid: Option<u32>,
@@ -238,12 +237,38 @@ pub(crate) fn stop_session_ids(session: &PtySession) {
     });
 }
 
-/// What opening a PTY yields: the session to write to / resize / signal, the
-/// master's output for a reader thread, and the child to reap on EOF.
+/// What opening a PTY yields: the session to resize / signal, the blocking
+/// writer for its owner's thread, the master's output for a reader thread,
+/// and the child to reap on EOF.
+///
+/// The writer lives outside `PtySession` on purpose: the window's manager
+/// moves it onto a writer thread that the sessions lock never sees, while the
+/// daemon's runtime keeps writing inline — each owner decides its write path.
 pub(crate) struct PtySpawned {
     pub(crate) session: PtySession,
+    pub(crate) writer: Box<dyn Write + Send>,
     pub(crate) reader: Box<dyn Read + Send>,
     pub(crate) child: Box<dyn portable_pty::Child + Send + Sync>,
+}
+
+/// Env a terminal needs that a Finder launch doesn't provide. `has` answers
+/// whether the child would already see a variable — explicit env first, then
+/// the process's inherited one.
+fn terminal_env_defaults(has: impl Fn(&str) -> bool) -> Vec<(&'static str, &'static str)> {
+    let mut vars = Vec::new();
+    // A Finder-launched app inherits no locale, and the login-shell path adds
+    // only TERM — zsh then runs in the C locale and non-ASCII input breaks.
+    // en_US.UTF-8 is fixed on purpose: values like en_CZ are not valid POSIX
+    // locales, and a wrong locale is worse than a working one. The user's rc
+    // can still override it.
+    if !has("LC_ALL") && !has("LC_CTYPE") && !has("LANG") {
+        vars.push(("LANG", "en_US.UTF-8"));
+    }
+    // ghostty-web renders 24-bit colour; saying so nothing would guess.
+    if !has("COLORTERM") {
+        vars.push(("COLORTERM", "truecolor"));
+    }
+    vars
 }
 
 /// Open a PTY and spawn `argv` in it, executed directly — never through a
@@ -279,6 +304,11 @@ pub(crate) fn open_pty(
     cmd.cwd(cwd);
     cmd.env("TERM", "xterm-256color");
 
+    let has = |k: &str| env.contains_key(k) || std::env::var_os(k).is_some();
+    for (k, v) in terminal_env_defaults(has) {
+        cmd.env(k, v);
+    }
+
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     drop(pair.slave);
     let shell_pid = child.process_id();
@@ -288,17 +318,27 @@ pub(crate) fn open_pty(
     Ok(PtySpawned {
         session: PtySession {
             master: pair.master,
-            writer,
             shell_pid,
         },
+        writer,
         reader,
         child,
     })
 }
 
 pub struct PtyManager {
-    sessions: Arc<Mutex<HashMap<u32, PtySession>>>,
+    sessions: Arc<Mutex<HashMap<u32, PtyOwned>>>,
     next_id: AtomicU32,
+}
+
+/// What the map holds: the session the signaling paths touch, and the queue
+/// its writer thread drains. Only the sender leaves the lock — the mutex is
+/// never held across I/O again.
+pub(crate) struct PtyOwned {
+    pub(crate) session: PtySession,
+    /// Dropping it ends the writer thread; a thread stuck in write_all on a
+    /// dead PTY gets EIO once the child is gone either way.
+    pub(crate) tx: std::sync::mpsc::Sender<Vec<u8>>,
 }
 
 impl Default for PtyManager {
@@ -331,17 +371,49 @@ impl PtyManager {
         on_event: Channel<PtyEvent>,
     ) -> Result<u32> {
         let (argv, env) = shell_launch(command.as_deref());
+        self.spawn_pty(&cwd, &argv, &env, command, cols, rows, on_event)
+    }
+
+    /// The PTY plumbing behind `spawn`, parameterized on argv/env so tests can
+    /// run a specific child instead of the developer's shell.
+    #[allow(clippy::too_many_arguments)] // one PTY spawn is one PTY spawn
+    fn spawn_pty(
+        &self,
+        cwd: &str,
+        argv: &[String],
+        env: &HashMap<String, String>,
+        command: Option<String>,
+        cols: u16,
+        rows: u16,
+        on_event: Channel<PtyEvent>,
+    ) -> Result<u32> {
         let PtySpawned {
-            mut session,
+            session,
+            writer,
             mut reader,
             mut child,
-        } = open_pty(&cwd, &argv, &env, cols, rows)?;
+        } = open_pty(cwd, argv, env, cols, rows)?;
 
-        // Auto-run the agent command.
+        // One writer thread per session owns the blocking write_all+flush, so
+        // a keystroke enqueues bytes instead of blocking the main thread on a
+        // wedged PTY. Writes take the channel in order, which is exactly why
+        // this stays out of the async runtime — parallel async writes could
+        // reorder keystrokes.
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            let mut writer = writer;
+            while let Ok(bytes) = rx.recv() {
+                if writer.write_all(&bytes).is_err() {
+                    break;
+                }
+                let _ = writer.flush();
+            }
+        });
+
+        // Auto-run the agent command — through the same channel as every
+        // other write, so it can never overtake bytes the user already sent.
         if let Some(cmd_str) = command {
-            let line = format!("{}\n", cmd_str);
-            let _ = session.writer.write_all(line.as_bytes());
-            let _ = session.writer.flush();
+            let _ = tx.send(format!("{}\n", cmd_str).into_bytes());
         }
 
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
@@ -351,7 +423,7 @@ impl PtyManager {
         self.sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(id, session);
+            .insert(id, PtyOwned { session, tx });
 
         // Output pipeline: a reader thread pulls raw bytes off the PTY and a
         // forwarder thread coalesces everything already queued into a single
@@ -434,17 +506,22 @@ impl PtyManager {
     }
 
     pub fn write(&self, id: u32, data: &str) -> Result<()> {
-        let mut sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
-        let session = sessions.get_mut(&id).ok_or("pty not found")?;
-        session.writer.write_all(data.as_bytes())?;
-        session.writer.flush()?;
-        Ok(())
+        // Lock only long enough to clone the sender — the real write happens
+        // on the session's own thread, and a channel send does not block.
+        let tx = {
+            let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            sessions.get(&id).ok_or("pty not found")?.tx.clone()
+        };
+        tx.send(data.as_bytes().to_vec())
+            .map_err(|_| crate::err!("pty not found"))
     }
 
     pub fn resize(&self, id: u32, cols: u16, rows: u16) -> Result<()> {
         let sessions = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
-        let session = sessions.get(&id).ok_or("pty not found")?;
-        session
+        sessions
+            .get(&id)
+            .ok_or("pty not found")?
+            .session
             .master
             .resize(PtySize {
                 rows,
@@ -459,7 +536,7 @@ impl PtyManager {
     /// Stop a PTY and everything running in it — a dev server dies with its
     /// tab. Asks politely first so servers can release their port, then kills.
     pub fn kill(&self, id: u32) -> Result<()> {
-        let Some(session) = self
+        let Some(owned) = self
             .sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -467,26 +544,26 @@ impl PtyManager {
         else {
             return Ok(());
         };
-        stop_session(session);
+        stop_session(owned.session);
         Ok(())
     }
 
     /// Tear down every PTY on app exit. Synchronous — the process is going
     /// away, so nothing is left to reap stragglers afterwards.
     pub fn kill_all(&self) {
-        let sessions: Vec<PtySession> = self
+        let sessions: Vec<PtyOwned> = self
             .sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .drain()
             .map(|(_, s)| s)
             .collect();
-        for s in &sessions {
-            signal_session(s, libc::SIGTERM);
+        for o in &sessions {
+            signal_session(&o.session, libc::SIGTERM);
         }
         std::thread::sleep(KILL_GRACE);
-        for s in &sessions {
-            signal_session(s, libc::SIGKILL);
+        for o in &sessions {
+            signal_session(&o.session, libc::SIGKILL);
         }
     }
 }
@@ -621,6 +698,8 @@ pub fn pty_kill(
 mod tests {
     use super::*;
     use std::fs;
+    use std::time::{Duration, Instant};
+    use tauri::ipc::Channel;
 
     fn alive(pid: u32) -> bool {
         unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
@@ -691,10 +770,9 @@ mod tests {
         drop(pair.slave);
 
         let shell_pid = child.process_id().unwrap();
-        let writer = pair.master.take_writer().unwrap();
+        let _writer = pair.master.take_writer().unwrap();
         let session = PtySession {
             master: pair.master,
-            writer,
             shell_pid: Some(shell_pid),
         };
 
@@ -711,6 +789,124 @@ mod tests {
 
         assert!(wait_for(|| !alive(job_pid)), "job survived the kill");
         assert!(!alive(shell_pid), "shell survived the kill");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn terminal_env_defaults_never_override_what_the_child_already_has() {
+        let defaults = |has: &dyn Fn(&str) -> bool| {
+            terminal_env_defaults(|k| has(k))
+                .into_iter()
+                .collect::<Vec<(&str, &str)>>()
+        };
+        assert_eq!(
+            defaults(&|_| false),
+            vec![("LANG", "en_US.UTF-8"), ("COLORTERM", "truecolor")]
+        );
+
+        // Anything already answered: nothing is added — any flavor of locale
+        // variable counts, not just LANG.
+        assert_eq!(defaults(&|k| k == "LANG" || k == "COLORTERM"), Vec::new());
+        assert_eq!(
+            defaults(&|k| k == "LC_CTYPE"),
+            vec![("COLORTERM", "truecolor")]
+        );
+        assert_eq!(defaults(&|k| k == "LC_ALL"), vec![("COLORTERM", "truecolor")]);
+        assert_eq!(
+            defaults(&|k| k == "COLORTERM"),
+            vec![("LANG", "en_US.UTF-8")]
+        );
+    }
+
+    fn never_reads_pty(argv: &[String]) -> (PtyManager, u32) {
+        let manager = PtyManager::new();
+        let id = manager
+            .spawn_pty(
+                std::env::temp_dir().to_string_lossy().as_ref(),
+                argv,
+                &HashMap::new(),
+                None,
+                80,
+                24,
+                Channel::new(move |_| Ok(())),
+            )
+            .unwrap();
+        (manager, id)
+    }
+
+    /// The old manager.write held the sessions mutex across a blocking
+    /// write_all — a child that never reads froze the map, and with it every
+    /// other PTY, for as long as the pipe buffer lasts.
+    #[test]
+    fn enqueueing_a_megabyte_to_a_child_that_never_reads_returns_quickly() {
+        let (manager, id) =
+            never_reads_pty(&["/bin/sleep".to_string(), "30".to_string()]);
+        let megabyte = "x".repeat(1024 * 1024);
+
+        let start = Instant::now();
+        manager.write(id, &megabyte).unwrap();
+        assert!(
+            start.elapsed() < Duration::from_millis(50),
+            "enqueue blocked for {:?}",
+            start.elapsed()
+        );
+
+        // Resize and any second write must succeed while the first still sits
+        // undrained in a PTY buffer the child will never pump.
+        manager.resize(id, 90, 30).unwrap();
+        manager.write(id, "y").unwrap();
+        manager.kill(id).unwrap();
+    }
+
+    #[test]
+    fn queued_bytes_reach_a_reading_child_complete_and_in_order() {
+        let dir = std::env::temp_dir().join(format!("emberyx-pty-feed-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("out.txt");
+        let _ = fs::remove_file(&target);
+
+        let manager = PtyManager::new();
+        let id = manager
+            .spawn_pty(
+                dir.to_string_lossy().as_ref(),
+                &[
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "cat > out.txt".to_string(),
+                ],
+                &HashMap::new(),
+                None,
+                80,
+                24,
+                Channel::new(move |_| Ok(())),
+            )
+            .unwrap();
+
+        // Hefty chunks written back to back — the writer thread must drain
+        // them in send order, none dropped. Short newlined lines: a tty in
+        // canonical mode caps how long one line can be, so the test paste is
+        // a run of lines like a human's clipboard.
+        let first = format!("{}\n", "a".repeat(63)).repeat(1024);
+        let second = format!("{}\n", "b".repeat(63)).repeat(1024);
+        manager.write(id, &first).unwrap();
+        manager.write(id, &second).unwrap();
+
+        let expected = first.len() + second.len();
+        assert!(
+            wait_for(|| {
+                fs::metadata(&target)
+                    .map(|m| m.len() as usize == expected)
+                    .unwrap_or(false)
+            }),
+            "the child received {} bytes, expected {}",
+            fs::metadata(&target).map(|m| m.len()).unwrap_or(0),
+            expected
+        );
+        let text = fs::read_to_string(&target).unwrap();
+        assert_eq!(text, format!("{first}{second}"));
+
+        manager.kill(id).unwrap();
         let _ = fs::remove_dir_all(&dir);
     }
 }
