@@ -59,6 +59,13 @@ pub async fn transcripts_ingest(
     .map_err(|e| crate::err!("transcripts_ingest join failed: {e}"))?
 }
 
+/// Version of what ingest derives from a transcript line: `classify_line`, title
+/// selection, the machine-prompt gate. Ingest stores its reading, not the bytes,
+/// so a thread stays as the parser that first saw it understood it. Bump this
+/// whenever that reading changes and each file is rebuilt from its transcript
+/// the next time its project is read.
+const INGEST_VERSION: u32 = 1;
+
 /// Shortest gap between two freshness passes for one project.
 ///
 /// "Cheap no-op" still means a `read_dir` over the project's transcripts, a
@@ -342,11 +349,25 @@ fn process_file(
         .unwrap_or(0);
 
     let mut reset = false;
-    if stored.as_ref().is_some_and(|c| c.byte_offset > size) {
-        // Shrank since last seen: the one change a stored offset cannot
-        // follow. Forget the thread's history and rebuild from byte 0. The
-        // cursor row goes too — `save_ingest_cursor` only ever moves forward,
-        // so a rebuild has to start from no row at all.
+    let mut stored = stored;
+    let stale_parser = stored
+        .as_ref()
+        .is_some_and(|c| c.ingest_version != INGEST_VERSION);
+    // A thread that also holds events no transcript can reproduce keeps its old
+    // reading: rebuilding it would drop them. Stamp it current instead, so the
+    // check is paid once rather than on every pass.
+    let rebuild_for_parser = stale_parser && !store.has_native_events(&thread_id)?;
+    if stale_parser && !rebuild_for_parser {
+        if let Some(cursor) = stored.as_mut() {
+            cursor.ingest_version = INGEST_VERSION;
+            store.save_ingest_cursor(path, cursor.clone())?;
+        }
+    }
+    if rebuild_for_parser || stored.as_ref().is_some_and(|c| c.byte_offset > size) {
+        // Shrank since last seen, or read by an older parser: the changes a
+        // stored offset cannot follow. Forget the thread's history and rebuild
+        // from byte 0. The cursor row goes too — `save_ingest_cursor` only ever
+        // moves forward, so a rebuild has to start from no row at all.
         store.reset_thread_for_reingest(&thread_id)?;
         store.clear_ingest_cursor(path)?;
         versions.remove(&thread_id);
@@ -458,6 +479,7 @@ fn process_file(
             mtime,
             byte_offset: consumed_end,
             stream_version,
+            ingest_version: INGEST_VERSION,
         },
     )?;
 
@@ -922,6 +944,110 @@ mod tests {
             new_events,
             vec![1, 2],
             "versions restart from one on rebuild"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn first_prompt_payload(store: &Store) -> String {
+        store
+            .with_reader(|conn| {
+                Ok(conn.query_row(
+                    "SELECT payload_json FROM events
+                     WHERE thread_id='session-a' AND kind='\"userPrompt\"'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap()
+    }
+
+    /// What an older parser left behind, written by hand: the stored reading is
+    /// wrong and the transcript on disk is untouched.
+    fn age_the_reading(store: &Store) {
+        store
+            .with_writer(|conn| {
+                conn.execute(
+                    "UPDATE events SET payload_json='old reading' WHERE kind='\"userPrompt\"'",
+                    [],
+                )?;
+                conn.execute("UPDATE ingest_cursor SET ingest_version = 0", [])?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn a_file_read_by_an_older_parser_is_rebuilt_from_its_transcript() {
+        let (store, dir) = store_in("stale-parser");
+        let root = dir.join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = write_session(&root, &transcript());
+        ingest_dir(&store, &root, "/tmp/proj").unwrap();
+        age_the_reading(&store);
+
+        let second = ingest_dir(&store, &root, "/tmp/proj").unwrap();
+        assert_eq!(second.files_reset, 1, "a stale version forces a rebuild");
+        assert_eq!(first_prompt_payload(&store), "Fix the parser");
+        assert_eq!(
+            store.ingest_cursor_state(&path).unwrap().unwrap().ingest_version,
+            INGEST_VERSION
+        );
+
+        let third = ingest_dir(&store, &root, "/tmp/proj").unwrap();
+        assert_eq!(third.files_reset, 0, "a current file is not rebuilt again");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_current_parser_leaves_stored_readings_alone() {
+        let (store, dir) = store_in("current-parser");
+        let root = dir.join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        write_session(&root, &transcript());
+        ingest_dir(&store, &root, "/tmp/proj").unwrap();
+        store
+            .with_writer(|conn| {
+                conn.execute(
+                    "UPDATE events SET payload_json='old reading' WHERE kind='\"userPrompt\"'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let second = ingest_dir(&store, &root, "/tmp/proj").unwrap();
+        assert_eq!(second.files_reset, 0);
+        assert_eq!(first_prompt_payload(&store), "old reading");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_stale_thread_holding_supervisor_events_is_not_rebuilt() {
+        let (store, dir) = store_in("stale-native");
+        let root = dir.join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = write_session(&root, &transcript());
+        ingest_dir(&store, &root, "/tmp/proj").unwrap();
+        store
+            .append_events(&[TimelineEvent {
+                seq: 5,
+                thread_id: "session-a".into(),
+                kind: TimelineEventKind::ProviderSwitch,
+                attribution: None,
+                timestamp: 1,
+                payload: "claude -> codex".into(),
+                raw_line: None,
+            }])
+            .unwrap();
+        age_the_reading(&store);
+
+        let second = ingest_dir(&store, &root, "/tmp/proj").unwrap();
+        assert_eq!(second.files_reset, 0, "the switch marker has no transcript to return from");
+        assert_eq!(counts(&store).0, 5);
+        assert_eq!(
+            store.ingest_cursor_state(&path).unwrap().unwrap().ingest_version,
+            INGEST_VERSION,
+            "stamped current so the check is not repeated every pass"
         );
         let _ = std::fs::remove_dir_all(dir);
     }

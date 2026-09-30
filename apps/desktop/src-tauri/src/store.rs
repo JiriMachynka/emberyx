@@ -116,6 +116,11 @@ const MIGRATIONS: &[&str] = &[
     // own transcript. Imports set it so the sidebar can list threads that have
     // no transcript on disk without guessing which those are.
     "ALTER TABLE projection_threads ADD COLUMN source TEXT;",
+    // 008 — which parser wrote a file's events. Ingest stores what it derived
+    // (kind, payload, title), so an update that changes the parser leaves every
+    // already-ingested thread on the old reading. 0 is "before versions
+    // existed", which is always stale.
+    "ALTER TABLE ingest_cursor ADD COLUMN ingest_version INTEGER NOT NULL DEFAULT 0;",
 ];
 
 pub struct Store {
@@ -507,7 +512,8 @@ impl Store {
     pub fn ingest_cursor_state(&self, path: &Path) -> Result<Option<IngestCursor>> {
         self.with_reader(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT size, mtime, byte_offset, stream_version FROM ingest_cursor WHERE path = ?1",
+                "SELECT size, mtime, byte_offset, stream_version, ingest_version
+                 FROM ingest_cursor WHERE path = ?1",
             )?;
             let mut rows = stmt.query_map(params![path.to_string_lossy()], |row| {
                 Ok(IngestCursor {
@@ -515,6 +521,7 @@ impl Store {
                     mtime: row.get::<_, i64>(1)? as u64,
                     byte_offset: row.get::<_, i64>(2)? as u64,
                     stream_version: row.get::<_, i64>(3)? as u64,
+                    ingest_version: row.get(4)?,
                 })
             })?;
             rows.next().transpose().map_err(Into::into)
@@ -526,7 +533,8 @@ impl Store {
     pub fn ingest_cursor_map(&self) -> Result<std::collections::HashMap<String, IngestCursor>> {
         self.with_reader(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT path, size, mtime, byte_offset, stream_version FROM ingest_cursor",
+                "SELECT path, size, mtime, byte_offset, stream_version, ingest_version
+                 FROM ingest_cursor",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok((
@@ -536,6 +544,7 @@ impl Store {
                         mtime: row.get::<_, i64>(2)? as u64,
                         byte_offset: row.get::<_, i64>(3)? as u64,
                         stream_version: row.get::<_, i64>(4)? as u64,
+                        ingest_version: row.get(5)?,
                     },
                 ))
             })?;
@@ -556,13 +565,15 @@ impl Store {
     pub fn save_ingest_cursor(&self, path: &Path, cursor: IngestCursor) -> Result<()> {
         self.with_writer(|conn| {
             conn.execute(
-                "INSERT INTO ingest_cursor (path, size, mtime, byte_offset, stream_version)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
+                "INSERT INTO ingest_cursor
+                   (path, size, mtime, byte_offset, stream_version, ingest_version)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                  ON CONFLICT(path) DO UPDATE SET
                    size = excluded.size,
                    mtime = excluded.mtime,
                    byte_offset = excluded.byte_offset,
-                   stream_version = excluded.stream_version
+                   stream_version = excluded.stream_version,
+                   ingest_version = excluded.ingest_version
                  WHERE excluded.byte_offset >= ingest_cursor.byte_offset
                    AND excluded.stream_version >= ingest_cursor.stream_version",
                 params![
@@ -571,6 +582,7 @@ impl Store {
                     cursor.mtime as i64,
                     cursor.byte_offset as i64,
                     cursor.stream_version as i64,
+                    cursor.ingest_version,
                 ],
             )?;
             Ok(())
@@ -610,6 +622,26 @@ impl Store {
             }
             conn.execute("COMMIT", [])?;
             Ok(())
+        })
+    }
+
+    /// Whether a thread carries events ingest did not write — supervisor
+    /// timeline entries (provider switches, approvals, live turns). Ingested
+    /// lines always keep their `raw_line`; the one exception is the synthesized
+    /// title. A thread with such events cannot be rebuilt from its transcript
+    /// alone without losing them.
+    pub fn has_native_events(&self, thread_id: &str) -> Result<bool> {
+        let title = serde_json::to_string(&TimelineEventKind::ThreadTitle)?;
+        self.with_reader(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT 1 FROM events
+                     WHERE thread_id = ?1 AND raw_line IS NULL AND kind <> ?2 LIMIT 1",
+                    params![thread_id, title],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some())
         })
     }
 
@@ -716,6 +748,9 @@ pub struct IngestCursor {
     /// `max(stream_version)` in `events`, never from this field alone — it is
     /// bookkeeping, not the source of truth.
     pub stream_version: u64,
+    /// `ingest::INGEST_VERSION` at the time the file was last read. A cursor
+    /// from an older parser is stale: what it derived is not what today's would.
+    pub ingest_version: u32,
 }
 
 /// Wire row for a projected message page. `payload_json` carries the raw

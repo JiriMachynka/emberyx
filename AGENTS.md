@@ -711,4 +711,10 @@ too**, or orphaned agent processes and shells survive the app.
   workflow dies at install. After touching dependencies run
   `bunx bun@1.3.13 install` so `bun.lock` stays `lockfileVersion: 1`. That bun
   also ignores nested `resolutions` (`mocha/diff`), so only top-level pins work.
+- **Changing what ingest derives means bumping `INGEST_VERSION`** (`ingest.rs`).
+  The event log stores ingest's *reading* of a transcript (kind, payload, title),
+  not just the bytes, and cursors only move forward — so without a bump every
+  existing thread keeps the old parser's reading after an update. A stale file is
+  rebuilt from its transcript on the next pass, except a thread that also holds
+  supervisor events (no `raw_line`), which is stamped current and left alone.
 - `codedb.snapshot` is gitignored build output, not source.
