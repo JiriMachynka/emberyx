@@ -56,7 +56,7 @@ export const ConnectionsSection = ({
       />
       <SwitchRow
         label="Keep agents running in the background"
-        hint="Reopening an older thread starts empty and fills from the next turn."
+        hint="Agents, terminals and dev servers keep running after you quit Emberyx."
         checked={settings.persistentAgents}
         onChange={(v) => onUpdate({ persistentAgents: v })}
       />

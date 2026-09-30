@@ -316,8 +316,10 @@ impl Daemon {
         after_frame_id: Option<u64>,
         sink: ProcSink,
     ) -> Result<(u32, ProcOutcome)> {
-        Self::proc_gate(&Self::health()?)?;
+        // Started first: asking a daemon that isn't running for its health
+        // fails the spawn instead of starting it.
         Self::ensure()?;
+        Self::proc_gate(&Self::health()?)?;
         let proc_id = spec.proc_id.clone();
         let outcome: ProcOutcome =
             serde_json::from_value(Self::request(&Request::ProcSpawn { spec })?)
@@ -475,7 +477,7 @@ pub fn daemon_start() -> Result<Health> {
     Daemon::health()
 }
 
-/// Agent ids the daemon is running right now, across every window.
+/// Agent and proc ids the daemon is running right now, across every window.
 pub fn daemon_live_agents() -> Result<Vec<String>> {
     let value = Daemon::request(&Request::AgentLive)?;
     serde_json::from_value(value).map_err(|e| e.to_string().into())

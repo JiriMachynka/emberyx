@@ -28,6 +28,24 @@ interface SidePanelProps {
   children: React.ReactNode;
 }
 
+/** The colour painted at an element's right edge: the first background under
+ *  that point. Sampled clear of the 8px resize handle that overhangs it. */
+const edgeColor = (el: HTMLElement): string => {
+  const rect = el.getBoundingClientRect();
+  let node = document.elementFromPoint?.(
+    rect.right - 12,
+    rect.top + rect.height / 2
+  );
+  while (node && node !== document.documentElement) {
+    const color = getComputedStyle(node).backgroundColor;
+    if (color && color !== "transparent" && color !== "rgba(0, 0, 0, 0)") {
+      return color;
+    }
+    node = node.parentElement;
+  }
+  return "transparent";
+};
+
 /**
  * The shell every right-hand panel shares: a bordered aside with a drag handle
  * on its left edge, a fixed-height header, and a scrollable body. Width is
@@ -76,7 +94,7 @@ export function SidePanel({
         {(header || actions) && (
         <header
           className={cn(
-            "flex h-11 shrink-0 items-center justify-between gap-2 border-b pr-2",
+            "flex h-10 shrink-0 items-center justify-between gap-2 border-b pr-2",
             flushHeader ? "pl-1" : "pl-3"
           )}
         >
@@ -89,31 +107,62 @@ export function SidePanel({
     );
   }
 
+  // The panel follows the pointer; the pane beside it does not. Resizing both
+  // live re-laid the whole window out on every frame — the chat column is
+  // centred, so it shifts with each pixel — and on a translucent window that
+  // is a full-window recomposite per frame, which pinned WindowServer and
+  // stuttered the whole machine. So the neighbour is held at its starting
+  // width: the panel slides over it when it grows, and when it shrinks the
+  // strip it uncovers is painted in the neighbour's own colour. The neighbour
+  // lays out once, on release.
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
     const startX = e.clientX;
     const startW = width;
     const aside = asideRef.current;
+    const sibling = aside?.previousElementSibling;
+    const beside = sibling instanceof HTMLElement ? sibling : null;
+    const fill = beside ? edgeColor(beside) : "transparent";
     let latest = startW;
     let frame = 0;
 
-    if (aside) aside.style.willChange = "width";
+    if (beside) {
+      beside.style.width = `${beside.getBoundingClientRect().width}px`;
+      beside.style.flex = "none";
+    }
+    // The handle trails the pointer by a frame, so the cursor and the
+    // no-select have to hold for the whole document.
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
 
     const paint = () => {
       frame = 0;
-      if (aside) aside.style.width = `${latest}px`;
+      if (!aside) return;
+      aside.style.width = `${latest}px`;
+      // The margin keeps the row's total constant: negative lets the panel
+      // overlap the held pane, positive is the strip the shadow fills.
+      if (beside) beside.style.marginRight = `${startW - latest}px`;
+      aside.style.boxShadow =
+        latest < startW ? `${latest - startW}px 0 0 0 ${fill}` : "";
     };
     const onMove = (ev: MouseEvent) => {
       const max = Math.round(window.innerWidth * 0.75);
       latest = Math.min(max, Math.max(PANEL_MIN_WIDTH, startW + startX - ev.clientX));
-      // Coalesce many mousemove events into one width write per frame.
+      // Coalesce many mousemove events into one style write per frame.
       if (!frame) frame = requestAnimationFrame(paint);
     };
     const onUp = () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
       if (frame) cancelAnimationFrame(frame);
-      if (aside) aside.style.willChange = "";
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      if (aside) aside.style.boxShadow = "";
+      if (beside) {
+        beside.style.width = "";
+        beside.style.flex = "";
+        beside.style.marginRight = "";
+      }
       setWidth(latest); // sync React state to the imperatively-driven width
       setPanelWidth(storageKey, latest);
     };
@@ -138,7 +187,7 @@ export function SidePanel({
       />
       <header
         className={cn(
-          "flex h-11 shrink-0 items-center justify-between gap-2 border-b pr-2",
+          "flex h-10 shrink-0 items-center justify-between gap-2 border-b pr-2",
           flushHeader ? "pl-1" : "pl-3"
         )}
       >

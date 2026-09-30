@@ -106,28 +106,6 @@ export const AppearanceSection = ({
     </Group>
 
     <Group title="Layout">
-      <Row
-        label="Workspace"
-        hint="Column adds a Sessions / Explorer / Changes column beside the project rail."
-        control={
-          <Select
-            value={settings.workspaceLayout}
-            onValueChange={(value) => {
-              if (value === "classic" || value === "column") {
-                onUpdate({ workspaceLayout: value });
-              }
-            }}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="classic">Classic</SelectItem>
-              <SelectItem value="column">Column</SelectItem>
-            </SelectContent>
-          </Select>
-        }
-      />
       <SwitchRow
         label="Right sidebar"
         checked={settings.rightDock}

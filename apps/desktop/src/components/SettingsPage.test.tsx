@@ -95,7 +95,7 @@ const content = () => {
 /** A distinctive piece of each section, so a tab that renders the wrong
  *  section (or none) fails even though the heading above it is right. */
 const LANDMARK: Record<string, string> = {
-  general: "Thread list",
+  general: "Days of inactivity before a thread settles",
   appearance: "Chat font",
   shortcuts: "Reset all shortcuts",
   providers: "Default backend",
@@ -250,18 +250,18 @@ describe("SettingsPage", () => {
       expect(patches).toEqual([{ threadSettleDays: 9 }]);
     });
 
-    it("General: the thread-list select", async () => {
+    it("General: the group-threads select", async () => {
       const { host, patches } = await mount();
       await openTab(host, "General");
-      await pickOtherOption(controlFor("Thread list", "button[role=combobox]"));
-      expect(patches).toEqual([{ threadView: "all" }]);
+      await pickOtherOption(controlFor("Group threads", "button[role=combobox]"));
+      expect(patches).toEqual([{ threadGrouping: "repository" }]);
     });
 
-    it("Appearance: the workspace select", async () => {
+    it("Appearance: the right-sidebar switch", async () => {
       const { host, patches } = await mount();
       await openTab(host, "Appearance");
-      await pickOtherOption(controlFor("Workspace", "button[role=combobox]"));
-      expect(patches).toEqual([{ workspaceLayout: "column" }]);
+      fireEvent.click(controlFor("Right sidebar", "button[role=switch]"));
+      expect(patches).toEqual([{ rightDock: false }]);
     });
 
     it("Appearance: the window-opacity select", async () => {
@@ -300,7 +300,7 @@ describe("SettingsPage", () => {
       fireEvent.click(
         screen.getByRole("switch", { name: /Keep agents running in the background/ })
       );
-      expect(patches).toEqual([{ persistentAgents: true }]);
+      expect(patches).toEqual([{ persistentAgents: false }]);
     });
 
     it("Source Control: the remote", async () => {

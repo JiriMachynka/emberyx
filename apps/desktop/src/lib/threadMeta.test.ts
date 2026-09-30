@@ -4,7 +4,6 @@ import {
   getAllThreadMeta,
   getThreadMeta,
   setThreadMeta,
-  snoozeUntil,
   threadMetaKey,
   type ThreadMeta,
 } from "@/lib/threadMeta";
@@ -54,18 +53,9 @@ describe("deriveThreadState", () => {
     expect(state(meta, daysAgo(0))).toBe("archived");
   });
 
-  it("ranks pinned above snoozed, merged, and idle", () => {
+  it("ranks pinned above merged and idle", () => {
     expect(state({ pinnedAt: NOW }, daysAgo(30))).toBe("pinned");
-    expect(state({ pinnedAt: NOW, snoozedUntil: NOW + 1000 }, daysAgo(0))).toBe(
-      "pinned"
-    );
-  });
-
-  it("treats a snooze as over the moment it lapses", () => {
-    expect(state({ snoozedUntil: NOW + 1 }, daysAgo(0))).toBe("snoozed");
-    expect(state({ snoozedUntil: NOW }, daysAgo(0))).toBe("active");
-    // A lapsed snooze stops hiding the thread, but doesn't stop it settling.
-    expect(state({ snoozedUntil: NOW - 1 }, daysAgo(30))).toBe("settled");
+    expect(state({ pinnedAt: NOW }, daysAgo(0), true)).toBe("pinned");
   });
 });
 
@@ -78,8 +68,8 @@ describe("the meta store", () => {
 
   it("merges patches instead of replacing the entry", () => {
     setThreadMeta(key, { pinnedAt: 1 });
-    setThreadMeta(key, { snoozedUntil: 2 });
-    expect(getThreadMeta(key)).toEqual({ pinnedAt: 1, snoozedUntil: 2 });
+    setThreadMeta(key, { archivedAt: 2 });
+    expect(getThreadMeta(key)).toEqual({ pinnedAt: 1, archivedAt: 2 });
   });
 
   it("stores a linked PR and clears it", () => {
@@ -122,22 +112,5 @@ describe("the meta store", () => {
     expect(getThreadMeta(key).keepGoing).toEqual(keepGoing);
     setThreadMeta(key, { keepGoing: undefined });
     expect(getThreadMeta(key)).toEqual({});
-  });
-});
-
-describe("snoozeUntil", () => {
-  it("moves an hour out", () => {
-    expect(snoozeUntil.hour(NOW)).toBe(NOW + 3_600_000);
-  });
-
-  it("lands on 9am the next local day", () => {
-    const d = new Date(snoozeUntil.tomorrow(NOW));
-    expect(d.getHours()).toBe(9);
-    expect(d.getMinutes()).toBe(0);
-    expect(d.getDate()).toBe(new Date(NOW).getDate() + 1);
-  });
-
-  it("moves a week out", () => {
-    expect(snoozeUntil.week(NOW)).toBe(NOW + 7 * 86_400_000);
   });
 });

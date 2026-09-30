@@ -31,20 +31,20 @@ describe("openTab", () => {
   });
 
   it("reveals an already-open tab instead of duplicating it", () => {
-    const state = dock(["dev", "diff"], "diff");
-    expect(openTab(state, "dev")).toEqual(dock(["dev", "diff"], "dev"));
+    const state = dock(["terminal", "diff"], "diff");
+    expect(openTab(state, "terminal")).toEqual(dock(["terminal", "diff"], "terminal"));
   });
 });
 
 describe("closeTab", () => {
   it("falls back to the left-hand neighbour", () => {
-    const state = dock(["dev", "files", "diff"], "diff");
-    expect(closeTab(state, "diff")).toEqual(dock(["dev", "files"], "files"));
+    const state = dock(["terminal", "files", "diff"], "diff");
+    expect(closeTab(state, "diff")).toEqual(dock(["terminal", "files"], "files"));
   });
 
   it("takes the new first tab when the leftmost one closes", () => {
-    const state = dock(["dev", "files"], "dev");
-    expect(closeTab(state, "dev")).toEqual(dock(["files"], "files"));
+    const state = dock(["terminal", "files"], "terminal");
+    expect(closeTab(state, "terminal")).toEqual(dock(["files"], "files"));
   });
 
   it("closes the dock when the last tab goes", () => {
@@ -53,20 +53,20 @@ describe("closeTab", () => {
   });
 
   it("leaves the selection alone when a background tab closes", () => {
-    const state = dock(["dev", "files", "diff"], "diff");
-    expect(closeTab(state, "files")).toEqual(dock(["dev", "diff"], "diff"));
+    const state = dock(["terminal", "files", "diff"], "diff");
+    expect(closeTab(state, "files")).toEqual(dock(["terminal", "diff"], "diff"));
   });
 
   it("ignores a tab that isn't open", () => {
     const state = dock(["diff"], "diff");
-    expect(closeTab(state, "preview")).toBe(state);
+    expect(closeTab(state, "projectSettings")).toBe(state);
   });
 });
 
 describe("toggleTab", () => {
   it("closes the tab that is already showing", () => {
-    expect(toggleTab(dock(["dev", "diff"], "diff"), "diff")).toEqual(
-      dock(["dev"], "dev")
+    expect(toggleTab(dock(["terminal", "diff"], "diff"), "diff")).toEqual(
+      dock(["terminal"], "terminal")
     );
   });
 
@@ -77,8 +77,8 @@ describe("toggleTab", () => {
   // A toolbar button on a hidden-but-open tab means "show me this", not "close
   // the thing I can't see".
   it("reveals an open tab that isn't the active one", () => {
-    const state = dock(["dev", "diff"], "diff");
-    expect(toggleTab(state, "dev")).toEqual(dock(["dev", "diff"], "dev"));
+    const state = dock(["terminal", "diff"], "diff");
+    expect(toggleTab(state, "terminal")).toEqual(dock(["terminal", "diff"], "terminal"));
   });
 });
 
@@ -98,8 +98,8 @@ describe("isShowing", () => {
 
 describe("closeTabs", () => {
   it("drops several at once, keeping the rest", () => {
-    const state = dock(["dev", "diff", "mrs"], "mrs");
-    expect(closeTabs(state, ["diff", "mrs"])).toEqual(dock(["dev"], "dev"));
+    const state = dock(["terminal", "diff", "mrs"], "mrs");
+    expect(closeTabs(state, ["diff", "mrs"])).toEqual(dock(["terminal"], "terminal"));
   });
 });
 
@@ -111,32 +111,36 @@ describe("showDock / hideDock", () => {
   });
 
   it("hides the panel without dropping open tabs", () => {
-    const hidden = hideDock(dock(["dev"], "dev"));
-    expect(hidden).toEqual(dock(["dev"], "dev", false));
-    expect(showDock(hidden)).toEqual(dock(["dev"], "dev"));
+    const hidden = hideDock(dock(["terminal"], "terminal"));
+    expect(hidden).toEqual(dock(["terminal"], "terminal", false));
+    expect(showDock(hidden)).toEqual(dock(["terminal"], "terminal"));
   });
 });
 
 describe("dockKindsFor", () => {
-  it("drops files and git in column layout, keeps them in classic", () => {
-    expect(dockKindsFor("classic")).toEqual(expect.arrayContaining(["files", "git"]));
-    expect(dockKindsFor("column")).not.toContain("files");
-    expect(dockKindsFor("column")).not.toContain("git");
-    expect(dockKindsFor("column")).toEqual(
-      expect.arrayContaining(["terminal", "diff", "preview"])
+  it("drops files, git, and merge requests", () => {
+    expect(dockKindsFor()).not.toContain("files");
+    expect(dockKindsFor()).not.toContain("git");
+    expect(dockKindsFor()).not.toContain("mrs");
+    expect(dockKindsFor()).toEqual(
+      expect.arrayContaining(["terminal", "diff"])
     );
   });
 });
 
 describe("pickerOffersFor", () => {
-  it("hides Files from the column-layout chooser", () => {
-    expect(pickerOffersFor("classic").some((o) => o.kind === "files")).toBe(true);
-    expect(pickerOffersFor("column").some((o) => o.kind === "files")).toBe(false);
-    expect(pickerOffersFor("column").every((o) => o.shortcut.length === 1)).toBe(true);
+  it("hides Files and Reviews from the chooser", () => {
+    expect(pickerOffersFor().some((o) => o.kind === "files")).toBe(false);
+    expect(pickerOffersFor().some((o) => o.kind === "mrs")).toBe(false);
+    expect(pickerOffersFor().every((o) => o.shortcut.length === 1)).toBe(true);
   });
 });
 
 describe("PICKER_OFFERS", () => {
+  it("offers a shell, a review, and nothing for a browser or server output", () => {
+    expect(PICKER_OFFERS.map((o) => o.kind)).toEqual(["terminal", "diff"]);
+  });
+
   // Counted rather than listed: the point is that no surface is offered twice
   // and no two share a key, whatever the list grows to.
   it("offers each surface once, with a shortcut of its own", () => {

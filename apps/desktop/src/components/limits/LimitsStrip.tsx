@@ -30,7 +30,7 @@ export function LimitsStrip({
     <div className={cn("flex min-w-0 items-center", className)}>
       <Popover>
         <PopoverTrigger
-          className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           title={`${LIMITS_TITLE[target.provider]} usage`}
         >
           <img

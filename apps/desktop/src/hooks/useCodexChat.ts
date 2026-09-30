@@ -13,6 +13,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { parseAttachments, usePromptQueue } from "@/lib/promptQueue";
+import { useDaemonHolds } from "@/hooks/useDaemonHolds";
 import {
   cancelStreamPublish,
   scheduleStreamPublish,
@@ -190,11 +191,14 @@ export function useCodexChat({
   const [ready, setReady] = useState(false);
   // Whether this pane wants an app-server at all. Opening a thread used to
   // launch one on the frame that switches panes. Stay asleep until the user
-  // types or sends, same as a resumed thread — unless the agent is persistent,
-  // in which case it may already be running in the daemon and the pane
-  // attaches right away to show it.
-  const [awake, setAwake] = useState(persistent);
+  // types or sends, same as a resumed thread — unless the daemon already runs
+  // this agent, in which case the pane attaches right away to show it.
+  const [awake, setAwake] = useState(false);
   const wake = useCallback(() => setAwake(true), []);
+  const held = useDaemonHolds(emberyxSessionId, persistent);
+  useEffect(() => {
+    if (held) setAwake(true);
+  }, [held]);
   // Turns accepted before the process existed, delivered in order once it is.
   const pendingSendRef = useRef<{ text: string; images?: ChatImage[] }[]>([]);
   const interruptedRef = useRef(false);

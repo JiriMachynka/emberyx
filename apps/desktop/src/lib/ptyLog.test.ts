@@ -29,12 +29,20 @@ vi.mock("@tauri-apps/api/core", () => ({
   }),
 }));
 
+// These cover the window-scoped path; the persistent one is the daemon's and
+// only changes which command spawns.
+vi.mock("@/lib/settings", () => ({
+  loadSettings: () => ({ persistentAgents: false }),
+}));
+
 import {
   disposeLog,
   isExited,
   killLog,
+  prewarmShell,
   rawLog,
   resizeLog,
+  shellSessionId,
   spawnLog,
   subscribeExit,
   subscribeRaw,
@@ -212,5 +220,67 @@ describe("ptyLog", () => {
     expect(calls.filter(([c]) => c === "pty_spawn")).toHaveLength(2);
     expect(calls.some(([c]) => c === "pty_kill")).toBe(true);
     disposeLog("dev-7");
+  });
+
+  it("prewarms a project's shell once, and never restarts one that has exited", async () => {
+    const id = shellSessionId("/warm");
+    prewarmShell("/warm");
+    prewarmShell("/warm");
+    await Promise.resolve();
+    expect(calls.filter(([c]) => c === "pty_spawn")).toHaveLength(1);
+
+    // The tab's own spawn finds the live shell and adds nothing.
+    await spawnLog({ sessionId: id, cwd: "/warm" });
+    expect(calls.filter(([c]) => c === "pty_spawn")).toHaveLength(1);
+
+    channels[0].onmessage?.({ type: "exit", data: 0 });
+    prewarmShell("/warm");
+    await Promise.resolve();
+    expect(calls.filter(([c]) => c === "pty_spawn")).toHaveLength(1);
+    disposeLog(id);
+  });
+
+  it("drops a prewarmed shell's prompt when the view measures another size", async () => {
+    await spawnLog({ sessionId: "sh-wrong", cwd: "/p" });
+    channels[0].onmessage?.({ type: "output", data: b64("wide prompt\n") });
+
+    await resizeLog("sh-wrong", 100, 30);
+    expect(rawLog("sh-wrong")).toBe("");
+
+    // Output after the resize (the redraw) is kept, and a later resize leaves
+    // the buffer alone.
+    channels[0].onmessage?.({ type: "output", data: b64("narrow prompt\n") });
+    await resizeLog("sh-wrong", 90, 30);
+    expect(rawLog("sh-wrong")).toBe("narrow prompt\n");
+    disposeLog("sh-wrong");
+  });
+
+  it("keeps the prompt when the size matches or the user already typed", async () => {
+    await spawnLog({ sessionId: "sh-same", cwd: "/p", cols: 100, rows: 30 });
+    channels[0].onmessage?.({ type: "output", data: b64("prompt\n") });
+    await resizeLog("sh-same", 100, 30);
+    expect(rawLog("sh-same")).toBe("prompt\n");
+
+    await spawnLog({ sessionId: "sh-typed", cwd: "/p" });
+    channels[1].onmessage?.({ type: "output", data: b64("history\n") });
+    await writeLog("sh-typed", "ls\r");
+    await resizeLog("sh-typed", 100, 30);
+    expect(rawLog("sh-typed")).toBe("history\n");
+    disposeLog("sh-same");
+    disposeLog("sh-typed");
+  });
+
+  it("starts a prewarmed shell at the size the last terminal measured", async () => {
+    localStorage.clear();
+    await spawnLog({ sessionId: shellSessionId("/first"), cwd: "/first" });
+    await resizeLog(shellSessionId("/first"), 97, 31);
+
+    calls.length = 0;
+    prewarmShell("/second");
+    await Promise.resolve();
+    const spawn = calls.find(([c]) => c === "pty_spawn");
+    expect(spawn?.[1]).toMatchObject({ cols: 97, rows: 31 });
+    disposeLog(shellSessionId("/first"));
+    disposeLog(shellSessionId("/second"));
   });
 });

@@ -13,9 +13,7 @@ export type DockKind =
   | "files"
   | "diff"
   | "git"
-  | "preview"
   | "mrs"
-  | "dev"
   | "projectSettings";
 
 /** Menu order, and the order tabs are offered in. */
@@ -24,9 +22,7 @@ export const DOCK_KINDS: readonly DockKind[] = [
   "files",
   "diff",
   "git",
-  "preview",
   "mrs",
-  "dev",
   "projectSettings",
 ];
 
@@ -35,9 +31,7 @@ export const DOCK_LABEL: Record<DockKind, string> = {
   files: "Files",
   diff: "Review",
   git: "Git",
-  preview: "Preview",
   mrs: "Reviews",
-  dev: "Output",
   projectSettings: "Project",
 };
 
@@ -54,29 +48,19 @@ export interface DockOffer {
 
 export const PICKER_OFFERS = [
   { kind: "terminal", shortcut: "T", blurb: "Start a shell in this workspace." },
-  { kind: "preview", shortcut: "B", blurb: "Open a local app or URL." },
-  { kind: "files", shortcut: "F", blurb: "Browse and read workspace files." },
   { kind: "diff", shortcut: "D", blurb: "Review uncommitted changes." },
-  { kind: "mrs", shortcut: "P", blurb: "Review open requests on this branch." },
-  { kind: "dev", shortcut: "O", blurb: "Running servers and command output." },
 ] as const satisfies readonly DockOffer[];
 
-/** Kinds the dock may host. Column layout owns files and git in the left workspace. */
-export function dockKindsFor(
-  layout: "classic" | "column"
-): readonly DockKind[] {
-  if (layout === "column") {
-    return DOCK_KINDS.filter((k) => k !== "files" && k !== "git");
-  }
-  return DOCK_KINDS;
+/** Kinds the dock may host. Files and git live in the left workspace column;
+ *  merge requests are not a dock tab. */
+export function dockKindsFor(): readonly DockKind[] {
+  return DOCK_KINDS.filter((k) => k !== "files" && k !== "git" && k !== "mrs");
 }
 
-/** Chooser cards for this layout — same order as `PICKER_OFFERS`, minus kinds
- *  the workspace column already owns. */
-export function pickerOffersFor(
-  layout: "classic" | "column"
-): readonly DockOffer[] {
-  const allowed = new Set(dockKindsFor(layout));
+/** Chooser buttons — same order as `PICKER_OFFERS`, minus kinds the workspace
+ *  column already owns. */
+export function pickerOffersFor(): readonly DockOffer[] {
+  const allowed = new Set(dockKindsFor());
   return PICKER_OFFERS.filter((o) => allowed.has(o.kind));
 }
 

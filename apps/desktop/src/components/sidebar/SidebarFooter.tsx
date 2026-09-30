@@ -14,7 +14,7 @@ export function SidebarFooter({
   return (
     <footer
       className={cn(
-        "flex shrink-0 items-center border-t",
+        "flex shrink-0 items-center",
         collapsed ? "justify-center py-1.5" : "px-2 py-1"
       )}
     >

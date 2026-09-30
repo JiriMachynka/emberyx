@@ -141,6 +141,26 @@ describe("useCodexChat lifecycle", () => {
     expect(sentTo("codex_spawn")).toHaveLength(1);
   });
 
+  // A persistent pane that spawned on open left an app-server outliving the
+  // app for every thread merely looked at.
+  it("keeps a persistent pane asleep unless the daemon runs its agent", async () => {
+    const base = invoke.getMockImplementation()!;
+    let live: string[] = [];
+    invoke.mockImplementation((command: string, args: Record<string, unknown>) =>
+      command === "daemon_live_agents" ? Promise.resolve(live) : base(command, args)
+    );
+    const idle = renderHook(() => useCodexChat({ ...options, persistent: true }));
+    await waitFor(() => expect(sentTo("daemon_live_agents")).toHaveLength(1));
+    expect(idle.result.current.asleep).toBe(true);
+    expect(sentTo("codex_spawn")).toHaveLength(0);
+    idle.unmount();
+
+    live = ["emberyx-1"];
+    const held = renderHook(() => useCodexChat({ ...options, persistent: true }));
+    await waitFor(() => expect(held.result.current.ready).toBe(true));
+    expect(sentTo("codex_spawn")).toHaveLength(1);
+  });
+
   it("replays a resumed thread's turns into the transcript", async () => {
     invoke.mockImplementation((command: string) => {
       if (command === "codex_spawn") return Promise.resolve({ id: 7 });

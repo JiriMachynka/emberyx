@@ -550,9 +550,16 @@ describe("useAcpChat thread durability", () => {
     expect(view.result.current.messages.every((m) => !m.streaming)).toBe(true);
   });
 
-  // In persistent mode the daemon's replay is the single source; seeding the
-  // store on top of it races the replay into duplicated turns.
-  it("does not seed from the event log in persistent mode", async () => {
+  // When the daemon holds the agent its replay is the single source; seeding
+  // the store on top of it races the replay into duplicated turns.
+  it("reattaches without seeding when the daemon runs this agent", async () => {
+    const base = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === "daemon_live_agents") return Promise.resolve(["emberyx-1"]);
+      if (command === "acp_spawn")
+        return Promise.resolve({ id: 3, reattached: true, initialize: {} });
+      return base(command, args);
+    });
     const view = renderHook(() =>
       useAcpChat({ ...options, resume: "s9", persistent: true })
     );
@@ -560,6 +567,51 @@ describe("useAcpChat thread durability", () => {
     expect(
       invoke.mock.calls.filter(([name]) => name === "thread_history")
     ).toHaveLength(0);
+  });
+
+  // An older thread the daemon isn't running used to open empty: the seed was
+  // skipped for every persistent pane, and the spawn cleared whatever was shown.
+  it("seeds an older thread the daemon isn't running, and keeps it on wake", async () => {
+    const base = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === "daemon_live_agents") return Promise.resolve([]);
+      if (command === "thread_history")
+        return Promise.resolve({
+          rows: [
+            {
+              messageId: "s9:1",
+              threadId: "s9",
+              role: "user",
+              text: "earlier question",
+              createdAt: 1,
+              payloadJson: null,
+            },
+          ],
+          hasMore: false,
+          activities: [],
+        });
+      return base(command, args);
+    });
+    const view = renderHook(() =>
+      useAcpChat({ ...options, resume: "s9", persistent: true })
+    );
+    await waitFor(() =>
+      expect(view.result.current.messages.map((m) => m.text)).toEqual([
+        "earlier question",
+      ])
+    );
+    expect(view.result.current.asleep).toBe(true);
+    expect(invoke.mock.calls.filter(([name]) => name === "acp_spawn")).toEqual([]);
+
+    act(() => view.result.current.wake());
+    await waitFor(() => expect(view.result.current.ready).toBe(true));
+    await act(async () => view.result.current.send("new question"));
+    await waitFor(() =>
+      expect(view.result.current.messages.map((m) => m.text)).toEqual([
+        "earlier question",
+        "new question",
+      ])
+    );
   });
 
   // A reopened thread used to drop its whole history when the user's first

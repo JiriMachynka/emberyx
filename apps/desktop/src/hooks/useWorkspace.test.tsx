@@ -20,7 +20,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (cmd: string, args?: Record<string, unknown>) => {
     invoked.push(cmd);
     calls.push([cmd, args ?? {}]);
-    if (cmd === "pty_spawn") return Promise.resolve(7);
+    if (cmd === "pty_spawn" || cmd === "pty_spawn_persistent") return Promise.resolve(7);
     if (cmd === "list_threads") return Promise.resolve([]);
     if (cmd === "list_store_threads") return Promise.resolve([]);
     if (cmd === "codex_spawn") return Promise.resolve({ id: 1, initialize: {}, version: null });

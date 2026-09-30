@@ -12,6 +12,7 @@ import type { AccessLevel, Settings } from "@/lib/settings";
 
 interface SessionPanesProps {
   sessions: Session[];
+  projects: Project[];
   activeId: string | null;
   settings: Settings;
   /** Persist a new default `--model` when a chat pane switches models. */
@@ -22,15 +23,13 @@ interface SessionPanesProps {
   /** Persist a new default reasoning effort when a chat pane switches it. */
   onEffortChange: (effort: string) => void;
   onAccessChange: (level: AccessLevel) => void;
-  projects: Project[];
-  recentProjects: string[];
-  onSelectProject: (projectId: string) => void;
-  onOpenProject: (path: string) => void;
   /** Chat sessions rename themselves once Claude titles the thread. */
   onTitled: (session: Session, title: string) => void;
   /** A fresh chat named its thread — list it before its transcript exists. */
   onThreadStarted: (session: Session, threadId: string, firstMessage: string) => void;
   onOpenWorktree?: (path: string, repoRoot: string, branch: string) => void;
+  /** Start a blank thread in a project — the empty-thread heading's switcher. */
+  onNewThreadIn: (projectId: string) => void;
 }
 
 /**
@@ -43,20 +42,26 @@ interface SessionPanesProps {
  */
 export function SessionPanes({
   sessions,
+  projects,
   activeId,
   settings,
   onModelChange,
   onBackendChange,
   onEffortChange,
   onAccessChange,
-  projects,
-  recentProjects,
-  onSelectProject,
-  onOpenProject,
   onTitled,
   onThreadStarted,
   onOpenWorktree,
+  onNewThreadIn,
 }: SessionPanesProps) {
+  // The workspace hook rebuilds its handlers every render; pin one so
+  // ChatPane's memo isn't broken by a prop that never really changes.
+  const newThreadRef = useRef(onNewThreadIn);
+  newThreadRef.current = onNewThreadIn;
+  const handleNewThreadIn = useCallback(
+    (projectId: string) => newThreadRef.current(projectId),
+    []
+  );
   const chats = useMemo(() => sessions.filter((s) => s.kind !== "dev"), [sessions]);
   // Only these sessions' statuses decide what stays mounted. Subscribing to the
   // whole map re-rendered every pane container on any session's transition, and
@@ -84,16 +89,15 @@ export function SessionPanes({
           <SessionPaneRow
             key={s.id}
             session={s}
+            project={projects.find((p) => p.id === s.projectId)}
+            projects={projects}
+            onNewThreadIn={handleNewThreadIn}
             activeId={activeId}
              settings={settings}
              onModelChange={onModelChange}
              onBackendChange={onBackendChange}
              onEffortChange={onEffortChange}
             onAccessChange={onAccessChange}
-            projects={projects}
-            recentProjects={recentProjects}
-            onSelectProject={onSelectProject}
-            onOpenProject={onOpenProject}
             onTitled={onTitled}
             onThreadStarted={onThreadStarted}
             onOpenWorktree={onOpenWorktree}
@@ -108,31 +112,29 @@ export function SessionPanes({
  *  fresh closure each render would defeat ChatPane's memo. */
 function SessionPaneRow({
   session,
+  project,
+  projects,
+  onNewThreadIn,
   activeId,
   settings,
   onModelChange,
   onBackendChange,
   onEffortChange,
   onAccessChange,
-  projects,
-  recentProjects,
-  onSelectProject,
-  onOpenProject,
   onTitled,
   onThreadStarted,
   onOpenWorktree,
 }: {
   session: Session;
+  project?: Project;
+  projects: Project[];
+  onNewThreadIn: (projectId: string) => void;
   activeId: string | null;
   settings: Settings;
   onModelChange: (model: string) => void;
   onBackendChange: (backend: AgentBackend) => void;
   onEffortChange: (effort: string) => void;
   onAccessChange: (level: AccessLevel) => void;
-  projects: Project[];
-  recentProjects: string[];
-  onSelectProject: (projectId: string) => void;
-  onOpenProject: (path: string) => void;
   onTitled: (session: Session, title: string) => void;
   onThreadStarted: (session: Session, threadId: string, firstMessage: string) => void;
   onOpenWorktree?: (path: string, repoRoot: string, branch: string) => void;
@@ -161,6 +163,10 @@ function SessionPaneRow({
         <ChatPane
           sessionId={session.id}
           cwd={session.cwd}
+          projectIcon={project?.icon ?? null}
+          projectRoot={project?.worktree?.repoRoot ?? project?.path ?? session.cwd}
+          projects={projects}
+          onNewThreadIn={onNewThreadIn}
           resume={session.resume}
           imported={session.imported ?? false}
           backend={session.backend ?? "claude"}
@@ -179,10 +185,6 @@ function SessionPaneRow({
           providerLaunch={settings.providerLaunch}
           claudeProfiles={settings.claudeProfiles}
           codexSandbox={settings.codexSandbox}
-          projects={projects}
-          recentProjects={recentProjects}
-          onSelectProject={onSelectProject}
-          onOpenProject={onOpenProject}
           onTitled={handleTitled}
           onThreadStarted={handleThreadStarted}
           onOpenWorktree={onOpenWorktree}

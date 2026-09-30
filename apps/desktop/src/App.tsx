@@ -1,4 +1,4 @@
-import { lazy, Profiler, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Profiler, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { markSwitch, onRender } from "@/lib/perf";
 import { toast, Toaster } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
@@ -25,12 +25,13 @@ import {
   type AccessLevel,
 } from "@/lib/settings";
 import { prefetchLimits } from "@/lib/limits";
+import { loadGhostty } from "@/lib/ghostty";
+import { prewarmShell } from "@/lib/ptyLog";
 import {
   EMPTY_DOCK,
   closeTab,
   closeTabs,
   dockKindsFor,
-  isShowing,
   hideDock,
   openTab,
   showDock,
@@ -44,10 +45,8 @@ import {
   type TurnReviewRequest,
 } from "@/lib/agentStore";
 import {
-  getSidebarCollapsed,
   getWorkspaceCollapsed,
   getWorkspaceTab,
-  setSidebarCollapsed,
   setWorkspaceCollapsed,
   setWorkspaceTab,
   type WorkspaceTab,
@@ -55,7 +54,7 @@ import {
 import { requestSearch } from "@/lib/searchRequest";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import type { Session } from "@/types";
-import { FORGE_NOUN, isRemoteHost, type RemoteHost } from "@/lib/forge";
+
 import type { CloneSource } from "@/lib/clone";
 import { useGitRemoteHost } from "@/lib/queries";
 import { useDevServers } from "@/hooks/useDevServers";
@@ -93,15 +92,6 @@ const EditorPane = lazy(() =>
 const SettingsPage = lazy(() =>
   import("@/components/SettingsPage").then((m) => ({ default: m.SettingsPage }))
 );
-const GraphPane = lazy(() =>
-  import("@/components/GraphPane").then((m) => ({ default: m.GraphPane }))
-);
-const MergeRequestsPanel = lazy(() =>
-  import("@/components/MergeRequestsPanel").then((m) => ({
-    default: m.MergeRequestsPanel,
-  }))
-);
-
 // The dock's own surfaces. None is on screen at boot — the dock opens on its
 // chooser — and between them they carry the heaviest dependencies in the app:
 // @pierre/diffs and its Shiki grammars (~1.1 MB of source) behind the diff, the
@@ -110,17 +100,8 @@ const MergeRequestsPanel = lazy(() =>
 const ChangesPanel = lazy(() =>
   import("@/components/ChangesPanel").then((m) => ({ default: m.ChangesPanel }))
 );
-const GitPanel = lazy(() =>
-  import("@/components/GitPanel").then((m) => ({ default: m.GitPanel }))
-);
-const DevPanel = lazy(() =>
-  import("@/components/DevPanel").then((m) => ({ default: m.DevPanel }))
-);
 const TerminalPane = lazy(() =>
   import("@/components/TerminalPane").then((m) => ({ default: m.TerminalPane }))
-);
-const PreviewPanel = lazy(() =>
-  import("@/components/PreviewPanel").then((m) => ({ default: m.PreviewPanel }))
 );
 
 /** Fetch and parse the settings chunk while the app is idle. Lazy keeps it out
@@ -141,11 +122,6 @@ function App() {
   // The commit-history graph is a full-window surface like Settings: it stays
   // mounted after its first open and is merely hidden, so the lanes, scroll
   // position and any expanded commit survive closing it.
-  const [graphOpen, setGraphOpen] = useState(false);
-  const graphMountedRef = useRef(false);
-  if (graphOpen) graphMountedRef.current = true;
-  const graphMounted = graphMountedRef.current;
-  const closeGraph = useCallback(() => setGraphOpen(false), []);
   // Settings stays mounted after its first open and is merely hidden, like the
   // editor above: remounting re-ran its effects, rebuilt ~1300 lines of JSX and
   // repainted the covered workspace from scratch on every toggle, which is what
@@ -166,7 +142,6 @@ function App() {
   // Once opened the editor stays mounted and is merely hidden, so open buffers,
   // scroll position and undo history survive closing it.
   const [editorMounted, setEditorMounted] = useState(false);
-  const [sidebarCollapsed, setCollapsed] = useState<boolean>(getSidebarCollapsed);
   const [workspaceCollapsed, setWorkspaceCollapsedState] = useState<boolean>(
     getWorkspaceCollapsed
   );
@@ -186,17 +161,10 @@ function App() {
   } = ws;
 
   function toggleSidebar() {
-    if (settings.workspaceLayout === "column") {
-      setWorkspaceCollapsedState((c) => {
-        setWorkspaceCollapsed(!c);
-        return !c;
-      });
-    } else {
-      setCollapsed((c) => {
-        setSidebarCollapsed(!c);
-        return !c;
-      });
-    }
+    setWorkspaceCollapsedState((c) => {
+      setWorkspaceCollapsed(!c);
+      return !c;
+    });
   }
 
   const openChangesColumn = () => {
@@ -211,13 +179,18 @@ function App() {
   // swaps in what was open there instead of closing everything, so switching
   // back restores this project's dock. A project with no entry starts closed.
   const [dockByProject, setDockByProject] = useState<Record<string, DockState>>({});
-  const dock =
-    (activeProjectId ? dockByProject[activeProjectId] : undefined) ?? EMPTY_DOCK;
+  const dock = closeTabs(
+    (activeProjectId ? dockByProject[activeProjectId] : undefined) ?? EMPTY_DOCK,
+    ["files", "git", "mrs"]
+  );
   const updateDock = (updater: (s: DockState) => DockState) => {
     if (!activeProjectId) return;
     setDockByProject((m) => ({
       ...m,
-      [activeProjectId]: updater(m[activeProjectId] ?? EMPTY_DOCK),
+      [activeProjectId]: closeTabs(
+        updater(m[activeProjectId] ?? EMPTY_DOCK),
+        ["files", "git", "mrs"]
+      ),
     }));
   };
 
@@ -232,29 +205,20 @@ function App() {
   const toggleDock = () =>
     updateDock((s) => (s.open ? hideDock(s) : showDock(s)));
 
-  // Clicking a file in the chat opens the editor. Column layout and a hidden
-  // dock have no Files tab, so those paths use the overlay editor instead.
+  // File clicks open the editor pane over the chat. Explorer owns the tree;
+  // the dock does not host files.
   useEffect(
     () =>
       onOpenFileRequest(() => {
-        if (settings.workspaceLayout === "column" || !settings.rightDock) {
-          setEditorMounted(true);
-          setEditorOpen(true);
-        } else {
-          showTab("files");
-        }
+        setEditorMounted(true);
+        setEditorOpen(true);
       }),
-    [settings.workspaceLayout, settings.rightDock]
+    []
   );
 
   useEffect(() => {
     if (activeProjectId) setWorkspaceTabState(getWorkspaceTab(activeProjectId));
   }, [activeProjectId]);
-
-  useEffect(() => {
-    if (settings.workspaceLayout !== "column") return;
-    updateDock((s) => closeTabs(s, ["files", "git"]));
-  }, [settings.workspaceLayout]);
 
   // A transcript card's "Review" scopes the diff tab to that turn's delta. The
   // request lives in the agent store so any mounted pane can raise it; only the
@@ -272,6 +236,15 @@ function App() {
   // thread-change drop below doesn't treat it as the user walking away.
   const pickRef = useRef(false);
   const activeProjectPath = activeProject?.path ?? null;
+  // Terminal tab warm-up. The tab used to wait on a lazy chunk, the wasm VT and
+  // then a login shell's rc files, one after another. All three now start when
+  // a project becomes active, side by side, so opening the tab only attaches.
+  useEffect(() => {
+    if (!activeProjectPath) return;
+    prewarmShell(activeProjectPath);
+    void import("@/components/TerminalPane");
+    void loadGhostty();
+  }, [activeProjectPath]);
   useEffect(() => {
     if (!turnReviewRequest) return;
     // Consume the request immediately: a lingering one would re-fire later.
@@ -400,37 +373,9 @@ function App() {
     };
   }, []);
 
-  // Project-scoped panels used to close when switching projects so they
-  // couldn't linger empty over the next; the per-project state above covers
-  // that. Output is the one exception carried across: it retargets to the new
-  // project's servers, so a dock that was showing it keeps showing it.
-  const prevProjectRef = useRef<string | null>(null);
-  useEffect(() => {
-    const prev = prevProjectRef.current;
-    prevProjectRef.current = activeProjectId;
-    if (!activeProjectId || !prev || prev === activeProjectId) return;
-    setDockByProject((m) => {
-      const from = m[prev];
-      if (!from?.tabs.includes("dev")) return m;
-      const to = m[activeProjectId] ?? EMPTY_DOCK;
-      if (to.tabs.includes("dev")) return m;
-      const devActive = from.active === "dev";
-      return {
-        ...m,
-        [activeProjectId]: {
-          tabs: [...to.tabs, "dev"],
-          active: devActive ? "dev" : to.active,
-          open: devActive ? true : to.open,
-        },
-      };
-    });
-  }, [activeProjectId]);
-
   // Which service the active project's remote is on. The review panel speaks
   // one shape for both; only the endpoints and the wording differ.
   const remoteHostValue = useGitRemoteHost(activeProject?.path ?? "").data;
-  const remoteHost: RemoteHost =
-    remoteHostValue && isRemoteHost(remoteHostValue) ? remoteHostValue : "gitlab";
   const agentBackend = useAgentBackend(activeProject, settings.agentBackend);
   const capabilities = agentBackend.capabilities;
   // Plan limits for every provider's default account, once per launch, so
@@ -450,11 +395,10 @@ function App() {
   const [actionEdit, setActionEdit] = useState<{
     action: ProjectAction | null;
   } | null>(null);
-  // Run an action's command as an output session; reveal the panel on the setting.
+  // Run an action's command as a background session.
   const runAction = (a: ProjectAction) => {
     if (!activeProject) return;
     ws.addDev(activeProject.id, a.name, activeProject.path, a.command);
-    if (settings.autoOpenDevPanel && settings.rightDock) showTab("dev");
   };
   // Open a new worktree, then fire the source project's run-on-create actions.
   const openWorktreeAndRun = async (
@@ -504,11 +448,6 @@ function App() {
     );
   };
 
-  const openProjectSettings = () => {
-    if (!activeProject || !settings.rightDock) return;
-    showTab("projectSettings");
-  };
-
   const openEditor = () => {
     if (!activeProject) return;
     setEditorMounted(true);
@@ -552,17 +491,9 @@ function App() {
       const target = tabs[next];
       if (target) ws.activateSession(target.projectId, target.id);
     },
-    onOpenGraph: () => {
-      if (!activeProject) return;
-      setGraphOpen((v) => !v);
-    },
+    onOpenGraph: openChangesColumn,
   });
-  // The palette action opens the graph (idempotent, unlike the shortcut which
-  // toggles), so a re-pick from ⌘K lands you on the same surface.
-  const openGraph = useCallback(() => {
-    if (!activeProject) return;
-    setGraphOpen(true);
-  }, [activeProject]);
+  const openGraph = openChangesColumn;
   useLaunchUpdateCheck();
   usePricingRefresh();
 
@@ -583,15 +514,6 @@ function App() {
         setConflictOpen(false);
       }
     : undefined;
-  // Dev servers render in the right-hand panel, never as sidebar tabs.
-  const devSessions = useMemo(
-    () => sessions.filter((s) => s.kind === "dev"),
-    [sessions]
-  );
-  const devCount = devSessions.filter(
-    (s) => s.projectId === activeProject?.id
-  ).length;
-
   // Content per dock tab. The dock decides what is mounted — a pane that owns a
   // child process stays mounted once opened, the rest come and go with the tab.
   const dockPanes: Partial<Record<DockKind, React.ReactNode>> = {
@@ -604,18 +526,6 @@ function App() {
         scrollback={settings.scrollback}
         active={dockActive === "terminal"}
       />
-      </Suspense>
-    ),
-    files: activeProject && (
-      <Suspense fallback={null}>
-        <EditorPane
-          key={activeProject.path}
-          projectPath={activeProject.path}
-          fontFamily={settings.editorFontFamily}
-          fontSize={settings.editorFontSize}
-          wordWrap={settings.wordWrap}
-          active={dockActive === "files"}
-        />
       </Suspense>
     ),
     diff: activeProject && (
@@ -631,55 +541,6 @@ function App() {
         onExitTurnPick={() => setTurnPick(null)}
         onPickTurn={setTurnPick}
         onClose={() => hideTab("diff")}
-      />
-      </Suspense>
-    ),
-    git: activeProject && (
-      <Suspense fallback={null}>
-      <GitPanel
-        embedded
-        projectPath={activeProject.path}
-        remoteHost={remoteHostValue}
-        onOpenReview={() => showTab("diff")}
-        onOpenWorktree={openWorktreeAndRun}
-        onRemoveWorktree={ws.removeWorktree}
-        onClose={() => hideTab("git")}
-      />
-      </Suspense>
-    ),
-    preview: activeProject && (
-      <Suspense fallback={null}>
-      <PreviewPanel
-        embedded
-        open={dockActive === "preview"}
-        projectPath={activeProject.path}
-        onClose={() => hideTab("preview")}
-      />
-      </Suspense>
-    ),
-    mrs: activeProject && (
-      <Suspense fallback={null}>
-        <MergeRequestsPanel
-          embedded
-          open={dockActive === "mrs"}
-          host={remoteHost}
-          path={activeProject.path}
-          onClose={() => hideTab("mrs")}
-          onConflicts={() => setConflictOpen(true)}
-        />
-      </Suspense>
-    ),
-    dev: (
-      <Suspense fallback={null}>
-      <DevPanel
-        embedded
-        sessions={devSessions}
-        projectId={activeProject?.id ?? null}
-        open={dockActive === "dev"}
-        fontFamily={settings.fontFamily}
-        fontSize={settings.fontSize}
-        onStop={ws.closeSession}
-        onClose={() => hideTab("dev")}
       />
       </Suspense>
     ),
@@ -721,9 +582,8 @@ function App() {
           threadAutoSettleOnMerge={settings.threadAutoSettleOnMerge}
           threadGrouping={settings.threadGrouping}
           fontFamily={settings.chatFontFamily}
-          collapsed={sidebarCollapsed}
+          collapsed={false}
           onToggleCollapse={toggleSidebar}
-          workspaceLayout={settings.workspaceLayout}
           workspaceCollapsed={workspaceCollapsed}
           workspaceTab={workspaceTab}
           onWorkspaceTab={(tab) => {
@@ -744,10 +604,8 @@ function App() {
           onSelectProject={(id) => {
             setSettingsOpen(false);
             ws.setActiveProjectId(id);
-            if (settings.workspaceLayout === "column") {
-              setWorkspaceCollapsed(false);
-              setWorkspaceCollapsedState(false);
-            }
+            setWorkspaceCollapsed(false);
+            setWorkspaceCollapsedState(false);
           }}
           onCloseProject={async (id) => {
             const closed = await ws.closeProjectById(id);
@@ -789,23 +647,9 @@ function App() {
               activeProject={activeProject}
               agent={agent}
               devRunning={projectSessions.some((s) => s.kind === "dev")}
-              gitOpen={
-                settings.workspaceLayout === "column"
-                  ? workspaceTab === "changes" && !workspaceCollapsed
-                  : isShowing(dock, "git")
-              }
-              onToggleGit={() => {
-                if (settings.workspaceLayout === "column") openChangesColumn();
-                else flipTab("git");
-              }}
-              showGit={
-                settings.workspaceLayout === "column" || settings.rightDock
-              }
+              gitOpen={workspaceTab === "changes" && !workspaceCollapsed}
+              onToggleGit={openChangesColumn}
               showDock={settings.rightDock}
-              devOpen={isShowing(dock, "dev")}
-              devCount={devCount}
-              onToggleDev={() => flipTab("dev")}
-              onOpenProjectSettings={openProjectSettings}
               actions={projectActions.actions}
               onRunAction={runAction}
               onEditAction={(a) => setActionEdit({ action: a })}
@@ -848,16 +692,14 @@ function App() {
             <TimedRegion id="workspace">
             <SessionPanes
               sessions={sessions}
+              projects={projects}
+              onNewThreadIn={ws.newAgentIn}
               activeId={activeId}
                settings={settings}
                onModelChange={onModelChange}
                onBackendChange={onBackendChange}
               onEffortChange={onEffortChange}
              onAccessChange={onAccessChange}
-             projects={projects}
-             recentProjects={recents}
-             onSelectProject={ws.newAgentIn}
-             onOpenProject={(path) => void ws.openProjectAt(path, { fresh: true })}
              onTitled={onTitled}
              onThreadStarted={onThreadStarted}
              onOpenWorktree={openWorktreeAndRun}
@@ -868,7 +710,7 @@ function App() {
             {activeProject && editorMounted && (
               <div
                 className={cn(
-                  "absolute inset-1 overflow-hidden rounded-md border bg-background",
+                  "absolute inset-0 z-10 bg-background",
                   editorOpen ? "" : "hidden"
                 )}
               >
@@ -880,6 +722,7 @@ function App() {
                     fontSize={settings.editorFontSize}
                     wordWrap={settings.wordWrap}
                     active={editorOpen}
+                    onClose={() => setEditorOpen(false)}
                   />
                 </Suspense>
               </div>
@@ -910,22 +753,13 @@ function App() {
           <RightDock
             state={dock}
             available={
-              activeProject ? dockKindsFor(settings.workspaceLayout) : []
+              activeProject ? dockKindsFor() : []
             }
             panes={dockPanes}
             onSelect={showTab}
             onClose={hideTab}
             onAdd={showTab}
             onHide={() => updateDock(hideDock)}
-            titles={{
-              preview: "Browser",
-              mrs: remoteHost === "github" ? "Pull request" : "Merge request",
-            }}
-            unavailable={
-              remoteHostValue && isRemoteHost(remoteHostValue)
-                ? undefined
-                : { mrs: `No ${FORGE_NOUN[remoteHost].one} on this branch yet.` }
-            }
           />
           )}
           {slashOpen && (
@@ -960,22 +794,6 @@ function App() {
           </div>
         )}
 
-        {graphMounted && (
-          <div
-            className={cn(
-              "absolute inset-0 z-20 flex-col bg-background",
-              graphOpen ? "flex" : "hidden"
-            )}
-          >
-            <Suspense fallback={null}>
-              <GraphPane
-                path={activeProjectPath}
-                active={graphOpen}
-                onBack={closeGraph}
-              />
-            </Suspense>
-          </div>
-        )}
       </div>
 
       <CommandPalette

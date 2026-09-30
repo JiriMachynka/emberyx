@@ -7,6 +7,7 @@ import { requestOpenFile } from "@/lib/openFileRequest";
 import { gitStatusInterval, useGitChanges } from "@/lib/queries";
 import type { WorkspaceTab } from "@/lib/sidebar";
 import { ChangesColumn } from "./ChangesColumn";
+import { SidebarFooter } from "./SidebarFooter";
 import { Tree } from "./Tree";
 import type { SidebarProps } from "./types";
 
@@ -47,7 +48,7 @@ export function WorkspaceColumn(props: SidebarProps) {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="flex shrink-0 items-center gap-1 border-b border-white/[0.06] px-2 py-1.5">
+      <header className="flex h-10 shrink-0 items-center gap-1 border-b px-2">
         <nav className="flex min-w-0 flex-1 gap-0.5 rounded-md bg-secondary/50 p-0.5">
           {TABS.map((tab) => (
             <button
@@ -127,6 +128,8 @@ export function WorkspaceColumn(props: SidebarProps) {
           </p>
         )}
       </div>
+      {/* With no rail (a flat list) the settings gear lives down here. */}
+      {props.threadGrouping === "none" && <SidebarFooter {...props} />}
     </div>
   );
 }

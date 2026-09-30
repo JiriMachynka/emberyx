@@ -382,7 +382,12 @@ Each switch appends a `providerSwitch` timeline event to this thread.
    (`State` — agents, events, queues) and `daemon_runtime.rs` owns the **live
    Claude child processes**, so an agent outlives the window that started it.
 
-   Enabled per-user by `settings.persistentAgents` (default off). What made it
+   On by default (`settings.persistentAgents`; a stored `false` from before the
+   flip is migrated once in `loadSettings`). A persistent pane does not spawn on
+   open — `useDaemonHolds` asks the daemon (`daemon_live_agents`, agents and
+   procs) whether it runs this session, reattaches if so, and otherwise sleeps
+   until the user sends like a window-scoped pane. Spawning on open would leave
+   an agent outliving the app for every thread merely looked at. What made it
    possible: `agent.rs` streams into an `AgentSink`
    (`Arc<dyn Fn(AgentEvent) -> bool>`) instead of a Tauri `Channel`, so the same
    spawn code works in a process with no webview. `daemon.rs` is the app-side

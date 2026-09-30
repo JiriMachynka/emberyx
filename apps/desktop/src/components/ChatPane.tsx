@@ -5,6 +5,7 @@ import { Archive, ChevronDown, RotateCw, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FileRefProject } from "@/components/FileRef";
 import type { AgentBackend } from "@/lib/agentBackend";
+import type { Project } from "@/types";
 import { lastTodos } from "@/lib/toolDisplay";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
@@ -49,7 +50,6 @@ import {
 import { lastActivityAt } from "@/lib/compact";
 import { ThreadLinkProvider } from "@/components/PrLink";
 import { PaneVisibleProvider } from "@/components/chat/PaneVisible";
-import type { Project } from "@/types";
 import { useAgentStore } from "@/lib/agentStore";
 import { rememberRowSizes, rowSize } from "@/lib/rowSizes";
 import { cn } from "@/lib/utils";
@@ -67,6 +67,14 @@ import { NewThreadHeading } from "@/components/chat/NewThreadHeading";
 interface ChatPaneProps {
   sessionId: string;
   cwd: string;
+  /** The project's own icon and the path its fallback letter tile is keyed on
+   *  — the same pair the sidebar uses, so the mark reads the same everywhere. */
+  projectIcon: string | null;
+  projectRoot: string;
+  /** Every open project, and the way to start a blank thread in one — the
+   *  empty-thread heading's project switcher. */
+  projects: Project[];
+  onNewThreadIn: (projectId: string) => void;
   resume?: string;
   /** The thread is imported history — rendered from the local event log, with
    *  no provider session behind it to continue. */
@@ -102,11 +110,6 @@ interface ChatPaneProps {
   claudeProfiles: Settings["claudeProfiles"];
   /** Codex sandbox posture; "" derives it from the permission switches. */
   codexSandbox: Settings["codexSandbox"];
-  /** Projects available to the empty-thread project switcher. */
-  projects: Project[];
-  recentProjects: string[];
-  onSelectProject: (projectId: string) => void;
-  onOpenProject: (path: string) => void;
   onTitled?: (title: string) => void;
   /** A fresh chat has named its thread and been given a first message. Fires
    *  once, so the sidebar lists the thread before its transcript exists. */
@@ -125,6 +128,10 @@ const AUTO_LOAD_PAGES = 3;
 export const ChatPane = memo(function ChatPane({
   sessionId,
   cwd,
+  projectIcon,
+  projectRoot,
+  projects,
+  onNewThreadIn,
   resume,
   imported = false,
   backend,
@@ -143,10 +150,6 @@ export const ChatPane = memo(function ChatPane({
   providerLaunch,
   claudeProfiles,
   codexSandbox,
-  projects,
-  recentProjects,
-  onSelectProject,
-  onOpenProject,
   onTitled,
   onThreadStarted,
   onOpenWorktree,
@@ -894,10 +897,13 @@ export const ChatPane = memo(function ChatPane({
       <div
         ref={dockRef}
         className={cn(
-          "absolute inset-x-0 z-10 shrink-0 px-5 pb-5 pt-3",
+          "absolute inset-x-0 z-10 shrink-0 px-5 pb-5",
           thread.length === 0
-            ? "top-1/2 -translate-y-1/2"
-            : "bottom-0"
+            ? "top-1/2 -translate-y-1/2 pt-3"
+            // Solid behind the composer and its shelf, fading out above them:
+            // the shelf is translucent, so without this the transcript reads
+            // straight through it and runs into the composer's edge.
+            : "bottom-0 bg-linear-to-t from-background via-background via-75% to-transparent pt-8"
         )}
       >
         <div className="chat-content-width mx-auto">
@@ -905,10 +911,10 @@ export const ChatPane = memo(function ChatPane({
             <div className="mb-8">
               <NewThreadHeading
                 cwd={cwd}
+                icon={projectIcon}
+                root={projectRoot}
                 projects={projects}
-                recentProjects={recentProjects}
-                onSelectProject={onSelectProject}
-                onOpenProject={onOpenProject}
+                onPickProject={onNewThreadIn}
               />
             </div>
           )}

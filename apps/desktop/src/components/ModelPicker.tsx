@@ -31,6 +31,7 @@ import {
 import { codexEffortForModel } from "@/lib/codex/models";
 import { contextLabel } from "@/lib/modelContext";
 import { useAcpModels, useClaudeModels, useCodexModels, useProviderStatus } from "@/lib/queries";
+import { chipTrigger } from "@/components/composer/chipStyles";
 import type { ChatUsage } from "@/hooks/useAgentChat";
 
 /** The rail's first entry: whatever the user starred, across providers. */
@@ -276,7 +277,7 @@ export const ModelPicker = memo(function ModelPicker({
       }}
     >
       <PopoverTrigger
-        className={TRIGGER}
+        className={chipTrigger}
         onMouseEnter={prefetch}
         onFocus={prefetch}
       >
@@ -426,10 +427,6 @@ export const ModelPicker = memo(function ModelPicker({
     </Popover>
   );
 });
-
-/** Trigger styling shared with the composer's other chips. */
-const TRIGGER =
-  "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-accent hover:text-primary focus-visible:ring-1 focus-visible:ring-ring";
 
 function RailButton({
   active,

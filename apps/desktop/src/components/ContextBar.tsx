@@ -1,11 +1,8 @@
-import { PanelRight, Terminal } from "lucide-react";
+import { PanelRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ProjectMark } from "@/components/ProjectMark";
 import { ActionsMenu } from "@/components/ActionsMenu";
 import { OpenInIde } from "@/components/OpenInIde";
 import type { ProjectAction } from "@/lib/actions";
-import { basename } from "@/lib/path";
-import { glyphFor } from "@/lib/projectGlyph";
 import { gitStatusInterval, useGitBranch, useGitChanges } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
 import type { Project, Session } from "@/types";
@@ -17,12 +14,7 @@ interface ContextBarProps {
   activeProject: Project | null;
   agent: Session | undefined;
   devRunning: boolean;
-  devOpen: boolean;
   /** Running action output in this project — badge on the Output toggle. */
-  devCount: number;
-  onToggleDev: () => void;
-  /** Opens the project settings pane. */
-  onOpenProjectSettings: () => void;
   actions: ProjectAction[];
   onRunAction: (action: ProjectAction) => void;
   onEditAction: (action: ProjectAction) => void;
@@ -30,22 +22,16 @@ interface ContextBarProps {
   onStopDev: () => void;
   gitOpen: boolean;
   onToggleGit: () => void;
-  /** Git dock / Changes column. Hidden when the dock is off in classic layout. */
-  showGit?: boolean;
   dockOpen: boolean;
   onToggleDock: () => void;
   showDock?: boolean;
 }
 
-/** Slim bar above the chat: project / thread title, plus the dock controls. */
+/** Slim bar above the chat: thread title plus the dock controls. */
 export function ContextBar({
   activeProject,
   agent,
   devRunning,
-  devOpen,
-  devCount,
-  onToggleDev,
-  onOpenProjectSettings,
   actions,
   onRunAction,
   onEditAction,
@@ -53,7 +39,6 @@ export function ContextBar({
   onStopDev,
   gitOpen,
   onToggleGit,
-  showGit = true,
   dockOpen,
   onToggleDock,
   showDock = true,
@@ -74,31 +59,14 @@ export function ContextBar({
     (agent?.resume &&
       activeProject?.threads.find((t) => t.id === agent.resume)?.title) ||
     (agent && !untitledLabel(agent.label) ? agent.label : null);
-  const glyph = activeProject
-    ? glyphFor(activeProject.worktree?.repoRoot ?? activeProject.path)
-    : null;
 
   return (
     <header className="flex h-10 shrink-0 items-center justify-between border-b bg-background px-3">
       <div className="flex min-w-0 items-center gap-2 text-sm">
-        {activeProject && glyph && (
-          <ProjectMark project={activeProject} glyph={glyph} />
-        )}
-        {activeProject && (
-          <button
-            type="button"
-            onClick={onOpenProjectSettings}
-            className="shrink-0 truncate font-medium hover:text-foreground"
-            title="Project settings"
-          >
-            {basename(activeProject.path)}
-          </button>
-        )}
-        {title && (
-          <>
-            <span className="shrink-0 text-muted-foreground/50">/</span>
-            <span className="min-w-0 truncate text-muted-foreground">{title}</span>
-          </>
+        {title ? (
+          <span className="min-w-0 truncate font-medium">{title}</span>
+        ) : (
+          <span className="min-w-0 truncate text-muted-foreground">New thread</span>
         )}
       </div>
 
@@ -114,7 +82,7 @@ export function ContextBar({
             onStop={onStopDev}
           />
         )}
-        {activeProject && showGit && (
+        {activeProject && (
           <Button
             variant={gitOpen ? "chromeActive" : "chrome"}
             size="sm"
@@ -136,20 +104,6 @@ export function ContextBar({
                 {changeCount}
               </span>
             )}
-          </Button>
-        )}
-        {devCount > 0 && showDock && (
-          <Button
-            variant={devOpen ? "chromeActive" : "chrome"}
-            size="sm"
-            onClick={onToggleDev}
-            title="Action output"
-          >
-            <Terminal className="size-3.5" />
-            Output
-            <span className="rounded bg-success/20 px-1 text-3xs tabular-nums text-success">
-              {devCount}
-            </span>
           </Button>
         )}
         {activeProject && showDock && (

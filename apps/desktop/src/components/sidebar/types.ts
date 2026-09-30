@@ -1,7 +1,7 @@
 import type { LinkedPr } from "@/lib/forge";
 import type { ThreadState } from "@/lib/threadMeta";
 import type { Project, Session, Thread } from "@/types";
-import type { ThreadGrouping, ThreadView, WorkspaceLayout } from "@/lib/settings";
+import type { ThreadGrouping, ThreadView } from "@/lib/settings";
 import type { WorkspaceTab } from "@/lib/sidebar";
 
 export interface SidebarProps {
@@ -21,8 +21,7 @@ export interface SidebarProps {
   fontFamily: string;
   collapsed: boolean;
   onToggleCollapse: () => void;
-  workspaceLayout: WorkspaceLayout;
-  /** Column layout: the Sessions/Explorer/Changes column is hidden. */
+  /** The Sessions/Explorer/Changes column is hidden; the project rail stays. */
   workspaceCollapsed: boolean;
   workspaceTab: WorkspaceTab;
   onWorkspaceTab: (tab: WorkspaceTab) => void;

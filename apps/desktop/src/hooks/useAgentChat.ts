@@ -3,6 +3,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { useAgentStore } from "@/lib/agentStore";
+import { useDaemonHolds } from "@/hooks/useDaemonHolds";
 import {
   SESSION_STATUS,
   attachTranscriptActivities,
@@ -237,9 +238,11 @@ export function useAgentChat({
   /** `cwd::resume` this pane has already hydrated, so the page is read once. */
   const hydratedRef = useRef<string | null>(null);
   /** The daemon's replay is the whole transcript, so the disk prefill must stay
-   *  out. True until a persistent spawn says the daemon started the agent fresh:
-   *  then the replay is empty and the store is the only history there is. */
+   *  out. True until the daemon turns out not to hold this agent, or a
+   *  persistent spawn says it started one fresh: then there is no replay and
+   *  the store is the only history there is. */
   const [replayOnly, setReplayOnly] = useState(persistent && !imported);
+  const held = useDaemonHolds(emberyxSessionId, persistent && !imported);
   const loadingOlderRef = useRef(false);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
@@ -267,10 +270,14 @@ export function useAgentChat({
   const [ready, setReady] = useState(false);
   // Whether this pane wants a process at all. Opening a thread used to launch a
   // CLI on the frame that switches panes — a second of work before the empty
-  // screen could paint. Stay asleep until the user types or sends; a persistent
-  // one may have a live daemon agent to reattach to, so those still spawn now.
-  const [awake, setAwake] = useState(() => persistent);
+  // screen could paint. Stay asleep until the user types or sends — unless the
+  // daemon already runs this agent, which is reattached right away to show it.
+  const [awake, setAwake] = useState(false);
   const wake = useCallback(() => setAwake(true), []);
+  useEffect(() => {
+    if (held) setAwake(true);
+    else if (held === false) setReplayOnly(false);
+  }, [held]);
   // A turn accepted before the process existed. Delivered by the effect below
   // the moment the spawn lands; further turns queue normally, since the status
   // is already busy by then.

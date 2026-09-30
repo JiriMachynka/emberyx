@@ -32,15 +32,6 @@ export type ThreadView = "project" | "all";
 
 export type ThreadGrouping = "none" | "repository";
 
-/** How the left chrome is arranged. Classic is today's sidebar; column is a
- *  project rail plus a Sessions / Explorer / Changes workspace. */
-export const WORKSPACE_LAYOUTS = ["classic", "column"] as const;
-
-export type WorkspaceLayout = (typeof WORKSPACE_LAYOUTS)[number];
-
-export const isWorkspaceLayout = (value: string): value is WorkspaceLayout =>
-  WORKSPACE_LAYOUTS.some((v) => v === value);
-
 /** One name/value injected into the agent process. Empty names are dropped. */
 export interface LaunchEnv {
   name: string;
@@ -186,8 +177,6 @@ export interface Settings {
   threadAutoSettleOnMerge: boolean;
   /** Group the active thread list by repository, or leave it flat. */
   threadGrouping: ThreadGrouping;
-  /** Open the dev output panel automatically when a dev/build/start run starts. */
-  autoOpenDevPanel: boolean;
   /** Git remote used for GitLab fetch/checkout. The token itself lives in the
    *  OS keychain, never here. */
   gitlabRemote: string;
@@ -215,8 +204,6 @@ export interface Settings {
   commitMessageModel: string;
   /** Wrap long lines in the built-in editor. */
   wordWrap: boolean;
-  /** Left chrome: one sidebar, or a project rail plus a workspace column. */
-  workspaceLayout: WorkspaceLayout;
   /** Right-hand dock (terminal, preview, review, merge requests). Off hides
    *  it until turned back on — those surfaces have nowhere else to go. */
   rightDock: boolean;
@@ -243,7 +230,7 @@ export const DEFAULT_SETTINGS: Settings = {
   ide: "vscode",
   ideCustomCommand: "",
   permissionMode: "acceptEdits",
-  persistentAgents: false,
+  persistentAgents: true,
   model: "",
   effort: "",
   expandAllProjects: false,
@@ -251,7 +238,6 @@ export const DEFAULT_SETTINGS: Settings = {
   threadSettleDays: 3,
   threadAutoSettleOnMerge: true,
   threadGrouping: "none",
-  autoOpenDevPanel: false,
   gitlabRemote: "origin",
   notifyOnDone: true,
   notifyOnError: true,
@@ -264,7 +250,6 @@ export const DEFAULT_SETTINGS: Settings = {
   diffIgnoreWhitespace: false,
   commitMessageModel: "claude-haiku-4-5",
   wordWrap: false,
-  workspaceLayout: "classic",
   rightDock: true,
   windowOpacity: 100,
   windowBackground: "",
@@ -296,9 +281,6 @@ const dropStoredUnknownTheme = (s: Settings): Settings =>
 
 const coerceLayout = (s: Settings): Settings => ({
   ...s,
-  workspaceLayout: isWorkspaceLayout(s.workspaceLayout)
-    ? s.workspaceLayout
-    : DEFAULT_SETTINGS.workspaceLayout,
   rightDock: s.rightDock !== false,
 });
 
@@ -315,13 +297,15 @@ const coerceWindowOpacity = (s: Settings): Settings => ({
       : DEFAULT_SETTINGS.windowBackground,
 });
 
-/** Dropped settings: OpenRouter commit generate, first-party Dokploy API. */
+/** Dropped settings: OpenRouter commit generate, first-party Dokploy API,
+ *  and the classic/column workspace switch (the rail + column is the only map). */
 const dropStoredRemovedKeys = (
   s: Settings & {
     openRouterApiKey?: string;
     openRouterModel?: string;
     dokployUrl?: string;
     dokployApiKey?: string;
+    workspaceLayout?: string;
   }
 ): Settings => {
   const next = { ...s };
@@ -329,6 +313,23 @@ const dropStoredRemovedKeys = (
   delete next.openRouterModel;
   delete next.dokployUrl;
   delete next.dokployApiKey;
+  delete next.workspaceLayout;
+  return next;
+};
+
+const PERSISTENT_DEFAULT_KEY = "emberyx.persistentAgentsDefaulted";
+
+/** Persistent agents used to default off, and settings are stored whole, so a
+ *  stored `false` is the old default rather than a choice. Flipped once and
+ *  written back; turning it off afterwards sticks. */
+const flipStoredPersistentDefault = (
+  stored: Partial<Settings>
+): Partial<Settings> => {
+  if (localStorage.getItem(PERSISTENT_DEFAULT_KEY)) return stored;
+  localStorage.setItem(PERSISTENT_DEFAULT_KEY, "1");
+  if (stored.persistentAgents !== false) return stored;
+  const next = { ...stored, persistentAgents: true };
+  localStorage.setItem(KEY, JSON.stringify(next));
   return next;
 };
 
@@ -338,7 +339,9 @@ export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return DEFAULT_SETTINGS;
-    const stored = JSON.parse(raw) as Partial<Settings>;
+    const stored = flipStoredPersistentDefault(
+      JSON.parse(raw) as Partial<Settings>
+    );
     const merged = coerceWindowOpacity(
       coerceLayout(
         dropStoredRemovedKeys(
@@ -444,6 +447,9 @@ export function useSettings() {
     setSettings((prev) => {
       const next = { ...prev, ...patch };
       localStorage.setItem(KEY, JSON.stringify(next));
+      // Written by a build where persistence is the default, so a stored
+      // `false` from here on is a choice the one-time flip must leave alone.
+      localStorage.setItem(PERSISTENT_DEFAULT_KEY, "1");
       return next;
     });
   }, []);

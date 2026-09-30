@@ -1,73 +1,49 @@
 import { cn } from "@/lib/utils";
-import { SidebarHeader } from "@/components/sidebar/SidebarHeader";
-import { Tree } from "@/components/sidebar/Tree";
 import { Rail } from "@/components/sidebar/Rail";
 import { SidebarFooter } from "@/components/sidebar/SidebarFooter";
 import { WorkspaceColumn } from "@/components/sidebar/WorkspaceColumn";
 import type { SidebarProps } from "@/components/sidebar/types";
 
-/** Left navigation. Classic is one sidebar that collapses to a rail. Column
- *  keeps the rail always on and puts Sessions / Explorer / Changes beside it. */
+/** Left navigation: a project rail plus a Sessions / Explorer / Changes
+ *  column. ⌘B hides the column; the rail stays. With "One flat list" there is
+ *  no rail — the Sessions dropdown switches project and the settings gear sits
+ *  at the foot of the column. A strip with just the gear only returns when the
+ *  column isn't on screen (hidden, or replaced by Settings). */
 export function Sidebar(props: SidebarProps) {
-  const { collapsed, fontFamily, settingsOpen, workspaceLayout, workspaceCollapsed } =
-    props;
-  const column = workspaceLayout === "column";
-  // The settings navigation is hosted in this same aside, so a collapsed rail
-  // clips every tab label to the icon. Opening settings forces it wide.
-  const rail = collapsed && !settingsOpen;
+  const { fontFamily, settingsOpen, workspaceCollapsed, threadGrouping } = props;
+  const flat = threadGrouping === "none";
+  const columnShown = !settingsOpen && !workspaceCollapsed;
+  const strip = !flat || !columnShown;
 
-  if (column) {
-    return (
-      <aside
-        style={{ fontFamily }}
-        className="flex shrink-0 bg-sidebar"
-      >
-        <div className="flex w-14 shrink-0 flex-col border-r border-white/[0.06]">
+  return (
+    <aside style={{ fontFamily }} className="flex shrink-0 bg-sidebar">
+      {strip && (
+        <div
+          className={cn(
+            "flex shrink-0 flex-col border-r border-white/[0.06]",
+            flat ? "w-12" : "w-14"
+          )}
+        >
           <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1.5">
-            <Rail {...props} />
+            {!flat && <Rail {...props} />}
           </div>
           <SidebarFooter {...props} collapsed />
         </div>
-        {settingsOpen ? (
-          <div className="flex w-72 shrink-0 flex-col border-r border-white/[0.06]">
-            <div
-              id="settings-navigation"
-              className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1.5"
-            />
-          </div>
-        ) : (
-          !workspaceCollapsed && (
-            <div className="flex w-72 shrink-0 flex-col border-r border-white/[0.06]">
-              <WorkspaceColumn {...props} />
-            </div>
-          )
-        )}
-      </aside>
-    );
-  }
-
-  return (
-    <aside
-      style={{ fontFamily }}
-      className={cn(
-        "flex shrink-0 flex-col border-r border-white/[0.06] bg-sidebar transition-[width] duration-200",
-        rail ? "w-14" : "w-72"
       )}
-    >
-      <SidebarHeader {...props} collapsed={rail} />
-      <div
-        data-sidebar-scroll
-        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden py-1.5"
-      >
-        {settingsOpen ? (
-          <div id="settings-navigation" className="flex min-h-full flex-col" />
-        ) : collapsed ? (
-          <Rail {...props} />
-        ) : (
-          <Tree {...props} />
-        )}
-      </div>
-      <SidebarFooter {...props} collapsed={rail} />
+      {settingsOpen ? (
+        <div className="flex w-72 shrink-0 flex-col border-r border-white/[0.06]">
+          <div
+            id="settings-navigation"
+            className="flex min-h-0 flex-1 flex-col overflow-y-auto py-1.5"
+          />
+        </div>
+      ) : (
+        !workspaceCollapsed && (
+          <div className="flex w-72 shrink-0 flex-col border-r border-white/[0.06]">
+            <WorkspaceColumn {...props} />
+          </div>
+        )
+      )}
     </aside>
   );
 }

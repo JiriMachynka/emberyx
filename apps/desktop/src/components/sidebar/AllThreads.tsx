@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDown, FolderOpen, FolderPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ProjectMark } from "@/components/ProjectMark";
 import { basename } from "@/lib/path";
+import { glyphFor } from "@/lib/projectGlyph";
 import { projectLabel } from "@/lib/worktree";
 import {
   useBranchMap,
@@ -46,9 +48,9 @@ export function AllThreads(props: SidebarProps) {
     window.addEventListener("emberyx-thread-meta", sync);
     return () => window.removeEventListener("emberyx-thread-meta", sync);
   }, []);
-  // Which project the inbox is showing. Null = every open project, which is the
-  // point of this view; the filter is for when one repo is the whole day.
-  const [scope, setScope] = useState<string | null>(null);
+  // Null = every open project. The filter is for when one repo is the whole day.
+  const [inboxScope, setInboxScope] = useState<string | null>(null);
+  const scope = inboxScope;
   const machine = useMachineName().data ?? "";
 
   // One probe per repo, not per worktree and not per thread. Memoized because
@@ -129,7 +131,6 @@ export function AllThreads(props: SidebarProps) {
     const by: Record<ThreadState, ThreadRowData[]> = {
       pinned: [],
       active: [],
-      snoozed: [],
       settled: [],
       archived: [],
     };
@@ -146,7 +147,7 @@ export function AllThreads(props: SidebarProps) {
   ]);
 
   const rows = buckets.all;
-  const { pinned, active, snoozed, settled, archived } = buckets;
+  const { pinned, active, settled, archived } = buckets;
 
   // setThreadMeta returns the whole store, so the new identity is what makes
   // the list re-derive — the rows are computed from `meta`, not read per row.
@@ -195,18 +196,25 @@ export function AllThreads(props: SidebarProps) {
     );
   };
 
+  // With no rail (a flat list) this dropdown is the project switcher, so a
+  // specific project becomes the active one as well as the filter.
+  const pickScope = (id: string | null) => {
+    setInboxScope(id);
+    if (id && threadGrouping === "none") props.onSelectProject(id);
+  };
+
   const scopeRow = (
     <ScopeRow
       projects={projects}
       scope={scope}
-      onScope={setScope}
+      onScope={pickScope}
       onPickProject={props.onPickProject}
     />
   );
 
   // Folded piles keep their open/closed state at this level so the whole
   // stream can be flattened under one virtualizer.
-  const [folds, setFolds] = useState({ snoozed: false, settled: false, archived: false });
+  const [folds, setFolds] = useState({ settled: false, archived: false });
   const toggleFold = (which: keyof typeof folds) =>
     setFolds((prev) => ({ ...prev, [which]: !prev[which] }));
 
@@ -243,7 +251,6 @@ export function AllThreads(props: SidebarProps) {
       active.forEach((r) => out.push({ key: r.key, kind: "thread", data: r }));
     }
     const piles: [keyof typeof folds, ThreadRowData[]][] = [
-      ["snoozed", snoozed],
       ["settled", settled],
       ["archived", archived],
     ];
@@ -264,7 +271,6 @@ export function AllThreads(props: SidebarProps) {
   }, [
     pinned,
     active,
-    snoozed,
     settled,
     archived,
     threadGrouping,
@@ -291,7 +297,7 @@ export function AllThreads(props: SidebarProps) {
         case "empty":
           return 48;
         default:
-          return 76;
+          return 34;
       }
     },
     getItemKey: (index) => listSlots[index]?.key ?? String(index),
@@ -328,7 +334,7 @@ export function AllThreads(props: SidebarProps) {
           <button
             type="button"
             onClick={() => toggleFold(slot.which)}
-            className="mt-1 flex w-full items-center justify-between border-t border-white/[0.06] px-1 pt-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+            className="mt-1 flex w-full items-center justify-between border-t border-white/[0.06] px-1 pt-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
             <span>
               {slot.label} ({slot.count})
@@ -390,8 +396,7 @@ function ScopeRow({
   return (
     <div className="flex items-center gap-1">
       <DropdownMenu>
-        <DropdownMenuTrigger className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground outline-none transition-colors hover:bg-secondary/50 hover:text-foreground">
-          <FolderOpen className="size-4 shrink-0" />
+        <DropdownMenuTrigger className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium text-foreground outline-none transition-colors hover:bg-secondary/50">
           <span className="min-w-0 flex-1 truncate text-left">
             {current ? projectLabel(current) : "All projects"}
           </span>
@@ -399,11 +404,13 @@ function ScopeRow({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-56">
           <DropdownMenuItem onSelect={() => onScope(null)}>
+            <FolderOpen className="size-4 shrink-0" />
             All projects
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           {projects.map((p) => (
             <DropdownMenuItem key={p.id} onSelect={() => onScope(p.id)}>
+              <ProjectIcon project={p} />
               <span className="truncate">{projectLabel(p)}</span>
             </DropdownMenuItem>
           ))}
@@ -420,8 +427,15 @@ function ScopeRow({
   );
 }
 
+const ProjectIcon = ({ project }: { project: Project }) => (
+  <ProjectMark
+    project={project}
+    glyph={glyphFor(project.worktree?.repoRoot ?? project.path)}
+  />
+);
+
 const SectionLabel = ({ children }: { children: React.ReactNode }) => (
-  <div className="px-2 pt-1 text-3xs font-medium uppercase tracking-wide text-muted-foreground">
+  <div className="px-2 pt-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
     {children}
   </div>
 );

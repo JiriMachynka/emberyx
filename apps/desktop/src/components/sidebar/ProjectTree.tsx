@@ -300,7 +300,7 @@ function SessionList({
               // Only the session on screen gets the filled treatment;
               // hover stays deliberately fainter so it can't be mistaken for it.
               active
-                ? "bg-primary/20 font-medium text-foreground ring-1 ring-inset ring-primary/40"
+                ? "bg-primary/20 font-medium text-foreground"
                 : "text-muted-foreground hover:bg-secondary/40",
               dragId === s.id && "opacity-40",
               overId === s.id && "ring-1 ring-primary/60"

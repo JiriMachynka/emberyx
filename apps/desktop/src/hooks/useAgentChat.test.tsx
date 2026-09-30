@@ -99,6 +99,9 @@ let openApprovals: Record<string, unknown>[] = [];
 /** Overrides for what `agent_spawn` answers, per test. */
 let spawnReply: Record<string, unknown> = {};
 
+/** Agent ids the daemon reports running. */
+let daemonLive: string[] = [];
+
 /** Scripted replies for `thread_history` / `thread_messages_page`, shifted per call. */
 type FakePage = {
   rows: {
@@ -128,9 +131,11 @@ beforeEach(() => {
   queueSeq = 0;
   openApprovals = [];
   spawnReply = {};
+  daemonLive = [];
   messagePages = [];
   invoke.mockReset();
   invoke.mockImplementation((command: string, args: Record<string, unknown>) => {
+    if (command === "daemon_live_agents") return Promise.resolve(daemonLive);
     if (command === "agent_spawn")
       return Promise.resolve({ id: 1, reattached: false, truncated: false, ...spawnReply });
     if (command === "thread_history" || command === "thread_messages_page")
@@ -705,8 +710,34 @@ describe("useAgentChat persistent agents", () => {
   // The daemon's replay and the on-disk transcript carry the same turns; taking
   // both would render the conversation twice.
   it("does not prefill from the event store when the daemon replays", async () => {
+    daemonLive = ["emberyx-1"];
     spawnReply = { reattached: true };
     await mount({ persistent: true, resume: "old-thread" });
+    expect(sentTo("thread_history")).toEqual([]);
+  });
+
+  // Spawning on open to find out left an agent outliving the app for every
+  // thread merely looked at.
+  it("stays asleep on open when the daemon is not running this agent", async () => {
+    messagePages = [{ rows: [userRow("m1", "from-disk", 1000)], hasMore: false }];
+    const { result } = renderHook(() =>
+      useAgentChat({ ...options, persistent: true, resume: "old-thread" })
+    );
+    await waitFor(() =>
+      expect(result.current.messages.map((m) => m.text)).toEqual(["from-disk"])
+    );
+    expect(result.current.asleep).toBe(true);
+    expect(sentTo("agent_spawn")).toEqual([]);
+  });
+
+  it("reattaches on open when the daemon is running this agent", async () => {
+    daemonLive = ["emberyx-1"];
+    spawnReply = { reattached: true };
+    const { result } = renderHook(() =>
+      useAgentChat({ ...options, persistent: true, resume: "old-thread" })
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(sentTo("agent_spawn")).toHaveLength(1);
     expect(sentTo("thread_history")).toEqual([]);
   });
 

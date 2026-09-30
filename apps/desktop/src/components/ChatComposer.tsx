@@ -459,8 +459,7 @@ export const ChatComposer = memo(function ChatComposer({
           // scale, and a 24px pill next to 10px tool cards reads as a
           // different design system.
           // Rounded all the way round: the session strip tucks *under* this
-          // surface rather than squaring its bottom corners, the same trick
-          // TasksCard uses above the composer.
+          // surface rather than squaring its bottom corners.
           "chat-composer-surface relative z-10 flex flex-col overflow-hidden rounded-xl border transition-colors",
           "focus-within:border-ring focus-within:ring-1 focus-within:ring-ring/50",
           // A drop target, but never louder than focus — dragging used to draw
@@ -684,12 +683,12 @@ export const ChatComposer = memo(function ChatComposer({
       </div>
 
       {/* Toolbar. The branch is the checkout; plan limits sit on the right.
-          Tucked behind the input's rounded bottom edge: the negative margin
-          is covered by the composer's own opaque surface, so the two read as
-          one object without the input giving up its corners. */}
-      <div className="chat-composer-shelf relative z-0 -mt-3 flex min-w-0 items-center gap-2 rounded-b-xl border border-border/60 bg-card/40 px-2 pb-1 pt-4">
+          Tucked behind the input's rounded bottom edge: -mt-3 (12px) is
+          covered by the composer, so pt-5 + pb-2 + px-2 leaves 8px visible
+          on every side. */}
+      <div className="chat-composer-shelf relative z-0 -mt-3 flex min-w-0 items-center justify-between gap-2 rounded-b-xl border border-border/60 bg-card/40 px-2 pb-2 pt-5">
         <BranchChip cwd={cwd} busy={busy} compact />
-        <LimitsStrip target={limitsTarget} className="ml-auto" />
+        <LimitsStrip target={limitsTarget} />
       </div>
     </>
   );

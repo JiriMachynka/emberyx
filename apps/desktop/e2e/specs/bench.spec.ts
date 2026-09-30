@@ -148,12 +148,10 @@ const clickByTitle = (title: string) =>
     return true;
   }, title);
 
-/** The dock chooser is up when the Review card is on screen. */
+/** The dock chooser is up when the Review button is on screen. */
 const chooserReady = () =>
   browser.execute(() =>
-    Array.from(document.querySelectorAll("button")).some((b) =>
-      (b.textContent ?? "").includes("Review uncommitted changes")
-    )
+    Boolean(document.querySelector('button[title="Review uncommitted changes"]'))
   );
 
 describe("bench", () => {
@@ -226,9 +224,7 @@ describe("bench", () => {
 
     const t0 = Date.now();
     const clicked = await browser.execute(() => {
-      const b = Array.from(document.querySelectorAll("button")).find((x) =>
-        (x.textContent ?? "").includes("Review uncommitted changes")
-      );
+      const b = document.querySelector('button[title="Review uncommitted changes"]');
       if (!(b instanceof HTMLElement)) return false;
       b.click();
       return true;

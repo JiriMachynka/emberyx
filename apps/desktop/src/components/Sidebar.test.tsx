@@ -1,10 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, screen, within } from "@testing-library/react";
+import { act, cleanup, screen } from "@testing-library/react";
 import { Sidebar } from "@/components/Sidebar";
+import { AllThreads } from "@/components/sidebar/AllThreads";
 import type { SidebarProps } from "@/components/sidebar/types";
 import { useAgentStore } from "@/lib/agentStore";
 import type { GitBranch, Project, Session, Thread } from "@/types";
-import { flush, renderWithQuery, stubLayout } from "@/test-utils/render";
+import { flush, openFromKeyboard, pressLikeAMouse, renderWithQuery, stubLayout } from "@/test-utils/render";
 
 const BRANCH: GitBranch = { branch: "main", upstream: null, ahead: 0, behind: 0 };
 
@@ -81,7 +82,6 @@ const baseProps = (over: Partial<SidebarProps> = {}): SidebarProps => ({
   fontFamily: "sans-serif",
   collapsed: false,
   onToggleCollapse: () => {},
-  workspaceLayout: "classic",
   workspaceCollapsed: false,
   workspaceTab: "sessions",
   onWorkspaceTab: () => {},
@@ -108,6 +108,16 @@ const baseProps = (over: Partial<SidebarProps> = {}): SidebarProps => ({
 
 const mount = async (over: Partial<SidebarProps> = {}) => {
   const view = renderWithQuery(<Sidebar {...baseProps(over)} />);
+  await flush();
+  return view;
+};
+
+const mountInbox = async (over: Partial<SidebarProps> = {}) => {
+  const view = renderWithQuery(
+    <div data-sidebar-scroll className="h-[800px] overflow-auto">
+      <AllThreads {...baseProps({ sessionsOnly: false, ...over })} />
+    </div>
+  );
   await flush();
   return view;
 };
@@ -157,64 +167,86 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("Sidebar — project tree", () => {
-  it("lists every project, and the active one's chat sessions (not its dev servers)", async () => {
-    await mount();
-    for (const label of ["emberyx", "emberyx · fix/panes", "glacies"]) {
-      expect(screen.getByText(label)).toBeTruthy();
-    }
-    expect(screen.getByText("Flaky test")).toBeTruthy();
-    expect(screen.getByText("Chat perf")).toBeTruthy();
-    expect(screen.queryByText("dev:web")).toBeNull();
-  });
-
-  it("a session's status label follows the agent store for its own id only", async () => {
-    await mount();
-    const row = (label: string) => screen.getByText(label).closest("li")!;
-    expect(row("Flaky test").textContent).not.toContain("working");
-
-    await setStatus("s1", "working");
-    expect(within(row("Flaky test")).getByText("working")).toBeTruthy();
-    expect(row("Chat perf").textContent).not.toContain("working");
-
-    await setStatus("s2", "waiting");
-    expect(within(row("Chat perf")).getByText("needs you")).toBeTruthy();
-    expect(row("Flaky test").textContent).not.toContain("needs you");
-
-    await setStatus("s1", "idle");
-    expect(row("Flaky test").textContent).not.toContain("working");
-  });
-
-  it("column layout shows Sessions, Explorer and Changes beside the rail", async () => {
-    await mount({ workspaceLayout: "column", workspaceCollapsed: false });
+describe("Sidebar — chrome", () => {
+  it("shows Sessions, Explorer and Changes beside the project rail", async () => {
+    await mount({ threadGrouping: "repository" });
     expect(screen.getByRole("button", { name: "Sessions" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Explorer" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Changes" })).toBeTruthy();
-    expect(screen.getByText("Flaky test")).toBeTruthy();
+    expect(screen.getByTitle("Open project (⌘O)")).toBeTruthy();
     expect(screen.queryByText("Projects")).toBeNull();
   });
 
-  it("column layout can hide the workspace column and keep the rail", async () => {
-    await mount({ workspaceLayout: "column", workspaceCollapsed: true });
+  it("lists threads from every open project, not its dev servers", async () => {
+    await mount();
+    expect(cardTitles()).toEqual([
+      "Fix the flaky sidebar test",
+      "Profile the chat pane",
+      "Split the settings page",
+      "Playoff odds model",
+    ]);
+    expect(screen.queryByText("dev:web")).toBeNull();
+  });
+
+  it("a thread card's status follows the agent store for its session's id", async () => {
+    await mount();
+    const flaky = "Fix the flaky sidebar test";
+    const perf = "Profile the chat pane";
+    expect(card(flaky).textContent).not.toContain("Working");
+
+    await setStatus("s1", "working");
+    expect(card(flaky).textContent).toContain("Working");
+    expect(card(perf).textContent).not.toContain("Working");
+
+    await setStatus("s2", "waiting");
+    expect(card(perf).querySelector(".text-amber-400")).not.toBeNull();
+    expect(card(flaky).querySelector(".text-amber-400")).toBeNull();
+
+    await setStatus("s1", "idle");
+    expect(card(flaky).textContent).not.toContain("Working");
+  });
+
+  it("can hide the workspace column and keep the rail", async () => {
+    await mount({ workspaceCollapsed: true, threadGrouping: "repository" });
     expect(screen.queryByRole("button", { name: "Sessions" })).toBeNull();
     expect(screen.getByTitle("Open project (⌘O)")).toBeTruthy();
   });
 
-  it("collapsed, it drops to the rail; in settings, it hosts the settings navigation", async () => {
-    const { rerender } = await mount({ collapsed: true });
-    expect(screen.queryByText("Flaky test")).toBeNull();
-    const aside = () => document.querySelector("aside");
-    expect(aside()?.className).toContain("w-14");
-    rerender(<Sidebar {...baseProps({ collapsed: true, settingsOpen: true })} />);
+  it("in settings, it hosts the settings navigation beside the rail", async () => {
+    await mount({ settingsOpen: true, threadGrouping: "repository" });
     expect(document.getElementById("settings-navigation")).not.toBeNull();
-    // The nav lives in this aside — a rail would clip every tab label.
-    expect(aside()?.className).toContain("w-72");
+    expect(screen.getByTitle("Open project (⌘O)")).toBeTruthy();
+  });
+
+  it("has no rail for a flat list, the settings gear sits in the column", async () => {
+    const { container } = await mount({ threadGrouping: "none" });
+    expect(screen.queryByTitle("Open project (⌘O)")).toBeNull();
+    expect(container.querySelectorAll("footer")).toHaveLength(1);
+    expect(screen.getByTitle("Settings")).toBeTruthy();
+    expect(container.querySelector("aside > div.w-12")).toBeNull();
+  });
+
+  it("brings back a gear-only strip when a flat list's column is hidden", async () => {
+    const { container } = await mount({
+      threadGrouping: "none",
+      workspaceCollapsed: true,
+    });
+    expect(container.querySelector("aside > div.w-12")).not.toBeNull();
+    expect(screen.getByTitle("Settings")).toBeTruthy();
+  });
+
+  it("in a flat list, picking a project from the dropdown switches to it", async () => {
+    const onSelectProject = vi.fn();
+    await mount({ threadGrouping: "none", onSelectProject });
+    openFromKeyboard(screen.getByRole("button", { name: /All projects/ }));
+    await pressLikeAMouse(screen.getByRole("menuitem", { name: /glacies/i }));
+    expect(onSelectProject).toHaveBeenCalledWith("p-glacies");
   });
 });
 
-describe("Sidebar — all threads", () => {
+describe("AllThreads — inbox", () => {
   it("lists every project's live threads newest first, settled ones folded away", async () => {
-    await mount({ threadView: "all" });
+    await mountInbox();
     expect(cardTitles()).toEqual([
       "Fix the flaky sidebar test",
       "Profile the chat pane",
@@ -224,8 +256,18 @@ describe("Sidebar — all threads", () => {
     expect(screen.getByRole("button", { name: /Settled \(1\)/ })).toBeTruthy();
   });
 
+  it("shows a mark for each project in the scope menu", async () => {
+    await mountInbox();
+    openFromKeyboard(screen.getByRole("button", { name: /All projects/ }));
+    const items = screen.getAllByRole("menuitem");
+    expect(items).toHaveLength(4);
+    expect(items[1].querySelector("[aria-hidden]")?.textContent).toBe("E");
+    expect(items[2].querySelector("[aria-hidden]")?.textContent).toBe("E");
+    expect(items[3].querySelector("[aria-hidden]")?.textContent).toBe("G");
+  });
+
   it("groups by repository, folding a worktree into its parent repo", async () => {
-    await mount({ threadView: "all", threadGrouping: "repository" });
+    await mountInbox({ threadGrouping: "repository" });
     expect(inboxOutline()).toEqual([
       "# Threads",
       "# emberyx",
@@ -238,12 +280,12 @@ describe("Sidebar — all threads", () => {
   });
 
   it("without grouping, no repository headings appear", async () => {
-    await mount({ threadView: "all", threadGrouping: "none" });
+    await mountInbox({ threadGrouping: "none" });
     expect(inboxOutline().filter((l) => l.startsWith("#"))).toEqual(["# Threads"]);
   });
 
   it("a thread card's status follows the agent store for its session's id", async () => {
-    await mount({ threadView: "all" });
+    await mountInbox();
     const flaky = "Fix the flaky sidebar test";
     const perf = "Profile the chat pane";
     expect(card(flaky).textContent).not.toContain("Working");

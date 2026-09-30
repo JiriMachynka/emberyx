@@ -1,5 +1,5 @@
 /**
- * Per-thread inbox state: pinned, snoozed, archived, settled.
+ * Per-thread inbox state: pinned, archived, settled.
  *
  * Threads themselves are read off disk from each CLI's own transcripts, so
  * none of this can live with them — it is Emberyx's own view of a conversation
@@ -18,7 +18,6 @@ const KEY = "emberyx.threadMeta";
 export type ThreadState =
   | "pinned"
   | "active"
-  | "snoozed"
   | "settled"
   | "archived";
 
@@ -27,8 +26,6 @@ export interface ThreadMeta {
   pinnedAt?: number;
   /** ms epoch the thread was archived; absent = not archived. */
   archivedAt?: number;
-  /** ms epoch the snooze lapses. A past value is simply no longer a snooze. */
-  snoozedUntil?: number;
   /** Manual settle decision, which outranks every automatic rule below it. */
   settledOverride?: "settled" | "active";
   /** A PR/MR the user linked from the transcript. Auto-settle on merge uses
@@ -117,22 +114,8 @@ export function deriveThreadState({
   if (meta.settledOverride === "settled") return "settled";
   if (meta.settledOverride === "active") return "active";
   if (meta.pinnedAt != null) return "pinned";
-  if (meta.snoozedUntil != null && meta.snoozedUntil > now) return "snoozed";
   if (merged) return "settled";
   const idleMs = now - modified * 1000;
   if (settleDays > 0 && idleMs >= settleDays * 86_400_000) return "settled";
   return "active";
 }
-
-/** Common snooze targets, as ms epochs. */
-export const snoozeUntil = {
-  hour: (now: number): number => now + 3_600_000,
-  /** 9am the next calendar day, local time. */
-  tomorrow: (now: number): number => {
-    const d = new Date(now);
-    d.setDate(d.getDate() + 1);
-    d.setHours(9, 0, 0, 0);
-    return d.getTime();
-  },
-  week: (now: number): number => now + 7 * 86_400_000,
-};

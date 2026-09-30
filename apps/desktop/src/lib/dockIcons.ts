@@ -1,11 +1,9 @@
 import {
+  FileDiff,
   FolderOpen,
-  GitCompare,
   GitGraph,
   GitPullRequest,
-  Globe,
   SlidersHorizontal,
-  SquareTerminal,
   Terminal,
   type LucideIcon,
 } from "lucide-react";
@@ -17,10 +15,8 @@ import type { DockKind } from "@/lib/dock";
 export const DOCK_ICONS: Record<DockKind, LucideIcon> = {
   terminal: Terminal,
   files: FolderOpen,
-  diff: GitCompare,
+  diff: FileDiff,
   git: GitGraph,
-  preview: Globe,
   mrs: GitPullRequest,
-  dev: SquareTerminal,
   projectSettings: SlidersHorizontal,
 };

@@ -38,6 +38,13 @@ interface Entry {
   spawned: boolean;
   /** Kill requested before the spawn resolved — honored as soon as it does. */
   killWhenSpawned: boolean;
+  /** The size the child started at, before any view had measured itself. */
+  spawnSize: { cols: number; rows: number };
+  /** A view has told the child its real size. Until then the buffer holds
+   *  whatever the child drew for a screen nobody is looking at. */
+  sized: boolean;
+  /** A view has typed into the child; from then on the buffer is history. */
+  wrote: boolean;
 }
 
 /** Replay budget for a reopened view. The terminal keeps its own scrollback
@@ -67,6 +74,40 @@ const sessions = new Map<string, Entry>();
 /** The project's interactive shell — one per project path, shared by every
  *  terminal view of it. */
 export const shellSessionId = (cwd: string) => `shell:${cwd}`;
+
+const SIZE_KEY = "emberyx.termSize";
+
+/** The last size a terminal view measured, so a shell started ahead of its
+ *  view draws its first prompt for a screen about that wide rather than a
+ *  guess. */
+const loadTermSize = (): { cols: number; rows: number } | null => {
+  try {
+    const raw = localStorage.getItem(SIZE_KEY);
+    if (!raw) return null;
+    const { cols, rows } = JSON.parse(raw) as { cols?: number; rows?: number };
+    return cols && rows && cols > 0 && rows > 0 ? { cols, rows } : null;
+  } catch {
+    return null;
+  }
+};
+
+const saveTermSize = (cols: number, rows: number): void => {
+  try {
+    localStorage.setItem(SIZE_KEY, JSON.stringify({ cols, rows }));
+  } catch {
+    // The next shell just starts at the default size.
+  }
+};
+
+/** Start a project's shell before its terminal tab is ever opened, so the
+ *  prompt is already drawn (and replayed from the buffer) by the time the view
+ *  mounts — a login shell's rc files are what the tab used to wait on. Never
+ *  restarts one that has run: an exited shell means the user closed it. */
+export const prewarmShell = (cwd: string): void => {
+  const sessionId = shellSessionId(cwd);
+  if (sessions.get(sessionId)?.spawned) return;
+  void spawnLog({ sessionId, cwd, ...loadTermSize() });
+};
 
 const base64ToBytes = (b64: string): Uint8Array => {
   const bin = atob(b64);
@@ -106,6 +147,9 @@ export async function spawnLog(opts: SpawnLogOptions): Promise<void> {
     onExit: opts.onExit,
     spawned: true,
     killWhenSpawned: false,
+    spawnSize: { cols, rows },
+    sized: existing?.sized ?? size !== null,
+    wrote: existing?.wrote ?? false,
   };
   sessions.set(opts.sessionId, entry);
 
@@ -236,7 +280,20 @@ export async function resizeLog(
 ): Promise<void> {
   const entry = sessions.get(sessionId);
   if (!entry) return;
+  // A shell started ahead of its view drew its first prompt for the spawn
+  // size. Replayed into a grid of another width that prompt wraps, and the
+  // redraw the resize triggers lands under it as a second one — so what it
+  // drew for the wrong screen is dropped, and the redraw is the only prompt.
+  if (
+    !entry.sized &&
+    !entry.wrote &&
+    (entry.spawnSize.cols !== cols || entry.spawnSize.rows !== rows)
+  ) {
+    entry.raw = createRawBuffer();
+  }
+  entry.sized = true;
   entry.size = { cols, rows };
+  if (sessionId.startsWith("shell:")) saveTermSize(cols, rows);
   if (entry.ptyId != null) {
     await invoke("pty_resize", { id: entry.ptyId, cols, rows }).catch(() => {});
   }
@@ -247,6 +304,7 @@ export async function writeLog(sessionId: string, data: string): Promise<void> {
   // A dead PTY has nothing to receive keystrokes — writing is an unhandled
   // rejection waiting for the next keypress, so the state flow ends here.
   if (entry?.ptyId == null || entry.status === "exited") return;
+  entry.wrote = true;
   await invoke("pty_write", { id: entry.ptyId, data }).catch((e) =>
     console.error("[emberyx] pty_write failed", e)
   );

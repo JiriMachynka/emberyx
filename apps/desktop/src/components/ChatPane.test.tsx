@@ -49,6 +49,10 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 const PROPS: ComponentProps<typeof ChatPane> = {
   sessionId: MOCKUP_SESSION_ID,
   cwd: "/code/emberyx",
+  projectIcon: null,
+  projectRoot: "/code/emberyx",
+  projects: [],
+  onNewThreadIn: () => {},
   backend: "claude",
   active: true,
   fontFamily: "sans-serif",
@@ -65,10 +69,6 @@ const PROPS: ComponentProps<typeof ChatPane> = {
   providerLaunch: {},
   claudeProfiles: [],
   codexSandbox: "",
-  projects: [],
-  recentProjects: [],
-  onSelectProject: () => {},
-  onOpenProject: () => {},
 };
 
 const FIRST_USER =

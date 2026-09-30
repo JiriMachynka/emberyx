@@ -55,6 +55,29 @@ describe("agentBackend migration", () => {
     expect((loaded as { dokployUrl?: string }).dokployUrl).toBeUndefined();
     expect((loaded as { dokployApiKey?: string }).dokployApiKey).toBeUndefined();
   });
+
+  // Settings are stored whole, so `false` from before the flip is the old
+  // default, not a choice.
+  it("turns persistent agents on once for settings stored before the default flipped", () => {
+    store({ persistentAgents: false });
+    expect(loadSettings().persistentAgents).toBe(true);
+    expect(
+      JSON.parse(localStorage.getItem("emberyx.settings")!).persistentAgents
+    ).toBe(true);
+  });
+
+  it("keeps persistent agents off once the user turns them off", () => {
+    store({ persistentAgents: false });
+    const { result } = renderHook(() => useSettings());
+    act(() => result.current.update({ persistentAgents: false }));
+    expect(loadSettings().persistentAgents).toBe(false);
+  });
+
+  it("keeps an off chosen on a fresh install", () => {
+    const { result } = renderHook(() => useSettings());
+    act(() => result.current.update({ persistentAgents: false }));
+    expect(loadSettings().persistentAgents).toBe(false);
+  });
 });
 
 describe("useSettings", () => {
@@ -71,24 +94,23 @@ describe("useSettings", () => {
     expect(JSON.parse(localStorage.getItem("emberyx.settings")!).threadView).toBe("all");
   });
 
-  it("persists workspace layout and the right-dock toggle", () => {
+  it("persists the right-dock toggle", () => {
     const { result } = renderHook(() => useSettings());
-    expect(result.current.settings.workspaceLayout).toBe("classic");
     expect(result.current.settings.rightDock).toBe(true);
-    act(() => result.current.update({ workspaceLayout: "column", rightDock: false }));
-    expect(result.current.settings.workspaceLayout).toBe("column");
+    act(() => result.current.update({ rightDock: false }));
     expect(result.current.settings.rightDock).toBe(false);
     const stored = JSON.parse(localStorage.getItem("emberyx.settings")!);
-    expect(stored.workspaceLayout).toBe("column");
     expect(stored.rightDock).toBe(false);
   });
 
-  it("coerces an unknown workspace layout back to classic", () => {
+  it("drops a stored workspace layout — the rail plus column is the only map", () => {
     localStorage.setItem(
       "emberyx.settings",
-      JSON.stringify({ workspaceLayout: "deck" })
+      JSON.stringify({ workspaceLayout: "classic" })
     );
-    expect(loadSettings().workspaceLayout).toBe("classic");
+    expect(
+      (loadSettings() as { workspaceLayout?: string }).workspaceLayout
+    ).toBeUndefined();
   });
 
   it("clamps a stored window opacity into range", () => {

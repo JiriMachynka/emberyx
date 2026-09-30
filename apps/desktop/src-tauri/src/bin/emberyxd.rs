@@ -22,7 +22,13 @@ fn handle_runtime(runtime: &Runtime, request: Request) -> Response {
             Ok(()) => Response::ok(true),
             Err(error) => Response::error(error),
         },
-        Request::AgentLive => Response::ok(runtime.live()),
+        // Procs too: a Codex or ACP pane asks this to decide whether it has a
+        // running agent to reattach to, and those live in the proc table.
+        Request::AgentLive => {
+            let mut live = runtime.live();
+            live.extend(runtime.proc_live());
+            Response::ok(live)
+        }
         Request::ProcSpawn { spec } => match runtime.proc_spawn(spec) {
             Ok(outcome) => Response::ok(outcome),
             Err(error) => Response::error(error),

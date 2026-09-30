@@ -30,6 +30,7 @@ import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { askQuestions, fetchPendingAsk } from "@/lib/approvals";
 import { parseAttachments, usePromptQueue } from "@/lib/promptQueue";
+import { useDaemonHolds } from "@/hooks/useDaemonHolds";
 import {
   cancelStreamPublish,
   scheduleStreamPublish,
@@ -258,11 +259,18 @@ export function useAcpChat({
   usageRef.current = usage;
   const [ready, setReady] = useState(false);
   // Stay asleep until the user types or sends, so switching onto a fresh ACP
-  // chat does not wait on spawn to paint the empty screen — unless the agent
-  // is persistent, in which case it may already be running in the daemon and
-  // the pane attaches right away to show it.
-  const [awake, setAwake] = useState(persistent);
+  // chat does not wait on spawn to paint the empty screen — unless the daemon
+  // already runs this agent, in which case the pane attaches right away to
+  // show it.
+  const [awake, setAwake] = useState(false);
   const wake = useCallback(() => setAwake(true), []);
+  const held = useDaemonHolds(emberyxSessionId, persistent);
+  // Read by the spawn effect, which must not re-run when the answer lands.
+  const heldRef = useRef(held);
+  heldRef.current = held;
+  useEffect(() => {
+    if (held) setAwake(true);
+  }, [held]);
   const pendingSendRef = useRef<{ text: string; images?: ChatImage[] } | null>(
     null
   );
@@ -807,10 +815,12 @@ export function useAcpChat({
       }
     };
 
-    // In persistent mode the daemon's replay is the only source for the
+    // When the daemon holds this agent its replay is the only source for the
     // rendered transcript (same rule as the Claude transport): start empty so
     // the replay rebuilds it exactly once, whatever this pane showed before.
-    if (persistent) {
+    // An agent it doesn't hold starts fresh with nothing to replay, and
+    // clearing here would wipe the history seeded from the store.
+    if (persistent && heldRef.current !== false) {
       committedRef.current = [];
       turnRef.current = emptyTurn();
     }
@@ -930,11 +940,11 @@ export function useAcpChat({
   // pane opened, so it is strictly newer. Dropping the page because the user
   // typed first is how a reopened thread lost its whole history.
   //
-  // Skipped in persistent mode, same as the Claude transport: the daemon's
-  // replay is the single source there, and seeding the store on top of it
-  // races the replay into duplicated turns.
+  // Skipped while the daemon holds (or may hold) this agent, same as the Claude
+  // transport: its replay is the single source there, and seeding the store on
+  // top of it races the replay into duplicated turns.
   useEffect(() => {
-    if (!enabled || !resume || persistent) return;
+    if (!enabled || !resume || held !== false) return;
     const target = `${cwd}::${resume}`;
     if (seededRef.current === target) return;
     seededRef.current = target;
@@ -959,7 +969,7 @@ export function useAcpChat({
       // not leave the target looking seeded.
       if (!landed && seededRef.current === target) seededRef.current = null;
     };
-  }, [enabled, resume, cwd, publish, persistent]);
+  }, [enabled, resume, cwd, publish, held]);
 
   // Pin the picked model, at open and on a mid-session switch alike. "" means
   // the agent decides, and there is no id to hand back — the agent just keeps

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, History, Save } from "lucide-react";
+import { ArrowLeft, History, Save, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { basename } from "@/lib/path";
 import { FileFinder } from "@/components/FileFinder";
@@ -33,6 +33,7 @@ interface EditorPaneProps {
   wordWrap: boolean;
   /** Only the focused editor tab claims ⌘K from the global command palette. */
   active: boolean;
+  onClose?: () => void;
 }
 
 /**
@@ -46,6 +47,7 @@ export function EditorPane({
   fontSize,
   wordWrap,
   active,
+  onClose,
 }: EditorPaneProps) {
   const [finderOpen, setFinderOpen] = useState(false);
   // A ⇧⌘F issued before this pane existed (the shortcut opens the editor
@@ -180,7 +182,7 @@ export function EditorPane({
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="relative flex h-9 shrink-0 items-center justify-between gap-2 border-b px-2">
+        <header className="relative flex h-10 shrink-0 items-center justify-between gap-2 border-b px-2">
           <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             {nav.canGoBack && (
               <button
@@ -218,6 +220,15 @@ export function EditorPane({
             >
               <Save className="size-3.5" />
               {saving ? "Saving…" : "Save"}
+            </button>
+          )}
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="Close editor"
+            >
+              <X className="size-3.5" />
             </button>
           )}
 
