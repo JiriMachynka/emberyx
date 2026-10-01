@@ -6,6 +6,7 @@ import type { ChatImage } from "@/hooks/useAgentChat";
 import type { SessionStatus } from "@/types";
 import type { AccountIssue } from "@/lib/accountState";
 import type { AgentBackend } from "@/lib/agentBackend";
+import { samePhase, type AgentPhase } from "@/lib/agentPhase";
 import {
   MAX_NOTIFICATIONS,
   loadNotifications,
@@ -98,6 +99,15 @@ interface AgentState {
    *  a permission prompt mid-turn is still the same turn, so waiting and
    *  working hand the clock to each other instead of restarting it. */
   statusSince: Record<string, number>;
+  /** What each running session is doing right now ("Running bun test"). Set
+   *  by the chat hooks off the render path, so a hidden pane keeps it current;
+   *  dropped when the session goes idle. */
+  phases: Record<string, AgentPhase>;
+  setPhase: (id: string, phase: AgentPhase | null) => void;
+  /** Sessions that finished a run nobody was looking at, until their thread is
+   *  opened. The sidebar row reads it as "done — come and look". */
+  unseen: Record<string, true>;
+  markSeen: (id: string) => void;
   usages: Record<string, Usage>;
   changes: Change[];
   /** Change count per session, kept in step with `changes` so consumers don't
@@ -175,6 +185,16 @@ interface AgentState {
 export const useAgentStore = create<AgentState>()((set) => ({
   statuses: {},
   statusSince: {},
+  phases: {},
+  setPhase: (id, phase) =>
+    set((s) => {
+      const prev = s.phases[id] ?? null;
+      if (samePhase(prev, phase)) return s;
+      if (phase) return { phases: { ...s.phases, [id]: phase } };
+      const { [id]: _, ...rest } = s.phases;
+      return { phases: rest };
+    }),
+  unseen: {},
   usages: {},
   changes: [],
   changeCounts: {},
@@ -224,10 +244,24 @@ export const useAgentStore = create<AgentState>()((set) => ({
         status !== "idle" && prev !== "idle"
           ? s.statusSince[id] ?? Date.now()
           : Date.now();
+      const { [id]: _, ...phases } = s.phases;
       return {
         statuses: { ...s.statuses, [id]: status },
         statusSince: { ...s.statusSince, [id]: since },
+        // An idle session is doing nothing; a stale "Running …" must not
+        // outlive the run that produced it.
+        ...(status === "idle" && s.phases[id] ? { phases } : {}),
+        unseen:
+          prev === "working" && status === "idle"
+            ? { ...s.unseen, [id]: true }
+            : s.unseen,
       };
+    }),
+  markSeen: (id) =>
+    set((s) => {
+      if (!s.unseen[id]) return s;
+      const { [id]: _, ...rest } = s.unseen;
+      return { unseen: rest };
     }),
   // Same object back means nothing moved. Without the bail-out every publish
   // allocated a new `usages` map and woke every subscriber — one per sidebar row.
@@ -326,6 +360,12 @@ export const useAgentStore = create<AgentState>()((set) => ({
         ),
         statusSince: Object.fromEntries(
           Object.entries(s.statusSince).filter(([id]) => !drop.has(id))
+        ),
+        phases: Object.fromEntries(
+          Object.entries(s.phases).filter(([id]) => !drop.has(id))
+        ),
+        unseen: Object.fromEntries(
+          Object.entries(s.unseen).filter(([id]) => !drop.has(id))
         ),
         usages: Object.fromEntries(
           Object.entries(s.usages).filter(([id]) => !drop.has(id))

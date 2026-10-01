@@ -23,11 +23,43 @@ import { Field, Group, Row, Tile } from "@/components/SettingsFields";
 import {
   AGENT_BACKENDS,
   BACKEND_LABEL,
+  CONFIG_DIR_ENV,
+  capabilitiesOf,
   isAgentBackend,
   type AgentBackend,
 } from "@/lib/agentBackend";
 import { LaunchEnvRows } from "./LaunchEnvRows";
 import type { Settings } from "@/lib/settings";
+
+/** Where each CLI keeps its config when the variable is unset. */
+const DEFAULT_CONFIG_DIR: Record<AgentBackend, string> = {
+  claude: "~/.claude",
+  codex: "~/.codex",
+  opencode: "~/.config/opencode",
+  grok: "~/.grok",
+};
+
+const ConfigDirField = ({
+  backend,
+  value,
+  hint,
+  onChange,
+}: {
+  backend: AgentBackend;
+  value: string;
+  hint: string;
+  onChange: (value: string) => void;
+}) => (
+  <Field label="Config directory" hint={`${CONFIG_DIR_ENV[backend]}. ${hint}`}>
+    <Input
+      value={value}
+      placeholder={`${DEFAULT_CONFIG_DIR[backend]}_work`}
+      spellCheck={false}
+      className="font-mono text-sm"
+      onChange={(e) => onChange(e.target.value)}
+    />
+  </Field>
+);
 
 export const ProvidersSection = ({
   settings,
@@ -323,21 +355,13 @@ export const ProvidersSection = ({
                   onChange={(e) => setLaunch({ args: e.target.value })}
                 />
               </Field>
-              {b === "claude" && (
-                <Field
-                  label="Config directory"
-                  hint="CLAUDE_CONFIG_DIR. Empty uses ~/.claude — set this for a second account or a router."
-                >
-                  <Input
-                    value={launch?.configDir ?? ""}
-                    placeholder="~/.claude_work"
-                    spellCheck={false}
-                    className="font-mono text-sm"
-                    onChange={(e) =>
-                      setLaunch({ configDir: e.target.value })
-                    }
-                  />
-                </Field>
+              {capabilitiesOf(b).configDirOverride && (
+                <ConfigDirField
+                  backend={b}
+                  value={launch?.configDir ?? ""}
+                  hint={`Empty uses ${DEFAULT_CONFIG_DIR[b]}.`}
+                  onChange={(configDir) => setLaunch({ configDir })}
+                />
               )}
               <LaunchEnvRows
                 rows={launch?.env ?? []}
@@ -348,32 +372,40 @@ export const ProvidersSection = ({
         })}
       </Group>
 
-      <Group title="Claude profiles">
-        {settings.claudeProfiles.map((profile) => {
+      <Group title="Profiles">
+        {settings.launchProfiles.map((profile) => {
           const patch = (next: Partial<typeof profile>) =>
             onUpdate({
-              claudeProfiles: settings.claudeProfiles.map((p) =>
+              launchProfiles: settings.launchProfiles.map((p) =>
                 p.id === profile.id ? { ...p, ...next } : p
               ),
             });
+          const b = profile.backend;
           return (
             <div
               key={profile.id}
               className="grid gap-3 py-5 first:pt-2.5 last:pb-2.5"
             >
               <div className="flex items-center justify-between gap-2">
-                <Input
-                  value={profile.name}
-                  onChange={(e) => patch({ name: e.target.value })}
-                  placeholder="Personal"
-                  className="h-8 max-w-56"
-                />
+                <div className="flex items-center gap-2">
+                  <img
+                    src={`/provider-icons/${b}.svg`}
+                    alt={BACKEND_LABEL[b]}
+                    className="size-4 object-contain"
+                  />
+                  <Input
+                    value={profile.name}
+                    onChange={(e) => patch({ name: e.target.value })}
+                    placeholder="Personal"
+                    className="h-8 max-w-56"
+                  />
+                </div>
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() =>
                     onUpdate({
-                      claudeProfiles: settings.claudeProfiles.filter(
+                      launchProfiles: settings.launchProfiles.filter(
                         (p) => p.id !== profile.id
                       ),
                     })
@@ -385,55 +417,55 @@ export const ProvidersSection = ({
               <Field label="Command">
                 <Input
                   value={profile.command}
-                  placeholder="claude"
+                  placeholder={b}
                   spellCheck={false}
                   className="font-mono text-sm"
                   onChange={(e) => patch({ command: e.target.value })}
                 />
               </Field>
-              <Field
-                label="Config directory"
-                hint="CLAUDE_CONFIG_DIR for this profile."
-              >
-                <Input
-                  value={profile.configDir}
-                  placeholder="~/.claude_personal"
-                  spellCheck={false}
-                  className="font-mono text-sm"
-                  onChange={(e) =>
-                    patch({ configDir: e.target.value })
-                  }
+              {capabilitiesOf(b).configDirOverride && (
+                <ConfigDirField
+                  backend={b}
+                  value={profile.configDir ?? ""}
+                  hint="For this profile."
+                  onChange={(configDir) => patch({ configDir })}
                 />
-              </Field>
+              )}
               <LaunchEnvRows
-                rows={profile.env}
+                rows={profile.env ?? []}
                 onChange={(env) => patch({ env })}
               />
             </div>
           );
         })}
-        <div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              onUpdate({
-                claudeProfiles: [
-                  ...settings.claudeProfiles,
-                  {
-                    id: `claude-${Date.now().toString(36)}`,
-                    name: "Personal",
-                    command: "",
-                    args: "",
-                    configDir: "",
-                    env: [],
-                  },
-                ],
-              })
-            }
-          >
-            Add Claude profile
-          </Button>
+        <div className="flex flex-wrap gap-2">
+          {AGENT_BACKENDS.filter((b) => capabilitiesOf(b).launchProfiles).map(
+            (b) => (
+              <Button
+                key={b}
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  onUpdate({
+                    launchProfiles: [
+                      ...settings.launchProfiles,
+                      {
+                        id: `${b}-${Date.now().toString(36)}`,
+                        name: "Personal",
+                        backend: b,
+                        command: "",
+                        args: "",
+                        configDir: "",
+                        env: [],
+                      },
+                    ],
+                  })
+                }
+              >
+                Add {BACKEND_LABEL[b]} profile
+              </Button>
+            )
+          )}
         </div>
       </Group>
     </>

@@ -20,10 +20,13 @@ export function ThinkingBlock({
   /** Identity for the timing record — the message this reasoning belongs to.
    *  Two blocks sharing a key would share a clock. */
   timingKey,
+  onToggle,
 }: {
   text: string;
   active: boolean;
   timingKey?: string;
+  /** Fired on a click, so a live turn can keep this row once it finishes. */
+  onToggle?: () => void;
 }) {
   const [override, setOverride] = useState<boolean | null>(null);
   // Newer models often think without sending readable text. An open, empty
@@ -54,7 +57,10 @@ export function ThinkingBlock({
         type="button"
         aria-expanded={expandable ? open : undefined}
         disabled={!expandable}
-        onClick={() => setOverride(!open)}
+        onClick={() => {
+          setOverride(!open);
+          onToggle?.();
+        }}
         className={cn(
           "flex w-full items-center gap-2 py-2 pl-8 pr-3 text-left text-muted-foreground transition-colors",
           expandable && "hover:bg-secondary"

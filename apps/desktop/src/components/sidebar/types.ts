@@ -21,19 +21,12 @@ export interface SidebarProps {
   fontFamily: string;
   collapsed: boolean;
   onToggleCollapse: () => void;
-  /** The Sessions/Explorer/Changes column is hidden; the project rail stays. */
+  /** The Sessions/Explorer column is hidden; the project rail stays. */
   workspaceCollapsed: boolean;
   workspaceTab: WorkspaceTab;
   onWorkspaceTab: (tab: WorkspaceTab) => void;
-  /** Open the editor overlay on an Explorer click. */
+  /** Open the editor overlay on an Explorer file click. */
   onOpenEditor: (path?: string) => void;
-  /** Open the Review dock tab from a Changes file, when the dock is on. */
-  onOpenReview: () => void;
-  rightDock: boolean;
-  onOpenWorktree: (path: string, repoRoot: string, branch: string) => void;
-  onRemoveWorktree: (worktreePath: string, repoRoot: string) => void | Promise<void>;
-  /** Origin remote host, for commit/PR actions in the Changes column. */
-  remoteHost: string | undefined;
   /** Column Sessions tab: the rail already names the project. */
   sessionsOnly?: boolean;
   onSelectProject: (id: string) => void;

@@ -495,13 +495,25 @@ commands and file work on one left hairline with an elbow per row (`.work-rail`
 in `index.css`), and reasoning is a row in that order rather than prose split
 out of it — `ThinkingBlock` is reused for the row and kept for the message with
 no recorded order. The border survives only where something is genuinely
-enclosed (a diff, command output, the file tree), so the sequence stays one
+enclosed (a diff, command output), so the sequence stays one
 rhythm and the answer text reads as the thing outside it. Live rows stay on
-screen only while they run — no checkmark row after they finish. The turn clock
-(`Working for 3.2s`) sits under the transcript, not on each row. Consecutive
-file reads and edits group into a folder tree (`ActivityFileTree`) the way T3
-Code shows them, and that tree accumulates for the turn instead of vanishing as
-each read settles.
+screen only while they run — no checkmark row after they finish — except a row
+the user has clicked: `WorkPin` (context, owned by `TurnWork`) pins it and
+forces the log open, or the row would vanish when the turn's work stops and the
+log folds. Rails join across a turn's messages: `ActivityList` takes
+`continues` (set by `railContinues` in `TurnRow` when a later message has rows
+and no narration sits between) to keep the last row's line and close the gap.
+A running turn with nothing produced yet shows a "Thinking" row, and a command
+whose arguments haven't streamed reads "Preparing…". The turn clock
+(`Working for 3.2s`) sits under the transcript, not on each row. File work is
+one row per file, named by its project-relative path with a file-type icon
+(`ActivityFileTree` is no longer rendered). Tool input and results that are
+records, or lists of records, render as titled items (`list` part in
+`toolDisplay.ts`), not JSON blocks.
+
+A thread that finishes a run while not on screen is flagged in
+`agentStore.unseen` (set on working → idle, cleared by `markSeen`); the sidebar
+row's `DoneDot` shows it until the thread is opened.
 
 ### Backends and capabilities
 

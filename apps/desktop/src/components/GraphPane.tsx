@@ -9,7 +9,8 @@ import {
   useCommitPatch,
   useGraphRefs,
 } from "@/lib/queries";
-import { dotColor, edgeColor, layoutGraph, laneColor, type GraphRow, type LayoutState } from "@/lib/gitGraph";
+import { layoutGraph, type GraphRow, type LayoutState } from "@/lib/gitGraph";
+import { graphGutter, GraphLaneSvg, GraphRowBand, type Gutter } from "@/components/GraphLanes";
 import type { CommitDetail, GraphCommit, GraphRef } from "@/types";
 import { cn } from "@/lib/utils";
 import { WorkingDiffView } from "@/components/WorkingDiffView";
@@ -18,19 +19,10 @@ import type { GitFile } from "@/types";
 /** One page's worth of commits, and how many rows the graph draws per page
  *  fetch. Git log is cheap at this scale; the layout is the same. */
 const PAGE = 60;
-/** Lane column width, row height, dot radius, and the right hand padding —
- *  the SVG's geometry. */
-const LANE_W = 18;
+/** Row height, and the lane spacing the gutter starts from and compresses to
+ *  — the full window has room a sidebar doesn't. */
 const ROW_H = 44;
-const DOT_R = 4.5;
-const SVG_PAD = 8;
-const laneWidth = (row: GraphRow) =>
-  Math.max(
-    row.columns,
-    ...row.edges.map((e) => Math.max(e.from, e.to) + 1),
-    row.dot + 1
-  ) * LANE_W +
-  SVG_PAD;
+const GUTTER = { laneW: 18, minLaneW: 10, maxWidth: 240 };
 
 /** Split a commit's %D decoration into typed ref badges for the row. */
 interface RefBadge {
@@ -63,75 +55,15 @@ const BADGE_STYLE: Record<RefBadge["kind"], string> = {
   tag: "bg-secondary text-amber-400",
 };
 
-/** The lane SVG for one row: vertical lines per column, the horizontal
- *  connectors between the dot and each parent's column, then the dot on top. */
-function LaneSvg({ row }: { row: GraphRow }) {
-  const width = laneWidth(row);
-  const midY = ROW_H / 2;
-  return (
-    <svg
-      width={width}
-      height={ROW_H}
-      viewBox={`0 0 ${width} ${ROW_H}`}
-      className="shrink-0"
-      aria-hidden
-    >
-      {row.cells.map((cell, c) => {
-        if (cell.kind === "empty") return null;
-        const x = c * LANE_W + LANE_W / 2;
-        const stroke = laneColor(cell.color);
-        const y1 = cell.span === "bottom" ? midY : 0;
-        const y2 = cell.span === "top" ? midY : ROW_H;
-        return (
-          <line
-            key={c}
-            x1={x}
-            x2={x}
-            y1={y1}
-            y2={y2}
-            stroke={stroke}
-            strokeWidth={2}
-            opacity={0.8}
-          />
-        );
-      })}
-      {row.edges.map((edge, i) => {
-        const from = edge.from * LANE_W + LANE_W / 2;
-        const to = edge.to * LANE_W + LANE_W / 2;
-        return (
-          <line
-            key={i}
-            x1={from}
-            x2={to}
-            y1={midY}
-            y2={midY}
-            stroke={edgeColor(row, edge)}
-            strokeWidth={2}
-            opacity={0.8}
-          />
-        );
-      })}
-      {row.cells[row.dot] && (
-        <circle
-          cx={row.dot * LANE_W + LANE_W / 2}
-          cy={midY}
-          r={DOT_R}
-          fill={dotColor(row)}
-          stroke="var(--background)"
-          strokeWidth={2}
-        />
-      )}
-    </svg>
-  );
-}
-
 function CommitRow({
   row,
+  gutter,
   path,
   expanded,
   onToggle,
 }: {
   row: GraphRow<GraphCommit>;
+  gutter: Gutter;
   path: string | null;
   expanded: boolean;
   onToggle: () => void;
@@ -144,12 +76,13 @@ function CommitRow({
       <button
         onClick={onToggle}
         className={cn(
-          "flex w-full items-center gap-2 pr-3 text-left transition-colors hover:bg-accent/40",
+          "relative isolate flex w-full items-center gap-2 pr-3 text-left transition-colors hover:bg-accent/40",
           expanded && "bg-accent/20"
         )}
         style={{ minHeight: ROW_H }}
       >
-        <LaneSvg row={row} />
+        <GraphRowBand row={row} gutter={gutter} />
+        <GraphLaneSvg row={row} gutter={gutter} rowH={ROW_H} />
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
             <span className="truncate text-sm font-medium">{c.subject}</span>
@@ -333,6 +266,8 @@ export function GraphPane({ path, active, onBack }: GraphPaneProps) {
     return { rows };
   }, [pages]);
 
+  const gutter = useMemo(() => graphGutter(rows, GUTTER), [rows]);
+
   const loadingCount = pages.reduce((n, p) => n + p.length, 0);
 
   // When scrolled near the bottom and more history exists, load the next page.
@@ -487,7 +422,7 @@ export function GraphPane({ path, active, onBack }: GraphPaneProps) {
                     transform: `translateY(${vItem.start}px)`,
                   }}
                 >
-                  <CommitRow row={row} path={path} expanded={isOpen} onToggle={() => toggle(sha)} />
+                  <CommitRow row={row} gutter={gutter} path={path} expanded={isOpen} onToggle={() => toggle(sha)} />
                 </div>
               );
             })}

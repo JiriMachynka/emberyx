@@ -1,12 +1,16 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PanelLeftClose, SquarePen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { basename } from "@/lib/path";
+import { Button } from "@/components/ui/button";
 import { FileTree } from "@/components/editor/FileTree";
-import { requestOpenFile } from "@/lib/openFileRequest";
+import {
+  latestOpenFile,
+  onOpenFileRequest,
+  requestOpenFile,
+} from "@/lib/openFileRequest";
 import { gitStatusInterval, useGitChanges } from "@/lib/queries";
 import type { WorkspaceTab } from "@/lib/sidebar";
-import { ChangesColumn } from "./ChangesColumn";
 import { SidebarFooter } from "./SidebarFooter";
 import { Tree } from "./Tree";
 import type { SidebarProps } from "./types";
@@ -14,10 +18,10 @@ import type { SidebarProps } from "./types";
 const TABS: { id: WorkspaceTab; label: string }[] = [
   { id: "sessions", label: "Sessions" },
   { id: "explorer", label: "Explorer" },
-  { id: "changes", label: "Changes" },
 ];
 
-/** Sessions / Explorer / Changes — the column beside the project rail. */
+/** Sessions / Explorer — the column beside the project rail. Changes live in
+ *  the Git view. */
 export function WorkspaceColumn(props: SidebarProps) {
   const {
     projects,
@@ -27,14 +31,18 @@ export function WorkspaceColumn(props: SidebarProps) {
     onToggleCollapse,
     onNewAgent,
     onOpenEditor,
-    onOpenReview,
-    rightDock,
-    onOpenWorktree,
-    onRemoveWorktree,
-    remoteHost,
   } = props;
   const project = projects.find((p) => p.id === activeProjectId);
-  const [explorerFile, setExplorerFile] = useState<string | null>(null);
+  const [explorerFile, setExplorerFile] = useState<string | null>(latestOpenFile);
+  const [reveal, setReveal] = useState(0);
+  useEffect(
+    () =>
+      onOpenFileRequest((path) => {
+        setExplorerFile(path);
+        setReveal((n) => n + 1);
+      }),
+    []
+  );
   const changes = useGitChanges(
     project?.path ?? "",
     !!project && workspaceTab === "explorer",
@@ -56,7 +64,7 @@ export function WorkspaceColumn(props: SidebarProps) {
               type="button"
               onClick={() => onWorkspaceTab(tab.id)}
               className={cn(
-                "min-w-0 flex-1 truncate rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                "flex-auto whitespace-nowrap rounded-md px-1 py-1 text-xs font-medium transition-colors",
                 workspaceTab === tab.id
                   ? "bg-background text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground"
@@ -66,22 +74,26 @@ export function WorkspaceColumn(props: SidebarProps) {
             </button>
           ))}
         </nav>
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           onClick={onNewAgent}
           title="New thread"
-          className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="text-muted-foreground"
         >
-          <SquarePen className="size-3.5" />
-        </button>
-        <button
+          <SquarePen />
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           onClick={onToggleCollapse}
           title="Hide workspace (⌘B)"
-          className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="text-muted-foreground"
         >
-          <PanelLeftClose className="size-3.5" />
-        </button>
+          <PanelLeftClose />
+        </Button>
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -96,6 +108,7 @@ export function WorkspaceColumn(props: SidebarProps) {
               root={project.path}
               name={basename(project.path)}
               selected={explorerFile}
+              revealToken={reveal}
               dirtyPaths={dirtyPaths}
               onSelect={(path) => {
                 setExplorerFile(path);
@@ -108,23 +121,6 @@ export function WorkspaceColumn(props: SidebarProps) {
         {workspaceTab === "explorer" && !project && (
           <p className="px-3 py-6 text-center text-xs text-muted-foreground">
             Open a project to browse files
-          </p>
-        )}
-        {workspaceTab === "changes" && project && (
-          <div className="flex min-h-0 flex-1 flex-col">
-            <ChangesColumn
-              projectPath={project.path}
-              rightDock={rightDock}
-              remoteHost={remoteHost}
-              onOpenReview={onOpenReview}
-              onOpenWorktree={onOpenWorktree}
-              onRemoveWorktree={onRemoveWorktree}
-            />
-          </div>
-        )}
-        {workspaceTab === "changes" && !project && (
-          <p className="px-3 py-6 text-center text-xs text-muted-foreground">
-            Open a project to see changes
           </p>
         )}
       </div>

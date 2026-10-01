@@ -17,15 +17,16 @@ export function QuotaNotice({
   return (
     <div
       className={cn(
-        // pt-2 pb-4, not py-2: this rides the 95% shelf above the composer and
+        // pt-3 pb-7, not py-3: this rides the 95% shelf above the composer and
         // is pulled 16px in behind its rounded top edge, so the bottom padding
-        // is what keeps the last line clear of the overlap instead of clipped.
-        "flex items-start gap-2 rounded-lg border border-border/60 px-3 pt-2 pb-4 text-xs",
+        // is the visible padding plus that overlap — which is what centres the
+        // line in the part you can see.
+        "flex items-center gap-2.5 rounded-lg border border-border/60 px-4 pt-3 pb-7 text-sm",
         // The icon carries the severity; a filled status box is costume.
         spent ? "text-red-400" : "text-amber-400"
       )}
     >
-      <Gauge className="mt-0.5 size-3.5 shrink-0" />
+      <Gauge className="size-4 shrink-0" />
       <div className="min-w-0 flex-1 text-foreground">
         <span className="font-medium">{quotaMessage(alert)}</span>
         {alert.resets && (
@@ -38,7 +39,7 @@ export function QuotaNotice({
         className="shrink-0 rounded-md p-0.5 text-muted-foreground opacity-70 hover:opacity-100"
         aria-label="Dismiss usage warning"
       >
-        <X className="size-3.5" />
+        <X className="size-4" />
       </button>
     </div>
   );

@@ -172,6 +172,11 @@ export interface ChatUsage {
   /** Model's total context window, when the backend reports it. */
   contextWindow?: number;
   model?: string;
+  /** Reasoning levels the live session offers for its current model (ACP).
+   *  Empty when that model has none, so the effort control is absent. */
+  efforts?: string[];
+  /** The level the live session actually runs at (ACP). */
+  effort?: string;
 }
 
 let counter = 0;

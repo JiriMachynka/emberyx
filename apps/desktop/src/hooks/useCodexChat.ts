@@ -51,7 +51,9 @@ import {
   generateCodexTitle,
   type CodexEvent,
 } from "@/lib/codex/transport";
-import { classifyFailure } from "@/lib/accountState";
+import { codexAccountIssue } from "@/lib/accountState";
+import { useAccountIssue } from "@/hooks/useAccountIssue";
+import { useAgentPhase } from "@/hooks/useAgentPhase";
 import { useAgentStore } from "@/lib/agentStore";
 import { settleTurn } from "@/lib/turnSettle";
 import { registerAgent, setAgentLifecycle } from "@/lib/agentRegistry";
@@ -77,6 +79,8 @@ import {
   type ChatSession,
 } from "@/lib/chatSession";
 import type { Json, JsonObject } from "@/types";
+import { CONTINUE_PROMPT, isKeepGoingOn, rejectAnswer, type KeepGoing } from "@/lib/keepGoing";
+import { useKeepGoing } from "@/hooks/useKeepGoing";
 
 interface Options {
   cwd: string;
@@ -106,9 +110,13 @@ interface Options {
   /** False while this pane is mounted but hidden. Token paints skip React;
    *  refs keep accumulating and one flush lands when it is shown again. */
   visible?: boolean;
+  /** Unattended continue loop — same contract as `useAgentChat`. */
+  keepGoing?: KeepGoing | null;
+  onKeepGoingTurn?: (next: KeepGoing) => void;
+  onKeepGoingStop?: () => void;
 }
 
-/** Rolling stderr kept per spawn, enough to classify a failure. */
+/** Rolling stderr kept per spawn, enough to name why it exited. */
 const STDERR_CAP = 8192;
 
 let counter = 0;
@@ -184,10 +192,19 @@ export function useCodexChat({
   enabled = true,
   visible = true,
   persistent = false,
+  keepGoing = null,
+  onKeepGoingTurn,
+  onKeepGoingStop,
 }: Options): ChatSession {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
+  const {
+    isOn: unattended,
+    wrap: wrapKeepGoing,
+    stop: stopKeepGoing,
+    idle: keepGoingIdle,
+  } = useKeepGoing({ keepGoing, onKeepGoingTurn, onKeepGoingStop });
   const [ready, setReady] = useState(false);
   // Whether this pane wants an app-server at all. Opening a thread used to
   // launch one on the frame that switches panes. Stay asleep until the user
@@ -249,8 +266,9 @@ export function useCodexChat({
   // queues through — enqueue on busy, drain one per idle. React keeps a
   // synchronous mirror for the composer count and the chip's identity tweaks.
   const promptQueue = usePromptQueue(emberyxSessionId);
+  // `raw` is the text before a keep-going wrap — what the transcript shows.
   const queueRef = useRef<
-    { queueId: string | null; text: string; images: ChatImage[] | undefined }[]
+    { queueId: string | null; text: string; raw: string; images: ChatImage[] | undefined }[]
   >([]);
   const [queued, setQueued] = useState(0);
   // Set while a queue drain is in flight — the queue identity changes on every
@@ -263,8 +281,8 @@ export function useCodexChat({
       const existing = queueRef.current[i];
       queueRef.current[i] =
         existing && existing.text === p.text
-          ? { queueId: p.queueId, text: p.text, images: existing.images }
-          : { queueId: p.queueId, text: p.text, images: parseAttachments(p.attachments) };
+          ? { queueId: p.queueId, text: p.text, raw: existing.raw, images: existing.images }
+          : { queueId: p.queueId, text: p.text, raw: p.text, images: parseAttachments(p.attachments) };
     }
     queueRef.current.length = runtime.length;
     setQueued(runtime.length);
@@ -272,7 +290,13 @@ export function useCodexChat({
 
   const addChange = useAgentStore((st) => st.addChange);
   const setSessionStatus = useAgentStore((st) => st.setStatus);
-  const reportAccountIssue = useAgentStore((st) => st.reportAccountIssue);
+  const announceIssue = useAccountIssue(emberyxSessionId, cwd);
+  const syncPhase = useAgentPhase(emberyxSessionId, enabled);
+  /** The phase reads the message being written, which is always the last. */
+  const syncPhaseFrom = useCallback(
+    (s: CodexChatState) => syncPhase(s.status, s.messages[s.messages.length - 1]),
+    [syncPhase]
+  );
 
   /** Mirror the chat's status into the store. Called from the publish path
    *  rather than an effect over `status`: an effect needs a cleanup to reset,
@@ -280,15 +304,19 @@ export function useCodexChat({
    *  store saw working -> idle -> working and restarted the run clock. Writing
    *  at the event also reaches a hidden pane, whose paints are skipped — its
    *  sidebar row used to sit on a stale status until it was shown again. */
-  const mirroredStatusRef = useRef<ChatStatus | null>(null);
+  const mirroredStatusRef = useRef<string | null>(null);
   const syncSessionStatus = useCallback(
     (next: ChatStatus) => {
-      if (!enabled || mirroredStatusRef.current === next) return;
-      mirroredStatusRef.current = next;
-      setSessionStatus(emberyxSessionId, SESSION_STATUS[next]);
+      // Keep-going threads stay "working" between continues so LRU unmount
+      // cannot drop the pane on the idle gap — same as Claude.
+      const sticky = next === "idle" && unattended(stateRef.current.usage);
+      const key = sticky ? "sticky" : next;
+      if (!enabled || mirroredStatusRef.current === key) return;
+      mirroredStatusRef.current = key;
+      setSessionStatus(emberyxSessionId, sticky ? "working" : SESSION_STATUS[next]);
       void setAgentLifecycle(emberyxSessionId, next);
     },
-    [enabled, emberyxSessionId, setSessionStatus]
+    [enabled, emberyxSessionId, setSessionStatus, unattended]
   );
 
   // Idle belongs to the pane going away, which is the one thing that really is
@@ -308,7 +336,11 @@ export function useCodexChat({
   const publish = useCallback(() => {
     cancelFrame();
     syncSessionStatus(stateRef.current.status);
+    syncPhaseFrom(stateRef.current);
     if (!visibleRef.current) {
+      // Status still reaches React: the queue drain and keep-going run off it,
+      // and a hidden pane is exactly where an unattended thread works.
+      setStatus(stateRef.current.status);
       dirtyRef.current = true;
       return;
     }
@@ -319,7 +351,7 @@ export function useCodexChat({
     setMessages(s.messages);
     setStatus(s.status);
     setUsage(s.usage);
-  }, [cancelFrame, syncSessionStatus]);
+  }, [cancelFrame, syncSessionStatus, syncPhaseFrom]);
 
   const schedulePublish = useCallback(() => {
     // Ahead of the paint, and ahead of `publish`'s own hidden-pane bail.
@@ -398,6 +430,7 @@ export function useCodexChat({
         params
       );
       stateRef.current = state;
+      syncPhaseFrom(state);
       const p = isRecord(params) ? params : null;
       const turn = p && isRecord(p.turn) ? p.turn : null;
       const turnId = turn && typeof turn.id === "string" ? turn.id : null;
@@ -408,8 +441,17 @@ export function useCodexChat({
         // Remember the turn so the `turn/completed` that closes it — which
         // carries no reason — does not toast the same failure a second time.
         announcedFailureRef.current = runningTurn;
-        toast.error("Turn failed", { description: state.errorMessage });
-        stateRef.current = { ...stateRef.current, errorMessage: null };
+        const issue = codexAccountIssue(state.errorCode, state.errorMessage, state.usage.quota);
+        // A spent plan or a lost login is the one failure a retry can't fix, so
+        // it parks the pane on the account notice the way Claude's does.
+        if (issue) announceIssue(issue);
+        else toast.error("Turn failed", { description: state.errorMessage });
+        stateRef.current = {
+          ...stateRef.current,
+          errorMessage: null,
+          errorCode: null,
+          ...(issue ? { status: "error" } : {}),
+        };
       } else if (
         method === "turn/completed" &&
         turn?.status === "failed" &&
@@ -455,7 +497,7 @@ export function useCodexChat({
       for (const event of subagents) applySubagent(event);
       if (sessionStatus) setSessionStatus(emberyxSessionId, sessionStatus);
     },
-    [addChange, applySubagent, emberyxSessionId, setSessionStatus, cwd, publish]
+    [addChange, applySubagent, emberyxSessionId, setSessionStatus, cwd, publish, announceIssue, syncPhaseFrom]
   );
 
   const handleRequest = useCallback(
@@ -471,6 +513,17 @@ export function useCodexChat({
       if (ASK_METHODS.includes(req.method)) {
         const built = askFromRequest(req);
         if (!built) return;
+        const id = idRef.current;
+        if (id !== null && unattended(stateRef.current.usage)) {
+          // Nobody is there to answer; an elicitation reads it as a decline.
+          void codexRespond(
+            id,
+            req.id,
+            askResult(built.ask, rejectAnswer(built.ask.questions.length))
+          ).catch((e) => console.error("[emberyx] codex answer failed", e));
+          setLocalStatus("thinking");
+          return;
+        }
         askRef.current = built.ask;
         setPendingAsk(built.pending);
         setLocalStatus("awaiting_answer");
@@ -480,7 +533,7 @@ export function useCodexChat({
       // this client never advertised, so answering would be a guess.
       console.warn("[emberyx] unanswered codex request", req.method);
     },
-    [setLocalStatus]
+    [setLocalStatus, unattended]
   );
 
   // Spawn one app-server per (cwd, resume, model, posture) target and open its
@@ -489,15 +542,9 @@ export function useCodexChat({
     if (!enabled || !awake) return;
     let disposed = false;
     const channel = new Channel<CodexEvent>();
+    // Kept for the exit reason only: Codex names account failures with a
+    // typed code on the `error` notification, never in stderr wording.
     let stderr = "";
-    let announced = false;
-    const checkStderr = () => {
-      if (announced) return;
-      const issue = classifyFailure(stderr, "stderr", "codex");
-      if (!issue) return;
-      announced = true;
-      reportAccountIssue(emberyxSessionId, issue);
-    };
 
     // A reattached daemon session rebuilds its transcript from the replayed
     // notifications, which carry the thread id in their params — the fallback
@@ -534,7 +581,6 @@ export function useCodexChat({
           break;
         case "stderr":
           stderr = (stderr + ev.data).slice(-STDERR_CAP);
-          checkStderr();
           break;
         case "warning":
           console.warn("[emberyx] codex:", ev.data);
@@ -546,11 +592,8 @@ export function useCodexChat({
           askRef.current = null;
           setLocalStatus("exited");
           if (ev.data !== 0) {
-            checkStderr();
-            if (!announced) {
-              const lines = stderr.trim().split("\n").filter(Boolean);
-              setExitReason(lines[lines.length - 1] ?? null);
-            }
+            const lines = stderr.trim().split("\n").filter(Boolean);
+            setExitReason(lines[lines.length - 1] ?? null);
           }
           break;
       }
@@ -665,7 +708,6 @@ export function useCodexChat({
     publish,
     schedulePublish,
     setLocalStatus,
-    reportAccountIssue,
   ]);
 
   // Auto-title a fresh chat once its first turn settles. Codex names a thread
@@ -711,10 +753,11 @@ export function useCodexChat({
   const stop = useCallback(() => {
     pendingSendRef.current = [];
     interruptedRef.current = true;
+    stopKeepGoing();
     publish();
     interrupt();
     setLocalStatus("idle");
-  }, [interrupt, publish, setLocalStatus]);
+  }, [interrupt, publish, setLocalStatus, stopKeepGoing]);
 
   const deliver = useCallback((text: string, images?: ChatImage[]) => {
     const id = idRef.current;
@@ -733,8 +776,10 @@ export function useCodexChat({
     void call.catch((e) => console.error("[emberyx] codex turn failed", e));
   }, []);
 
+  /** `wire` is what goes to the app-server when it differs from what the
+   *  transcript shows — a keep-going wrap. */
   const acceptTurn = useCallback(
-    (text: string, images?: ChatImage[]) => {
+    (text: string, images?: ChatImage[], wire = text) => {
       const hasImages = !!images && images.length > 0;
       interruptedRef.current = false;
       if (firstMsgRef.current === null && text.trim()) firstMsgRef.current = text;
@@ -768,11 +813,11 @@ export function useCodexChat({
       if (idRef.current === null) {
         // No app-server yet — this send is what wakes it. The transcript already
         // shows the turn; it goes on the wire when the spawn lands.
-        pendingSendRef.current.push({ text, images });
+        pendingSendRef.current.push({ text: wire, images });
         wake();
         return;
       }
-      deliver(text, images);
+      deliver(wire, images);
     },
     [cwd, deliver, emberyxSessionId, publish, wake]
   );
@@ -783,19 +828,20 @@ export function useCodexChat({
     (text: string, images?: ChatImage[]) => {
       const hasImages = !!images && images.length > 0;
       if (!enabled || (!text.trim() && !hasImages)) return;
+      const wire = wrapKeepGoing(text, stateRef.current.usage);
       if (idRef.current !== null && BUSY_STATUS.has(stateRef.current.status)) {
         // Queue like every transport: a mid-turn message waits for the idle
         // instead of steering the running turn, and joins the transcript on
         // delivery.
         const attachments = hasImages ? JSON.stringify(images) : undefined;
-        queueRef.current.push({ queueId: null, text, images });
+        queueRef.current.push({ queueId: null, text: wire, raw: text, images });
         setQueued((n) => n + 1);
-        void promptQueue.enqueue(text, attachments, emberyxSessionId);
+        void promptQueue.enqueue(wire, attachments, emberyxSessionId);
         return;
       }
-      acceptTurn(text, images);
+      acceptTurn(text, images, wire);
     },
-    [acceptTurn, emberyxSessionId, enabled, promptQueue]
+    [acceptTurn, emberyxSessionId, enabled, promptQueue, wrapKeepGoing]
   );
 
   // Turns accepted before the app-server existed, in the order they were typed.
@@ -809,24 +855,38 @@ export function useCodexChat({
   // Drain one queued turn each time the agent goes idle. `turn/completed`
   // clears the turn id, so the popped turn starts a fresh one rather than
   // steering the turn that just finished.
+  // With the queue empty, a keep-going thread continues instead.
+  const keepGoingOn = isKeepGoingOn(keepGoing, usage);
   useEffect(() => {
     if (status !== "idle") {
+      // Held true across idle→thinking so a Strict-Mode double invoke cannot
+      // inject two continues for one idle.
       drainingRef.current = false;
       return;
     }
-    if (drainingRef.current) return;
-    if (queueRef.current.length === 0) return;
+    if (drainingRef.current || !enabled) return;
+    if (queueRef.current.length === 0) {
+      const step = keepGoingIdle(stateRef.current.usage, stateRef.current.messages);
+      // The idle was mirrored sticky-working while the flag was still on.
+      if (step === "done") syncSessionStatus(stateRef.current.status);
+      if (step !== "continue") return;
+      drainingRef.current = true;
+      acceptTurn(CONTINUE_PROMPT);
+      return;
+    }
     drainingRef.current = true;
     let cancelled = false;
     void promptQueue
       .runNext()
       .then((next) => {
         if (cancelled || !next) return;
+        // Show what the user typed; the runtime stores the keep-going wrap.
+        const raw = queueRef.current[0]?.raw ?? next.text;
         queueRef.current.shift();
         setQueued((n) => Math.max(0, n - 1));
         // `acceptTurn`, not `deliver` — the Codex transcript only shows the
         // user's turn on the idle-path accept, which also scores the checkpoint.
-        acceptTurn(next.text, parseAttachments(next.attachments));
+        acceptTurn(raw, parseAttachments(next.attachments), next.text);
       })
       .catch((e) => console.error("[emberyx] queue drain failed", e))
       .finally(() => {
@@ -835,7 +895,7 @@ export function useCodexChat({
     return () => {
       cancelled = true;
     };
-  }, [status, acceptTurn, promptQueue]);
+  }, [status, enabled, acceptTurn, promptQueue, keepGoingOn, keepGoingIdle, syncSessionStatus]);
 
   const compact = useCallback(() => {
     const id = idRef.current;

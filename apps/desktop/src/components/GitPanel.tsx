@@ -1,9 +1,15 @@
-import { ChangesColumn } from "@/components/sidebar/ChangesColumn";
+import { BranchTitle, ChangesColumn } from "@/components/sidebar/ChangesColumn";
+import { GitActions } from "@/components/GitActions";
 import { SidePanel } from "@/components/SidePanel";
 
 interface GitPanelProps {
   projectPath: string;
   remoteHost: string | undefined;
+  /** On screen: the file list polls porcelain and the forge is probed. A
+   *  hidden panel only reads the shared git cache. */
+  active: boolean;
+  /** File clicks open the Review dock tab, which only exists with the dock on. */
+  rightDock: boolean;
   onOpenReview: () => void;
   onOpenWorktree: (path: string, repoRoot: string, branch: string) => void;
   onRemoveWorktree: (worktreePath: string, repoRoot: string) => void | Promise<void>;
@@ -13,12 +19,14 @@ interface GitPanelProps {
 }
 
 /**
- * The same Changes surface as the column layout — commit composer, file list,
- * graph — in the Git dock tab. Branch/stash/worktree sit in the header overflow.
+ * The Git view's right sidebar: commit composer and file list beside the full
+ * graph. Branch/stash/worktree sit in the header overflow.
  */
 export function GitPanel({
   projectPath,
   remoteHost,
+  active,
+  rightDock,
   onOpenReview,
   onOpenWorktree,
   onRemoveWorktree,
@@ -28,22 +36,21 @@ export function GitPanel({
   return (
     <SidePanel
       storageKey="git"
-      flushHeader
       embedded={embedded}
       onClose={onClose}
-      header={
-        embedded ? null : (
-          <span className="px-2 text-xs font-medium text-muted-foreground">Git</span>
-        )
-      }
+      header={<BranchTitle projectPath={projectPath} />}
     >
-      <ChangesColumn
+      <GitActions
         projectPath={projectPath}
-        rightDock
-        remoteHost={remoteHost}
-        onOpenReview={onOpenReview}
         onOpenWorktree={onOpenWorktree}
         onRemoveWorktree={onRemoveWorktree}
+      />
+      <ChangesColumn
+        projectPath={projectPath}
+        rightDock={rightDock}
+        remoteHost={remoteHost}
+        active={active}
+        onOpenReview={onOpenReview}
       />
     </SidePanel>
   );

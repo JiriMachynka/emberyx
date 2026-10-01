@@ -103,6 +103,56 @@ export const lastAssistantText = (
   return "";
 };
 
+/** What a settled turn should do once the queue is empty. The caller drains
+ *  queued user turns first — a typed message always beats a continue. */
+export type IdleStep =
+  | { kind: "continue"; next: KeepGoing }
+  | { kind: "done" }
+  | { kind: "none" };
+
+export const planIdle = ({
+  flag,
+  usage = {},
+  now = 0,
+  messages,
+}: {
+  flag: KeepGoing | null | undefined;
+  usage?: { costUsd?: number };
+  now?: number;
+  messages: { role: string; text: string }[];
+}): IdleStep => {
+  if (!flag) return { kind: "none" };
+  const last = lastAssistantText(messages);
+  const go = shouldContinue({
+    flag,
+    queueEmpty: true,
+    status: "idle",
+    usage,
+    now,
+    lastAssistantText: last,
+    hasUserTurn: messages.some((m) => m.role === "user"),
+  });
+  if (go) return { kind: "continue", next: bumpTurns(flag) };
+  return last && isDoneCue(last) ? { kind: "done" } : { kind: "none" };
+};
+
+/** The text that goes on the wire for a user send, and the flag to persist
+ *  when this send is the one that gets wrapped. */
+export const prepareSend = (
+  flag: KeepGoing | null | undefined,
+  text: string,
+  usage: { costUsd?: number } = {},
+  now = 0
+): { wire: string; next?: KeepGoing } => {
+  if (!flag || flag.wrapped || !isKeepGoingOn(flag, usage, now)) return { wire: text };
+  return { wire: wrapOriginatingPrompt(text), next: { ...flag, wrapped: true } };
+};
+
+/** One reject line per question, for transports that answer each question
+ *  separately (Codex `requestUserInput`). */
+export const rejectAnswer = (questions: number): string =>
+  Array.from({ length: Math.max(1, questions) }, () => ASK_REJECT).join("\n");
+
 export const formatKeepGoingLabel = (
   flag: KeepGoing,
   costUsd?: number,

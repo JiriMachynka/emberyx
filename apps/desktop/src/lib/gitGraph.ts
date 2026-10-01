@@ -50,11 +50,23 @@ export interface GraphRow<
   dot: number;
   /** Per-column cells, index-aligned with the columns. */
   cells: LaneCell[];
-  /** Horizontal connectors between columns (dot→parent, and lane slides). */
-  edges: { from: number; to: number }[];
+  /** Horizontal connectors between columns. */
+  edges: GraphEdge[];
 }
 
 export type LaneCellKind = "dot" | "line" | "empty";
+
+/** A horizontal connector. What it joins decides how it is drawn:
+ *  - `parent` — the dot to a parent's lane, which continues below;
+ *  - `slide` — a lane changing column, arriving from above at `from` and
+ *    carrying on at `to` (compaction, or the trunk's occupant moving aside);
+ *  - `pull` — the trunk's line arriving at `from` and bending home into the
+ *    dot at column 0. */
+export interface GraphEdge {
+  from: number;
+  to: number;
+  kind: "parent" | "slide" | "pull";
+}
 
 /** Distinct, muted hues for the lanes — data-viz colour, not theme chrome.
  *  Shared by the full-window History pane and the Changes column's graph so
@@ -99,13 +111,77 @@ export const edgeColor = (row: GraphRow, edge: { to: number }): string =>
 export const isHeadRef = (refs: readonly string[]): boolean =>
   refs.some((r) => r === "HEAD" || r.startsWith("HEAD -> "));
 
-/** A connector from one lane's x to another at the same y, as an upward
- *  semicircular arc — the compact surface's merge/slide connector, where the
- *  History pane draws a straight `line`. */
-export const arcPath = (x1: number, x2: number, midY: number): string => {
-  const r = Math.abs(x2 - x1) / 2;
-  const sweep = x2 > x1 ? 0 : 1;
-  return `M ${x1} ${midY} A ${r} ${r} 0 0 ${sweep} ${x2} ${midY}`;
+/** A connector between two lanes as a horizontal run with one rounded corner —
+ *  the compact surface's merge/slide connector, where the History pane draws a
+ *  straight `line`.
+ *
+ *  `"target"` turns down into `x2`: the connector feeds a lane that continues
+ *  below (a parent, a new branch). `"source"` comes down from the row's top at
+ *  `x1` and bends across into the dot at `x2` — drawing its own top half, since
+ *  the column it arrives in may already belong to another lane. The radius
+ *  never exceeds the run or the half-row, so the corner stays inside. */
+export const elbowPath = (
+  x1: number,
+  x2: number,
+  midY: number,
+  radius: number,
+  corner: "target" | "source"
+): string => {
+  const dir = x2 > x1 ? 1 : -1;
+  const r = Math.min(radius, Math.abs(x2 - x1), midY);
+  if (corner === "target") {
+    const sweep = dir > 0 ? 1 : 0;
+    return `M ${x1} ${midY} H ${x2 - dir * r} A ${r} ${r} 0 0 ${sweep} ${x2} ${midY + r}`;
+  }
+  const sweep = dir > 0 ? 0 : 1;
+  return `M ${x1} 0 V ${midY - r} A ${r} ${r} 0 0 ${sweep} ${x1 + dir * r} ${midY} H ${x2}`;
+};
+
+/** A lane changing column: down from the row's top at `x1`, across, and down
+ *  into `x2` — two rounded corners, so it draws its own top half and the
+ *  target column must not draw one too. Each corner gets at most half the run. */
+export const slidePath = (x1: number, x2: number, midY: number, radius: number): string => {
+  const dir = x2 > x1 ? 1 : -1;
+  const r = Math.min(radius, Math.abs(x2 - x1) / 2, midY);
+  const out = dir > 0 ? 0 : 1;
+  const down = dir > 0 ? 1 : 0;
+  return (
+    `M ${x1} 0 V ${midY - r} A ${r} ${r} 0 0 ${out} ${x1 + dir * r} ${midY} ` +
+    `H ${x2 - dir * r} A ${r} ${r} 0 0 ${down} ${x2} ${midY + r}`
+  );
+};
+
+/** The path one connector draws, in a gutter of `laneW` columns. Anything
+ *  landing on the dot bends in from above; a slide is an S-bend between two
+ *  columns; a parent connector drops into the lane it opens or joins. */
+export const connectorPath = (
+  row: GraphRow,
+  edge: GraphEdge,
+  laneW: number,
+  midY: number
+): string => {
+  const x1 = edge.from * laneW + laneW / 2;
+  const x2 = edge.to * laneW + laneW / 2;
+  const r = Math.round(laneW * 0.7);
+  if (row.cells[edge.to]?.kind === "dot") return elbowPath(x1, x2, midY, r, "source");
+  if (edge.kind === "slide") return slidePath(x1, x2, midY, r);
+  return elbowPath(x1, x2, midY, r, "target");
+};
+
+/** Columns whose top half a connector already draws, so the cell must not.
+ *  A slide comes down its old column and lands in its new one: above the new
+ *  column a stroke would be a line that was never there, and above the old
+ *  one (now another lane's, or the dot's) it would run into the wrong thing.
+ *  A pull comes down the column the trunk leaves, and bends before the
+ *  centre a cell's stroke would reach. */
+export const connectorTops = (row: GraphRow): Set<number> => {
+  const tops = new Set<number>();
+  for (const e of row.edges) {
+    if (e.kind === "parent") continue;
+    tops.add(e.from);
+    if (e.kind === "slide") tops.add(e.to);
+  }
+  return tops;
 };
 
 export interface LaneCell {
@@ -158,16 +234,16 @@ export function layoutGraph<
     const isTrunk = trunkNext === s;
     if (isTrunk) trunkNext = commit.parents[0] ?? null;
 
-    const edges: { from: number; to: number }[] = [];
+    const edges: GraphEdge[] = [];
     let dot = prevLanes.indexOf(s);
     if (isTrunk && dot > 0) {
       // The trunk arrives in a lane other than 0 — pull it home: whatever
       // lane 0 was expecting moves into the trunk's lane (drawing its shift),
       // and the trunk's incoming line draws the bend past the occupant.
-      if (lanes[0] !== null) edges.push({ from: 0, to: dot });
+      if (lanes[0] !== null) edges.push({ from: 0, to: dot, kind: "slide" });
       lanes[dot] = lanes[0];
       laneColors[dot] = laneColors[0];
-      edges.push({ from: dot, to: 0 });
+      edges.push({ from: dot, to: 0, kind: "pull" });
       dot = 0;
       lanes[0] = null;
     } else {
@@ -194,7 +270,7 @@ export function layoutGraph<
       const existing = prevLanes.indexOf(parent);
       if (existing !== -1 && !used.has(existing)) {
         used.add(existing);
-        if (existing !== dot) edges.push({ from: dot, to: existing });
+        if (existing !== dot) edges.push({ from: dot, to: existing, kind: "parent" });
         return;
       }
       let free: number;
@@ -218,7 +294,7 @@ export function layoutGraph<
       lanes[free] = parent;
       used.add(free);
       // A straight first-parent continuation needs no connector.
-      if (free !== dot) edges.push({ from: dot, to: free });
+      if (free !== dot) edges.push({ from: dot, to: free, kind: "parent" });
     });
 
     // Compact: a slot that renders nothing this row and carries nothing
@@ -238,7 +314,7 @@ export function layoutGraph<
     }
     for (const raw of kept) {
       if (prevLanes[raw] != null && map.get(raw) !== raw) {
-        edges.push({ from: raw, to: map.get(raw)! });
+        edges.push({ from: raw, to: map.get(raw)!, kind: "slide" });
       }
     }
     const mappedDot = map.get(dot) ?? 0;

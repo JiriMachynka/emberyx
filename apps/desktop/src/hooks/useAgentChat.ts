@@ -46,12 +46,9 @@ import {
   upsertActivities,
 } from "@/lib/activities";
 import type { ActivityItem, Json, JsonObject } from "@/types";
-import {
-  classifyFailure,
-  issueTitle,
-  resetLabel,
-  type AccountIssue,
-} from "@/lib/accountState";
+import { classifyFailure } from "@/lib/accountState";
+import { useAccountIssue } from "@/hooks/useAccountIssue";
+import { useAgentPhase } from "@/hooks/useAgentPhase";
 import type { AgentBackend } from "@/lib/agentBackend";
 import {
   BUSY_STATUS,
@@ -66,14 +63,10 @@ import { parseAttachments, usePromptQueue } from "@/lib/promptQueue";
 import {
   ASK_REJECT,
   CONTINUE_PROMPT,
-  bumpTurns,
-  isDoneCue,
   isKeepGoingOn,
-  lastAssistantText,
-  shouldContinue,
-  wrapOriginatingPrompt,
   type KeepGoing,
 } from "@/lib/keepGoing";
+import { useKeepGoing } from "@/hooks/useKeepGoing";
 
 /** Paging over the local event store, plus the sidebar's hover prefetch. */
 import { fetchThreadPage, loadThreadHistory, takePrefetchedPage } from "@/lib/threadPage";
@@ -248,12 +241,12 @@ export function useAgentChat({
   const [usage, setUsage] = useState<ChatUsage>({});
   const usageRef = useRef(usage);
   usageRef.current = usage;
-  const keepGoingRef = useRef(keepGoing);
-  keepGoingRef.current = keepGoing;
-  const onKeepGoingTurnRef = useRef(onKeepGoingTurn);
-  onKeepGoingTurnRef.current = onKeepGoingTurn;
-  const onKeepGoingStopRef = useRef(onKeepGoingStop);
-  onKeepGoingStopRef.current = onKeepGoingStop;
+  const {
+    isOn: unattended,
+    wrap: wrapKeepGoing,
+    stop: stopKeepGoing,
+    idle: keepGoingIdle,
+  } = useKeepGoing({ keepGoing, onKeepGoingTurn, onKeepGoingStop });
   // Live token tally for the turn in flight. A turn is several assistant
   // messages (one per tool-loop hop): `done` holds finished messages, `cur` the
   // streaming one, whose count is restated (not incremented) by message_delta.
@@ -323,8 +316,8 @@ export function useAgentChat({
   const endSubagent = useAgentStore((st) => st.endSubagent);
   const endOpenSubagents = useAgentStore((st) => st.endOpenSubagents);
   const pushNotification = useAgentStore((st) => st.pushNotification);
-  const reportAccountIssue = useAgentStore((st) => st.reportAccountIssue);
   const setSessionStatus = useAgentStore((st) => st.setStatus);
+  const syncPhase = useAgentPhase(emberyxSessionId, enabled);
 
   // Read through a ref so `applyStatus` stays identity-stable: it is called
   // from callbacks all over this file, and a new identity per `enabled` would
@@ -345,11 +338,12 @@ export function useAgentChat({
       // Keep-going threads stay "working" in the sidebar between continues so
       // LRU unmount cannot drop the pane on the idle gap.
       const sticky =
-        next === "idle" && isKeepGoingOn(keepGoingRef.current, usageRef.current);
+        next === "idle" && unattended(usageRef.current);
       setSessionStatus(emberyxSessionId, sticky ? "working" : SESSION_STATUS[next]);
+      syncPhase(next, draftRef.current);
       void setAgentLifecycle(emberyxSessionId, next);
     },
-    [emberyxSessionId, setSessionStatus]
+    [emberyxSessionId, setSessionStatus, unattended, syncPhase]
   );
 
   // Idle belongs to the pane going away, which is the one thing that really is
@@ -549,9 +543,10 @@ export function useAgentChat({
       if (!draft) return;
       patch(draft);
       draftDirtyRef.current = true;
+      syncPhase(statusRef.current, draft);
       scheduleFlush();
     },
-    [scheduleFlush]
+    [scheduleFlush, syncPhase]
   );
 
   /** Fold row snapshots into the message that owns them. The routing and the
@@ -601,27 +596,7 @@ export function useAgentChat({
     if (visible) flushPending();
   }, [visible, flushPending]);
 
-  /** Record an account-level failure and announce it in the generic error's
-   *  place — "usage limit reached" is actionable, "ended with an error" isn't. */
-  const announceIssue = useCallback(
-    (issue: AccountIssue) => {
-      reportAccountIssue(emberyxSessionId, issue);
-      const kind = issue.kind === "rate_limit" ? "rate-limited" : "logged-out";
-      const title = issueTitle(issue);
-      const reset = resetLabel(issue);
-      const body = reset ? `${issue.message} — ${reset}` : issue.message;
-      const settings = loadSettings();
-      pushNotification({
-        session: emberyxSessionId,
-        project: basename(cwd),
-        kind,
-        title,
-        body,
-      });
-      void notifyNative(settings, kind, title, body);
-    },
-    [cwd, emberyxSessionId, pushNotification, reportAccountIssue]
-  );
+  const announceIssue = useAccountIssue(emberyxSessionId, cwd);
 
   const handleLine = useCallback(
     (raw: string) => {
@@ -1350,10 +1325,7 @@ export function useAgentChat({
     // go out after the user already hit stop.
     pendingSendRef.current = null;
     interruptedRef.current = true;
-    if (keepGoingRef.current) {
-      keepGoingRef.current = null;
-      onKeepGoingStopRef.current?.();
-    }
+    stopKeepGoing();
     // No further tokens are coming — publish what the frame still owed.
     flushPending();
     if (idRef.current === null) {
@@ -1361,7 +1333,7 @@ export function useAgentChat({
       return;
     }
     interrupt();
-  }, [interrupt, flushPending]);
+  }, [interrupt, flushPending, stopKeepGoing]);
 
   // Stop the newest turn. A turn that never produced anything is un-sent — it
   // leaves the transcript and its text/images are handed back for the composer
@@ -1465,7 +1437,7 @@ export function useAgentChat({
     void fetchPendingAsk(emberyxSessionId)
       .then((pending) => {
         if (cancelled || !pending || askRef.current) return;
-        if (isKeepGoingOn(keepGoingRef.current, usageRef.current)) {
+        if (unattended(usageRef.current)) {
           rejectUnattended(pending.id);
           return;
         }
@@ -1484,7 +1456,7 @@ export function useAgentChat({
         console.error("[emberyx] unanswerable ask-user payload", payload);
         return;
       }
-      if (isKeepGoingOn(keepGoingRef.current, usageRef.current)) {
+      if (unattended(usageRef.current)) {
         rejectUnattended(payload.id);
         return;
       }
@@ -1495,7 +1467,7 @@ export function useAgentChat({
       cancelled = true;
       void unlisten.then((off) => off());
     };
-  }, [enabled, emberyxSessionId]);
+  }, [enabled, emberyxSessionId, unattended]);
 
   /** Hand a choice back to the blocked tool call. */
   const answerAsk = useCallback((answer: string) => {
@@ -1570,14 +1542,7 @@ export function useAgentChat({
       // silently retrying.
       usedRef.current = true;
       if (!firstMsgRef.current && text.trim()) firstMsgRef.current = text;
-      let wire = text;
-      const flag = keepGoingRef.current;
-      if (isKeepGoingOn(flag, usageRef.current, Date.now()) && flag && !flag.wrapped) {
-        wire = wrapOriginatingPrompt(text);
-        const next = { ...flag, wrapped: true };
-        keepGoingRef.current = next;
-        onKeepGoingTurnRef.current?.(next);
-      }
+      const wire = wrapKeepGoing(text, usageRef.current);
       if (id === null && !pendingSendRef.current) {
         // No process yet — this is the turn that wakes the pane. Hold it and go
         // busy, so anything sent while the spawn is in flight takes the queue
@@ -1599,7 +1564,7 @@ export function useAgentChat({
       }
       deliver(wire, images, text);
     },
-    [deliver, promptQueue, emberyxSessionId, enabled, wake]
+    [deliver, promptQueue, emberyxSessionId, enabled, wake, wrapKeepGoing]
   );
 
   // The turn that woke the pane goes on the wire as soon as the spawn lands.
@@ -1656,34 +1621,13 @@ export function useAgentChat({
         cancelled = true;
       };
     }
-    const flag = keepGoingRef.current;
-    const last = lastAssistantText(messagesRef.current);
-    if (
-      !flag ||
-      !shouldContinue({
-        flag,
-        queueEmpty: true,
-        status: "idle",
-        usage: usageRef.current,
-        now: Date.now(),
-        lastAssistantText: last,
-        hasUserTurn: messagesRef.current.some((m) => m.role === "user"),
-      })
-    ) {
-      if (flag && last && isDoneCue(last)) {
-        keepGoingRef.current = null;
-        onKeepGoingStopRef.current?.();
-        // applyStatus("idle") ran sticky-working while the flag was still on.
-        applyStatus("idle");
-      }
-      return;
-    }
+    const step = keepGoingIdle(usageRef.current, messagesRef.current);
+    // applyStatus("idle") ran sticky-working while the flag was still on.
+    if (step === "done") applyStatus("idle");
+    if (step !== "continue") return;
     drainingRef.current = true;
-    const next = bumpTurns(flag);
-    keepGoingRef.current = next;
-    onKeepGoingTurnRef.current?.(next);
     deliver(CONTINUE_PROMPT);
-  }, [status, deliver, promptQueue, keepGoingOn, applyStatus]);
+  }, [status, deliver, promptQueue, keepGoingOn, applyStatus, keepGoingIdle]);
 
   // Auto-title a fresh chat after its first turn completes (headless CC never
   // titles a session itself). Skipped for resumed threads (already titled).

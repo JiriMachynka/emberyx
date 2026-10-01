@@ -24,12 +24,15 @@ export function FileTree({
   root,
   name,
   selected,
+  revealToken = 0,
   dirtyPaths,
   onSelect,
 }: {
   root: string;
   name: string;
   selected: string | null;
+  /** Bumped when the same file is opened again, so the tree re-scrolls to it. */
+  revealToken?: number;
   dirtyPaths: Set<string>;
   onSelect: (path: string) => void;
 }) {
@@ -60,6 +63,9 @@ export function FileTree({
     () => buildDirRows(root, name, open, entries),
     [root, name, open, entries]
   );
+  const selectedIndex = selected
+    ? rows.findIndex((row) => row.path === selected)
+    : -1;
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virt = useVirtualizer({
@@ -68,6 +74,12 @@ export function FileTree({
     estimateSize: () => ROW_HEIGHT,
     overscan: 12,
   });
+
+  // Listings arrive asynchronously; wait until the row exists, then jump to it.
+  useEffect(() => {
+    if (selectedIndex < 0) return;
+    virt.scrollToIndex(selectedIndex, { align: "center", behavior: "auto" });
+  }, [selectedIndex, revealToken, virt]);
 
   const toggle = (path: string) =>
     setOpen((prev) => {
@@ -93,6 +105,9 @@ export function FileTree({
                 height: ROW_HEIGHT,
                 paddingLeft: 6 + row.depth * 12,
               }}
+              aria-current={
+                !row.isDir && row.path === selected ? "true" : undefined
+              }
               className={cn(
                 "flex w-full items-center gap-1.5 pr-2 text-left text-xs hover:bg-accent",
                 !row.isDir && row.path === selected && "bg-accent text-foreground"

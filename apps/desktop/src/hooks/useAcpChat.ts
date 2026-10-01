@@ -40,9 +40,12 @@ import {
 import {
   applyUpdate,
   autoPermission,
+  configOptionsOf,
   emptyTurn,
   endTurn,
   grokTurnStop,
+  interjectMethod,
+  ownsToolCall,
   permissionOutcome,
   readPermission,
   readUsageUpdate,
@@ -50,7 +53,7 @@ import {
   type AcpPermission,
   type AcpTurn,
 } from "@/lib/acp/adapter";
-import type { AcpSessionUpdate } from "@/lib/acp/protocol";
+import type { AcpConfigOption, AcpSessionUpdate } from "@/lib/acp/protocol";
 import {
   accessLevelFrom,
   type PermissionMode,
@@ -58,18 +61,25 @@ import {
 import {
   acpCancel,
   acpDetach,
+  acpInterject,
   acpKill,
   acpPrompt,
   acpRespond,
   acpSessionLoad,
   acpSessionNew,
+  acpSetConfigOption,
   acpSetModel,
   acpSpawn,
   currentModel,
+  effortOption,
   modelOptions,
   type AcpEvent,
   type AcpServerRequest,
 } from "@/lib/acp/transport";
+import { acpAccountIssue } from "@/lib/accountState";
+import { isAgentBackend } from "@/lib/agentBackend";
+import { useAgentPhase } from "@/hooks/useAgentPhase";
+import { useAccountIssue } from "@/hooks/useAccountIssue";
 import { contextForModel } from "@/lib/modelContext";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
 import { loadThreadHistory, type ProjectedMessageRow } from "@/lib/threadPage";
@@ -93,13 +103,14 @@ import {
 } from "@/hooks/useAgentChat";
 import {
   BUSY_STATUS,
-  chatNoop,
   loadNothing,
   rewindNothing,
   revertNothing,
   type ChatSession,
 } from "@/lib/chatSession";
 import type { Json, JsonObject } from "@/types";
+import { ASK_REJECT, CONTINUE_PROMPT, isKeepGoingOn, type KeepGoing } from "@/lib/keepGoing";
+import { useKeepGoing } from "@/hooks/useKeepGoing";
 
 /** Keep the tail of stderr for an exit message; the rest is diagnostics. */
 const STDERR_CAP = 4000;
@@ -185,6 +196,10 @@ interface Options {
   /** Model to run, from the picker; "" lets the agent decide. Applied over
    *  `session/set_model` — ACP has no model parameter on `session/new`. */
   model?: string;
+  /** Reasoning level from the picker; "" leaves the session on its own. Set
+   *  over `session/set_config_option`, and only to a level the session offers
+   *  for its current model. */
+  effort?: string;
   /** Binary override + extra args from Settings → Providers. Identity-stable
    *  at the call site — it rides the spawn effect's deps. */
   launch?: { command: string | null; args: string[]; env?: Record<string, string> };
@@ -200,6 +215,10 @@ interface Options {
   /** False while this pane is mounted but hidden. Token paints skip React;
    *  refs keep accumulating and one flush lands when it is shown again. */
   visible?: boolean;
+  /** Unattended continue loop — same contract as `useAgentChat`. */
+  keepGoing?: KeepGoing | null;
+  onKeepGoingTurn?: (next: KeepGoing) => void;
+  onKeepGoingStop?: () => void;
 }
 
 /**
@@ -244,6 +263,7 @@ export function useAcpChat({
   resumeOwned = false,
   imported = false,
   model,
+  effort = "",
   launch,
   skipPermissions = false,
   permissionMode = "default",
@@ -251,12 +271,21 @@ export function useAcpChat({
   onTitled,
   visible = true,
   persistent = false,
+  keepGoing = null,
+  onKeepGoingTurn,
+  onKeepGoingStop,
 }: Options): ChatSession {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [usage, setUsage] = useState<ChatUsage>({});
   const usageRef = useRef(usage);
   usageRef.current = usage;
+  const {
+    isOn: unattended,
+    wrap: wrapKeepGoing,
+    stop: stopKeepGoing,
+    idle: keepGoingIdle,
+  } = useKeepGoing({ keepGoing, onKeepGoingTurn, onKeepGoingStop });
   const [ready, setReady] = useState(false);
   // Stay asleep until the user types or sends, so switching onto a fresh ACP
   // chat does not wait on spawn to paint the empty screen — unless the daemon
@@ -271,15 +300,17 @@ export function useAcpChat({
   useEffect(() => {
     if (held) setAwake(true);
   }, [held]);
-  const pendingSendRef = useRef<{ text: string; images?: ChatImage[] } | null>(
-    null
-  );
+  // `text` is the wire form; `raw` what the user typed, before a keep-going wrap.
+  const pendingSendRef = useRef<
+    { text: string; raw: string; images?: ChatImage[] } | null
+  >(null);
 
   // The supervisor owns this thread's prompt queue, the same runtime Claude
   // queues through — enqueue on busy, drain one per idle.
   const promptQueue = usePromptQueue(emberyxSessionId);
+  // `raw` is the text before a keep-going wrap — what the transcript shows.
   const queueRef = useRef<
-    { queueId: string | null; text: string; images: ChatImage[] | undefined }[]
+    { queueId: string | null; text: string; raw: string; images: ChatImage[] | undefined }[]
   >([]);
   const [queued, setQueued] = useState(0);
   // Set while a queue drain is in flight — the queue identity changes on every
@@ -292,8 +323,8 @@ export function useAcpChat({
       const existing = queueRef.current[i];
       queueRef.current[i] =
         existing && existing.text === p.text
-          ? { queueId: p.queueId, text: p.text, images: existing.images }
-          : { queueId: p.queueId, text: p.text, images: parseAttachments(p.attachments) };
+          ? { queueId: p.queueId, text: p.text, raw: existing.raw, images: existing.images }
+          : { queueId: p.queueId, text: p.text, raw: p.text, images: parseAttachments(p.attachments) };
     }
     queueRef.current.length = runtime.length;
     setQueued(runtime.length);
@@ -390,6 +421,25 @@ export function useAcpChat({
    *  cancelled `session/prompt` either way — some with `cancelled`, some with an
    *  error — and a stop the user asked for is not a failed session. */
   const stoppedRef = useRef(false);
+  /** A `session/prompt` still waiting on its reply. Grok settles a turn on its
+   *  ext notifications *before* replying, so a continue sent in that gap would
+   *  have the late reply commit the continue instead — keep-going waits. */
+  const [promptOpen, setPromptOpen] = useState(false);
+  /** Which config option sets reasoning effort on this session, when one does. */
+  const effortConfigIdRef = useRef<string | null>(null);
+  /** `model|level` last asked for, so a refused level is never re-sent. */
+  const attemptedEffortRef = useRef("");
+  /** A refused level, reported the way a refused model is. */
+  const [effortError, setEffortError] = useState<string | null>(null);
+  /** Messages sent into the running turn, in order, each with the id of the
+   *  reply part it cut off. Recorded to the event log when the turn settles,
+   *  so the log reads in the order the transcript shows. */
+  const steersRef = useRef<{ replyId: string | null; prompt: string }[]>([]);
+  /** Replies still owed by prompts sent mid-turn. OpenCode answers every
+   *  prompt that joined a turn when the turn ends, all at once; only the last
+   *  one settles it. */
+  const steerRepliesRef = useRef(0);
+  const announceIssue = useAccountIssue(emberyxSessionId, cwd);
 
   const setSessionStatus = useAgentStore((s) => s.setStatus);
 
@@ -399,14 +449,19 @@ export function useAcpChat({
    *  store saw working -> idle -> working and restarted the run clock. Writing
    *  at the event also reaches a hidden pane, whose paints are skipped — its
    *  sidebar row used to sit on a stale status until it was shown again. */
-  const mirroredStatusRef = useRef<ChatStatus | null>(null);
+  const mirroredStatusRef = useRef<string | null>(null);
+  const syncPhase = useAgentPhase(emberyxSessionId, enabled);
   const syncSessionStatus = useCallback(
     (next: ChatStatus) => {
-      if (!enabled || mirroredStatusRef.current === next) return;
-      mirroredStatusRef.current = next;
-      setSessionStatus(emberyxSessionId, SESSION_STATUS[next]);
+      // Keep-going threads stay "working" between continues so LRU unmount
+      // cannot drop the pane on the idle gap — same as Claude.
+      const sticky = next === "idle" && unattended(usageRef.current);
+      const key = sticky ? "sticky" : next;
+      if (!enabled || mirroredStatusRef.current === key) return;
+      mirroredStatusRef.current = key;
+      setSessionStatus(emberyxSessionId, sticky ? "working" : SESSION_STATUS[next]);
     },
-    [enabled, emberyxSessionId, setSessionStatus]
+    [enabled, emberyxSessionId, setSessionStatus, unattended]
   );
 
   // Idle belongs to the pane going away, which is the one thing that really is
@@ -424,9 +479,17 @@ export function useAcpChat({
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
+    // Unattended: nobody is there to pick, so the agent is told to decide.
+    const rejectUnattended = (id: string) => {
+      void invoke("answer_ask", { id, answer: ASK_REJECT });
+    };
     void fetchPendingAsk(emberyxSessionId)
       .then((pending) => {
         if (cancelled || !pending || askRef.current) return;
+        if (unattended(usageRef.current)) {
+          rejectUnattended(pending.id);
+          return;
+        }
         setPendingAsk(pending);
       })
       .catch((e) => console.error("[emberyx] pending ask read failed", e));
@@ -440,13 +503,17 @@ export function useAcpChat({
         console.error("[emberyx] unanswerable ask-user payload", payload);
         return;
       }
+      if (unattended(usageRef.current)) {
+        rejectUnattended(payload.id);
+        return;
+      }
       setPendingAsk({ id: payload.id, questions });
     });
     return () => {
       cancelled = true;
       void unlisten.then((off) => off());
     };
-  }, [enabled, emberyxSessionId]);
+  }, [enabled, emberyxSessionId, unattended]);
 
   const cancelFrame = useCallback(() => {
     cancelStreamPublish(frameRef.current);
@@ -456,7 +523,11 @@ export function useAcpChat({
   const publish = useCallback(() => {
     cancelFrame();
     syncSessionStatus(turnRef.current.status);
+    syncPhase(turnRef.current.status, turnRef.current.message);
     if (!visibleRef.current) {
+      // Status still reaches React: the queue drain and keep-going run off it,
+      // and a hidden pane is exactly where an unattended thread works.
+      setStatus(turnRef.current.status);
       dirtyRef.current = true;
       return;
     }
@@ -468,11 +539,12 @@ export function useAcpChat({
       turn.message ? [...committedRef.current, turn.message] : committedRef.current
     );
     setStatus(turn.status);
-  }, [cancelFrame, syncSessionStatus]);
+  }, [cancelFrame, syncSessionStatus, syncPhase]);
 
   const schedulePublish = useCallback(() => {
     // Ahead of the paint, and ahead of `publish`'s own hidden-pane bail.
     syncSessionStatus(turnRef.current.status);
+    syncPhase(turnRef.current.status, turnRef.current.message);
     dirtyRef.current = true;
     frameRef.current = scheduleStreamPublish(frameRef.current, {
       lastAt: lastPublishRef.current,
@@ -483,7 +555,7 @@ export function useAcpChat({
         publish();
       },
     });
-  }, [publish, syncSessionStatus]);
+  }, [publish, syncSessionStatus, syncPhase]);
 
   // A queued frame can only render into a live component.
   useEffect(() => cancelFrame, [cancelFrame]);
@@ -592,10 +664,10 @@ export function useAcpChat({
       // Reopened history lives under `resume`; the provider's new session id
       // is ephemeral and must not fork a second store thread.
       const logId = resume ?? sessionRef.current;
-      if (logId && ended.message) {
-        for (const tool of ended.message.tools) {
+      const recordReply = (id: string, reply: ChatMessage) => {
+        for (const tool of reply.tools) {
           recordTimeline(
-            logId,
+            id,
             "toolInvocation",
             JSON.stringify({
               name: tool.name,
@@ -605,10 +677,20 @@ export function useAcpChat({
             })
           );
         }
-        if (ended.message.text.trim()) {
-          recordTimeline(logId, "assistantResponse", ended.message.text);
+        if (reply.text.trim()) recordTimeline(id, "assistantResponse", reply.text);
+      };
+      // Steered parts are recorded only now, so a tool that was still running
+      // when the user cut in is logged with the result it later got.
+      const steers = steersRef.current;
+      steersRef.current = [];
+      if (logId) {
+        for (const steer of steers) {
+          const part = committedRef.current.find((m) => m.id === steer.replyId);
+          if (part) recordReply(logId, part);
+          recordTimeline(logId, "userPrompt", steer.prompt);
         }
       }
+      if (logId && ended.message) recordReply(logId, ended.message);
       if (logId) {
         recordTimeline(
           logId,
@@ -686,6 +768,14 @@ export function useAcpChat({
     [publish, showHeadPermission]
   );
 
+  /** Read the effort select out of a full option set. A model switch rebuilds
+   *  the set, and a model without levels drops it, which empties `efforts`. */
+  const applyConfigOptions = useCallback((options: AcpConfigOption[]) => {
+    const option = effortOption(options);
+    effortConfigIdRef.current = option?.configId ?? null;
+    setUsage((u) => ({ ...u, efforts: option?.levels ?? [], effort: option?.current }));
+  }, []);
+
   const applyNotification = useCallback((method: string, params: Json) => {
     const update = sessionUpdateOf(method, params);
     if (!update) return;
@@ -698,14 +788,35 @@ export function useAcpChat({
         ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
       }));
     }
+    if (isRecord(update) && update.sessionUpdate === "config_option_update") {
+      const options = configOptionsOf(update);
+      if (options) applyConfigOptions(options);
+      return;
+    }
     if (method !== "session/update" || replayingRef.current) return;
+    // A tool that was running when the user steered belongs to the reply part
+    // the steer cut off; its update must land there, not open a second card.
+    for (const steer of steersRef.current) {
+      const part = committedRef.current.find((m) => m.id === steer.replyId);
+      if (!part || !ownsToolCall(part, update)) continue;
+      const patched = applyUpdate(
+        { message: part, status: "tool" },
+        update as AcpSessionUpdate["update"],
+        part.id,
+        autoApprovedRef.current
+      ).message;
+      committedRef.current = committedRef.current.map((m) =>
+        m.id === part.id && patched ? patched : m
+      );
+      return;
+    }
     turnRef.current = applyUpdate(
       turnRef.current,
       update as AcpSessionUpdate["update"],
       turnRef.current.message?.id ?? messageId("a"),
       autoApprovedRef.current
     );
-  }, []);
+  }, [applyConfigOptions]);
 
   useEffect(() => {
     if (!enabled || !awake) return;
@@ -732,10 +843,23 @@ export function useAcpChat({
       }
     };
 
+    const accountIssue = (message: string) =>
+      isAgentBackend(provider) ? acpAccountIssue(provider, message) : null;
+
     channel.onmessage = (ev) => {
       // StrictMode's double-mount kills the first process; its exit must not
       // flip the live session to "exited".
       if (disposed) return;
+      // A prompt that joined the running turn is answered with it; the turn
+      // settles on the last of those replies, once.
+      if ((ev.type === "turnEnded" || ev.type === "turnFailed") && steerRepliesRef.current > 0) {
+        steerRepliesRef.current -= 1;
+        return;
+      }
+      if (ev.type === "exit") steerRepliesRef.current = 0;
+      if (ev.type === "turnEnded" || ev.type === "turnFailed" || ev.type === "exit") {
+        setPromptOpen(false);
+      }
       // Stop already committed the turn. Further chunks would reopen it as a
       // live bubble; the cancelled `session/prompt` reply just clears the flag.
       if (stoppedRef.current && turnRef.current.status === "idle") {
@@ -788,6 +912,16 @@ export function useAcpChat({
           // next turn, possibly on another model. Announce it and stay
           // writable — a process that really died arrives as `exit`, and that
           // is what parks the pane on "Session failed".
+          {
+            // A lost login is the one failure a retry can't fix, so it parks
+            // the pane on the account notice instead, the way Codex's does.
+            const issue = accountIssue(ev.data.message);
+            if (issue) {
+              announceIssue(issue);
+              commitTurn("refusal", "error");
+              break;
+            }
+          }
           rememberRefusal(modelRef.current, ev.data.message, usageRef.current.models);
           toast.error("Turn failed", { description: ev.data.message });
           commitTurn("refusal", "idle");
@@ -888,10 +1022,15 @@ export function useAcpChat({
           models,
           contextWindow: windowOf(modelId, models) ?? u.contextWindow,
         }));
+        applyConfigOptions(session.configOptions ?? []);
         setReady(true);
       } catch (e) {
         if (disposed) return;
         setPendingAsk(null);
+        // An agent with no login refuses the session itself; the account
+        // notice says what to do about it, where "Session failed" would not.
+        const issue = accountIssue(String(e));
+        if (issue) announceIssue(issue);
         setExitReason(String(e));
         turnRef.current = { ...turnRef.current, status: "error" };
         publish();
@@ -902,6 +1041,9 @@ export function useAcpChat({
       disposed = true;
       setReady(false);
       setLiveThreadId(undefined);
+      // The next process owes no reply for this one's prompt.
+      setPromptOpen(false);
+      steerRepliesRef.current = 0;
       const id = processRef.current;
       processRef.current = null;
       sessionRef.current = null;
@@ -928,6 +1070,8 @@ export function useAcpChat({
     schedulePublish,
     commitTurn,
     clearPermissions,
+    applyConfigOptions,
+    announceIssue,
   ]);
 
   // Reopening a thread the event log owns: the turns it recorded are the
@@ -998,6 +1142,42 @@ export function useAcpChat({
       .catch((e) => setModelError(`${provider} refused ${model}: ${String(e)}`));
   }, [enabled, ready, model, provider]);
 
+  // Apply the picked reasoning level. Levels are per model and come from the
+  // live session, so a level the current model doesn't offer is left alone
+  // rather than sent, and a switch to a model that does offer it applies it
+  // then. "" leaves the session on its own level. A refusal is reported like a
+  // refused model and not retried for the same model.
+  const sessionEfforts = usage.efforts;
+  const sessionEffort = usage.effort;
+  const sessionModel = usage.model ?? "";
+  useEffect(() => {
+    if (!enabled || !ready || !effort) return;
+    if (!sessionEfforts?.includes(effort) || sessionEffort === effort) return;
+    const id = processRef.current;
+    const sessionId = sessionRef.current;
+    const configId = effortConfigIdRef.current;
+    if (id === null || !sessionId || !configId) return;
+    const key = `${sessionModel}|${effort}`;
+    if (attemptedEffortRef.current === key) return;
+    attemptedEffortRef.current = key;
+    void acpSetConfigOption(id, sessionId, configId, effort)
+      .then((options) => {
+        if (options) applyConfigOptions(options);
+        else setUsage((u) => ({ ...u, effort }));
+        setEffortError(null);
+      })
+      .catch((e) => setEffortError(`${provider} refused ${effort} effort: ${String(e)}`));
+  }, [
+    enabled,
+    ready,
+    effort,
+    sessionEfforts,
+    sessionEffort,
+    sessionModel,
+    provider,
+    applyConfigOptions,
+  ]);
+
   const promptTurn = useCallback(
     async (
       id: number,
@@ -1005,13 +1185,19 @@ export function useAcpChat({
       text: string,
       images?: ChatImage[]
     ) => {
-      await acpPrompt(id, sessionId, text, images);
+      setPromptOpen(true);
+      await acpPrompt(id, sessionId, text, images).catch((e) => {
+        setPromptOpen(false);
+        throw e;
+      });
     },
     []
   );
 
+  /** `wire` is what goes to the agent when it differs from what the
+   *  transcript and the event log show — a keep-going wrap. */
   const acceptTurn = useCallback(
-    (text: string, images?: ChatImage[]) => {
+    (text: string, images?: ChatImage[], wire = text) => {
       const id = processRef.current;
       const sessionId = sessionRef.current;
       const channel = channelRef.current;
@@ -1035,7 +1221,7 @@ export function useAcpChat({
       turnRef.current = { message: null, status: "thinking" };
       publish();
       if (id === null || !sessionId || !channel) {
-        pendingSendRef.current = { text, images };
+        pendingSendRef.current = { text: wire, raw: text, images };
         wake();
         return;
       }
@@ -1057,49 +1243,119 @@ export function useAcpChat({
         committedRef.current = attachCheckpoint(committedRef.current, point.id);
         publish();
       });
-      void promptTurn(id, sessionId, text, images);
+      void promptTurn(id, sessionId, wire, images);
     },
     [cwd, emberyxSessionId, publish, adoptThread, recordTimeline, resume, wake, promptTurn]
+  );
+
+  /**
+   * Put a message into the running turn: Grok over its interject method,
+   * OpenCode as a second `session/prompt`, which joins the turn rather than
+   * waiting behind it. The reply streamed so far is cut off as its own part, so
+   * the transcript reads in the order the agent saw things. False when there is
+   * no live session to steer, or Grok was handed images it has no field for.
+   */
+  const steer = useCallback(
+    (text: string, images: ChatImage[] | undefined, wire: string): boolean => {
+      const id = processRef.current;
+      const sessionId = sessionRef.current;
+      const interject = interjectMethod(provider);
+      const hasImages = !!images && images.length > 0;
+      if (id === null || !sessionId || (interject && hasImages)) return false;
+      const live = turnRef.current;
+      const part = live.message ? endTurn(live, "end_turn").message : null;
+      committedRef.current = [
+        ...committedRef.current,
+        ...(part ? [part] : []),
+        {
+          id: messageId("u"),
+          role: "user",
+          text,
+          thinking: "",
+          tools: [],
+          streaming: false,
+          images: hasImages ? images : undefined,
+        },
+      ];
+      steersRef.current = [...steersRef.current, { replyId: part?.id ?? null, prompt: text }];
+      turnRef.current = { message: null, status: live.status };
+      publish();
+      const undelivered = (e: Error | string) =>
+        toast.error("Message not delivered", { description: String(e) });
+      if (interject) {
+        void acpInterject(id, interject, sessionId, wire).catch(undelivered);
+      } else {
+        steerRepliesRef.current += 1;
+        void acpPrompt(id, sessionId, wire, images).catch((e) => {
+          steerRepliesRef.current -= 1;
+          undelivered(e);
+        });
+      }
+      return true;
+    },
+    [provider, publish]
   );
 
   const send = useCallback(
     (text: string, images?: ChatImage[]) => {
       const hasImages = !!images && images.length > 0;
       if (!text.trim() && !hasImages) return;
+      const wire = wrapKeepGoing(text, usageRef.current);
       if (processRef.current !== null && BUSY_STATUS.has(turnRef.current.status)) {
-        // Queue like every transport: a mid-turn message waits for the idle
-        // instead of cancelling the running turn, and joins the transcript on
-        // delivery.
+        // A mid-turn message steers the running turn rather than waiting for
+        // it to end. Only what can't be steered waits in the queue.
+        if (steer(text, images, wire)) return;
         const attachments = hasImages ? JSON.stringify(images) : undefined;
-        queueRef.current.push({ queueId: null, text, images });
+        queueRef.current.push({ queueId: null, text: wire, raw: text, images });
         setQueued((n) => n + 1);
-        void promptQueue.enqueue(text, attachments, emberyxSessionId);
+        void promptQueue.enqueue(wire, attachments, emberyxSessionId);
         return;
       }
-      acceptTurn(text, images);
+      acceptTurn(text, images, wire);
     },
-    [acceptTurn, emberyxSessionId, promptQueue]
+    [acceptTurn, emberyxSessionId, promptQueue, steer, wrapKeepGoing]
   );
+
+  // Same as Claude's: the CLI's own `/compact` command, sent as a turn. Both
+  // ACP agents register it — OpenCode runs its session summarizer on it.
+  const compact = useCallback(() => {
+    send("/compact");
+  }, [send]);
 
   // Drain one queued turn each time the agent goes idle. The supervisor's queue
   // pops the head — and stays paused while the agent is blocked — so this only
   // dispatches what the runtime is ready for.
+  // With the queue empty, a keep-going thread continues instead.
+  const keepGoingOn = isKeepGoingOn(keepGoing, usage);
   useEffect(() => {
     if (status !== "idle") {
+      // Held true across idle→thinking so a Strict-Mode double invoke cannot
+      // inject two continues for one idle.
       drainingRef.current = false;
       return;
     }
-    if (drainingRef.current) return;
-    if (queueRef.current.length === 0) return;
+    if (drainingRef.current || !enabled) return;
+    if (queueRef.current.length === 0) {
+      if (promptOpen) return;
+      const step = keepGoingIdle(usageRef.current, committedRef.current);
+      // The idle was mirrored sticky-working while the flag was still on.
+      if (step === "done") syncSessionStatus(turnRef.current.status);
+      if (step !== "continue") return;
+      drainingRef.current = true;
+      acceptTurn(CONTINUE_PROMPT);
+      return;
+    }
     drainingRef.current = true;
     let cancelled = false;
     void promptQueue
       .runNext()
       .then((next) => {
         if (cancelled || !next) return;
+        // Show what the user typed; the runtime stores the keep-going wrap.
+        const raw = queueRef.current[0]?.raw ?? next.text;
         queueRef.current.shift();
         setQueued((n) => Math.max(0, n - 1));
-        acceptTurn(next.text, parseAttachments(next.attachments));
+        acceptTurn(raw, parseAttachments(next.attachments), next.text);
       })
       .catch((e) => console.error("[emberyx] queue drain failed", e))
       .finally(() => {
@@ -1108,7 +1364,16 @@ export function useAcpChat({
     return () => {
       cancelled = true;
     };
-  }, [status, acceptTurn, promptQueue]);
+  }, [
+    status,
+    enabled,
+    promptOpen,
+    acceptTurn,
+    promptQueue,
+    keepGoingOn,
+    keepGoingIdle,
+    syncSessionStatus,
+  ]);
 
   // The turn that woke the pane goes on the wire as soon as the spawn lands.
   useEffect(() => {
@@ -1124,12 +1389,12 @@ export function useAcpChat({
       adoptedForRef.current = logId;
       if (!resume) {
         adoptThread(logId);
-        const title = threadTitleFrom(held.text);
+        const title = threadTitleFrom(held.raw);
         if (title) recordTimeline(logId, "threadTitle", title);
       }
     }
-    recordTimeline(logId, "userPrompt", held.text);
-    void createCheckpoint(cwd, emberyxSessionId, held.text).then((point) => {
+    recordTimeline(logId, "userPrompt", held.raw);
+    void createCheckpoint(cwd, emberyxSessionId, held.raw).then((point) => {
       if (!point) return;
       lastCheckpointIdRef.current = point.id;
       committedRef.current = attachCheckpoint(committedRef.current, point.id);
@@ -1138,19 +1403,31 @@ export function useAcpChat({
     void promptTurn(id, sessionId, held.text, held.images);
   }, [ready, cwd, emberyxSessionId, publish, adoptThread, recordTimeline, resume, promptTurn]);
 
-  // Name a fresh chat once its first turn settles. No ACP agent announces a
-  // title, so the name is derived here rather than awaited — without it the
-  // sidebar row keeps its first-message placeholder for the thread's whole
-  // life. A resumed thread already has one.
+  // Name a fresh chat once its first turn settles, the way a Claude chat is
+  // named: no ACP agent announces a title, so the same Haiku one-shot writes
+  // one. The event log holds ACP threads, so the title is recorded there to
+  // outlive the session. If Haiku can't run, the opening line stays the name.
+  // A resumed thread already has one.
   useEffect(() => {
     if (!enabled || status !== "idle" || resume || titledRef.current) return;
-    const title = threadTitleFrom(firstMsgRef.current);
-    if (!title) return;
+    const first = firstMsgRef.current;
+    const fallback = threadTitleFrom(first);
+    if (!fallback) return;
     titledRef.current = true;
-    onTitledRef.current?.(title);
-  }, [enabled, status, resume]);
+    const logId = sessionRef.current;
+    void invoke<string>("generate_title", { firstMessage: first })
+      .then((title) => {
+        if (logId) recordTimeline(logId, "threadTitle", title);
+        onTitledRef.current?.(title);
+      })
+      .catch((e) => {
+        console.error("[emberyx] generate_title failed", e);
+        onTitledRef.current?.(fallback);
+      });
+  }, [enabled, status, resume, recordTimeline]);
 
   const stop = useCallback(() => {
+    stopKeepGoing();
     const id = processRef.current;
     const sessionId = sessionRef.current;
     if (id === null || !sessionId) return;
@@ -1171,7 +1448,7 @@ export function useAcpChat({
     // turn is already committed; waiting for it left the square button live
     // for the rest of the in-flight generation.
     commitTurn("cancelled");
-  }, [clearPermissions, commitTurn]);
+  }, [clearPermissions, commitTurn, stopKeepGoing]);
 
   const restart = useCallback(() => {
     setAwake(true);
@@ -1184,6 +1461,9 @@ export function useAcpChat({
     // A fresh session has not refused anything yet, and `session/new` picks the
     // model up again on its own.
     setModelError(null);
+    setEffortError(null);
+    attemptedEffortRef.current = "";
+    steersRef.current = [];
     appliedModelRef.current = "";
     committedRef.current = [];
     turnRef.current = emptyTurn();
@@ -1247,13 +1527,13 @@ export function useAcpChat({
     // register the provider's new session as a second row.
     threadId: resume ?? liveThreadId,
     send,
-    compact: chatNoop,
+    compact,
     queued,
     queue: promptQueue,
     stop,
     restart,
     exitReason,
-    modelError,
+    modelError: modelError ?? effortError,
     // Rewinding a sent turn is Claude's transcript trick and ACP has no
     // equivalent, so there is never anything to pull back — which is exactly
     // what `null` means to the composer, leaving Escape to do its usual thing.

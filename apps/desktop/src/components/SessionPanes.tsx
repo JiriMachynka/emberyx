@@ -183,7 +183,7 @@ function SessionPaneRow({
           onEffortChange={onEffortChange}
           onAccessChange={onAccessChange}
           providerLaunch={settings.providerLaunch}
-          claudeProfiles={settings.claudeProfiles}
+          launchProfiles={settings.launchProfiles}
           codexSandbox={settings.codexSandbox}
           onTitled={handleTitled}
           onThreadStarted={handleThreadStarted}

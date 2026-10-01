@@ -86,11 +86,6 @@ const baseProps = (over: Partial<SidebarProps> = {}): SidebarProps => ({
   workspaceTab: "sessions",
   onWorkspaceTab: () => {},
   onOpenEditor: () => {},
-  onOpenReview: () => {},
-  rightDock: true,
-  onOpenWorktree: () => {},
-  onRemoveWorktree: () => {},
-  remoteHost: undefined,
   onSelectProject: () => {},
   onCloseProject: () => {},
   onPickProject: () => {},
@@ -168,11 +163,12 @@ afterEach(() => {
 });
 
 describe("Sidebar — chrome", () => {
-  it("shows Sessions, Explorer and Changes beside the project rail", async () => {
+  it("shows Sessions and Explorer beside the project rail", async () => {
     await mount({ threadGrouping: "repository" });
     expect(screen.getByRole("button", { name: "Sessions" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Explorer" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Changes" })).toBeTruthy();
+    // Changes live in the Git view now, not in the sidebar.
+    expect(screen.queryByRole("button", { name: "Changes" })).toBeNull();
     expect(screen.getByTitle("Open project (⌘O)")).toBeTruthy();
     expect(screen.queryByText("Projects")).toBeNull();
   });
@@ -192,24 +188,37 @@ describe("Sidebar — chrome", () => {
     await mount();
     const flaky = "Fix the flaky sidebar test";
     const perf = "Profile the chat pane";
-    expect(card(flaky).textContent).not.toContain("Working");
+    expect(card(flaky).querySelector(".working-sweep")).toBeNull();
 
     await setStatus("s1", "working");
-    expect(card(flaky).textContent).toContain("Working");
-    expect(card(perf).textContent).not.toContain("Working");
+    expect(card(flaky).querySelector(".working-sweep")).not.toBeNull();
+    expect(card(perf).querySelector(".working-sweep")).toBeNull();
 
     await setStatus("s2", "waiting");
     expect(card(perf).querySelector(".text-amber-400")).not.toBeNull();
     expect(card(flaky).querySelector(".text-amber-400")).toBeNull();
 
     await setStatus("s1", "idle");
-    expect(card(flaky).textContent).not.toContain("Working");
+    expect(card(flaky).querySelector(".working-sweep")).toBeNull();
+  });
+
+  it("a working card says what its agent is doing under the title", async () => {
+    await mount();
+    await setStatus("s1", "working");
+    await act(async () =>
+      useAgentStore.getState().setPhase("s1", { tone: "working", label: "Running bun test" })
+    );
+    expect(card("Fix the flaky sidebar test").textContent).toContain("Running bun test");
+    // Going idle drops the phase with the run that produced it.
+    await setStatus("s1", "idle");
+    expect(card("Fix the flaky sidebar test").textContent).not.toContain("Running bun test");
   });
 
   it("can hide the workspace column and keep the rail", async () => {
     await mount({ workspaceCollapsed: true, threadGrouping: "repository" });
     expect(screen.queryByRole("button", { name: "Sessions" })).toBeNull();
     expect(screen.getByTitle("Open project (⌘O)")).toBeTruthy();
+    expect(screen.getByTitle("Show workspace (⌘B)")).toBeTruthy();
   });
 
   it("in settings, it hosts the settings navigation beside the rail", async () => {
@@ -226,13 +235,19 @@ describe("Sidebar — chrome", () => {
     expect(container.querySelector("aside > div.w-12")).toBeNull();
   });
 
-  it("brings back a gear-only strip when a flat list's column is hidden", async () => {
+  it("brings back a strip with show-workspace when a flat list's column is hidden", async () => {
+    const onToggleCollapse = vi.fn();
     const { container } = await mount({
       threadGrouping: "none",
       workspaceCollapsed: true,
+      onToggleCollapse,
     });
     expect(container.querySelector("aside > div.w-12")).not.toBeNull();
     expect(screen.getByTitle("Settings")).toBeTruthy();
+    const show = screen.getByTitle("Show workspace (⌘B)");
+    expect(show).toBeTruthy();
+    show.click();
+    expect(onToggleCollapse).toHaveBeenCalledTimes(1);
   });
 
   it("in a flat list, picking a project from the dropdown switches to it", async () => {
@@ -288,11 +303,11 @@ describe("AllThreads — inbox", () => {
     await mountInbox();
     const flaky = "Fix the flaky sidebar test";
     const perf = "Profile the chat pane";
-    expect(card(flaky).textContent).not.toContain("Working");
+    expect(card(flaky).querySelector(".working-sweep")).toBeNull();
 
     await setStatus("s1", "working");
-    expect(card(flaky).textContent).toContain("Working");
-    expect(card(perf).textContent).not.toContain("Working");
+    expect(card(flaky).querySelector(".working-sweep")).not.toBeNull();
+    expect(card(perf).querySelector(".working-sweep")).toBeNull();
     // Working is the header chip, not also an attention dot.
     expect(card(flaky).querySelector(".text-amber-400")).toBeNull();
 
@@ -301,6 +316,6 @@ describe("AllThreads — inbox", () => {
     expect(card(flaky).querySelector(".text-amber-400")).toBeNull();
 
     await setStatus("s1", "idle");
-    expect(card(flaky).textContent).not.toContain("Working");
+    expect(card(flaky).querySelector(".working-sweep")).toBeNull();
   });
 });

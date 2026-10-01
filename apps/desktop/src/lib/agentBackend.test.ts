@@ -38,12 +38,11 @@ describe("capabilitiesOf", () => {
       steering: true,
       compact: true,
       conversationRewind: true,
-      // Only Claude's failure wording is described, so Codex classifies as
-      // nothing rather than through another CLI's patterns.
-      accountIssues: false,
+      // From the typed `codexErrorInfo` code, never Claude's wording.
+      accountIssues: true,
       sessionModelCatalog: false,
-      launchProfiles: false,
-      configDirOverride: false,
+      launchProfiles: true,
+      configDirOverride: true,
       threadScanSpawnsChild: true,
       loginCommand: ["codex", "login"],
     });
@@ -59,6 +58,18 @@ describe("capabilitiesOf", () => {
       expect(caps.usage).toBe(true);
       expect(caps.sessionModelCatalog).toBe(true);
       expect(caps.slashCommands).toBe(true);
+    }
+  });
+
+  // Each has a driver in useAcpChat: set_config_option, a mid-turn interject
+  // or joining prompt, `/compact`, and the auth_required classifier.
+  it("gives the ACP agents effort, steering, compact and sign-in detection", () => {
+    for (const backend of ["opencode", "grok"] as const) {
+      const caps = capabilitiesOf(backend);
+      expect(caps.reasoningEffort).toBe(true);
+      expect(caps.steering).toBe(true);
+      expect(caps.compact).toBe(true);
+      expect(caps.accountIssues).toBe(true);
     }
   });
 
@@ -100,15 +111,6 @@ describe("resolveLoginCommand", () => {
       const declared = capabilitiesOf(backend).loginCommand;
       expect(resolveLoginCommand(backend) === null).toBe(declared === null);
     }
-  });
-});
-
-describe("accountIssues", () => {
-  // `accountState.ts` holds Claude's wording alone. Any other backend claiming
-  // this would have its output read through the wrong CLI's error patterns.
-  it("is claimed only by the backend whose error wording is described", () => {
-    const claiming = AGENT_BACKENDS.filter((b) => capabilitiesOf(b).accountIssues);
-    expect(claiming).toEqual(["claude"]);
   });
 });
 

@@ -4,15 +4,20 @@ import {
   GitPullRequest,
   Check,
   Laptop,
-  LoaderCircle,
   SquareTerminal,
   MoreHorizontal,
   Pin,
+  PinOff,
+  Archive,
+  ArchiveRestore,
+  Unlink,
+  Undo2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { prefetchThreadPage } from "@/lib/threadPage";
 import { projectLabel } from "@/lib/worktree";
 import { formatElapsed, statusOf } from "@/lib/status";
+import { TICK_MS } from "@/hooks/useRunningTimer";
 import { StatusDot } from "@/components/StatusDot";
 import { useAgentStore } from "@/lib/agentStore";
 import {
@@ -34,6 +39,9 @@ import type { Session } from "@/types";
 import type { Provider } from "@/lib/providers";
 import { threadRowProvider } from "@/lib/thread";
 import type { ThreadRowData } from "./types";
+
+/** The row menu sits beside a 14px title; default menu items read oversized there. */
+const MENU_ITEM = "gap-1.5 py-1 text-xs [&_svg]:size-3.5";
 
 /** One thread, as a single line: the title and how stale it is. Project,
  *  branch, PR and model live in the hover card.
@@ -73,6 +81,9 @@ export const ThreadRow = memo(function ThreadRow({
   );
   const backend = threadRowProvider(switched, thread.provider, session?.backend);
   const [detail, setDetail] = useState(false);
+  // Keeps the actions laid out while the menu is open: the pointer leaves the
+  // row for the menu, and a trigger gone `display: none` drops its anchor.
+  const [menuOpen, setMenuOpen] = useState(false);
   // A card that popped its detail the instant the pointer crossed it would
   // flicker on the way down the list.
   const timer = useRef<number | undefined>(undefined);
@@ -94,10 +105,8 @@ export const ThreadRow = memo(function ThreadRow({
       <PopoverAnchor asChild>
         <div
           className={cn(
-            "group/row relative w-full min-w-0 overflow-hidden rounded-lg border transition-colors",
-            open
-              ? "border-primary text-foreground"
-              : "border-transparent hover:bg-secondary/40"
+            "group/row relative w-full min-w-0 overflow-hidden rounded-lg transition-colors",
+            open ? "bg-accent text-foreground" : "hover:bg-secondary/40"
           )}
           onMouseEnter={enter}
           onMouseLeave={leave}
@@ -108,6 +117,7 @@ export const ThreadRow = memo(function ThreadRow({
             aria-label={`Resume ${thread.title}`}
             className="absolute inset-0 rounded-lg outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
+          {session && <WorkingSweep id={session.id} />}
 
           <div className="pointer-events-none relative flex min-w-0 flex-col px-2.5 py-1.5">
             <div className="flex min-w-0 items-center gap-2">
@@ -132,71 +142,84 @@ export const ThreadRow = memo(function ThreadRow({
               {/* Working already has the readout on the right; a second amber
                   dot for the same fact is noise. This is only "needs you". */}
               {session && <AttentionDot id={session.id} />}
+              {session && <DoneDot id={session.id} open={open} />}
 
-              <span className="grid shrink-0 justify-items-end">
-                <span
-                  className={cn(
-                    "col-start-1 row-start-1 flex items-center text-xs text-muted-foreground",
-                    "group-hover/row:invisible"
-                  )}
-                >
-                  {session ? (
-                    <WorkingChip id={session.id} idle={relativeThreadTime(thread.modified)} />
-                  ) : (
-                    relativeThreadTime(thread.modified)
-                  )}
-                </span>
+              <span
+                className={cn(
+                  "flex shrink-0 items-center text-xs text-muted-foreground group-hover/row:hidden",
+                  menuOpen && "hidden"
+                )}
+              >
+                {session ? (
+                  <WorkingChip id={session.id} idle={relativeThreadTime(thread.modified)} />
+                ) : (
+                  relativeThreadTime(thread.modified)
+                )}
+              </span>
               {/* The row's inbox verbs, in place of the timestamp while the
-                  pointer is on the card. Everything else stays in the menu. */}
-              <span className="pointer-events-auto invisible col-start-1 row-start-1 flex items-center gap-1 group-hover/row:visible">
+                  pointer is on the card. Everything else stays in the menu.
+                  Out of flow until hover, so a resting title only gives up the
+                  timestamp's width, not the width of these buttons. */}
+              <span
+                className={cn(
+                  "pointer-events-auto shrink-0 items-center gap-1 group-hover/row:flex",
+                  menuOpen ? "flex" : "hidden"
+                )}
+              >
                 <button
                   type="button"
                   onClick={() =>
                     onApply(key, { settledOverride: settled ? "active" : "settled" })
                   }
-                  className="flex items-center gap-1 rounded px-1 py-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                  title={settled ? "Unsettle" : "Settle"}
+                  aria-label={settled ? "Unsettle" : "Settle"}
+                  className="-my-1 rounded-md p-1 text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
                 >
-                  <Check className="size-3" />
-                  {settled ? "Unsettle" : "Settle"}
+                  {settled ? <Undo2 className="size-4" /> : <Check className="size-4" />}
                 </button>
-                <DropdownMenu>
+                <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
                   <DropdownMenuTrigger
                     title="Thread actions"
-                    className="rounded p-0.5 text-muted-foreground outline-none transition-colors hover:text-foreground"
+                    className="-my-1 rounded-md p-1 text-muted-foreground outline-none transition-colors hover:bg-foreground/10 hover:text-foreground data-[state=open]:bg-foreground/10 data-[state=open]:text-foreground"
                   >
-                    <MoreHorizontal className="size-3.5" />
+                    <MoreHorizontal className="size-4" />
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuContent align="end" className="min-w-32">
                     <DropdownMenuItem
+                      className={MENU_ITEM}
                       onSelect={() => onApply(key, { pinnedAt: pinned ? undefined : now })}
                     >
+                      {pinned ? <PinOff /> : <Pin />}
                       {pinned ? "Unpin" : "Pin"}
                     </DropdownMenuItem>
-                    <DropdownMenuSeparator />
                     <DropdownMenuItem
+                      className={MENU_ITEM}
                       onSelect={() =>
                         onApply(key, { archivedAt: archived ? undefined : now })
                       }
                     >
+                      {archived ? <ArchiveRestore /> : <Archive />}
                       {archived ? "Unarchive" : "Archive"}
                     </DropdownMenuItem>
                     {linkedPr && (
                       <>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
+                          className={MENU_ITEM}
                           onSelect={() =>
                             onApply(key, { linkedPr: undefined })
                           }
                         >
+                          <Unlink />
                           Unlink #{linkedPr.iid}
                         </DropdownMenuItem>
                       </>
                     )}
                   </DropdownMenuContent>
                 </DropdownMenu>
-                </span>
               </span>
             </div>
+            {session && <PhaseLine id={session.id} />}
           </div>
         </div>
       </PopoverAnchor>
@@ -245,9 +268,28 @@ const AttentionDot = memo(function AttentionDot({ id }: { id: string }) {
   return <StatusDot status={status} />;
 });
 
-/** "Working 2s" while the agent is running, the thread's age otherwise. It
+/** A run finished while the thread wasn't on screen. Stays until the thread is
+ *  opened — opening it (or finishing while already open) is what clears it. */
+const DoneDot = memo(function DoneDot({ id, open }: { id: string; open: boolean }) {
+  const unseen = useAgentStore((s) => s.unseen[id] === true);
+  const markSeen = useAgentStore((s) => s.markSeen);
+  useEffect(() => {
+    if (open && unseen) markSeen(id);
+  }, [open, unseen, id, markSeen]);
+  if (!unseen || open) return null;
+  return (
+    <span
+      className="size-1.5 shrink-0 rounded-full bg-emerald-500"
+      title="Finished"
+      role="img"
+      aria-label="Finished"
+    />
+  );
+});
+
+/** The run's clock while the agent is working, the thread's age otherwise. It
  *  subscribes to its own session and owns its ticker, so a running turn
- *  re-renders this chip once a second and nothing else in the list. */
+ *  re-renders this chip and nothing else in the list. */
 const WorkingChip = memo(function WorkingChip({
   id,
   idle,
@@ -266,17 +308,40 @@ const WorkingChip = memo(function WorkingChip({
 
   useEffect(() => {
     if (!working) return;
-    const timer = window.setInterval(() => tick((n) => n + 1), 1000);
+    const timer = window.setInterval(() => tick((n) => n + 1), TICK_MS);
     return () => window.clearInterval(timer);
   }, [working]);
 
   if (!working) return <>{idle}</>;
+  // The line under the title says what it is doing; this is only how long.
   return (
-    <span className="flex items-center gap-1 text-xs font-medium text-primary">
-      <LoaderCircle className="size-3 animate-spin" />
-      <span className="tabular-nums">Working {formatElapsed(since)}</span>
+    <span className="text-xs font-medium tabular-nums text-primary">
+      {formatElapsed(since)}
     </span>
   );
+});
+
+/** What the run is doing right now — "Running bun test", "Needs approval" —
+ *  under the title. Waiting reads amber: it is the one state only you can end. */
+const PhaseLine = memo(function PhaseLine({ id }: { id: string }) {
+  const phase = useAgentStore((s) => s.phases[id]);
+  if (!phase) return null;
+  return (
+    <span
+      className={cn(
+        "truncate text-xs",
+        phase.tone === "waiting" ? "text-amber-400" : "text-muted-foreground"
+      )}
+    >
+      {phase.label}
+    </span>
+  );
+});
+
+/** The ember hairline along a working row's bottom edge (`.working-sweep`). */
+const WorkingSweep = memo(function WorkingSweep({ id }: { id: string }) {
+  const working = useAgentStore((s) => statusOf(s.statuses, id) === "working");
+  return working ? <span aria-hidden className="working-sweep" /> : null;
 });
 
 const DetailRow = ({

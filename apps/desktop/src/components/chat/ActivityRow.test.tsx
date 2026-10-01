@@ -39,16 +39,13 @@ describe("ActivityList file groups", () => {
     complete: true,
   };
 
-  it("folds live file work into a tree and lists settled files as rows", () => {
-    const live = render(<ActivityList live activities={[write]} />);
-    expect(live.container.textContent).toContain("created");
-    expect(live.container.textContent).not.toContain("Write");
-    live.unmount();
-
-    const settled = render(<ActivityList activities={[write]} />);
-    expect(settled.container.textContent).not.toContain("created");
-    expect(settled.container.textContent).toContain("Write");
-    expect(settled.container.textContent).toContain("src/a.ts");
+  it("lists file work as one row per file, live or settled", () => {
+    for (const live of [true, false]) {
+      const view = render(<ActivityList live={live} activities={[write]} />);
+      expect(view.container.textContent).toContain("Write");
+      expect(view.container.textContent).toContain("src/a.ts");
+      view.unmount();
+    }
   });
 
   it("hides a finished command on a live turn and keeps the one still running", () => {

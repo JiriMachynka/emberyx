@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createRoot } from "react-dom/client";
 import { act } from "react";
 import { DockPicker } from "@/components/DockPicker";
@@ -20,18 +20,9 @@ describe("DockPicker", () => {
   it("renders Terminal and Review as header buttons, with the blurb as the title", () => {
     const host = render(<DockPicker onPick={() => {}} />);
     const buttons = [...host.querySelectorAll("button")];
-    expect(buttons.map((b) => b.textContent)).toEqual(["TerminalT", "ReviewD"]);
+    expect(buttons.map((b) => b.textContent)).toEqual(["Terminal", "Review"]);
     expect(buttons.map((b) => b.getAttribute("title"))).toEqual(
       PICKER_OFFERS.map((o) => o.blurb)
     );
-  });
-
-  it("picks a surface from its letter key", () => {
-    const onPick = vi.fn();
-    render(<DockPicker onPick={onPick} />);
-    act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "d", bubbles: true }));
-    });
-    expect(onPick).toHaveBeenCalledWith("diff");
   });
 });

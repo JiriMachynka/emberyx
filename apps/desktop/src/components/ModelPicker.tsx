@@ -132,27 +132,23 @@ export const ModelPicker = memo(function ModelPicker({
   const codexModels = useMemo(() => codexCatalog.data ?? [], [codexCatalog.data]);
   // The ACP catalogs are read just as lazily — each needs a throwaway agent
   // session — and only when that provider's rail is showing. The provider a
-  // live chat runs on already carries its list in `usage.models`, so it is
-  // never probed a second time.
-  const wantsGrok =
-    rail === "grok" && backend !== "grok" && installed.some((s) => s.id === "grok" && s.installed);
-  const wantsOpencode =
-    rail === "opencode" &&
-    backend !== "opencode" &&
-    installed.some((s) => s.id === "opencode" && s.installed);
+  // live chat runs on carries its list in `usage.models` once its session is
+  // open, and is not probed a second time — but a pane stays asleep until the
+  // user types, and until then its own rail has nothing else to show.
+  const needsProbe = (provider: "grok" | "opencode") =>
+    installed.some((s) => s.id === provider && s.installed) &&
+    (backend !== provider || !sessionModels?.length);
+  const wantsGrok = rail === "grok" && needsProbe("grok");
+  const wantsOpencode = rail === "opencode" && needsProbe("opencode");
   const grokCatalog = useAcpModels(
     "grok",
     cwd,
-    (wantsGrok && open) ||
-      (warm && backend !== "grok" && installed.some((s) => s.id === "grok" && s.installed))
+    (wantsGrok && open) || (warm && needsProbe("grok"))
   );
   const opencodeCatalog = useAcpModels(
     "opencode",
     cwd,
-    (wantsOpencode && open) ||
-      (warm &&
-        backend !== "opencode" &&
-        installed.some((s) => s.id === "opencode" && s.installed))
+    (wantsOpencode && open) || (warm && needsProbe("opencode"))
   );
 
   const catalog = useMemo(() => {

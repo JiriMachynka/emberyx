@@ -301,16 +301,19 @@ export const isEmptyThought = (activity: ActivityItem): boolean =>
  *  is not a checkmark row. File work is the exception: the tree accumulates
  *  for the turn, the way T3 shows consecutive reads and edits. Subagent rows
  *  stay too; they are a doorway, and the child can outlive the tool call.
- *  Once the turn settles, the full log is in the collapsed accordion. */
+ *  Once the turn settles, the full log is in the collapsed accordion. A row the
+ *  user has clicked (`pinned`) stays — they are reading it. */
 export const visibleActivities = (
   activities: ActivityItem[],
-  live: boolean
+  live: boolean,
+  pinned: ReadonlySet<string> = new Set()
 ): ActivityItem[] => {
   const rows = activities.filter((a) => !isEmptyThought(a));
   if (!live) return rows;
   return rows.filter(
     (a) =>
       !a.complete ||
+      pinned.has(a.id) ||
       isAgentActivity(a) ||
       (isFileActivity(a) && pathsForActivity(a).length > 0)
   );

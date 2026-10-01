@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { ChangesColumn } from "./ChangesColumn";
-import type { GraphCommit, GitBranch, GitFile } from "@/types";
+import type { GitBranch, GitFile } from "@/types";
 import { flush, renderWithQuery } from "@/test-utils/render";
 
 let branch: GitBranch = {
@@ -40,42 +40,9 @@ const FILES_UNSTAGED: GitFile[] = [
   },
 ];
 
-// The graph page the column reads (Phase 2): a merge whose tip wears HEAD.
-const GRAPH: GraphCommit[] = [
-  {
-    sha: "m3",
-    shortSha: "m3",
-    subject: "Merge the panes fix",
-    author: "JiriMachynka",
-    authorDate: "2026-09-25T10:00:00+02:00",
-    relativeDate: "2 days ago",
-    parents: ["m2", "s2"],
-    refs: ["HEAD -> main"],
-  },
-  {
-    sha: "m2",
-    shortSha: "m2",
-    subject: "Release 0.2.60",
-    author: "JiriMachynka",
-    authorDate: "2026-09-25T09:00:00+02:00",
-    relativeDate: "2 days ago",
-    parents: [],
-    refs: [],
-  },
-  {
-    sha: "s2",
-    shortSha: "s2",
-    subject: "Fix the layout",
-    author: "JiriMachynka",
-    authorDate: "2026-09-24T09:00:00+02:00",
-    relativeDate: "3 days ago",
-    parents: [],
-    refs: ["origin/feat"],
-  },
-];
-
 let files: GitFile[] = FILES_MIXED;
 const invoked: { cmd: string; args?: Record<string, unknown> }[] = [];
+let hangChanges = false;
 
 vi.mock("@tauri-apps/api/core", () => ({
   Channel: class {},
@@ -83,8 +50,8 @@ vi.mock("@tauri-apps/api/core", () => ({
     invoked.push({ cmd, args });
     if (cmd === "git_head_ref") return Promise.resolve("refs/heads/main");
     if (cmd === "git_branch") return Promise.resolve(branch);
-    if (cmd === "git_changes") return Promise.resolve(files);
-    if (cmd === "git_graph_page") return Promise.resolve(GRAPH);
+    if (cmd === "git_changes")
+      return hangChanges ? new Promise(() => {}) : Promise.resolve(files);
     if (cmd === "git_default_branch") return Promise.resolve("main");
     if (cmd === "git_remote_host") return Promise.resolve("github");
     if (cmd === "git_branches") return Promise.resolve(["main"]);
@@ -124,6 +91,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 beforeEach(() => {
   invoked.length = 0;
+  hangChanges = false;
   files = FILES_MIXED;
   branch = { branch: "main", upstream: "origin/main", ahead: 0, behind: 0 };
   localStorage.setItem(
@@ -137,15 +105,14 @@ afterEach(() => {
   localStorage.clear();
 });
 
-const mount = async (rightDock = true) => {
+const mount = async (rightDock = true, active = true) => {
   const view = renderWithQuery(
     <ChangesColumn
       projectPath="/repo"
       rightDock={rightDock}
       remoteHost="github"
+      active={active}
       onOpenReview={() => {}}
-      onOpenWorktree={() => {}}
-      onRemoveWorktree={() => {}}
     />
   );
   await flush();
@@ -167,13 +134,6 @@ describe("ChangesColumn", () => {
     // Status letters: the staged side reads "M", the untracked "U".
     expect(screen.getAllByText("M").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("U").length).toBe(1);
-  });
-
-  it("shows the compact graph with a subject from the graph page", async () => {
-    await mount();
-    expect(screen.getByText("Graph")).toBeTruthy();
-    expect(screen.getByText("Merge the panes fix")).toBeTruthy();
-    expect(screen.getByText("Fix the layout")).toBeTruthy();
   });
 
   it("shows the empty copy, and a sync note when the tree is clean but ahead", async () => {
@@ -239,5 +199,18 @@ describe("ChangesColumn", () => {
     expect(invoked.some((c) => c.cmd === "git_draft_commit_message")).toBe(true);
     const warm = invoked.find((c) => c.cmd === "draft_warm");
     expect(warm?.args).toMatchObject({ model: "claude-haiku-4-5" });
+  });
+
+  it("does not claim the tree is clean while changes are still loading", async () => {
+    hangChanges = true;
+    await mount();
+    expect(screen.queryByText("No uncommitted changes")).toBeNull();
+  });
+
+  it("skips forge probes while hidden, and still reads the file list", async () => {
+    await mount(true, false);
+    expect(invoked.some((c) => c.cmd === "forge_cli_status")).toBe(false);
+    expect(invoked.some((c) => c.cmd === "forge_pr_for_branch")).toBe(false);
+    expect(invoked.some((c) => c.cmd === "git_changes")).toBe(true);
   });
 });

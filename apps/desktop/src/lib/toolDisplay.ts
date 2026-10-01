@@ -24,9 +24,17 @@ export interface TodoItem {
   text: string;
 }
 
+/** One record out of a list or nested object: a name-like field promoted to a
+ *  heading, everything else as rows. */
+export interface ListItem {
+  title?: string;
+  rows: FieldRow[];
+}
+
 /** A chunk of a tool's expanded input. The component renders per `kind`. */
 export type ToolBodyPart =
   | { kind: "code"; label?: string; code: string; lang: string | null }
+  | { kind: "list"; label?: string; items: ListItem[] }
   | { kind: "text"; label?: string; text: string }
   | { kind: "diff"; label?: string; before: string; after: string; lang: string | null }
   | { kind: "fields"; rows: FieldRow[] }
@@ -105,10 +113,32 @@ function lineRange(i: JsonObject): string | undefined {
 
 const isLong = (s: string): boolean => s.length > 120 || s.includes("\n");
 
+const asObject = (v: Json): JsonObject | null =>
+  typeof v === "object" && v !== null && !Array.isArray(v) ? (v as JsonObject) : null;
+
+const LIST_TITLE_KEYS = ["name", "title", "label", "id"];
+
+const listItem = (o: JsonObject): ListItem => {
+  const titleKey = LIST_TITLE_KEYS.find((k) => str(o[k]));
+  const rows = Object.entries(o).flatMap(([key, v]) =>
+    v == null || key === titleKey
+      ? []
+      : [{ key, value: typeof v === "object" ? JSON.stringify(v) : String(v) }]
+  );
+  return { title: titleKey ? str(o[titleKey]) : undefined, rows };
+};
+
+/** An array of records — `[{ name, description }, …]` — as a list, or null when
+ *  it is anything else. */
+const recordList = (v: Json): ListItem[] | null =>
+  Array.isArray(v) && v.length > 0 && v.every((x) => asObject(x))
+    ? v.map(rec).map(listItem)
+    : null;
+
 /**
  * Last-resort renderer: scalars become a key/value table, long strings become
- * prose, nested structures become labelled JSON. Beats one undifferentiated
- * JSON dump for tools we have no bespoke layout for.
+ * prose, records and lists of records become labelled items. Beats one
+ * undifferentiated JSON dump for tools we have no bespoke layout for.
  */
 function genericBody(input: Json, skip: string[] = []): ToolBodyPart[] {
   const rows: FieldRow[] = [];
@@ -121,7 +151,13 @@ function genericBody(input: Json, skip: string[] = []): ToolBodyPart[] {
     } else if (typeof value === "number" || typeof value === "boolean") {
       rows.push({ key, value: String(value) });
     } else {
-      parts.push({ kind: "code", label: key, code: JSON.stringify(value, null, 2), lang: "json" });
+      const object = asObject(value);
+      const items = object ? [listItem(object)] : recordList(value);
+      parts.push(
+        items
+          ? { kind: "list", label: key, items }
+          : { kind: "code", label: key, code: JSON.stringify(value, null, 2), lang: "json" }
+      );
     }
   }
   return rows.length > 0 ? [{ kind: "fields", rows }, ...parts] : parts;
@@ -532,6 +568,10 @@ export function describeResult(result: string): ToolBodyPart[] {
         const body = genericBody(parsed);
         if (body.length > 0) return body;
       }
+      // Text blocks are a wrapper, not records — detectResult unwraps them.
+      const items = recordList(parsed);
+      const wrapper = Array.isArray(parsed) && parsed.some((b) => asObject(b)?.type === "text");
+      if (items && !wrapper) return [{ kind: "list", items }];
     } catch {
       // not JSON — fall through
     }

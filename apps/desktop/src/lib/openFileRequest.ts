@@ -2,14 +2,23 @@
 const EVENT = "emberyx:open-file";
 
 /** A request issued before the editor pane existed — clicking a file reference
- *  opens the Files tab, and the pane that mounts as a result consumes this on
- *  mount. Without it the tab would open on an empty editor. */
+ *  opens the editor, and the pane that mounts as a result consumes this on
+ *  mount. Without it the overlay would open on an empty editor. */
 let pending: string | null = null;
+/** Last path asked for, kept after `take` so Explorer can highlight it when
+ *  the column remounts (it was collapsed, or the tab was Sessions). */
+let latest: string | null = null;
 
 /** Absolute path of the file to show in the editor. */
 export function requestOpenFile(path: string): void {
   pending = path;
+  latest = path;
   window.dispatchEvent(new CustomEvent(EVENT, { detail: path }));
+}
+
+/** Last file opened, for Explorer to select on mount. */
+export function latestOpenFile(): string | null {
+  return latest;
 }
 
 /** Consume a pending request (mount-time check). */

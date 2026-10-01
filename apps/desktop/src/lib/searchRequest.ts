@@ -1,12 +1,12 @@
-/** Custom event the editor listens for to switch to its Search tab. */
+/** Custom event the editor listens for to open project search. */
 const EVENT = "emberyx:search";
 
 /** True when a ⇧⌘F fired before the editor pane existed — the pane consumes it
  *  on mount, so opening the editor and asking for search is one action. */
 let pending = false;
 
-/** Ask the active project's editor to focus project search, opening the tab if
- *  it just got created. */
+/** Ask the active project's editor to focus project search, opening the overlay
+ *  if it just got created. */
 export function requestSearch(): void {
   pending = true;
   window.dispatchEvent(new Event(EVENT));

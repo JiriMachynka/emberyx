@@ -67,7 +67,7 @@ const PROPS: ComponentProps<typeof ChatPane> = {
   onEffortChange: () => {},
   onAccessChange: () => {},
   providerLaunch: {},
-  claudeProfiles: [],
+  launchProfiles: [],
   codexSandbox: "",
 };
 

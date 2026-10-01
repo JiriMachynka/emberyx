@@ -1,40 +1,33 @@
 import { useEffect, useReducer } from "react";
 
 import { usePaneVisible } from "@/components/chat/PaneVisible";
-import { recordThinkTiming, thinkTimings } from "@/lib/thinkTimings";
-import { formatDuration } from "@/lib/duration";
+import { useAgentStore } from "@/lib/agentStore";
+import { formatElapsed } from "@/lib/status";
 
 /** The label shows whole seconds, but the interval isn't phase-locked to the
  *  start, so a full-second tick would lag up to a second and occasionally skip
- *  a value. A quarter second keeps the digit within 250ms of true. */
-const TICK_MS = 250;
+ *  a value. A quarter second keeps the digit within 250ms of true. The sidebar's
+ *  working chip ticks at the same rate so the two readouts never disagree. */
+export const TICK_MS = 250;
 
 /**
- * "Working for 3s" — the observed run time of one unit of work, ticking
- * while it runs.
+ * "3s" — how long this session's run has been going, ticking while it runs.
  *
- * Nothing in the payload carries a clock (the same gap `thinkTimings` fills
- * for reasoning), so the start is observed on first render and the store is
- * shared with the Think rows: one Map, keyed by activity id, survives the
- * transcript's virtualized remounts.
- *
- * Returns null once the work settles, and when `key` is absent, so a caller
- * without an identity stays silent rather than sharing a clock with nobody.
- * The live label lives under the transcript, not on each tool card.
+ * The start is the store's `statusSince`, the same instant the sidebar's
+ * working chip reads. It used to be observed on the footer's first render,
+ * and a hidden pane doesn't render: a turn started while another thread was
+ * open began counting only when you opened it, so the two clocks disagreed.
  *
  * The clock only runs while the pane is on screen. Several panes stay mounted
  * behind the active one, so an ungated ticker repaints invisible DOM for every
- * running row of every project at once.
+ * running session of every project at once.
  */
-export const useRunningTimer = (
-  key: string | undefined,
-  running: boolean
-): string | null => {
-  // Out of the React Compiler: the label is a fresh clock read per tick and
-  // the timings live in a module map — neither is an input it can see.
+export const useRunningTimer = (sessionId: string, running: boolean): string | null => {
+  // Out of the React Compiler: the label is a fresh clock read per tick, which
+  // is not an input it can see.
   "use no memo";
   const visible = usePaneVisible();
-  const timing = key ? recordThinkTiming(thinkTimings, key, running, Date.now()) : null;
+  const since = useAgentStore((s) => s.statusSince[sessionId]);
   const [, tick] = useReducer((n: number) => n + 1, 0);
 
   useEffect(() => {
@@ -46,6 +39,6 @@ export const useRunningTimer = (
     return () => window.clearInterval(id);
   }, [running, visible]);
 
-  if (!running || timing?.startedAt == null) return null;
-  return `Working for ${formatDuration(Date.now() - timing.startedAt)}`;
+  if (!running || since == null) return null;
+  return formatElapsed(since);
 };

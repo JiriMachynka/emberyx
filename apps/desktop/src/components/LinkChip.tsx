@@ -51,13 +51,13 @@ export function LinkChip({
       rel="noreferrer"
       title={url.href}
       className={cn(
-        "inline-flex max-w-full items-baseline gap-1 rounded bg-muted px-1.5 py-0.5 align-baseline text-[0.9em] text-foreground no-underline outline-none transition-colors hover:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring",
+        "inline-flex max-w-full items-center gap-1 rounded bg-muted px-1.5 py-0.5 align-baseline text-[0.9em] text-foreground no-underline outline-none transition-colors hover:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring",
         className,
       )}
     >
       {iconFailed ? (
         <Globe
-          className="size-3.5 translate-y-0.5 self-center text-muted-foreground"
+          className="size-3.5 shrink-0 text-muted-foreground"
           aria-hidden
         />
       ) : (
@@ -65,7 +65,7 @@ export function LinkChip({
           src={faviconSrc(url.hostname)}
           alt=""
           aria-hidden
-          className="size-3.5 translate-y-0.5 self-center"
+          className="size-3.5 shrink-0"
           onError={() => setIconFailed(true)}
         />
       )}

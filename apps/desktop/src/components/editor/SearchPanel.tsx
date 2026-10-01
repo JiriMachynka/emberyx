@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { CaseSensitive, ChevronDown, ChevronRight, Regex, Search } from "lucide-react";
+import { CaseSensitive, ChevronDown, ChevronRight, Regex, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { basename, dirname } from "@/lib/path";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
@@ -17,17 +17,19 @@ interface SearchPanelProps {
   /** Bumped by the ⇧⌘F shortcut to refocus the input on an already-open panel. */
   focusToken: number;
   onOpenHit: (relPath: string, line: number) => void;
+  onClose?: () => void;
 }
 
 /**
- * Project-wide content search for the editor's left column. The query only runs
- * on Enter — the backend walks every file, so live search per keystroke would
- * be wasteful. Results group by file; clicking a line opens it there.
+ * Project-wide content search, shown from ⇧⌘F. The query only runs on Enter —
+ * the backend walks every file, so live search per keystroke would be
+ * wasteful. Results group by file; clicking a line opens it there.
  */
 export function SearchPanel({
   projectPath,
   focusToken,
   onOpenHit,
+  onClose,
 }: SearchPanelProps) {
   const [draft, setDraft] = useState("");
   const [query, setQuery] = useState("");
@@ -95,6 +97,16 @@ export function SearchPanel({
           >
             <Regex className="size-3.5" />
           </Toggle>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              title="Close search"
+              className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <X className="size-3.5" />
+            </button>
+          )}
         </div>
         <p className="px-0.5 text-2xs text-muted-foreground">
           {results.isError ? (

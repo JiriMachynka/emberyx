@@ -3,7 +3,7 @@ import { markSwitch, onRender } from "@/lib/perf";
 import { toast, Toaster } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { onOpenFileRequest } from "@/lib/openFileRequest";
+import { onOpenFileRequest, requestOpenFile } from "@/lib/openFileRequest";
 import { SessionPanes } from "@/components/SessionPanes";
 import { RightDock } from "@/components/RightDock";
 import { ProjectSettingsPane } from "@/components/ProjectSettingsPane";
@@ -11,6 +11,7 @@ import { ContextBar } from "@/components/ContextBar";
 import { TimedRegion } from "@/lib/commitTiming";
 import { Sidebar } from "@/components/Sidebar";
 import { CommandPalette } from "@/components/CommandPalette";
+import { FileFinder } from "@/components/FileFinder";
 import { CloneDialog } from "@/components/CloneDialog";
 import { PublishDialog } from "@/components/PublishDialog";
 import { SlashCommandsPanel } from "@/components/SlashCommandsPanel";
@@ -34,7 +35,6 @@ import {
   dockKindsFor,
   hideDock,
   openTab,
-  showDock,
   toggleTab,
   type DockKind,
   type DockState,
@@ -85,6 +85,10 @@ const ConflictView = lazy(() =>
 const EditorPane = lazy(() =>
   import("@/components/EditorPane").then((m) => ({ default: m.EditorPane }))
 );
+// The full history renders commit patches through @pierre/diffs.
+const GitView = lazy(() =>
+  import("@/components/GitView").then((m) => ({ default: m.GitView }))
+);
 
 // Full-screen surfaces and a dock tab most sessions never open. Each already
 // renders behind its own flag, so lazy loading changes nothing but when the
@@ -114,6 +118,7 @@ const warmSettingsChunk = () => {
 function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [finderOpen, setFinderOpen] = useState(false);
   const [cloneSource, setCloneSource] = useState<CloneSource | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
   const [settingsRevealTab, setSettingsRevealTab] = useState<"usage" | null>(null);
@@ -142,6 +147,10 @@ function App() {
   // Once opened the editor stays mounted and is merely hidden, so open buffers,
   // scroll position and undo history survive closing it.
   const [editorMounted, setEditorMounted] = useState(false);
+  // The Git view follows the editor's lifetime: mounted on first open, then
+  // hidden, so the graph's pages and the forge probes are paid once.
+  const [gitOpen, setGitOpen] = useState(false);
+  const [gitMounted, setGitMounted] = useState(false);
   const [workspaceCollapsed, setWorkspaceCollapsedState] = useState<boolean>(
     getWorkspaceCollapsed
   );
@@ -167,10 +176,20 @@ function App() {
     });
   }
 
-  const openChangesColumn = () => {
+  // The Git view and the editor share the space over the chat; opening one
+  // closes the other.
+  const openGit = () => {
     if (!activeProjectId) return;
-    setWorkspaceTab(activeProjectId, "changes");
-    setWorkspaceTabState("changes");
+    setEditorOpen(false);
+    setGitMounted(true);
+    setGitOpen(true);
+  };
+  const toggleGit = () => (gitOpen ? setGitOpen(false) : openGit());
+
+  const openExplorerColumn = () => {
+    if (!activeProjectId) return;
+    setWorkspaceTab(activeProjectId, "explorer");
+    setWorkspaceTabState("explorer");
     setWorkspaceCollapsed(false);
     setWorkspaceCollapsedState(false);
   };
@@ -200,16 +219,13 @@ function App() {
   const showTab = (kind: DockKind) => updateDock((s) => openTab(s, kind));
   const hideTab = (kind: DockKind) => updateDock((s) => closeTab(s, kind));
   const flipTab = (kind: DockKind) => updateDock((s) => toggleTab(s, kind));
-  // The dock's own toggle reveals the chooser when nothing is open, and
-  // otherwise hides the panel without dropping the tabs that were showing.
-  const toggleDock = () =>
-    updateDock((s) => (s.open ? hideDock(s) : showDock(s)));
 
   // File clicks open the editor pane over the chat. Explorer owns the tree;
   // the dock does not host files.
   useEffect(
     () =>
       onOpenFileRequest(() => {
+        setGitOpen(false);
         setEditorMounted(true);
         setEditorOpen(true);
       }),
@@ -450,8 +466,15 @@ function App() {
 
   const openEditor = () => {
     if (!activeProject) return;
+    setGitOpen(false);
     setEditorMounted(true);
     setEditorOpen(true);
+  };
+
+  const openFinder = () => {
+    if (!activeProject) return;
+    setPaletteOpen(false);
+    setFinderOpen(true);
   };
 
   const openSearch = () => {
@@ -461,15 +484,22 @@ function App() {
     openEditor();
   };
 
-  // Esc closes the editor overlay, unless a child (the file finder) claimed it.
+  // Esc closes the file finder first, then whichever overlay is open.
   useEffect(() => {
-    if (!editorOpen) return;
+    if (!finderOpen && !editorOpen && !gitOpen) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape" && !e.defaultPrevented) setEditorOpen(false);
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (finderOpen) {
+        e.preventDefault();
+        setFinderOpen(false);
+        return;
+      }
+      setEditorOpen(false);
+      setGitOpen(false);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editorOpen]);
+  }, [finderOpen, editorOpen, gitOpen]);
 
   useShortcuts({
     onOpen: ws.pickProject,
@@ -477,6 +507,7 @@ function App() {
     onToggleSidebar: toggleSidebar,
     onCommandPalette: () => setPaletteOpen((v) => !v),
     onSearch: openSearch,
+    onFindFile: openFinder,
     onCloseTab: () => activeId && ws.closeSession(activeId),
     onSelectTab: (index) => {
       const tabs = projectSessions.filter((s) => s.kind !== "dev");
@@ -491,9 +522,8 @@ function App() {
       const target = tabs[next];
       if (target) ws.activateSession(target.projectId, target.id);
     },
-    onOpenGraph: openChangesColumn,
+    onOpenGraph: toggleGit,
   });
-  const openGraph = openChangesColumn;
   useLaunchUpdateCheck();
   usePricingRefresh();
 
@@ -590,17 +620,7 @@ function App() {
             if (activeProjectId) setWorkspaceTab(activeProjectId, tab);
             setWorkspaceTabState(tab);
           }}
-          onOpenEditor={() => {
-            setEditorMounted(true);
-            setEditorOpen(true);
-          }}
-          onOpenReview={() => {
-            if (settings.rightDock) showTab("diff");
-          }}
-          rightDock={settings.rightDock}
-          onOpenWorktree={openWorktreeAndRun}
-          onRemoveWorktree={ws.removeWorktree}
-          remoteHost={remoteHostValue}
+          onOpenEditor={openEditor}
           onSelectProject={(id) => {
             setSettingsOpen(false);
             ws.setActiveProjectId(id);
@@ -647,8 +667,8 @@ function App() {
               activeProject={activeProject}
               agent={agent}
               devRunning={projectSessions.some((s) => s.kind === "dev")}
-              gitOpen={workspaceTab === "changes" && !workspaceCollapsed}
-              onToggleGit={openChangesColumn}
+              gitOpen={gitOpen}
+              onToggleGit={toggleGit}
               showDock={settings.rightDock}
               actions={projectActions.actions}
               onRunAction={runAction}
@@ -657,8 +677,7 @@ function App() {
               onStopDev={() => {
                 if (activeProjectId) ws.stopAllDev(activeProjectId);
               }}
-              dockOpen={dock.open}
-              onToggleDock={toggleDock}
+              onPickDock={showTab}
             />
 
             <AccountBanner
@@ -690,6 +709,10 @@ function App() {
                 project boots in the background. Hidden unless it's the active,
                 revealed tab. */}
             <TimedRegion id="workspace">
+            {/* The Git view's background is translucent when the window is, so
+                the chat under it must not paint. `invisible`, not hidden, for
+                the reason the settings overlay gives above. */}
+            <div className={cn("contents", gitOpen && "invisible")} inert={gitOpen}>
             <SessionPanes
               sessions={sessions}
               projects={projects}
@@ -704,6 +727,7 @@ function App() {
              onThreadStarted={onThreadStarted}
              onOpenWorktree={openWorktreeAndRun}
             />
+            </div>
             </TimedRegion>
             {/* The editor is an overlay, not a tab: it covers the active pane
                 while open and keeps its buffers when hidden. */}
@@ -721,8 +745,31 @@ function App() {
                     fontFamily={settings.editorFontFamily}
                     fontSize={settings.editorFontSize}
                     wordWrap={settings.wordWrap}
-                    active={editorOpen}
                     onClose={() => setEditorOpen(false)}
+                  />
+                </Suspense>
+              </div>
+            )}
+            {activeProject && gitMounted && (
+              <div
+                className={cn(
+                  "absolute inset-0 z-10 bg-background",
+                  gitOpen ? "" : "hidden"
+                )}
+              >
+                <Suspense fallback={null}>
+                  <GitView
+                    key={activeProject.path}
+                    projectPath={activeProject.path}
+                    remoteHost={remoteHostValue}
+                    open={gitOpen}
+                    rightDock={settings.rightDock}
+                    onOpenReview={() => {
+                      if (settings.rightDock) showTab("diff");
+                    }}
+                    onOpenWorktree={openWorktreeAndRun}
+                    onRemoveWorktree={ws.removeWorktree}
+                    onClose={() => setGitOpen(false)}
                   />
                 </Suspense>
               </div>
@@ -825,7 +872,7 @@ function App() {
         onCloneUrl={() => setCloneSource("url")}
         onPublish={() => setPublishOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
-        onOpenEditor={openEditor}
+        onOpenFinder={openFinder}
         onToggleChanges={() => flipTab("diff")}
         onSearch={openSearch}
         onOpenUsage={() => {
@@ -833,8 +880,21 @@ function App() {
           setSettingsOpen(true);
         }}
         onOpenSlash={() => setSlashOpen(true)}
-        onOpenGraph={openGraph}
+        onOpenGraph={openGit}
       />
+
+      {finderOpen && activeProject && (
+        <FileFinder
+          projectPath={activeProject.path}
+          onPick={(rel) => {
+            setFinderOpen(false);
+            openExplorerColumn();
+            requestOpenFile(`${activeProject.path}/${rel}`);
+            openEditor();
+          }}
+          onClose={() => setFinderOpen(false)}
+        />
+      )}
 
       <CloneDialog
         open={cloneSource !== null}

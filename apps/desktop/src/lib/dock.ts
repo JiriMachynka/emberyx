@@ -42,13 +42,12 @@ export const DOCK_LABEL: Record<DockKind, string> = {
  */
 export interface DockOffer {
   kind: DockKind;
-  shortcut: string;
   blurb: string;
 }
 
 export const PICKER_OFFERS = [
-  { kind: "terminal", shortcut: "T", blurb: "Start a shell in this workspace." },
-  { kind: "diff", shortcut: "D", blurb: "Review uncommitted changes." },
+  { kind: "terminal", blurb: "Start a shell in this workspace." },
+  { kind: "diff", blurb: "Review uncommitted changes." },
 ] as const satisfies readonly DockOffer[];
 
 /** Kinds the dock may host. Files and git live in the left workspace column;

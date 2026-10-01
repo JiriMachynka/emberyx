@@ -17,7 +17,7 @@ import {
   capabilitiesOf,
   type AgentBackend,
 } from "@/lib/agentBackend";
-import type { AccessLevel, ClaudeProfile } from "@/lib/settings";
+import type { AccessLevel, LaunchProfile } from "@/lib/settings";
 import type { KeepGoing } from "@/lib/keepGoing";
 import { applyMention, mentionAt, type Mention } from "@/lib/mentions";
 import {
@@ -81,10 +81,10 @@ interface ChatComposerProps {
   onAccessChange: (v: AccessLevel) => void;
   /** Move the thread to another provider in place. */
   onSwitchBackend: (backend: AgentBackend) => void;
-  /** Extra named Claude setups. Empty = the default Claude only. */
-  claudeProfiles?: ClaudeProfile[];
-  claudeProfileId?: string | null;
-  onClaudeProfileChange?: (id: string | null) => void;
+  /** This backend's named launches. Empty = its default launch only. */
+  launchProfiles?: LaunchProfile[];
+  launchProfileId?: string | null;
+  onLaunchProfileChange?: (id: string | null) => void;
   /** Runtime-owned prompt queue for reorder/edit/delete/pause/run-next. */
   queue?: PromptQueue | null;
   keepGoing?: KeepGoing;
@@ -134,9 +134,9 @@ export const ChatComposer = memo(function ChatComposer({
   access,
   onAccessChange,
   onSwitchBackend,
-  claudeProfiles = [],
-  claudeProfileId = null,
-  onClaudeProfileChange,
+  launchProfiles = [],
+  launchProfileId = null,
+  onLaunchProfileChange,
   queue,
   keepGoing,
   onKeepGoingChange,
@@ -572,7 +572,7 @@ export const ChatComposer = memo(function ChatComposer({
           // padding + text with no slack under the placeholder. The shadcn
           // base ships `min-h-16`, which is where the old blank strip came
           // from. It still grows to max-h-40 and then scrolls.
-          className="block w-full max-h-40 min-h-0 shrink-0 resize-none overscroll-contain overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent p-5 text-base leading-6 shadow-none transition-[height] duration-150 ease-out placeholder:text-muted-foreground/80 focus-visible:ring-0 motion-reduce:transition-none"
+          className="block w-full max-h-40 min-h-0 shrink-0 resize-none overscroll-contain overflow-x-hidden overflow-y-auto break-words border-0 bg-transparent p-5 pr-16 text-base leading-6 shadow-none transition-[height] duration-150 ease-out placeholder:text-muted-foreground/80 focus-visible:ring-0 motion-reduce:transition-none"
         />
         </div>
           {resumeOffer && (
@@ -625,9 +625,9 @@ export const ChatComposer = memo(function ChatComposer({
             access={access}
             onAccessChange={onAccessChange}
             onSwitchBackend={onSwitchBackend}
-            claudeProfiles={claudeProfiles}
-            claudeProfileId={claudeProfileId}
-            onClaudeProfileChange={onClaudeProfileChange}
+            launchProfiles={launchProfiles}
+            launchProfileId={launchProfileId}
+            onLaunchProfileChange={onLaunchProfileChange}
             queue={queue}
             keepGoing={keepGoing}
             onKeepGoingChange={onKeepGoingChange}
@@ -646,15 +646,17 @@ export const ChatComposer = memo(function ChatComposer({
                 e.target.value = "";
               }}
             />
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               title="Attach image"
               onClick={() => fileRef.current?.click()}
               disabled={exited}
-              className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+              className="rounded-full text-muted-foreground"
             >
-              <ImagePlus className="size-4" />
-            </button>
+              <ImagePlus />
+            </Button>
             {/* The shared primary button, not a hand-rolled circle: the
                 composer's most-used control was the one place missing the
                 press-scale and the ember shadow every other primary has. It

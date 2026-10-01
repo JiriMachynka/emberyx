@@ -75,6 +75,9 @@ export interface CodexChatState {
   turnId: string | null;
   /** Why the last turn failed; rendered under the composer. */
   errorMessage: string | null;
+  /** `codexErrorInfo` variant of that failure — what tells a spent plan or a
+   *  lost login apart from a turn that merely went wrong. */
+  errorCode: string | null;
   draft: TurnDraft | null;
   /** Subagent thread id -> the tool call that spawned it. Those threads stream
    *  over the same connection, so this is what keeps their turns out of the
@@ -105,6 +108,7 @@ export const initialCodexState = (): CodexChatState => ({
   usage: {},
   turnId: null,
   errorMessage: null,
+  errorCode: null,
   draft: null,
   agentThreads: {},
 });
@@ -436,6 +440,7 @@ const startTurn = (state: CodexChatState, turnId: string): CodexChatState => {
     draft: { turnId, messageId: turnId, texts: [], thinking: [] },
     turnId,
     errorMessage: null,
+    errorCode: null,
     status: "thinking",
   };
 };
@@ -483,8 +488,9 @@ export function applyCodexNotification(
       if (!turn) return none(state);
       // A failed turn is not a dead session — the app-server is still up and
       // takes the next turn. The hook announces the failure; the pane stays
-      // sendable. Only a process that exits is terminal.
-      return none(endTurn(state, "idle"));
+      // sendable. Only a process that exits is terminal — or an account issue
+      // the hook already parked the pane on, which this close must not undo.
+      return none(endTurn(state, state.status === "error" ? "error" : "idle"));
     }
 
     case "error": {
@@ -496,6 +502,7 @@ export function applyCodexNotification(
       return none({
         ...endTurn(state, "idle"),
         errorMessage: err.message,
+        errorCode: err.code,
       });
     }
 

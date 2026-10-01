@@ -17,6 +17,7 @@ export function useShortcuts(handlers: {
   onToggleSidebar: () => void;
   onCommandPalette: () => void;
   onSearch: () => void;
+  onFindFile: () => void;
   onCloseTab: () => void;
   onSelectTab: (index: number) => void;
   onCycleTab: (direction: 1 | -1) => void;
@@ -48,6 +49,7 @@ export function useShortcuts(handlers: {
       "agent.new": () => ref.current.onNewAgent(),
       "sidebar.toggle": () => ref.current.onToggleSidebar(),
       "project.search": () => ref.current.onSearch(),
+      "file.find": () => ref.current.onFindFile(),
       "tab.next": () => ref.current.onCycleTab(1),
       "tab.prev": () => ref.current.onCycleTab(-1),
       "graph.open": () => ref.current.onOpenGraph(),

@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAcpChat } from "@/hooks/useAcpChat";
 import { useAgentStore } from "@/lib/agentStore";
+import { ASK_REJECT, CONTINUE_PROMPT, startKeepGoing } from "@/lib/keepGoing";
 import type { SessionStatus } from "@/types";
 
 const channels: { onmessage?: (ev: unknown) => void }[] = [];
@@ -61,6 +62,21 @@ const setModelCalls = () =>
       (args as { method: string }).method === "session/set_model"
   );
 
+const acpRequests = (method: string) =>
+  invoke.mock.calls.filter(
+    ([name, args]) =>
+      name === "acp_request" && (args as { method: string }).method === method
+  );
+const interjects = () => acpRequests("_x.ai/interject");
+const prompted = () =>
+  invoke.mock.calls
+    .filter(([name]) => name === "acp_prompt")
+    .map(([, args]) => (args as { text: string }).text);
+const timeline = () =>
+  invoke.mock.calls
+    .filter(([name]) => name === "thread_timeline_append")
+    .map(([, args]) => args as { kind: string; payload: string });
+
 /** Runtime-owned prompt queue, emulated so enqueue/drain is the real path. */
 let queueItems: { queueId: string; text: string; attachments: string | null }[] =
   [];
@@ -94,6 +110,8 @@ beforeEach(() => {
     }
     if (command === "agent_queue_run_next")
       return Promise.resolve(queueItems.shift() ?? null);
+    // No `claude` binary under test: titling falls back to the opening line.
+    if (command === "generate_title") return Promise.reject(new Error("no claude"));
     return Promise.resolve(null);
   });
 });
@@ -370,7 +388,7 @@ describe("useAcpChat thread durability", () => {
     expect(events[1].threadId).toBe("s1");
 
     // A second prompt records under the same thread, without re-adopting or
-    // re-titling it. End the first turn first — a mid-turn send now queues.
+    // re-titling it. End the first turn first — a mid-turn send steers it.
     await act(async () => {
       channels[0]?.onmessage?.({
         type: "turnEnded",
@@ -651,7 +669,8 @@ describe("useAcpChat thread durability", () => {
 });
 
 describe("useAcpChat queueing", () => {
-  it("holds a turn typed while the agent is working, then sends it when idle", async () => {
+  // `_x.ai/interject` carries text only, so an image can't steer a Grok turn.
+  it("holds an image sent to a working Grok turn, then sends it when idle", async () => {
     const view = await mount();
     await act(async () => view.result.current.send("first"));
     expect(
@@ -659,10 +678,13 @@ describe("useAcpChat queueing", () => {
     ).toHaveLength(1);
     expect(view.result.current.status).toBe("thinking");
 
-    await act(async () => view.result.current.send("second"));
+    await act(async () =>
+      view.result.current.send("second", [{ id: "i1", mediaType: "image/png", data: "AAAA" }])
+    );
     expect(
       invoke.mock.calls.filter(([name]) => name === "acp_prompt")
     ).toHaveLength(1);
+    expect(interjects()).toHaveLength(0);
     expect(view.result.current.queued).toBe(1);
     expect(view.result.current.messages.map((m) => m.text)).toEqual(["first"]);
 
@@ -682,6 +704,334 @@ describe("useAcpChat queueing", () => {
       "first",
       "second",
     ]);
+  });
+});
+
+const emitTo = (ev: unknown) =>
+  act(async () => {
+    channels[0]?.onmessage?.(ev);
+  });
+const chunkEv = (text: string) => ({
+  type: "notification",
+  data: {
+    method: "session/update",
+    params: { update: { sessionUpdate: "agent_message_chunk", content: { text } } },
+  },
+});
+const endedEv = {
+  type: "turnEnded",
+  data: { sessionId: "s1", result: { stopReason: "end_turn" } },
+};
+
+describe("useAcpChat steering", () => {
+  it("interjects a Grok mid-turn message into the running turn", async () => {
+    const view = await mount();
+    await act(async () => view.result.current.send("count to 40"));
+    await emitTo(chunkEv("1 2 3"));
+    await act(async () => view.result.current.send("stop and say BANANA"));
+    expect(interjects().map(([, args]) => args)).toEqual([
+      {
+        id: 3,
+        method: "_x.ai/interject",
+        params: { sessionId: "s1", text: "stop and say BANANA" },
+      },
+    ]);
+    // Steered, not queued and not a second turn.
+    expect(prompted()).toEqual(["count to 40"]);
+    expect(view.result.current.queued).toBe(0);
+    // The reply so far is cut off, so the steer reads where the agent saw it.
+    await waitFor(() =>
+      expect(view.result.current.messages.map((m) => [m.role, m.text])).toEqual([
+        ["user", "count to 40"],
+        ["assistant", "1 2 3"],
+        ["user", "stop and say BANANA"],
+      ])
+    );
+    expect(view.result.current.status).not.toBe("idle");
+
+    await emitTo(chunkEv("BANANA"));
+    await emitTo({
+      type: "notification",
+      data: { method: "_x.ai/session/prompt_complete", params: { stopReason: "end_turn" } },
+    });
+    await emitTo(endedEv);
+    await waitFor(() => expect(view.result.current.status).toBe("idle"));
+    expect(view.result.current.messages.map((m) => m.text)).toEqual([
+      "count to 40",
+      "1 2 3",
+      "stop and say BANANA",
+      "BANANA",
+    ]);
+    // The log reads back in the order the transcript shows.
+    expect(
+      timeline()
+        .filter((e) => e.kind === "userPrompt" || e.kind === "assistantResponse")
+        .map((e) => e.payload)
+    ).toEqual(["count to 40", "1 2 3", "stop and say BANANA", "BANANA"]);
+  });
+
+  it("joins an OpenCode turn with a second prompt and settles it once", async () => {
+    const view = await mount({ provider: "opencode" });
+    await act(async () => view.result.current.send("count to 30"));
+    await emitTo(chunkEv("1 2"));
+    await act(async () => view.result.current.send("reply BANANA"));
+    expect(prompted()).toEqual(["count to 30", "reply BANANA"]);
+    expect(interjects()).toHaveLength(0);
+    expect(view.result.current.queued).toBe(0);
+
+    await emitTo(chunkEv("BANANA"));
+    // Both prompts are answered together when the turn ends; the first reply
+    // must not settle the turn the second one is still part of.
+    await emitTo(endedEv);
+    expect(view.result.current.status).not.toBe("idle");
+    expect(timeline().filter((e) => e.kind === "completion")).toHaveLength(0);
+    await emitTo(endedEv);
+    await waitFor(() => expect(view.result.current.status).toBe("idle"));
+    expect(timeline().filter((e) => e.kind === "completion")).toHaveLength(1);
+    expect(view.result.current.messages.map((m) => m.text)).toEqual([
+      "count to 30",
+      "1 2",
+      "reply BANANA",
+      "BANANA",
+    ]);
+  });
+
+  it("lands a cut-off tool's result on the part it belongs to", async () => {
+    const view = await mount({ provider: "opencode" });
+    await act(async () => view.result.current.send("read it"));
+    const tool = (status: string, extra: object = {}) =>
+      emitTo({
+        type: "notification",
+        data: {
+          method: "session/update",
+          params: {
+            update: {
+              sessionUpdate: status === "pending" ? "tool_call" : "tool_call_update",
+              toolCallId: "t1",
+              title: "Read config",
+              status,
+              ...extra,
+            },
+          },
+        },
+      });
+    await tool("pending");
+    await act(async () => view.result.current.send("and then stop"));
+    await tool("completed", { content: [{ type: "content", content: { type: "text", text: "body" } }] });
+    await emitTo(endedEv);
+    await emitTo(endedEv);
+    await waitFor(() => expect(view.result.current.status).toBe("idle"));
+    const tools = view.result.current.messages.flatMap((m) => m.tools);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].result).toBe("body");
+  });
+
+  it("sends a keep-going continue only after the last joined reply", async () => {
+    const view = await mount({
+      provider: "opencode",
+      keepGoing: { ...startKeepGoing(1_000_000), wrapped: true },
+    });
+    await act(async () => view.result.current.send("go"));
+    await emitTo(chunkEv("working"));
+    await act(async () => view.result.current.send("also run the tests"));
+    await emitTo(endedEv);
+    await act(async () => {});
+    expect(prompted()).toEqual(["go", "also run the tests"]);
+    await emitTo(endedEv);
+    await waitFor(() =>
+      expect(prompted()).toEqual(["go", "also run the tests", CONTINUE_PROMPT])
+    );
+  });
+});
+
+describe("useAcpChat compact", () => {
+  // Same contract as Claude's: the CLI's own command, sent as a turn.
+  it("sends /compact as a turn", async () => {
+    const view = await mount({ provider: "opencode" });
+    await act(async () => view.result.current.compact());
+    expect(prompted()).toEqual(["/compact"]);
+    expect(view.result.current.status).toBe("thinking");
+  });
+});
+
+describe("useAcpChat reasoning effort", () => {
+  // As `grok agent stdio` 1.0.46 lists it in `session/new`'s configOptions.
+  const GROK_EFFORT = {
+    id: "reasoning_effort",
+    name: "Reasoning Effort",
+    category: "thought_level",
+    type: "select",
+    currentValue: "high",
+    options: [
+      { value: "xhigh", name: "Extra High" },
+      { value: "high", name: "High" },
+      { value: "medium", name: "Medium" },
+      { value: "low", name: "Low" },
+    ],
+  };
+  // OpenCode 1.18.34 on big-pickle: a model with no variants, so no effort.
+  const OPENCODE_PLAIN = {
+    sessionId: "s1",
+    configOptions: [
+      {
+        id: "model",
+        category: "model",
+        currentValue: "opencode/big-pickle",
+        options: [{ value: "opencode/big-pickle", name: "Big Pickle" }],
+      },
+    ],
+  };
+  const OPENCODE_EFFORT = (current: string) => ({
+    id: "effort",
+    name: "Effort",
+    category: "thought_level",
+    type: "select",
+    currentValue: current,
+    options: [{ value: "high" }, { value: "max" }, { value: "default" }],
+  });
+  const serve = (
+    session: object,
+    onSet?: (params: { configId: string; value: string }) => Promise<unknown>
+  ) => {
+    const base = invoke.getMockImplementation();
+    invoke.mockImplementation((command: string, args: Record<string, unknown> = {}) => {
+      if (command === "acp_session_new") return Promise.resolve(session);
+      if (
+        command === "acp_request" &&
+        args.method === "session/set_config_option" &&
+        onSet
+      ) {
+        return onSet(args.params as { configId: string; value: string });
+      }
+      return base?.(command, args);
+    });
+  };
+  const setEffortCalls = () => acpRequests("session/set_config_option");
+
+  it("offers the levels the session reports for its model", async () => {
+    serve({ ...SESSION, configOptions: [GROK_EFFORT] });
+    const view = await mount();
+    await waitFor(() =>
+      expect(view.result.current.usage.efforts).toEqual(["xhigh", "high", "medium", "low"])
+    );
+    expect(view.result.current.usage.effort).toBe("high");
+    expect(setEffortCalls()).toHaveLength(0);
+  });
+
+  it("sets a picked level over set_config_option and reads back the options", async () => {
+    serve({ ...SESSION, configOptions: [GROK_EFFORT] }, ({ value }) =>
+      Promise.resolve({ configOptions: [{ ...GROK_EFFORT, currentValue: value }] })
+    );
+    const view = await mount({ effort: "low" });
+    await waitFor(() => expect(view.result.current.usage.effort).toBe("low"));
+    expect(setEffortCalls().map(([, args]) => args)).toEqual([
+      {
+        id: 3,
+        method: "session/set_config_option",
+        params: { sessionId: "s1", configId: "reasoning_effort", value: "low" },
+      },
+    ]);
+    expect(view.result.current.modelError).toBeNull();
+  });
+
+  it("offers nothing and sends nothing for a model with no levels", async () => {
+    serve(OPENCODE_PLAIN, () => Promise.resolve(null));
+    const view = await mount({ provider: "opencode", effort: "high" });
+    await waitFor(() => expect(view.result.current.usage.efforts).toEqual([]));
+    expect(setEffortCalls()).toHaveLength(0);
+  });
+
+  // A model switch rebuilds the option set; the picked level applies once the
+  // new model offers it.
+  it("follows a config_option_update and applies the level it now allows", async () => {
+    serve(OPENCODE_PLAIN, ({ value }) =>
+      Promise.resolve({ configOptions: [OPENCODE_EFFORT(value)] })
+    );
+    const view = await mount({ provider: "opencode", effort: "max" });
+    expect(setEffortCalls()).toHaveLength(0);
+    await emitTo({
+      type: "notification",
+      data: {
+        method: "session/update",
+        params: {
+          update: {
+            sessionUpdate: "config_option_update",
+            configOptions: [OPENCODE_EFFORT("high")],
+          },
+        },
+      },
+    });
+    await waitFor(() => expect(view.result.current.usage.effort).toBe("max"));
+    expect(view.result.current.usage.efforts).toEqual(["high", "max", "default"]);
+    expect(setEffortCalls().map(([, args]) => args)).toEqual([
+      {
+        id: 3,
+        method: "session/set_config_option",
+        params: { sessionId: "s1", configId: "effort", value: "max" },
+      },
+    ]);
+  });
+
+  it("reports a refused level once and does not retry it", async () => {
+    serve({ ...SESSION, configOptions: [GROK_EFFORT] }, () =>
+      Promise.reject(new Error("invalid effort"))
+    );
+    const view = await mount({ effort: "low" });
+    await waitFor(() => expect(view.result.current.modelError).toContain("low"));
+    view.rerender();
+    view.rerender();
+    expect(setEffortCalls()).toHaveLength(1);
+    // The session still runs where it was.
+    expect(view.result.current.usage.effort).toBe("high");
+  });
+});
+
+describe("useAcpChat account issues", () => {
+  beforeEach(() => useAgentStore.getState().clearAccountIssue());
+
+  it("parks on the sign-in notice when the agent refuses the session for auth", async () => {
+    const base = invoke.getMockImplementation();
+    invoke.mockImplementation((command: string, args: Record<string, unknown> = {}) =>
+      command === "acp_session_new"
+        ? Promise.reject("session/new failed: Authentication required")
+        : base?.(command, args)
+    );
+    const view = renderHook(() => useAcpChat(options));
+    act(() => view.result.current.wake());
+    await waitFor(() => expect(view.result.current.status).toBe("error"));
+    expect(useAgentStore.getState().accountIssue).toMatchObject({
+      kind: "logged_out",
+      backend: "grok",
+    });
+  });
+
+  it("parks on the sign-in notice when a prompt is refused for auth", async () => {
+    const view = await mount({ provider: "opencode" });
+    await act(async () => view.result.current.send("hi"));
+    await emitTo({
+      type: "turnFailed",
+      data: {
+        sessionId: "s1",
+        message:
+          "session/prompt failed: Authentication required: provider authentication required",
+      },
+    });
+    await waitFor(() => expect(view.result.current.status).toBe("error"));
+    expect(useAgentStore.getState().accountIssue).toMatchObject({
+      kind: "logged_out",
+      backend: "opencode",
+    });
+  });
+
+  it("leaves any other failed turn writable and unclassified", async () => {
+    const view = await mount({ provider: "opencode" });
+    await act(async () => view.result.current.send("hi"));
+    await emitTo({
+      type: "turnFailed",
+      data: { sessionId: "s1", message: "session/prompt failed: model overloaded" },
+    });
+    await waitFor(() => expect(view.result.current.status).toBe("idle"));
+    expect(useAgentStore.getState().accountIssue).toBeNull();
   });
 });
 
@@ -1016,6 +1366,35 @@ describe("useAcpChat resuming", () => {
   });
 });
 
+describe("useAcpChat agent phase", () => {
+  it("names the running tool for the sidebar, even in a hidden pane", async () => {
+    const view = await mount({ visible: false });
+    await act(async () => view.result.current.send("fix it"));
+    await act(async () => {
+      channels[0]?.onmessage?.({
+        type: "notification",
+        data: {
+          method: "session/update",
+          params: {
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "c1",
+              title: "Read config",
+              kind: "read",
+              status: "pending",
+              rawInput: { path: "src/config.ts" },
+            },
+          },
+        },
+      });
+    });
+    expect(useAgentStore.getState().phases["emberyx-1"]).toEqual({
+      tone: "working",
+      label: "Reading config.ts",
+    });
+  });
+});
+
 describe("useAcpChat auto-titling", () => {
   const endTurn = () =>
     channels[0]?.onmessage?.({
@@ -1023,16 +1402,37 @@ describe("useAcpChat auto-titling", () => {
       data: { sessionId: "s1", result: { stopReason: "end_turn" } },
     });
 
-  it("names the thread from the first prompt once its turn settles", async () => {
+  it("names the thread with a generated title and records it", async () => {
+    const fallback = invoke.getMockImplementation();
+    invoke.mockImplementation((command: string, args?: Record<string, unknown>) =>
+      command === "generate_title"
+        ? Promise.resolve("Parser fixes")
+        : fallback?.(command, args)
+    );
     const onTitled = vi.fn();
     const view = await mount({ onTitled });
     await act(async () => view.result.current.send("Fix the parser\nplease"));
     await act(async () => endTurn());
-    await waitFor(() => expect(view.result.current.status).toBe("idle"));
+    await waitFor(() => expect(onTitled).toHaveBeenCalledWith("Parser fixes"));
 
-    // ACP announces no title, so the name is the opening prompt's first line —
-    // the same string the thread's own threadTitle event records.
     expect(onTitled).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith("generate_title", {
+      firstMessage: "Fix the parser\nplease",
+    });
+    // The event log is where an ACP thread's name lives past this session.
+    expect(invoke).toHaveBeenCalledWith(
+      "thread_timeline_append",
+      expect.objectContaining({ kind: "threadTitle", payload: "Parser fixes" })
+    );
+  });
+
+  it("falls back to the first prompt line when no title can be generated", async () => {
+    const onTitled = vi.fn();
+    const view = await mount({ onTitled });
+    await act(async () => view.result.current.send("Fix the parser\nplease"));
+    await act(async () => endTurn());
+    await waitFor(() => expect(onTitled).toHaveBeenCalledTimes(1));
+
     expect(onTitled).toHaveBeenCalledWith("Fix the parser");
   });
 
@@ -1284,5 +1684,122 @@ describe("useAcpChat ask_user questions", () => {
       channels[0]?.onmessage?.({ type: "exit", data: 1 });
     });
     expect(view.result.current.pendingAsk).toBeNull();
+  });
+});
+
+describe("useAcpChat keep going", () => {
+  const flag = (over: Partial<ReturnType<typeof startKeepGoing>> = {}) =>
+    startKeepGoing(1_000_000, over);
+  const prompts = () =>
+    invoke.mock.calls
+      .filter(([name]) => name === "acp_prompt")
+      .map(([, args]) => (args as { text: string }).text);
+  const emit = (ev: unknown) =>
+    act(async () => {
+      channels[0]?.onmessage?.(ev);
+    });
+  const chunk = (text: string) =>
+    emit({
+      type: "notification",
+      data: {
+        method: "session/update",
+        params: { update: { sessionUpdate: "agent_message_chunk", content: { text } } },
+      },
+    });
+  const turnEnded = () =>
+    emit({ type: "turnEnded", data: { sessionId: "s1", result: { stopReason: "end_turn" } } });
+
+  it("wraps the originating send once and keeps the transcript clean", async () => {
+    const onKeepGoingTurn = vi.fn();
+    const view = await mount({ keepGoing: flag(), onKeepGoingTurn });
+    await act(async () => view.result.current.send("fix the flaky test"));
+    expect(view.result.current.messages[0].text).toBe("fix the flaky test");
+    expect(prompts()[0]).toContain("You are unattended");
+    expect(onKeepGoingTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ wrapped: true, turns: 0 })
+    );
+  });
+
+  it("sends one continue when a turn settles", async () => {
+    const onKeepGoingTurn = vi.fn();
+    const view = await mount({ keepGoing: { ...flag(), wrapped: true }, onKeepGoingTurn });
+    await act(async () => view.result.current.send("go"));
+    await chunk("working on it");
+    await turnEnded();
+    await waitFor(() => expect(prompts()).toEqual(["go", CONTINUE_PROMPT]));
+    expect(onKeepGoingTurn).toHaveBeenCalledWith(expect.objectContaining({ turns: 1 }));
+    expect(useAgentStore.getState().statuses["emberyx-1"]).not.toBe("idle");
+  });
+
+  // Grok settles on prompt_complete before replying to `session/prompt`. A
+  // continue sent in that gap would have the late reply end it instead.
+  it("waits for the prompt reply before continuing after an early settle", async () => {
+    const view = await mount({ keepGoing: { ...flag(), wrapped: true } });
+    await act(async () => view.result.current.send("go"));
+    await chunk("working on it");
+    await emit({
+      type: "notification",
+      data: { method: "_x.ai/session/prompt_complete", params: { stopReason: "end_turn" } },
+    });
+    await waitFor(() => expect(view.result.current.status).toBe("idle"));
+    expect(prompts()).toEqual(["go"]);
+    await turnEnded();
+    await waitFor(() => expect(prompts()).toEqual(["go", CONTINUE_PROMPT]));
+    expect(view.result.current.status).toBe("thinking");
+  });
+
+  it("stops on a DONE cue and puts the sidebar back to idle", async () => {
+    const onKeepGoingStop = vi.fn();
+    const view = await mount({ keepGoing: { ...flag(), wrapped: true }, onKeepGoingStop });
+    await act(async () => view.result.current.send("go"));
+    await chunk("shipped\nDONE");
+    await turnEnded();
+    await act(async () => {});
+    expect(prompts()).toEqual(["go"]);
+    expect(onKeepGoingStop).toHaveBeenCalled();
+    expect(useAgentStore.getState().statuses["emberyx-1"]).toBe("idle");
+  });
+
+  it("rejects ask_user instead of opening the picker", async () => {
+    const view = await mount({ keepGoing: { ...flag(), wrapped: true } });
+    await act(async () => {
+      for (const handler of listeners.ask) {
+        handler({
+          payload: {
+            id: "ask-1",
+            session: "emberyx-1",
+            questions: [
+              {
+                question: "Which one?",
+                header: "Pick",
+                options: [{ label: "A", description: "first" }],
+                multiSelect: false,
+              },
+            ],
+          },
+        });
+      }
+    });
+    expect(view.result.current.pendingAsk).toBeNull();
+    expect(invoke.mock.calls.filter(([name]) => name === "answer_ask")).toEqual([
+      ["answer_ask", { id: "ask-1", answer: ASK_REJECT }],
+    ]);
+  });
+
+  it("clears the flag on stop", async () => {
+    const onKeepGoingStop = vi.fn();
+    // The prop follows the callback, as ChatPane's state does.
+    const opts: Record<string, unknown> = { keepGoing: { ...flag(), wrapped: true } };
+    opts.onKeepGoingStop = () => {
+      opts.keepGoing = null;
+      onKeepGoingStop();
+    };
+    const view = await mount(opts);
+    await act(async () => view.result.current.send("go"));
+    await act(async () => view.result.current.stop());
+    await turnEnded();
+    await act(async () => {});
+    expect(onKeepGoingStop).toHaveBeenCalled();
+    expect(prompts()).toEqual(["go"]);
   });
 });

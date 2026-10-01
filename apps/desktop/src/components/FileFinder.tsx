@@ -36,8 +36,8 @@ interface FileFinderProps {
   onClose: () => void;
 }
 
-/** ⌘K file browser scoped to the editor: fuzzy-match every file in the project
- *  and open the chosen one. Arrows move, Enter opens, Esc closes. */
+/** ⌘P quick-open: fuzzy-match every file in the project and open the chosen
+ *  one. Arrows move, Enter opens, Esc closes. */
 export function FileFinder({ projectPath, onPick, onClose }: FileFinderProps) {
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
@@ -59,12 +59,13 @@ export function FileFinder({ projectPath, onPick, onClose }: FileFinderProps) {
       if (active) onPick(active.value);
     } else if (e.key === "Escape") {
       e.preventDefault();
+      e.stopPropagation();
       onClose();
     }
   }
 
   return (
-    <div className="absolute inset-0 z-40 flex justify-center bg-black/40" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex justify-center bg-black/40" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
         className="mt-12 h-fit max-h-2/3 w-128 max-w-11/12 overflow-hidden rounded-md border bg-popover shadow-xl"

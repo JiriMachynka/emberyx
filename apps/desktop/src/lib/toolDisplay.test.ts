@@ -204,7 +204,7 @@ describe("describeTool", () => {
       mode: "fast",
       count: 3,
       notes: "x".repeat(200),
-      nested: { a: 1 },
+      nested: [1, 2],
     });
     expect(d.icon).toBe("tool");
     expect(d.body[0]).toEqual({
@@ -288,9 +288,37 @@ describe("describeResult", () => {
     ]);
   });
 
-  it("keeps a json array as formatted code", () => {
-    const parts = describeResult('[{"a":1}]');
+  it("keeps a plain json array as formatted code", () => {
+    const parts = describeResult("[1,2]");
     expect(parts[0].kind).toBe("code");
+  });
+
+  it("lays out an array of records as titled items", () => {
+    expect(describeResult('[{"name":"Read","description":"Reads a file","max":3}]')).toEqual([
+      {
+        kind: "list",
+        items: [
+          {
+            title: "Read",
+            rows: [
+              { key: "description", value: "Reads a file" },
+              { key: "max", value: "3" },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("lays out a nested object as a labelled item", () => {
+    const parts = describeResult('{"server":{"name":"a","url":"b"}}');
+    expect(parts).toEqual([
+      {
+        kind: "list",
+        label: "server",
+        items: [{ title: "a", rows: [{ key: "url", value: "b" }] }],
+      },
+    ]);
   });
 
   it("returns nothing for an empty result", () => {

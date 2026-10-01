@@ -62,10 +62,13 @@ export function MessageWork({
   message,
   active,
   live,
+  continues,
 }: {
   message: ChatMessage;
   active: boolean;
   live?: boolean;
+  /** More work follows in this turn — see `ActivityList`. */
+  continues?: boolean;
 }) {
   const stream = message.activities;
   if (stream?.length) {
@@ -76,6 +79,7 @@ export function MessageWork({
       <ActivityList
         activities={rows}
         live={live}
+        continues={continues}
         renderAgent={(a) => {
           const tool = message.tools.find((t) => t.id === a.id);
           return tool ? <SubagentInline id={a.id} tool={tool} /> : null;

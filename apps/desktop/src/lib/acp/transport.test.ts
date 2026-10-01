@@ -16,8 +16,11 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import {
+  acpInterject,
+  acpSetConfigOption,
   acpSetModel,
   currentModel,
+  effortOption,
   modelOptions,
   readAcpModels,
 } from "@/lib/acp/transport";
@@ -184,5 +187,75 @@ describe("readAcpModels", () => {
       "agent not logged in"
     );
     expect(calls.map(([cmd]) => cmd)).toContain("acp_kill");
+  });
+});
+
+describe("effortOption", () => {
+  // As `grok agent stdio` 1.0.46 answers `session/new`.
+  const grokEffort = {
+    id: "reasoning_effort",
+    name: "Reasoning Effort",
+    category: "thought_level",
+    type: "select",
+    currentValue: "high",
+    options: [
+      { value: "xhigh", name: "Extra High" },
+      { value: "high", name: "High" },
+      { value: "medium", name: "Medium" },
+      { value: "low", name: "Low" },
+    ],
+  };
+
+  it("finds the select by its thought_level category, whatever its id", () => {
+    expect(effortOption([openCodeSession.configOptions[0], grokEffort])).toEqual({
+      configId: "reasoning_effort",
+      current: "high",
+      levels: ["xhigh", "high", "medium", "low"],
+    });
+    expect(
+      effortOption([{ ...grokEffort, id: "effort", options: [{ value: "max" }] }])?.configId
+    ).toBe("effort");
+  });
+
+  // OpenCode only offers it on models with variants; big-pickle has none.
+  it("is null for a model that offers no levels", () => {
+    expect(effortOption(openCodeSession.configOptions)).toBeNull();
+    expect(effortOption([{ ...grokEffort, options: [] }])).toBeNull();
+    expect(effortOption(undefined)).toBeNull();
+  });
+});
+
+describe("acpSetConfigOption", () => {
+  it("sends the value as a bare string and hands back the new option set", async () => {
+    invoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      calls.push([cmd, args ?? {}]);
+      return Promise.resolve({
+        configOptions: [{ id: "effort", category: "thought_level", currentValue: "max", options: [{ value: "max" }] }],
+      });
+    });
+    const options = await acpSetConfigOption(7, "ses_1", "effort", "max");
+    expect(calls).toEqual([
+      [
+        "acp_request",
+        {
+          id: 7,
+          method: "session/set_config_option",
+          params: { sessionId: "ses_1", configId: "effort", value: "max" },
+        },
+      ],
+    ]);
+    expect(options?.[0].currentValue).toBe("max");
+  });
+});
+
+describe("acpInterject", () => {
+  it("names the session and the text on the vendor method", async () => {
+    await acpInterject(7, "_x.ai/interject", "s1", "stop and say BANANA");
+    expect(calls).toEqual([
+      [
+        "acp_request",
+        { id: 7, method: "_x.ai/interject", params: { sessionId: "s1", text: "stop and say BANANA" } },
+      ],
+    ]);
   });
 });

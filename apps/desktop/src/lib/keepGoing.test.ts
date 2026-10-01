@@ -8,6 +8,9 @@ import {
   isDoneCue,
   isKeepGoingOn,
   lastAssistantText,
+  planIdle,
+  prepareSend,
+  rejectAnswer,
   shouldContinue,
   startKeepGoing,
   wrapOriginatingPrompt,
@@ -170,5 +173,58 @@ describe("constants", () => {
   it("keeps the reject copy and continue line stable", () => {
     expect(ASK_REJECT).toContain("unattended");
     expect(CONTINUE_PROMPT).toContain("DONE");
+  });
+});
+
+describe("planIdle", () => {
+  const thread = (reply: string) => [
+    { role: "user", text: "go" },
+    { role: "assistant", text: reply },
+  ];
+
+  it("continues under cap and hands back the bumped flag", () => {
+    expect(planIdle({ flag: flag({ turns: 3 }), now: NOW, messages: thread("working") })).toEqual({
+      kind: "continue",
+      next: flag({ turns: 4 }),
+    });
+  });
+
+  it("is done on a DONE cue, even with the cap spent", () => {
+    expect(planIdle({ flag: flag(), messages: thread("ok\nDONE") })).toEqual({ kind: "done" });
+    expect(planIdle({ flag: flag({ turns: 20 }), messages: thread("DONE") })).toEqual({
+      kind: "done",
+    });
+  });
+
+  it("does nothing without a flag, a user turn, or headroom", () => {
+    expect(planIdle({ flag: null, messages: thread("DONE") })).toEqual({ kind: "none" });
+    expect(planIdle({ flag: flag(), messages: [] })).toEqual({ kind: "none" });
+    expect(planIdle({ flag: flag({ turns: 20 }), messages: thread("working") })).toEqual({
+      kind: "none",
+    });
+    expect(
+      planIdle({ flag: flag({ maxUsd: 1 }), usage: { costUsd: 2 }, messages: thread("working") })
+    ).toEqual({ kind: "none" });
+  });
+});
+
+describe("prepareSend", () => {
+  it("wraps the first send and marks the flag wrapped", () => {
+    const { wire, next } = prepareSend(flag(), "fix it", {}, NOW);
+    expect(wire).toBe(wrapOriginatingPrompt("fix it"));
+    expect(next).toEqual({ ...flag(), wrapped: true });
+  });
+
+  it("passes the text through once wrapped, when off, or when spent", () => {
+    expect(prepareSend({ ...flag(), wrapped: true }, "more", {}, NOW)).toEqual({ wire: "more" });
+    expect(prepareSend(null, "more")).toEqual({ wire: "more" });
+    expect(prepareSend(flag({ maxMs: 10 }), "more", {}, NOW + 10)).toEqual({ wire: "more" });
+  });
+});
+
+describe("rejectAnswer", () => {
+  it("answers every question, and at least one", () => {
+    expect(rejectAnswer(2)).toBe(`${ASK_REJECT}\n${ASK_REJECT}`);
+    expect(rejectAnswer(0)).toBe(ASK_REJECT);
   });
 });

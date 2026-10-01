@@ -1,5 +1,6 @@
 import { ArrowLeft, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import type { SidebarProps } from "./types";
 
 export function SidebarFooter({
@@ -8,33 +9,35 @@ export function SidebarFooter({
   settingsOpen,
   onBackFromSettings,
 }: SidebarProps) {
-  const btn =
-    "flex items-center gap-1.5 rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
-
   return (
     <footer
       className={cn(
         "flex shrink-0 items-center",
-        collapsed ? "justify-center py-1.5" : "px-2 py-1"
+        collapsed ? "justify-center py-1" : "px-2 py-1"
       )}
     >
       {settingsOpen ? (
-        <button
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
           onClick={onBackFromSettings}
-          className={btn}
           title="Back"
+          className="text-muted-foreground"
         >
-          <ArrowLeft className="size-4" />
-          {!collapsed && <span className="text-xs">Back</span>}
-        </button>
+          <ArrowLeft />
+        </Button>
       ) : (
-        <button
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
           onClick={onOpenSettings}
-          className={btn}
           title="Settings"
+          className="text-muted-foreground"
         >
-          <Settings className="size-5" />
-        </button>
+          <Settings />
+        </Button>
       )}
     </footer>
   );

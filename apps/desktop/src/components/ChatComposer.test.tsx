@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { ChatComposer, clampComposerHeight } from "@/components/ChatComposer";
-import { AGENT_BACKENDS, capabilitiesOf, type AgentBackend } from "@/lib/agentBackend";
+import {
+  AGENT_BACKENDS,
+  capabilitiesOf,
+  isAcpBackend,
+  type AgentBackend,
+} from "@/lib/agentBackend";
 import { codexKeys } from "@/lib/queries";
 import type { CodexModel } from "@/lib/codex/protocol";
 import type { ChatImage } from "@/hooks/useAgentChat";
@@ -44,7 +49,13 @@ const propsFor = (backend: AgentBackend, sent: [string, ChatImage[]][] = []): Pr
   busy: false,
   queued: 0,
   exited: false,
-  usage: backend === "claude" ? { contextTokens: 12_000, model: "claude-sonnet-4-5" } : {},
+  // ACP levels come from the live session, so it offers some here.
+  usage:
+    backend === "claude"
+      ? { contextTokens: 12_000, model: "claude-sonnet-4-5" }
+      : isAcpBackend(backend)
+        ? { efforts: ["low", "high"], effort: "high" }
+        : {},
   limitsTarget: { provider: backend, command: null, configDir: null },
   model: backend === "codex" ? CODEX_MODEL.id : "",
   onModelChange: () => {},
@@ -53,12 +64,12 @@ const propsFor = (backend: AgentBackend, sent: [string, ChatImage[]][] = []): Pr
   access: "full",
   onAccessChange: () => {},
   onSwitchBackend: () => {},
-  claudeProfiles: [
-    { id: "work", name: "Work Account", command: "", args: "", configDir: "", env: [] },
+  launchProfiles: [
+    { id: "work", name: "Work Account", backend, command: "", args: "", configDir: "", env: [] },
   ],
-  // Picked, so the chip names it rather than falling back to plain "Claude".
-  claudeProfileId: "work",
-  onClaudeProfileChange: () => {},
+  // Picked, so the chip names it rather than falling back to the provider's name.
+  launchProfileId: "work",
+  onLaunchProfileChange: () => {},
   queue: null,
   onDraftConsumed: () => {},
   onSend: (text, images) => sent.push([text, images]),
@@ -217,6 +228,28 @@ describe("ChatComposer", () => {
     });
   });
 
+  // OpenCode offers levels only on models with variants; a chip for a model
+  // without them would set nothing.
+  it.each(["opencode", "grok"] as const)(
+    "%s drops the effort chip when the session offers no levels",
+    async (backend) => {
+      await mount({ ...propsFor(backend), usage: { efforts: [] } });
+      expect(menuChips().some((c) => c.includes("High"))).toBe(false);
+      expect(menuChips().some((c) => c.includes("Full access"))).toBe(true);
+    }
+  );
+
+  // The session's own level is what runs when the picked one isn't offered.
+  it("names the level an ACP session runs at when the pick isn't offered", async () => {
+    await mount({
+      ...propsFor("opencode"),
+      effort: "xhigh",
+      usage: { efforts: ["high", "max"], effort: "max" },
+    });
+    expect(menuChips().some((c) => c.includes("Max"))).toBe(true);
+    expect(menuChips().some((c) => c.includes("Xhigh"))).toBe(false);
+  });
+
   it("turning Keep going on forces full access", async () => {
     const onAccessChange = vi.fn();
     const onKeepGoingChange = vi.fn();
@@ -241,7 +274,7 @@ describe("ChatComposer", () => {
   });
 
   it("the profile chip needs profiles to pick between", async () => {
-    await mount({ ...propsFor("claude"), claudeProfiles: [] });
+    await mount({ ...propsFor("claude"), launchProfiles: [] });
     expect(menuChips().some((c) => c.includes("Work Account"))).toBe(false);
     // The rest of Claude's row is unaffected.
     expect(menuChips().some((c) => c.includes("Full access"))).toBe(true);

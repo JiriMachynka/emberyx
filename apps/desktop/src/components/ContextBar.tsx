@@ -1,8 +1,9 @@
-import { PanelRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ActionsMenu } from "@/components/ActionsMenu";
+import { DockPicker } from "@/components/DockPicker";
 import { OpenInIde } from "@/components/OpenInIde";
 import type { ProjectAction } from "@/lib/actions";
+import type { DockKind } from "@/lib/dock";
 import { gitStatusInterval, useGitBranch, useGitChanges } from "@/lib/queries";
 import { useAgentStore } from "@/lib/agentStore";
 import type { Project, Session } from "@/types";
@@ -22,8 +23,7 @@ interface ContextBarProps {
   onStopDev: () => void;
   gitOpen: boolean;
   onToggleGit: () => void;
-  dockOpen: boolean;
-  onToggleDock: () => void;
+  onPickDock: (kind: DockKind) => void;
   showDock?: boolean;
 }
 
@@ -39,8 +39,7 @@ export function ContextBar({
   onStopDev,
   gitOpen,
   onToggleGit,
-  dockOpen,
-  onToggleDock,
+  onPickDock,
   showDock = true,
 }: ContextBarProps) {
   const path = activeProject?.path ?? "";
@@ -96,7 +95,7 @@ export function ContextBar({
             <img
               src="/source-control-icons/git.svg"
               alt=""
-              className="size-3.5 shrink-0"
+              className="size-4 shrink-0"
             />
             Git
             {changeCount > 0 && (
@@ -107,14 +106,7 @@ export function ContextBar({
           </Button>
         )}
         {activeProject && showDock && (
-          <Button
-            variant={dockOpen ? "chromeActive" : "chrome"}
-            size="icon"
-            onClick={onToggleDock}
-            title={dockOpen ? "Close dock" : "Open dock"}
-          >
-            <PanelRight className="size-3.5" />
-          </Button>
+          <DockPicker onPick={onPickDock} />
         )}
       </div>
     </header>

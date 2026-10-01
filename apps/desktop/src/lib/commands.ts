@@ -16,6 +16,7 @@ export const COMMAND_IDS = [
   "agent.new",
   "sidebar.toggle",
   "project.search",
+  "file.find",
   "tab.next",
   "tab.prev",
   "tab.close",
@@ -66,6 +67,12 @@ export const COMMANDS: readonly CommandDef[] = [
     id: "project.search",
     label: "Search in project",
     defaultKey: "mod+shift+f",
+    rebindable: true,
+  },
+  {
+    id: "file.find",
+    label: "Go to file",
+    defaultKey: "mod+p",
     rebindable: true,
   },
   {

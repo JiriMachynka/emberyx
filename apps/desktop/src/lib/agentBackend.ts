@@ -19,8 +19,8 @@ export type AgentBackend = "claude" | "codex" | "opencode" | "grok";
 export interface AgentCapabilities {
   /** Past conversations can be listed (`list_threads` / the event log's store
    *  listing). Claude and Codex threads resume on their own id; ACP threads
-   *  are history only — the provider keeps no resumable store, so reopening
-   *  one shows the recorded conversation under a fresh agent. */
+   *  resume through `session/load` when the agent advertises `loadSession`
+   *  (both installed CLIs do), else reopen as history under a fresh agent. */
   threads: boolean;
   /** Token counts and context-window fill are reported live. Claude and Codex
    *  in-band; ACP via `usage_update`. */
@@ -59,13 +59,11 @@ export interface AgentCapabilities {
    *  session already running on it. */
   sessionModelCatalog: boolean;
   /** Several named launch configurations can be saved and picked per session —
-   *  a second account, a router in front of the API. Only Claude has them:
-   *  `Settings.claudeProfiles` holds a Claude launch line, and applying one to
-   *  another backend would spawn it with the wrong CLI's arguments. */
+   *  a second account, a router in front of the API. Each profile names its
+   *  backend (`LaunchProfile.backend`), so one is never applied to another CLI. */
   launchProfiles: boolean;
-  /** The CLI's config directory can be redirected per session. Only the Claude
-   *  transport applies it (`agent.rs` sets `CLAUDE_CONFIG_DIR` and nothing
-   *  else), so offering the field elsewhere is a control that does nothing. */
+  /** The CLI's config directory can be redirected per session, through the
+   *  variable `CONFIG_DIR_ENV` names. */
   configDirOverride: boolean;
   /** Listing this backend's threads boots a child process — Codex opens an
    *  `app-server` probe for it — so repeated scans need a cooldown. Claude
@@ -183,13 +181,13 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     steering: true,
     compact: true,
     conversationRewind: true,
-    // Codex's failure wording is its own and nothing here describes it yet, so
-    // it classifies as nothing rather than through Claude's patterns.
-    accountIssues: false,
+    // Classified from the typed `codexErrorInfo` code (codexAccountIssue),
+    // never from Claude's wording.
+    accountIssues: true,
     // Catalog is read off a separate app-server even for the running session.
     sessionModelCatalog: false,
-    launchProfiles: false,
-    configDirOverride: false,
+    launchProfiles: true,
+    configDirOverride: true,
     // `codex thread list` runs through a fresh app-server child.
     threadScanSpawnsChild: true,
     loginCommand: ["codex", "login"],
@@ -207,9 +205,7 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     usage: true,
     hookStatus: false,
     permissions: true,
-    // The `ask_user` picker is wired over ACP too, but keep-going is not: a
-    // chip that starts a loop this transport never runs would be a dead control.
-    askUser: false,
+    askUser: true,
     // Skills and custom commands live in the same folders the CLI reads;
     // the composer lists them and inserts `/name`, which OpenCode registers
     // as a slash command for every discovered skill.
@@ -218,47 +214,69 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     // The catalog arrives with `session/new`; switching is a `session/set_model`
     // round trip.
     modelPicker: true,
-    reasoningEffort: false,
-    // A prompt sent mid-turn is rejected; the turn is cancelled and re-sent.
-    steering: false,
-    compact: false,
+    // The `thought_level` config option (`effort`), set over
+    // `session/set_config_option`. Only models with variants offer it, so the
+    // chip reads the levels off the live session and is absent without them.
+    reasoningEffort: true,
+    // A second `session/prompt` sent mid-turn joins the running turn; both
+    // replies land when it ends, and only the last settles it.
+    steering: true,
+    // `/compact` is a registered command that runs the session summarizer.
+    compact: true,
     conversationRewind: false,
-    accountIssues: false,
+    // Sign-in only, from ACP's standard `auth_required` error
+    // (`acpAccountIssue`). Its quota wording is unknown, so it isn't guessed.
+    accountIssues: true,
     sessionModelCatalog: true,
-    launchProfiles: false,
+    launchProfiles: true,
+    // OPENCODE_CONFIG_DIR adds a config dir on top of ~/.config/opencode
+    // rather than replacing it, and auth lives under XDG_DATA_HOME — which the
+    // agent's own shell commands would inherit. No variable isolates it.
     configDirOverride: false,
     threadScanSpawnsChild: false,
     // `opencode providers`, aliased `auth`, is the credential flow.
     loginCommand: ["opencode", "auth", "login"],
   },
-  // Also ACP, over `grok agent stdio`. Grok advertises more than OpenCode does
-  // — reasoning effort and a session list among them — but each still needs the
-  // client half wired before its control can promise anything.
+  // Also ACP, over `grok agent stdio`.
   grok: {
     // Same story as OpenCode: the event log is the thread store.
     threads: true,
     usage: true,
     hookStatus: false,
     permissions: true,
-    askUser: false,
+    askUser: true,
     // User-invocable skills show up as `/name`, same as the Grok TUI.
     slashCommands: true,
     subagents: false,
     modelPicker: true,
-    // Grok reports `supportsReasoningEffort` and offers levels under its
-    // session config; switching one needs a set-config round trip that is not
-    // wired, and a control that doesn't change the run is worse than none.
-    reasoningEffort: false,
-    steering: false,
-    compact: false,
+    // The `thought_level` config option (`reasoning_effort`), set over
+    // `session/set_config_option`; levels come from the live session.
+    reasoningEffort: true,
+    // `_x.ai/interject` puts the message into the running turn. A second
+    // `session/prompt` would wait as a turn of its own instead.
+    steering: true,
+    // `/compact` is one of the commands Grok announces.
+    compact: true,
     conversationRewind: false,
-    accountIssues: false,
+    // Sign-in only: `session/new` answers ACP's `auth_required` error
+    // (`acpAccountIssue`). Its quota wording is unknown, so it isn't guessed.
+    accountIssues: true,
     sessionModelCatalog: true,
-    launchProfiles: false,
-    configDirOverride: false,
+    launchProfiles: true,
+    configDirOverride: true,
     threadScanSpawnsChild: false,
     loginCommand: ["grok", "login"],
   },
+};
+
+/** The variable each CLI reads its config directory from. Read only where
+ *  `configDirOverride` holds — OpenCode's entry is additive, not a redirect
+ *  (verified with `opencode debug config`, 1.18.34), so it is never exported. */
+export const CONFIG_DIR_ENV: Record<AgentBackend, string> = {
+  claude: "CLAUDE_CONFIG_DIR",
+  codex: "CODEX_HOME",
+  opencode: "OPENCODE_CONFIG_DIR",
+  grok: "GROK_HOME",
 };
 
 /** Stable per-backend record — safe to pass to memoized components. */

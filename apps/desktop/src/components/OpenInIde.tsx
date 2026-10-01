@@ -43,9 +43,9 @@ export function OpenInIde({ projectPath }: { projectPath: string }) {
       {/* The editor's own logo when there is one; an editor with no logo drawn
           gets the generic glyph rather than a broken image. */}
       {icon ? (
-        <img src={icon} alt="" className="size-3.5 shrink-0" />
+        <img src={icon} alt="" className="size-4 shrink-0" />
       ) : (
-        <SquareArrowOutUpRight className="size-3.5" />
+        <SquareArrowOutUpRight />
       )}
       {label}
     </Button>

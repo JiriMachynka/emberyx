@@ -8,16 +8,14 @@
  * change is a one-file fix, and anything unmatched is logged in dev.
  *
  * The patterns are Claude's wording alone, so every entry point takes the
- * backend and only a backend whose wording is described here — the
- * `accountIssues` capability — is classified at all; the rest get nothing
- * rather than a bad guess.
+ * backend and only Claude's text is classified by them; the rest get nothing
+ * rather than a bad guess. Codex reports typed codes instead
+ * (`codexAccountIssue`), which is what its `accountIssues` capability rests on;
+ * the ACP agents are read from the protocol's standard error (`acpAccountIssue`).
  */
 
-import {
-  BACKEND_LABEL,
-  capabilitiesOf,
-  type AgentBackend,
-} from "@/lib/agentBackend";
+import { BACKEND_LABEL, type AgentBackend } from "@/lib/agentBackend";
+import type { ChatQuota } from "@/lib/chatMessage";
 
 export type AccountIssueKind = "rate_limit" | "logged_out";
 
@@ -115,7 +113,7 @@ export function classify(
   raw: string,
   backend: AgentBackend = "claude"
 ): AccountIssue | null {
-  if (!capabilitiesOf(backend).accountIssues) return null;
+  if (backend !== "claude") return null;
   const text = stripAnsi(raw);
   if (!text.trim()) return null;
 
@@ -149,6 +147,53 @@ export function classifyFailure(
   }
   return issue;
 }
+
+/**
+ * Codex names its failures (`codexErrorInfo`) instead of describing them, so
+ * it is classified by variant, never by Claude's wording. `rateLimitExceeded`
+ * is a transient throttle the server retries, not a spent plan, so it stays a
+ * plain turn failure. The reset comes from the last quota the session saw: the
+ * latest window that is full is the one that has to reopen.
+ */
+export const codexAccountIssue = (
+  code: string | null,
+  message: string,
+  quota?: ChatQuota
+): AccountIssue | null => {
+  if (code === "unauthorized") return { kind: "logged_out", backend: "codex", message };
+  if (code !== "usageLimitExceeded") return null;
+  const resets = [quota?.primary, quota?.secondary].flatMap((w) =>
+    w && w.usedPercent >= 100 && w.resetsAt != null ? [w.resetsAt * 1000] : []
+  );
+  return {
+    kind: "rate_limit",
+    backend: "codex",
+    message,
+    ...(resets.length ? { resetAt: Math.max(...resets) } : {}),
+  };
+};
+
+/** ACP's own `auth_required` message, after the bridge's `<method> failed: `. */
+const ACP_AUTH_REQUIRED = /^(?:Error: )?(?:[\w./]+ failed: )?Authentication required\b/;
+
+/**
+ * An ACP agent with no usable login answers with the protocol's `auth_required`
+ * error (-32000, "Authentication required") — Grok at `session/new`, OpenCode
+ * with a `: provider authentication required` tail at `session/new` or a
+ * prompt. The code does not survive the Rust bridge, which keeps only
+ * `<method> failed: <message>`, so the standard message is matched where the
+ * error starts, never anywhere in the text. Sign-in only: neither CLI's quota
+ * wording is known, and a guess would announce a spent plan that isn't.
+ */
+export const acpAccountIssue = (
+  backend: AgentBackend,
+  message: string
+): AccountIssue | null => {
+  const text = message.trim();
+  return ACP_AUTH_REQUIRED.test(text)
+    ? { kind: "logged_out", backend, message: text.slice(0, 300) }
+    : null;
+};
 
 /** Human label for the banner and notifications. */
 export const issueTitle = (issue: AccountIssue): string =>

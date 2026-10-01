@@ -5,7 +5,7 @@ export interface FuzzyHit {
   positions: number[];
 }
 
-/** Lowercased copies, keyed by the list they came from. A ⌘K over a large repo
+/** Lowercased copies, keyed by the list they came from. A ⌘P over a large repo
  *  runs this filter on every keystroke, and lowercasing tens of thousands of
  *  paths each time is the whole cost of the search. */
 const lowered = new WeakMap<readonly string[], string[]>();

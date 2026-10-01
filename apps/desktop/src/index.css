@@ -162,6 +162,21 @@
     --diffs-header-font-family: var(--chat-font);
     --diffs-addition-color-override: var(--color-emerald-400);
     --diffs-deletion-color-override: var(--color-red-400);
+    /* The library tints a changed line 20% toward this target. Handing it a
+       target already 40% of the way to the panel leaves ~8%: a whole added or
+       deleted file otherwise reads as one slab of colour that drowns the
+       syntax. The gutter, the bar and the word-level emphasis keep the full
+       colour, so they carry the signal and the code stays readable. */
+    --diffs-bg-addition-override: color-mix(
+      in oklch,
+      var(--color-emerald-400) 40%,
+      var(--background)
+    );
+    --diffs-bg-deletion-override: color-mix(
+      in oklch,
+      var(--color-red-400) 40%,
+      var(--background)
+    );
   }
 
   /* Elevated panel: faint top-lit gradient, hairline highlight on the top
@@ -266,7 +281,7 @@
     border-bottom: 1px solid var(--rail-color);
     border-bottom-left-radius: 0.5rem;
   }
-  .work-rail > :last-child > .work-row:last-child::before {
+  .work-rail:not([data-continues]) > :last-child > .work-row:last-child::before {
     display: none;
   }
 
@@ -637,6 +652,44 @@
     animation: none;
     background: none;
     color: var(--muted-foreground);
+  }
+}
+
+/* A running thread's row carries one ember hairline along its bottom edge
+   with a light travelling through it — quieter than a spinner when several
+   agents run at once, and it never shifts the row's text. */
+@keyframes working-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+.working-sweep {
+  position: absolute;
+  inset-inline: 0.625rem;
+  bottom: 0;
+  height: 1px;
+  overflow: hidden;
+  pointer-events: none;
+  background: color-mix(in oklch, var(--primary) 14%, transparent);
+}
+.working-sweep::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, var(--primary), transparent);
+  animation: working-sweep 1.8s var(--motion-ease-in-out) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .working-sweep::after {
+    animation: none;
+    left: 30%;
+    opacity: 0.6;
   }
 }
 

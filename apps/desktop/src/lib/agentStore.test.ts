@@ -25,10 +25,25 @@ const usage = (input: number): Usage => ({
 });
 
 beforeEach(() => {
-  useAgentStore.setState({ statuses: {}, statusSince: {}, usages: {}, changes: [] });
+  useAgentStore.setState({
+    statuses: {},
+    statusSince: {},
+    unseen: {},
+    usages: {},
+    changes: [],
+  });
 });
 
 describe("useAgentStore", () => {
+  it("flags a finished run as unseen until it is marked seen", () => {
+    store().setStatus("s1", "working");
+    expect(store().unseen).toEqual({});
+    store().setStatus("s1", "idle");
+    expect(store().unseen).toEqual({ s1: true });
+    store().markSeen("s1");
+    expect(store().unseen).toEqual({});
+  });
+
   it("tracks status per session", () => {
     store().setStatus("s1", "working");
     store().setStatus("s2", "waiting");

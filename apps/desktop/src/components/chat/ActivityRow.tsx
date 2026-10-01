@@ -2,16 +2,17 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { FileTypeIcon } from "@/components/FileTypeIcon";
-import { ActivityFileTree } from "@/components/chat/ActivityFileTree";
 import { StepEnter, useStepQueue } from "@/components/chat/StepEnter";
 import { Disclosure, DisclosureChevron } from "@/components/chat/Disclosure";
 import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { ToolBody } from "@/components/chat/ToolViews";
+import { useWorkPin } from "@/components/chat/WorkPin";
 import { useAgentStore } from "@/lib/agentStore";
 import {
   groupActivities,
   iconForActivity,
   isAgentActivity,
+  isFileActivity,
   isMonoActivity,
   labelForActivity,
   metaForActivity,
@@ -20,7 +21,8 @@ import {
   type ActivityGroup,
 } from "@/lib/activityDisplay";
 import { TOOL_ICONS, TOOL_TINT } from "@/lib/toolIcons";
-import { isFileReference } from "@/lib/fileRef";
+import { useProjectCwd } from "@/components/FileRef";
+import { isFileReference, relativeToProject } from "@/lib/fileRef";
 import { describeResult, describeTool, stripReminders } from "@/lib/toolDisplay";
 import { cn } from "@/lib/utils";
 import type { ActivityItem } from "@/types";
@@ -43,7 +45,15 @@ export const ActivityRow = memo(function ActivityRow({
   const Icon = TOOL_ICONS[iconForActivity(activity)];
   const tint = TOOL_TINT[iconForActivity(activity)];
   const label = labelForActivity(activity);
-  const title = titleForActivity(activity);
+  const cwd = useProjectCwd();
+  const named = titleForActivity(activity);
+  // A file row says where in the project, not where on disk.
+  const title =
+    named && cwd && activity.displayDescription == null && isFileActivity(activity)
+      ? relativeToProject(named, cwd)
+      : // A command row's arguments stream in after the row appears; until they do
+        // the header would be a bare verb.
+        (named ?? (!activity.complete ? "Preparing…" : undefined));
   const meta = metaForActivity(activity);
   // A provider says when its work finished. The tool card had to infer it from
   // whether a result had landed, which left a tool that returns nothing
@@ -57,6 +67,7 @@ export const ActivityRow = memo(function ActivityRow({
   const [override, setOverride] = useState<boolean | null>(null);
   const open = expandable && !isAgent && (override ?? running);
 
+  const { pin } = useWorkPin();
   const selectAgent = useAgentStore((s) => s.selectAgent);
   const selectedAgent = useAgentStore((s) => s.selectedAgent);
   const selected = isAgent && selectedAgent === activity.id;
@@ -92,11 +103,13 @@ export const ActivityRow = memo(function ActivityRow({
       <button
         type="button"
         aria-expanded={expandable && !isAgent ? open : undefined}
-        onClick={() =>
-          isAgent
-            ? selectAgent(selected ? null : activity.id)
-            : expandable && setOverride(!open)
-        }
+        onClick={() => {
+          if (isAgent) selectAgent(selected ? null : activity.id);
+          else if (expandable) {
+            setOverride(!open);
+            pin([activity.id]);
+          }
+        }}
         disabled={!clickable}
         className={cn(
           // A row on the work rail: the left padding is the rail's gutter and
@@ -189,6 +202,7 @@ export function ActivityList({
   renderAgent,
   live,
   framed = true,
+  continues = false,
 }: {
   activities: ActivityItem[];
   /** A subagent run has a whole inline log of its own; the pane supplies it
@@ -200,8 +214,12 @@ export function ActivityList({
   live?: boolean;
   /** Draw the rail. A caller that already provides its own surface drops it. */
   framed?: boolean;
+  /** More work follows in the same turn: carry the rail through this list's
+   *  last row and close the gap, so the lines read as one tree. */
+  continues?: boolean;
 }) {
-  const rows = visibleActivities(activities, live === true);
+  const { pinned, pin } = useWorkPin();
+  const rows = visibleActivities(activities, live === true, pinned);
   const turnFor = useStepQueue();
   // A step already on screen when the group mounted is history; only one that
   // lands later is queued. `mounted` keeps the first render from animating the
@@ -229,20 +247,13 @@ export function ActivityList({
             .join("\n\n")}
           active={thoughts.some((thought) => !thought.complete)}
           timingKey={thoughts[0].id}
+          onToggle={() => pin(thoughts.map((thought) => thought.id))}
         />
       );
     }
     if (group.type === "files") {
-      // A live turn folds consecutive file work into a tree that accumulates.
-      // Settled, the "Changed N files" card summarizes the turn, so the tree
-      // would read twice its own summary — settled file work is plain rows.
-      if (live === true) {
-        return (
-          <div className="work-row pl-8">
-            <ActivityFileTree activities={group.activities} live />
-          </div>
-        );
-      }
+      // One row per file, named in full — a folder tree hides the path the
+      // reader came for.
       return (
         <>
           {group.activities.map((activity) => (
@@ -261,8 +272,11 @@ export function ActivityList({
   };
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className={cn("flex flex-col", framed && "work-rail")}>
+    <div className={cn("flex flex-col gap-1.5", continues && "-mb-2")}>
+      <div
+        className={cn("flex flex-col", framed && "work-rail")}
+        data-continues={continues || undefined}
+      >
         {groups.map((group) => {
           const id =
             group.type === "files"

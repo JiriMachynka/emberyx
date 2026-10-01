@@ -628,13 +628,18 @@ export interface ForgeCliStatus {
 export const useForgeOpenPr = (
   path: string,
   provider: RemoteHost | undefined,
-  branch: string | undefined
+  branch: string | undefined,
+  enabled = true
 ) =>
   useQuery({
     queryKey: ["forgeCli", "openPr", path, provider ?? "", branch ?? ""],
     queryFn: () =>
       invoke<string | null>("forge_pr_for_branch", { path, provider, branch }),
-    enabled: !!path && !!branch && (provider === "github" || provider === "gitlab"),
+    enabled:
+      enabled &&
+      !!path &&
+      !!branch &&
+      (provider === "github" || provider === "gitlab"),
     staleTime: 30_000,
     retry: false,
   });
@@ -886,9 +891,9 @@ export const fileKeys = {
   text: (path: string) => ["files", "text", path] as const,
 };
 
-/** Flat recursive file list for the editor's ⌘K finder. Fetched when the
- *  finder first opens and kept for the session — a re-walk per keystroke would
- *  be wasteful, and new files are rare mid-session. */
+/** Flat recursive file list for the ⌘P file finder. Fetched when the finder
+ *  first opens and kept for the session — a re-walk per keystroke would be
+ *  wasteful, and new files are rare mid-session. */
 export const useProjectFiles = (path: string, enabled: boolean) =>
   useQuery({
     queryKey: fileKeys.all(path),

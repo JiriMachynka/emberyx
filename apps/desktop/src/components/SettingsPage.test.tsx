@@ -49,13 +49,13 @@ vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: () => Promise.resolve()
 
 /** Every conditional row switched on, so a sweep over the page reaches each
  *  control a section can render: the "all threads" rows, the custom IDE
- *  command, a Claude profile with an environment row. */
+ *  command, a launch profile with an environment row. */
 const FULL: Settings = {
   ...DEFAULT_SETTINGS,
   threadView: "all",
   ide: "custom",
-  claudeProfiles: [
-    { id: "p1", name: "Work", command: "", args: "", configDir: "", env: [{ name: "A", value: "1" }] },
+  launchProfiles: [
+    { id: "p1", name: "Work", backend: "claude", command: "", args: "", configDir: "", env: [{ name: "A", value: "1" }] },
   ],
 };
 

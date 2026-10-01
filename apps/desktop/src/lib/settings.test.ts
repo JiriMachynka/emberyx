@@ -7,6 +7,7 @@ import {
   accessLevelToSettings,
   launchFor,
   loadSettings,
+  profilesFor,
   useSettings,
 } from "@/lib/settings";
 
@@ -37,6 +38,28 @@ describe("agentBackend migration", () => {
     expect(loadSettings().agentBackend).toBe("codex");
     store({ agentCommand: "codex", agentBackend: "gemini" });
     expect(loadSettings().agentBackend).toBe("codex");
+  });
+
+  it("lifts Claude-only profiles into backend-scoped launch profiles", () => {
+    store({
+      claudeProfiles: [
+        { id: "p1", name: "Work", command: "", args: "", configDir: "~/.cw", env: [] },
+      ],
+    });
+    const loaded = loadSettings();
+    expect(loaded.launchProfiles).toEqual([
+      { id: "p1", name: "Work", backend: "claude", command: "", args: "", configDir: "~/.cw", env: [] },
+    ]);
+    expect("claudeProfiles" in loaded).toBe(false);
+  });
+
+  it("keeps stored launch profiles over a stale Claude-only list", () => {
+    const kept = { id: "g", name: "Grok", backend: "grok", command: "", args: "" };
+    store({
+      launchProfiles: [kept],
+      claudeProfiles: [{ id: "p1", name: "Old", command: "", args: "", configDir: "", env: [] }],
+    });
+    expect(loadSettings().launchProfiles).toEqual([kept]);
   });
 
   it("drops stored OpenRouter and first-party Dokploy keys", () => {
@@ -195,8 +218,33 @@ describe("launchFor", () => {
       command: "/opt/claude",
       args: ["--flag", "a b"],
       configDir: "~/.claude_work",
-      env: { ANTHROPIC_BASE_URL: "https://openrouter.ai/api" },
+      env: {
+        ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
+        CLAUDE_CONFIG_DIR: "~/.claude_work",
+      },
     });
+  });
+
+  // Every transport carries `env` to its local and daemon spawn alike, so the
+  // config dir reaches each CLI under the variable it actually reads.
+  it.each([
+    ["codex", "CODEX_HOME"],
+    ["grok", "GROK_HOME"],
+  ] as const)("exports %s's config dir as %s, over a same-named env row", (backend, name) => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      providerLaunch: {
+        [backend]: {
+          command: "",
+          args: "",
+          configDir: " /tmp/second ",
+          env: [{ name, value: "/tmp/stale" }],
+        },
+      },
+    };
+    const launch = launchFor(settings, backend);
+    expect(launch.configDir).toBe("/tmp/second");
+    expect(launch.env).toEqual({ [name]: "/tmp/second" });
   });
 
   it("resolves a named Claude profile over the default launch", () => {
@@ -205,10 +253,11 @@ describe("launchFor", () => {
       providerLaunch: {
         claude: { command: "claude", args: "", configDir: "", env: [] },
       },
-      claudeProfiles: [
+      launchProfiles: [
         {
           id: "personal",
           name: "Personal",
+          backend: "claude" as const,
           command: "claude",
           args: "",
           configDir: "~/.claude_personal",
@@ -220,6 +269,39 @@ describe("launchFor", () => {
       "~/.claude_personal"
     );
     expect(launchFor(settings, "claude").configDir).toBeNull();
+  });
+
+  // An id survives an in-place provider switch; it must never hand one CLI's
+  // launch line to another.
+  it("applies a profile only to the backend it names", () => {
+    const settings = {
+      ...DEFAULT_SETTINGS,
+      providerLaunch: { codex: { command: "codex", args: "" } },
+      launchProfiles: [
+        { id: "work", name: "Work", backend: "claude" as const, command: "/opt/claude", args: "" },
+        { id: "alt", name: "Alt", backend: "codex" as const, command: "/opt/codex", args: "", configDir: "~/.codex_alt" },
+      ],
+    };
+    expect(launchFor(settings, "codex", "work").command).toBe("codex");
+    expect(launchFor(settings, "claude", "work").command).toBe("/opt/claude");
+    expect(launchFor(settings, "codex", "alt")).toEqual({
+      command: "/opt/codex",
+      args: [],
+      configDir: "~/.codex_alt",
+      env: { CODEX_HOME: "~/.codex_alt" },
+    });
+    expect(launchFor(settings, "claude", "alt").command).toBeNull();
+  });
+});
+
+describe("profilesFor", () => {
+  it("lists only the backend's own profiles", () => {
+    const profiles = [
+      { id: "a", name: "A", backend: "claude" as const, command: "", args: "" },
+      { id: "b", name: "B", backend: "grok" as const, command: "", args: "" },
+    ];
+    expect(profilesFor(profiles, "grok").map((p) => p.id)).toEqual(["b"]);
+    expect(profilesFor(profiles, "codex")).toEqual([]);
   });
 });
 

@@ -8,15 +8,17 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ModelPicker } from "@/components/ModelPicker";
 import {
+  BACKEND_LABEL,
   CLAUDE_EFFORTS,
   capabilitiesOf,
+  isAcpBackend,
   type AgentBackend,
 } from "@/lib/agentBackend";
 import {
   ACCESS_LEVELS,
   ACCESS_LEVEL_LABEL,
   type AccessLevel,
-  type ClaudeProfile,
+  type LaunchProfile,
 } from "@/lib/settings";
 import {
   codexDefaultEffort,
@@ -43,6 +45,10 @@ interface EffortPickerProps {
    *  streamed frame, so taking the whole thing re-renders the chip per frame. */
   resolvedModel?: string;
   contextWindow?: number;
+  /** ACP: the levels the live session offers for its model, and the one it
+   *  runs at. There is no catalog to read them from ahead of the session. */
+  sessionEfforts?: string[];
+  sessionEffort?: string;
   onEffortChange: (effort: string) => void;
 }
 
@@ -56,17 +62,32 @@ const EffortPicker = memo(function EffortPicker({
   cwd,
   resolvedModel,
   contextWindow,
+  sessionEfforts,
+  sessionEffort,
   onEffortChange,
 }: EffortPickerProps) {
   const codex = backend === "codex";
+  const acp = isAcpBackend(backend);
   const models = useCodexModels(cwd, codex).data ?? [];
   // Codex: on "Default" the levels on offer are those of the model the CLI
   // resolved. Claude: the same five levels whatever the model, so no catalog.
+  // ACP: whatever the running session offers for its model, often nothing.
   const source = model || resolvedModel || "";
-  const efforts = codex ? codexEfforts(source, models) : CLAUDE_EFFORTS;
+  const efforts = codex
+    ? codexEfforts(source, models)
+    : acp
+      ? (sessionEfforts ?? [])
+      : CLAUDE_EFFORTS;
   if (efforts.length === 0) return null;
-  const fallback = codex ? codexDefaultEffort(source, models) : undefined;
-  const level = titleCase(effort || fallback || "") || "Default";
+  const fallback = codex
+    ? codexDefaultEffort(source, models)
+    : acp
+      ? sessionEffort
+      : undefined;
+  // A level this model doesn't offer is never sent over ACP, so the chip names
+  // the one the session really runs at instead.
+  const chosen = acp && !efforts.includes(effort) ? "" : effort;
+  const level = titleCase(chosen || fallback || "") || "Default";
   // The window rides along on this chip: it is the other half of "how hard is
   // this turn going to think", and it saves a second control for one number.
   const max = resolveContextWindow(model, backend, resolvedModel, contextWindow);
@@ -82,7 +103,7 @@ const EffortPicker = memo(function EffortPicker({
           className="justify-between gap-4"
         >
           {fallback ? `Default (${titleCase(fallback)})` : "Default"}
-          {effort === "" && <Check className="size-3.5" />}
+          {chosen === "" && <Check className="size-3.5" />}
         </DropdownMenuItem>
         {efforts.map((e) => (
           <DropdownMenuItem
@@ -137,12 +158,14 @@ const AccessChip = memo(function AccessChip({
   );
 });
 
-const ClaudeProfileChip = memo(function ClaudeProfileChip({
+const LaunchProfileChip = memo(function LaunchProfileChip({
+  backend,
   profiles,
   profileId,
   onChange,
 }: {
-  profiles: ClaudeProfile[];
+  backend: AgentBackend;
+  profiles: LaunchProfile[];
   profileId: string | null;
   onChange?: (id: string | null) => void;
 }) {
@@ -150,7 +173,7 @@ const ClaudeProfileChip = memo(function ClaudeProfileChip({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger className={chipTrigger}>
-        <span>{current?.name ?? "Claude"}</span>
+        <span>{current?.name ?? BACKEND_LABEL[backend]}</span>
         <ChevronDown className="size-3.5 shrink-0 opacity-50" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-44">
@@ -158,8 +181,8 @@ const ClaudeProfileChip = memo(function ClaudeProfileChip({
           onSelect={() => onChange?.(null)}
           className="justify-between gap-4"
         >
-          Claude
-          {!profileId && <Check className="size-3.5" />}
+          {BACKEND_LABEL[backend]}
+          {!current && <Check className="size-3.5" />}
         </DropdownMenuItem>
         {profiles.map((profile) => (
           <DropdownMenuItem
@@ -193,9 +216,10 @@ interface UsageFooterProps {
   /** Move the thread to another provider in place — picking a model that
    *  belongs to one is how that happens. */
   onSwitchBackend: (backend: AgentBackend) => void;
-  claudeProfiles: ClaudeProfile[];
-  claudeProfileId: string | null;
-  onClaudeProfileChange?: (id: string | null) => void;
+  /** This backend's named launches. Empty = its default launch only. */
+  launchProfiles: LaunchProfile[];
+  launchProfileId: string | null;
+  onLaunchProfileChange?: (id: string | null) => void;
   /** Runtime-owned prompt queue; null when the backend has none (Codex steers). */
   queue?: PromptQueue | null;
   keepGoing?: KeepGoing;
@@ -219,9 +243,9 @@ export const UsageFooter = memo(function UsageFooter({
   access,
   onAccessChange,
   onSwitchBackend,
-  claudeProfiles,
-  claudeProfileId,
-  onClaudeProfileChange,
+  launchProfiles,
+  launchProfileId,
+  onLaunchProfileChange,
   queue,
   keepGoing,
   onKeepGoingChange,
@@ -252,6 +276,8 @@ export const UsageFooter = memo(function UsageFooter({
           cwd={cwd}
           resolvedModel={usage.model}
           contextWindow={usage.contextWindow}
+          sessionEfforts={usage.efforts}
+          sessionEffort={usage.effort}
           onEffortChange={onEffortChange}
         />
       )}
@@ -270,11 +296,12 @@ export const UsageFooter = memo(function UsageFooter({
           onOpenWorktree={onOpenWorktree}
         />
       )}
-      {backend === "claude" && claudeProfiles.length > 0 && (
-        <ClaudeProfileChip
-          profiles={claudeProfiles}
-          profileId={claudeProfileId}
-          onChange={onClaudeProfileChange}
+      {capabilitiesOf(backend).launchProfiles && launchProfiles.length > 0 && (
+        <LaunchProfileChip
+          backend={backend}
+          profiles={launchProfiles}
+          profileId={launchProfileId}
+          onChange={onLaunchProfileChange}
         />
       )}
     </div>

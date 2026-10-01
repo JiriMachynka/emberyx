@@ -3,12 +3,12 @@
 
 use serde_json::{json, Value};
 
-use super::{capitalize, iso_secs, rpc_oneshot, LimitAccount, LimitSource, LimitStatus, LimitWindow, ProviderLimits};
+use super::{capitalize, cli_home, iso_secs, rpc_oneshot, LimitAccount, LimitSource, LimitStatus, LimitWindow, ProviderLimits};
 use crate::time::now_ms;
 
-pub fn read(binary: &str) -> ProviderLimits {
-    let email = crate::paths::home_dir()
-        .map(|h| h.join(".grok/auth.json"))
+pub fn read(binary: &str, config_dir: Option<&str>) -> ProviderLimits {
+    let email = cli_home(config_dir, "GROK_HOME", ".grok")
+        .map(|h| h.join("auth.json"))
         .and_then(|p| std::fs::read(p).ok())
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
         .and_then(|auth| {
@@ -19,9 +19,11 @@ pub fn read(binary: &str) -> ProviderLimits {
     let Some(email) = email else {
         return ProviderLimits::without("grok", LimitStatus::SignedOut, "Sign in with `grok` to see your limits.");
     };
+    let env: Vec<_> = config_dir.map(|d| ("GROK_HOME", d)).into_iter().collect();
     match rpc_oneshot(
         binary,
         &["agent", "stdio"],
+        &env,
         json!({ "protocolVersion": 1, "clientCapabilities": {} }),
         &[("_x.ai/billing", json!({}))],
     ) {

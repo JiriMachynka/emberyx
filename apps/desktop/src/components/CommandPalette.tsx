@@ -39,7 +39,7 @@ interface CommandPaletteProps {
   onCloneUrl: () => void;
   onPublish: () => void;
   onOpenSettings: () => void;
-  onOpenEditor: () => void;
+  onOpenFinder: () => void;
   onToggleChanges: () => void;
   onSearch: () => void;
   onOpenUsage: () => void;
@@ -66,7 +66,7 @@ export function CommandPalette({
   onCloneUrl,
   onPublish,
   onOpenSettings,
-  onOpenEditor,
+  onOpenFinder,
   onToggleChanges,
   onSearch,
   onOpenUsage,
@@ -174,9 +174,12 @@ export function CommandPalette({
                   </Item>
                 )}
                 {activeProject && (
-                  <Item value="action files editor" onSelect={() => run(onOpenEditor)}>
+                  <Item
+                    value="action go to file finder editor"
+                    onSelect={() => run(onOpenFinder)}
+                  >
                     <FileCode className="size-4 text-muted-foreground" />
-                    Files
+                    Go to file
                   </Item>
                 )}
                 <Item value="action toggle changes" onSelect={() => run(onToggleChanges)}>

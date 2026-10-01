@@ -31,7 +31,9 @@ export interface ThreadMeta {
   /** A PR/MR the user linked from the transcript. Auto-settle on merge uses
    *  this iid when present, instead of only the worktree branch. */
   linkedPr?: LinkedPr;
-  /** Named Claude profile this thread was last spawned with. */
+  /** Named launch profile this thread was last spawned with. */
+  launchProfileId?: string;
+  /** The same, stored before profiles were per backend. Read, never written. */
   claudeProfileId?: string;
   /** Unattended continue loop for this thread. Absent = off. An expired cap
    *  still stores the object; `isKeepGoingOn` is what reads it as off. */

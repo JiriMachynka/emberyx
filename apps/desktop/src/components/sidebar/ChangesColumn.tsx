@@ -29,8 +29,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { FileTypeIcon } from "@/components/FileTypeIcon";
-import { GitActions } from "@/components/GitActions";
-import { ChangesGraph } from "./ChangesGraph";
 import { cn } from "@/lib/utils";
 import { basename, dirname } from "@/lib/path";
 import { isStaged, isUnstaged } from "@/lib/gitStatus";
@@ -45,7 +43,6 @@ import {
   useGitDefaultBranch,
   useInvalidateGit,
 } from "@/lib/queries";
-import { useAgentStore } from "@/lib/agentStore";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { CommitPush, GitFile, Json } from "@/types";
 
@@ -215,20 +212,46 @@ function MiniButton({
   );
 }
 
+/** The branch as the Git panel's title: its name, and how far it sits from
+ *  its upstream. Nothing until the branch read lands — a repo with no
+ *  commits has no branch to name. */
+export function BranchTitle({ projectPath }: { projectPath: string }) {
+  const branch = useGitBranch(projectPath).data;
+  if (!branch) return null;
+  return (
+    <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
+      <GitBranch className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate">{branch.branch}</span>
+      {branch.behind > 0 && (
+        <span className="flex shrink-0 items-center text-xs font-normal tabular-nums text-muted-foreground">
+          <ArrowDown className="size-3" />
+          {branch.behind}
+        </span>
+      )}
+      {branch.ahead > 0 && (
+        <span className="flex shrink-0 items-center text-xs font-normal tabular-nums text-muted-foreground">
+          <ArrowUp className="size-3" />
+          {branch.ahead}
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function ChangesColumn({
   projectPath,
   rightDock,
   remoteHost,
+  active = true,
   onOpenReview,
-  onOpenWorktree,
-  onRemoveWorktree,
 }: {
   projectPath: string;
   rightDock: boolean;
   remoteHost: string | undefined;
+  /** Visible tab: porcelain watch + forge probes. Hidden keep-alive only
+   *  reads the shared git cache and warms the graph. */
+  active?: boolean;
   onOpenReview: () => void;
-  onOpenWorktree: (path: string, repoRoot: string, branch: string) => void;
-  onRemoveWorktree: (worktreePath: string, repoRoot: string) => void | Promise<void>;
 }) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -238,14 +261,17 @@ export function ChangesColumn({
   const drafting = useRef(false);
 
   const branchQuery = useGitBranch(projectPath);
-  const changesQuery = useGitChanges(projectPath, true, gitStatusInterval("watch"));
+  const changesQuery = useGitChanges(
+    projectPath,
+    true,
+    gitStatusInterval(active ? "watch" : "read")
+  );
   const defaultBranchQuery = useGitDefaultBranch(projectPath);
   const forge = isRemoteHost(remoteHost ?? "") ? (remoteHost as RemoteHost) : undefined;
   const branch = branchQuery.data;
-  const openPrQuery = useForgeOpenPr(projectPath, forge, branch?.branch);
-  const cliStatus = useForgeCliStatus();
+  const openPrQuery = useForgeOpenPr(projectPath, forge, branch?.branch, active);
+  const cliStatus = useForgeCliStatus(active);
   const invalidateGit = useInvalidateGit();
-  const requestCommitReview = useAgentStore((s) => s.requestCommitReview);
 
   const files = changesQuery.data ?? [];
   const staged = useMemo(() => files.filter(isStaged), [files]);
@@ -600,7 +626,8 @@ export function ChangesColumn({
   };
 
   const empty = files.length === 0;
-  const cleanNote = branch && empty ? syncCopy(branch) : null;
+  const changesPending = changesQuery.isPending && !changesQuery.data;
+  const cleanNote = branch && empty && !changesPending ? syncCopy(branch) : null;
   // The split dropdown is the PR move only. Commit is the button; push is
   // Sync / Publish below.
   const canPush = !!branch && (branch.ahead > 0 || !branch.upstream);
@@ -625,39 +652,8 @@ export function ChangesColumn({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* Header row: title, branch chip, overflow. */}
-      <div className="flex h-9 shrink-0 items-center gap-2 px-3">
-        <span className="text-sm font-medium">Changes</span>
-        {branch && (
-          <span className="flex min-w-0 items-center gap-1 rounded-md bg-secondary/70 px-1.5 py-0.5 text-xs text-muted-foreground">
-            <GitBranch className="size-3 shrink-0" />
-            <span className="min-w-0 max-w-28 truncate">{branch.branch}</span>
-            {branch.behind > 0 && (
-              <span className="flex shrink-0 items-center tabular-nums">
-                <ArrowDown className="size-3" />
-                {branch.behind}
-              </span>
-            )}
-            {branch.ahead > 0 && (
-              <span className="flex shrink-0 items-center tabular-nums">
-                <ArrowUp className="size-3" />
-                {branch.ahead}
-              </span>
-            )}
-          </span>
-        )}
-        <span className="ml-auto">
-          <GitActions
-            projectPath={projectPath}
-            onOpenWorktree={onOpenWorktree}
-            onRemoveWorktree={onRemoveWorktree}
-            compact
-          />
-        </span>
-      </div>
-
       {/* Commit composer */}
-      <div className="grid shrink-0 gap-2 px-3 pb-2">
+      <div className="grid shrink-0 gap-2 px-3 pb-2 pt-3">
         <div className="relative">
           <Textarea
             ref={textareaRef}
@@ -804,7 +800,7 @@ export function ChangesColumn({
           empty ? "shrink-0" : "min-h-0 flex-1",
         )}
       >
-        {empty ? (
+        {changesPending ? null : empty ? (
           <div className="pt-2">
             <p className="px-3 py-2 text-center text-xs text-muted-foreground">
               No uncommitted changes
@@ -892,15 +888,6 @@ export function ChangesColumn({
           </>
         )}
       </div>
-
-      {/* Compact swimlane graph */}
-      <ChangesGraph
-        projectPath={projectPath}
-        onPickCommit={(sha, subject) => {
-          requestCommitReview({ projectPath, sha, subject });
-          if (rightDock) onOpenReview();
-        }}
-      />
     </div>
   );
 }

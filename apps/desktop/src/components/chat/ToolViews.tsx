@@ -179,6 +179,29 @@ export function ToolBody({
     );
   }
 
+  if (part.kind === "list") {
+    return (
+      <div>
+        {label}
+        <ul className="flex flex-col gap-2">
+          {part.items.map((item, idx) => (
+            <li key={idx} className="flex flex-col gap-1 border-l border-border pl-2.5">
+              {item.title && <div className="text-xs font-medium">{item.title}</div>}
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-2xs">
+                {item.rows.map((row) => (
+                  <Fragment key={row.key}>
+                    <dt className="text-muted-foreground">{row.key}</dt>
+                    <dd className="whitespace-pre-wrap break-words">{row.value}</dd>
+                  </Fragment>
+                ))}
+              </dl>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+
   if (part.kind === "todos") {
     return (
       <ul className="flex flex-col gap-1 text-2xs">

@@ -104,7 +104,7 @@ export const TABS: TabMeta[] = [
       "agentBackend",
       "agentCommand",
       "providerLaunch",
-      "claudeProfiles",
+      "launchProfiles",
       "codexSandbox",
     ],
     finds: "claude codex backend cli command installed version sandbox launch binary args model list hidden custom config dir env profile",

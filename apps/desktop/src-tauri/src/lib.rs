@@ -143,6 +143,7 @@ pub fn run() {
             agent::agent_kill,
             agent::agent_detach,
             agent::title_thread,
+            agent::generate_title,
             codex::codex_spawn,
             codex::codex_kill,
             codex::codex_detach,

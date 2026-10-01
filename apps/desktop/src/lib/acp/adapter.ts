@@ -19,6 +19,7 @@ import { upsertActivities } from "@/lib/activities";
 import type { ActivityItem, Json, JsonObject } from "@/types";
 import { acpActivity } from "./activities";
 import type {
+  AcpConfigOption,
   AcpContentBlock,
   AcpPlanEntry,
   AcpStopReason,
@@ -135,6 +136,61 @@ export const sessionUpdateOf = (method: string, params: Json): Json => {
     return params.update;
   }
   return null;
+};
+
+/** One select entry; ACP also allows grouped entries, which are flattened. */
+const selectValues = (v: Json): { value: string; name?: string }[] => {
+  if (!isRecord(v) || Array.isArray(v)) return [];
+  if (Array.isArray(v.options)) return v.options.flatMap(selectValues);
+  return typeof v.value === "string" ? [{ value: v.value, name: asString(v.name) }] : [];
+};
+
+const decodeConfigOption = (v: Json): AcpConfigOption[] => {
+  if (!isRecord(v) || Array.isArray(v) || typeof v.id !== "string") return [];
+  return [
+    {
+      id: v.id,
+      name: asString(v.name),
+      category: asString(v.category),
+      type: asString(v.type),
+      currentValue: asString(v.currentValue),
+      options: Array.isArray(v.options) ? v.options.flatMap(selectValues) : undefined,
+    },
+  ];
+};
+
+/**
+ * The config options a `session/set_config_option` reply or a
+ * `config_option_update` carries — both are `{ configOptions: [...] }`, and the
+ * list is always the whole set, so it replaces rather than merges. Null when the
+ * frame names none, which is not the same as an empty set.
+ */
+export const configOptionsOf = (value: Json): AcpConfigOption[] | null => {
+  const list = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.configOptions)
+      ? value.configOptions
+      : null;
+  return list ? list.flatMap(decodeConfigOption) : null;
+};
+
+/**
+ * Vendor method that adds text to the running turn, where the agent has one.
+ * Grok queues an interjection into the turn it is running; a second
+ * `session/prompt` would instead wait as a turn of its own. OpenCode has no such
+ * method, but a prompt sent mid-turn joins the running one.
+ */
+export const interjectMethod = (provider: string): string | null =>
+  provider === "grok" ? "_x.ai/interject" : null;
+
+/** Whether a tool-call update is about a call `message` already holds. */
+export const ownsToolCall = (message: ChatMessage, update: Json): boolean => {
+  if (!isRecord(update) || Array.isArray(update)) return false;
+  if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") {
+    return false;
+  }
+  const id = update.toolCallId;
+  return typeof id === "string" && message.tools.some((t) => t.id === id);
 };
 
 /** Live context fill from ACP `usage_update`. `size` is the window; `used` is

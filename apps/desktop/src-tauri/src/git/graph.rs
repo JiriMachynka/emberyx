@@ -36,10 +36,10 @@ pub struct GraphCommit {
 /// applied first), so pages can be laid out incrementally.
 ///
 /// Excludes the machinery namespaces `refs/emberyx/*` (this app's
-/// checkpoints/settles) and `refs/t3/*` (T3 Code's ancestor checkpoints,
-/// written as parentless roots) — without them the graph is a staircase of
-/// one-lane snapshot commits no real branch ever references. The patterns
-/// must precede `--all`, which they modify.
+/// checkpoints/settles), `refs/t3/*` (T3 Code's ancestor checkpoints) and
+/// `refs/waku/*` (Waku turn snapshots) — parentless roots that would
+/// staircase the graph into one-lane snapshot commits no real branch ever
+/// references. The patterns must precede `--all`, which they modify.
 pub fn git_graph_page(path: String, limit: u32, skip: u32) -> Result<Vec<GraphCommit>> {
     if !is_repo(&path) {
         return Err(Error::new("Not a git repository."));
@@ -54,6 +54,7 @@ pub fn git_graph_page(path: String, limit: u32, skip: u32) -> Result<Vec<GraphCo
             "log",
             "--exclude=refs/emberyx/*",
             "--exclude=refs/t3/*",
+            "--exclude=refs/waku/*",
             "--all",
             "--topo-order",
             &format!("-n{limit}"),
@@ -378,7 +379,7 @@ mod tests {
     }
 
     #[test]
-    fn excludes_emberyx_machinery_refs_from_the_graph() {
+    fn excludes_checkpoint_namespaces_from_the_graph() {
         let repo = Repo::new("graph_exclude");
         repo.write("a.txt", "one\n");
         repo.commit("real work");
@@ -390,6 +391,8 @@ mod tests {
         // T3 Code's checkpoints the same way, parked in their own namespace.
         let t3 = repo.run(&["commit-tree", tree.as_str(), "-m", "t3 checkpoint ref=refs/t3/checkpoints/a/turn/0"]);
         repo.run(&["update-ref", "refs/t3/checkpoints/a/turn/0", t3.as_str()]);
+        let waku = repo.run(&["commit-tree", tree.as_str(), "-m", "Waku worktree snapshot"]);
+        repo.run(&["update-ref", "refs/waku/session-x-turn-0", waku.as_str()]);
 
         let page = git_graph_page(repo.path(), 10, 0).unwrap();
         assert_eq!(page.len(), 1);

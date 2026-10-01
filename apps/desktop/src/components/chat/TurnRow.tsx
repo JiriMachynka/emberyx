@@ -2,7 +2,12 @@ import { Fragment, memo, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Markdown } from "@/components/Markdown";
 import { isTodoTool, lastTodos } from "@/lib/toolDisplay";
-import { isEmptyThought, isFileActivity, pathsForActivity } from "@/lib/activityDisplay";
+import {
+  isEmptyThought,
+  isFileActivity,
+  pathsForActivity,
+  visibleActivities,
+} from "@/lib/activityDisplay";
 import type { ChatMessage } from "@/hooks/useAgentChat";
 import { summarizeWork } from "@/lib/workSummary";
 import { useAgentStore } from "@/lib/agentStore";
@@ -14,6 +19,8 @@ import {
   type Turn,
 } from "@/components/chat/turns";
 import { Disclosure, DisclosureChevron } from "@/components/chat/Disclosure";
+import { WorkPinContext, type WorkPin } from "@/components/chat/WorkPin";
+import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { TasksCard } from "@/components/chat/TasksCard";
 import { ChangedFilesCard } from "@/components/chat/ChangedFilesCard";
 import { MessageWork } from "@/components/chat/MessageWork";
@@ -124,6 +131,7 @@ export const TurnRow = memo(
                       message={a}
                       active={live && a.streaming && !a.text && a.tools.length === 0}
                       live={live}
+                      continues={railContinues(assistants, i, live)}
                     />
                     {/* Only interstitial narration stays inside; the final
                         answer is shown below the accordion. */}
@@ -145,6 +153,13 @@ export const TurnRow = memo(
               )}
             </div>
           ))}
+        {live && !hasWork && !last?.text && (
+          // The turn is running but nothing has been produced yet: say so
+          // rather than leaving the prompt sitting alone.
+          <div className="work-rail">
+            <ThinkingBlock text="" active />
+          </div>
+        )}
         {user?.checkpointId && !live && (
           <ChangedFilesCard
             projectPath={chat.cwd}
@@ -165,6 +180,26 @@ export const TurnRow = memo(
     a.turn.assistants.length === b.turn.assistants.length &&
     a.turn.assistants.every((m, i) => m === b.turn.assistants[i])
 );
+
+/** Whether a message renders any rows — the same filters `MessageWork` applies. */
+const showsWork = (a: ChatMessage, live: boolean): boolean =>
+  a.activities?.length
+    ? visibleActivities(
+        a.activities.filter((row) => !isTodoTool(row.title) && !isEmptyThought(row)),
+        live
+      ).length > 0
+    : Boolean(a.thinking) || a.tools.some((t) => !isTodoTool(t.name));
+
+/** Does message `i`'s rail run on into a later message's? Narration between
+ *  them breaks it — the line would cross prose. */
+const railContinues = (assistants: ChatMessage[], i: number, live: boolean): boolean => {
+  if (!showsWork(assistants[i], live) || assistants[i].text) return false;
+  for (const next of assistants.slice(i + 1)) {
+    if (showsWork(next, live)) return true;
+    if (next.text) return false;
+  }
+  return false;
+};
 
 /** What one turn's work amounts to, in words. A count, not the live row —
  *  "Thinking" and the running command already have their own rows. */
@@ -196,6 +231,19 @@ function TurnWork({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState<boolean | null>(null);
+  const [pinned, setPinned] = useState<ReadonlySet<string>>(new Set());
+  // Clicking a row inside is a decision to read it: keep it, and keep the log
+  // open around it rather than folding away when the work stops.
+  const workPin = useMemo<WorkPin>(
+    () => ({
+      pinned,
+      pin: (ids) => {
+        setPinned((prev) => new Set([...prev, ...ids]));
+        setOpen((prev) => prev ?? true);
+      },
+    }),
+    [pinned]
+  );
   const expanded = workLogOpen({
     live: live === true,
     working,
@@ -236,7 +284,9 @@ function TurnWork({
         </button>
       )}
       <Disclosure open={expanded}>
-        <div className="flex flex-col gap-2">{children}</div>
+        <WorkPinContext.Provider value={workPin}>
+          <div className="flex flex-col gap-2">{children}</div>
+        </WorkPinContext.Provider>
       </Disclosure>
     </div>
   );

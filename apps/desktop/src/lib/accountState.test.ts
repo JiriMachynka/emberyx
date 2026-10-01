@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_BACKENDS, capabilitiesOf } from "@/lib/agentBackend";
+import { AGENT_BACKENDS } from "@/lib/agentBackend";
 import {
   type AccountIssue,
+  acpAccountIssue,
   classify,
   classifyFailure,
+  codexAccountIssue,
   issueTitle,
   resetLabel,
   stripAnsi,
@@ -265,21 +267,64 @@ describe("resetLabel", () => {
 });
 
 describe("classify — the backend gate", () => {
-  // The patterns are one CLI's wording, so the gate is the `accountIssues`
-  // capability rather than a backend name spelled out here. A backend that
-  // doesn't declare it gets nothing — which is what `useCodexChat`'s stderr
-  // call site correctly receives.
-  it("classifies only backends that declare accountIssues", () => {
+  // The patterns are Claude's wording. Codex declares accountIssues too, but
+  // through typed codes (codexAccountIssue) — its text must never be read
+  // through Claude's regexes.
+  it("classifies only Claude's wording", () => {
     for (const backend of AGENT_BACKENDS) {
       const issue = classify("API Error: Invalid API key · Please run /login", backend);
-      expect(issue?.kind ?? null).toBe(
-        capabilitiesOf(backend).accountIssues ? "logged_out" : null
-      );
+      expect(issue?.kind ?? null).toBe(backend === "claude" ? "logged_out" : null);
     }
   });
 
   it("names the backend it classified, since the banner quotes it", () => {
     expect(classify("Usage limit reached", "claude")?.backend).toBe("claude");
+  });
+});
+
+describe("codexAccountIssue", () => {
+  const window = (usedPercent: number, resetsAt: number | null) => ({
+    usedPercent,
+    resetsAt,
+    windowDurationMins: 300,
+  });
+
+  it("reads a lost login from the unauthorized code", () => {
+    expect(codexAccountIssue("unauthorized", "401")).toEqual({
+      kind: "logged_out",
+      backend: "codex",
+      message: "401",
+    });
+  });
+
+  it("dates a spent plan by the latest full window", () => {
+    const issue = codexAccountIssue("usageLimitExceeded", "limit", {
+      primary: window(100, 1_000),
+      secondary: window(100, 2_000),
+      planType: "plus",
+    });
+    expect(issue).toEqual({
+      kind: "rate_limit",
+      backend: "codex",
+      message: "limit",
+      resetAt: 2_000_000,
+    });
+  });
+
+  it("ignores windows that still have room", () => {
+    const issue = codexAccountIssue("usageLimitExceeded", "limit", {
+      primary: window(100, 1_000),
+      secondary: window(40, 9_000),
+      planType: null,
+    });
+    expect(issue?.resetAt).toBe(1_000_000);
+    expect(codexAccountIssue("usageLimitExceeded", "limit")?.resetAt).toBeUndefined();
+  });
+
+  it("leaves throttles and ordinary failures as turn failures", () => {
+    expect(codexAccountIssue("rateLimitExceeded", "slow down")).toBeNull();
+    expect(codexAccountIssue("other", "boom")).toBeNull();
+    expect(codexAccountIssue(null, "boom")).toBeNull();
   });
 });
 
@@ -318,5 +363,38 @@ describe("does not fire on the agent's own output", () => {
 
   it("still catches the real thing on an error-shaped line", () => {
     expect(classify("API Error: Invalid API key · Please run /login")?.kind).toBe("logged_out");
+  });
+});
+
+describe("acpAccountIssue", () => {
+  // Exactly as the Rust bridge words the agents' `auth_required` replies:
+  // Grok 1.0.46 at `session/new`, OpenCode 1.18.34 with its own tail.
+  it("reads ACP's auth_required error as signed out, for either agent", () => {
+    expect(acpAccountIssue("grok", "session/new failed: Authentication required")).toEqual({
+      kind: "logged_out",
+      backend: "grok",
+      message: "session/new failed: Authentication required",
+    });
+    expect(
+      acpAccountIssue(
+        "opencode",
+        "session/prompt failed: Authentication required: provider authentication required"
+      )?.kind
+    ).toBe("logged_out");
+  });
+
+  // The agent's own prose, or a tool's output, can say the words; only the
+  // error itself — where the message starts — counts.
+  it("ignores the phrase anywhere but the start of the error", () => {
+    expect(
+      acpAccountIssue("grok", "session/prompt failed: tool said Authentication required")
+    ).toBeNull();
+    expect(acpAccountIssue("opencode", "session/prompt failed: rate limited")).toBeNull();
+    expect(acpAccountIssue("opencode", "")).toBeNull();
+  });
+
+  // Neither CLI's spent-plan wording is known, so nothing here claims one.
+  it("never reports a usage limit", () => {
+    expect(acpAccountIssue("grok", "session/prompt failed: usage limit reached")).toBeNull();
   });
 });

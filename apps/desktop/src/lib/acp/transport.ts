@@ -8,6 +8,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { AgentBackend } from "@/lib/agentBackend";
 import { launchFor, loadSettings } from "@/lib/settings";
 import type { AcpConfigOption } from "./protocol";
+import { configOptionsOf } from "./adapter";
 import type { Json, JsonObject } from "@/types";
 
 export interface AcpNotify {
@@ -219,6 +220,54 @@ export const acpSetModel = (
     method: "session/set_model",
     params: { sessionId, modelId },
   }).then(() => undefined);
+
+/** The reasoning-effort select a session offers for its current model. */
+export interface AcpEffortOption {
+  configId: string;
+  /** The level the session runs at now. */
+  current: string;
+  levels: string[];
+}
+
+/**
+ * Found by the standard `thought_level` category, not by id: Grok calls it
+ * `reasoning_effort`, OpenCode `effort`. Null when the model has none —
+ * OpenCode only offers it on models with variants — which is what keeps the
+ * effort control absent rather than offering levels nothing will apply.
+ */
+export const effortOption = (
+  options: AcpConfigOption[] | null | undefined
+): AcpEffortOption | null => {
+  const option = options?.find((o) => o.category === "thought_level");
+  const levels = option?.options?.map((o) => o.value) ?? [];
+  if (!option || levels.length === 0) return null;
+  return { configId: option.id, current: option.currentValue ?? "", levels };
+};
+
+/** Set one session config option. Both CLIs take the value as a bare string
+ *  and reply with the whole option set, which may have changed shape. */
+export const acpSetConfigOption = (
+  id: number,
+  sessionId: string,
+  configId: string,
+  value: string
+): Promise<AcpConfigOption[] | null> =>
+  invoke<Json>("acp_request", {
+    id,
+    method: "session/set_config_option",
+    params: { sessionId, configId, value },
+  }).then(configOptionsOf);
+
+/** Add text to the running turn over a vendor method (see `interjectMethod`). */
+export const acpInterject = (
+  id: number,
+  method: string,
+  sessionId: string,
+  text: string
+): Promise<void> =>
+  invoke("acp_request", { id, method, params: { sessionId, text } }).then(
+    () => undefined
+  );
 
 /**
  * Read a provider's model catalog without a chat: spawn the agent, open a

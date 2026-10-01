@@ -2,17 +2,15 @@
 //! back to asking a one-shot `codex app-server` — the documented route, but a
 //! cold process start.
 
-use std::path::PathBuf;
-
 use serde_json::{json, Value};
 
-use super::{capitalize, get_json, rpc_oneshot, HttpError, LimitAccount, LimitSource, LimitStatus, LimitWindow, ProviderLimits};
+use super::{capitalize, cli_home, get_json, rpc_oneshot, HttpError, LimitAccount, LimitSource, LimitStatus, LimitWindow, ProviderLimits};
 use crate::time::now_ms;
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 
-pub fn read(binary: &str) -> ProviderLimits {
-    let auth = codex_home()
+pub fn read(binary: &str, config_dir: Option<&str>) -> ProviderLimits {
+    let auth = cli_home(config_dir, "CODEX_HOME", ".codex")
         .map(|d| d.join("auth.json"))
         .and_then(|p| std::fs::read(p).ok())
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
@@ -45,9 +43,11 @@ pub fn read(binary: &str) -> ProviderLimits {
         }
     }
 
+    let env: Vec<_> = config_dir.map(|d| ("CODEX_HOME", d)).into_iter().collect();
     match rpc_oneshot(
         binary,
         &["app-server"],
+        &env,
         json!({ "clientInfo": { "name": "emberyx", "title": "Emberyx", "version": env!("CARGO_PKG_VERSION") } }),
         &[("account/rateLimits/read", json!({})), ("account/read", json!({}))],
     ) {
@@ -56,12 +56,6 @@ pub fn read(binary: &str) -> ProviderLimits {
         }),
         Err(e) => ProviderLimits::without("codex", LimitStatus::Failed, e.to_string()),
     }
-}
-
-fn codex_home() -> Option<PathBuf> {
-    std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| crate::paths::home_dir().map(|h| h.join(".codex")))
 }
 
 fn from_usage(body: &Value) -> Option<ProviderLimits> {

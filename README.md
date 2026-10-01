@@ -16,7 +16,8 @@ Built with Tauri v2 + React. A lighter, purpose-built alternative to cmux.
 - **Multi-project cockpit** — open several projects at once; each is a tab with
   its own agent and dev-server sessions, with per-project status at a glance.
 - **Chat pane** (default) — a structured view of the agent: streaming messages,
-  collapsible tool calls, image paste, and slash-command autocomplete.
+  a work log of thoughts, commands and per-file edits on one rail, structured
+  tool input and results, image paste, and slash-command autocomplete.
 - **Integrated agent terminal** — or run the agent in a real embedded terminal
   (Ghostty, Geist Mono) instead; scrollback persists across restarts.
 - **Interactive option picker** — when the agent asks a multiple-choice question,
@@ -26,7 +27,8 @@ Built with Tauri v2 + React. A lighter, purpose-built alternative to cmux.
 - **Thread resume** — browse and resume a project's past conversations; Claude
   and Codex threads resume natively, ACP threads reopen as history.
 - **Agent-aware UI** — each transport drives live status (working / needs-you /
-  idle), a "needs input" banner, and desktop notifications.
+  idle), a "needs input" banner, desktop notifications, and a dot on any
+  sidebar thread that finished while you were elsewhere.
 - **Chat-first orchestration** — a Rust supervisor keeps an authoritative,
   stable-ID registry for every agent session, bounded event transcripts,
   lifecycle state, and chat-native delegation between agents.

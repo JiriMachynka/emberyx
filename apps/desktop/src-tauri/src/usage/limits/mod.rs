@@ -8,6 +8,7 @@
 
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::Mutex;
@@ -107,14 +108,17 @@ impl ProviderLimits {
     }
 }
 
-/// `command` is the Settings → Providers binary override; `config_dir` a
-/// Claude profile's `CLAUDE_CONFIG_DIR`.
+/// `command` is the Settings → Providers binary override; `config_dir` the
+/// session's config-dir override (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`,
+/// `GROK_HOME`). OpenCode's only moves config — its key lives in the data dir —
+/// so it has nothing to redirect.
 pub fn provider_limits(provider: String, command: Option<String>, config_dir: Option<String>) -> ProviderLimits {
     let command = command.filter(|c| !c.trim().is_empty());
+    let config_dir = config_dir.map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
     match provider.as_str() {
-        "claude" => claude::read(config_dir.filter(|d| !d.trim().is_empty())),
-        "codex" => codex::read(command.as_deref().unwrap_or("codex")),
-        "grok" => grok::read(command.as_deref().unwrap_or("grok")),
+        "claude" => claude::read(config_dir),
+        "codex" => codex::read(command.as_deref().unwrap_or("codex"), config_dir.as_deref()),
+        "grok" => grok::read(command.as_deref().unwrap_or("grok"), config_dir.as_deref()),
         "opencode" => opencode::read(),
         other => ProviderLimits::without(other, LimitStatus::Unsupported, "This provider reports no plan limits."),
     }
@@ -127,6 +131,16 @@ pub mod cmd {
 }
 
 // ── helpers shared by the providers ────────────────────────────────────────
+
+/// A CLI's home: the session's override, else the CLI's own variable, else
+/// `~/<leaf>`. A one-shot child is handed the same override (see `rpc_oneshot`),
+/// or it would answer for the default account.
+fn cli_home(config_dir: Option<&str>, var: &str, leaf: &str) -> Option<PathBuf> {
+    config_dir
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from))
+        .or_else(|| crate::paths::home_dir().map(|h| h.join(leaf)))
+}
 
 /// Plan tiers arrive lower-case: `free` → "Free", `max` → "Max".
 fn capitalize(s: &str) -> String {
@@ -206,8 +220,15 @@ pub fn kill_all() {
 
 /// Spawn a JSON-RPC-over-stdio CLI, complete `initialize`, send `requests`
 /// (ids 2, 3, …) and return their results in order. The child is killed on
-/// return — this is a question, not a session.
-fn rpc_oneshot(binary: &str, args: &[&str], initialize: Value, requests: &[(&str, Value)]) -> Result<Vec<Value>> {
+/// return — this is a question, not a session. `env` lands after the login
+/// shell's, so a config-dir override wins.
+fn rpc_oneshot(
+    binary: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    initialize: Value,
+    requests: &[(&str, Value)],
+) -> Result<Vec<Value>> {
     let mut cmd = Command::new(binary);
     cmd.args(args)
         .current_dir(crate::paths::home_dir().unwrap_or_else(std::env::temp_dir))
@@ -217,6 +238,7 @@ fn rpc_oneshot(binary: &str, args: &[&str], initialize: Value, requests: &[(&str
     if let Some(shell) = crate::pty::shell_env_blocking(ENV_WAIT) {
         cmd.envs(shell);
     }
+    cmd.envs(env.iter().copied());
     let mut probe = Probe::spawn(cmd)?;
     let mut stdin = probe.0.stdin.take().ok_or("no stdin")?;
     let stdout = probe.0.stdout.take().ok_or("no stdout")?;
@@ -269,6 +291,15 @@ mod tests {
         assert_eq!(iso_secs(&json!("2026-10-02T20:00:00.317318+00:00")), Some(1_790_971_200));
         assert_eq!(iso_secs(&json!("2026-10-05T00:00:00.000Z")), Some(1_791_158_400));
         assert_eq!(iso_secs(&Value::Null), None);
+    }
+
+    #[test]
+    fn cli_home_prefers_the_session_override() {
+        assert_eq!(cli_home(Some("/tmp/alt"), "PATH", ".x"), Some(PathBuf::from("/tmp/alt")));
+        assert_eq!(
+            cli_home(None, "EMBERYX_TEST_NEVER_SET_HOME", ".x"),
+            crate::paths::home_dir().map(|h| h.join(".x"))
+        );
     }
 
     /// Hits the real services with this machine's CLI logins. Claude is left

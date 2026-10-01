@@ -40,7 +40,7 @@ import {
   type PermissionMode,
   type Settings,
 } from "@/lib/settings";
-import { launchFor } from "@/lib/settings";
+import { launchFor, profilesFor } from "@/lib/settings";
 import { getThreadMeta, setThreadMeta, threadMetaKey } from "@/lib/threadMeta";
 import {
   formatKeepGoingLabel,
@@ -106,8 +106,9 @@ interface ChatPaneProps {
   onAccessChange: (level: AccessLevel) => void;
   /** Per-backend launch overrides; the active backend's is resolved here. */
   providerLaunch: Settings["providerLaunch"];
-  /** Extra named Claude setups, shown in the composer when any exist. */
-  claudeProfiles: Settings["claudeProfiles"];
+  /** Extra named launches, each for one backend; the active backend's are
+   *  shown in the composer when any exist. */
+  launchProfiles: Settings["launchProfiles"];
   /** Codex sandbox posture; "" derives it from the permission switches. */
   codexSandbox: Settings["codexSandbox"];
   onTitled?: (title: string) => void;
@@ -148,7 +149,7 @@ export const ChatPane = memo(function ChatPane({
   onEffortChange,
   onAccessChange,
   providerLaunch,
-  claudeProfiles,
+  launchProfiles,
   codexSandbox,
   onTitled,
   onThreadStarted,
@@ -203,17 +204,22 @@ export const ChatPane = memo(function ChatPane({
   // a thread can change hands mid-conversation — the turns each provider
   // produced stay in the same visual transcript, stamped with who made them.
   const [activeBackend, setActiveBackend] = useState<AgentBackend>(backend);
-  const [claudeProfileId, setClaudeProfileId] = useState<string | null>(() =>
-    resume
-      ? getThreadMeta(threadMetaKey(cwd, resume)).claudeProfileId ?? null
-      : null
-  );
+  const [profileId, setProfileId] = useState<string | null>(() => {
+    if (!resume) return null;
+    const meta = getThreadMeta(threadMetaKey(cwd, resume));
+    return meta.launchProfileId ?? meta.claudeProfileId ?? null;
+  });
   // The active backend's launch override, memoized so its identity survives
-  // renders — it rides the transport hooks' spawn-effect deps.
+  // renders — it rides the transport hooks' spawn-effect deps. A profile id
+  // kept across a provider switch only applies to the backend it names.
   const launch = useMemo(
     () =>
-      launchFor({ providerLaunch, claudeProfiles }, activeBackend, claudeProfileId),
-    [providerLaunch, claudeProfiles, activeBackend, claudeProfileId]
+      launchFor({ providerLaunch, launchProfiles }, activeBackend, profileId),
+    [providerLaunch, launchProfiles, activeBackend, profileId]
+  );
+  const backendProfiles = useMemo(
+    () => profilesFor(launchProfiles, activeBackend),
+    [launchProfiles, activeBackend]
   );
   // Plan limits follow the provider and account this thread runs on now.
   const limitsTarget = useMemo(
@@ -568,12 +574,13 @@ export const ChatPane = memo(function ChatPane({
     },
     [switchProvider, onBackendChange]
   );
-  const changeClaudeProfile = useCallback(
+  const changeProfile = useCallback(
     (id: string | null) => {
-      setClaudeProfileId(id);
+      setProfileId(id);
       if (resume) {
         setThreadMeta(threadMetaKey(cwd, resume), {
-          claudeProfileId: id ?? undefined,
+          launchProfileId: id ?? undefined,
+          claudeProfileId: undefined,
         });
       }
     },
@@ -873,7 +880,7 @@ export const ChatPane = memo(function ChatPane({
               its dots line up with the transcript's own left edge. */}
           <div className="chat-content-width mx-auto pt-4">
             <WorkingFooter
-              turnKey={busy ? (turns[turns.length - 1]?.key ?? sessionId) : undefined}
+              sessionId={sessionId}
               busy={busy}
             />
           </div>
@@ -1021,9 +1028,9 @@ export const ChatPane = memo(function ChatPane({
                   access={access}
                   onAccessChange={changeAccess}
                   onSwitchBackend={switchBackend}
-                  claudeProfiles={claudeProfiles}
-                  claudeProfileId={claudeProfileId}
-                  onClaudeProfileChange={changeClaudeProfile}
+                  launchProfiles={backendProfiles}
+                  launchProfileId={profileId}
+                  onLaunchProfileChange={changeProfile}
                   queue={queue}
                   keepGoing={keepGoing}
                   onKeepGoingChange={setKeepGoing}

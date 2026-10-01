@@ -126,6 +126,7 @@ describe("matchCommand", () => {
     expect(matchCommand(press("F", { meta: true, shift: true }), b)).toBe(
       "project.search"
     );
+    expect(matchCommand(press("p", { meta: true }), b)).toBe("file.find");
   });
 
   it("follows an override", () => {

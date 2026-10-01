@@ -14,6 +14,7 @@ const handlers = () => ({
   onToggleSidebar: vi.fn(),
   onCommandPalette: vi.fn(),
   onSearch: vi.fn(),
+  onFindFile: vi.fn(),
   onCloseTab: vi.fn(),
   onSelectTab: vi.fn(),
   onCycleTab: vi.fn(),
@@ -52,6 +53,13 @@ describe("useShortcuts", () => {
     const event = press("k", { meta: true });
     expect(h.onCommandPalette).toHaveBeenCalledTimes(1);
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("opens the file finder with ⌘P", () => {
+    const h = handlers();
+    renderHook(() => useShortcuts(h));
+    press("p", { meta: true });
+    expect(h.onFindFile).toHaveBeenCalledTimes(1);
   });
 
   it("cycles tabs in both directions", () => {

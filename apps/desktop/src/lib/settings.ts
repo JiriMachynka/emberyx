@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from "react";
 import {
+  CONFIG_DIR_ENV,
   backendFromCommand,
   capabilitiesOf,
   isAgentBackend,
@@ -44,20 +45,19 @@ export interface LaunchEnv {
 export interface ProviderLaunch {
   command: string;
   args: string;
-  /** `CLAUDE_CONFIG_DIR` for Claude. Empty uses the CLI default (~/.claude). */
+  /** The CLI's config directory, exported as `CONFIG_DIR_ENV[backend]`.
+   *  Empty uses the CLI default. */
   configDir?: string;
   env?: LaunchEnv[];
 }
 
-/** An extra named Claude: work vs personal, OpenRouter, a local router. The
- *  default Claude is `providerLaunch.claude`; these sit beside it in the picker. */
-export interface ClaudeProfile {
+/** An extra named launch of one backend: work vs personal, OpenRouter, a
+ *  local router. The default is `providerLaunch[backend]`; these sit beside it
+ *  in the picker. */
+export interface LaunchProfile extends ProviderLaunch {
   id: string;
   name: string;
-  command: string;
-  args: string;
-  configDir: string;
-  env: LaunchEnv[];
+  backend: AgentBackend;
 }
 
 /** Codex's sandbox posture; "" keeps the current behavior, which derives it
@@ -192,8 +192,8 @@ export interface Settings {
   notifySound: boolean;
   /** Per-backend binary + extra launch args for chat agents. */
   providerLaunch: Partial<Record<AgentBackend, ProviderLaunch>>;
-  /** Extra named Claude setups; the default Claude is `providerLaunch.claude`. */
-  claudeProfiles: ClaudeProfile[];
+  /** Extra named launches per backend; the default is `providerLaunch[b]`. */
+  launchProfiles: LaunchProfile[];
   /** Codex sandbox posture; "" follows the permission switches. */
   codexSandbox: CodexSandbox;
   /** Working-tree diffs hide whitespace-only changes. */
@@ -245,7 +245,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notifyOnlyWhenUnfocused: false,
   notifySound: false,
   providerLaunch: {},
-  claudeProfiles: [],
+  launchProfiles: [],
   codexSandbox: "",
   diffIgnoreWhitespace: false,
   commitMessageModel: "claude-haiku-4-5",
@@ -317,6 +317,22 @@ const dropStoredRemovedKeys = (
   return next;
 };
 
+/** Profiles were Claude-only and stored as `claudeProfiles`, without a
+ *  backend. Lifted once into `launchProfiles`; the old key is dropped. */
+const liftClaudeProfiles = (
+  s: Settings & { claudeProfiles?: Omit<LaunchProfile, "backend">[] }
+): Settings => {
+  const { claudeProfiles, ...rest } = s;
+  if (!claudeProfiles) return rest;
+  const lifted = claudeProfiles.map((p) => ({ ...p, backend: "claude" as const }));
+  return {
+    ...rest,
+    launchProfiles: Array.isArray(s.launchProfiles) && s.launchProfiles.length
+      ? s.launchProfiles
+      : lifted,
+  };
+};
+
 const PERSISTENT_DEFAULT_KEY = "emberyx.persistentAgentsDefaulted";
 
 /** Persistent agents used to default off, and settings are stored whole, so a
@@ -342,12 +358,14 @@ export function loadSettings(): Settings {
     const stored = flipStoredPersistentDefault(
       JSON.parse(raw) as Partial<Settings>
     );
-    const merged = coerceWindowOpacity(
-      coerceLayout(
-        dropStoredRemovedKeys(
-          dropStoredUnknownTheme(
-            dropStoredPlanMode(
-              splitStoredEffort({ ...DEFAULT_SETTINGS, ...stored })
+    const merged = liftClaudeProfiles(
+      coerceWindowOpacity(
+        coerceLayout(
+          dropStoredRemovedKeys(
+            dropStoredUnknownTheme(
+              dropStoredPlanMode(
+                splitStoredEffort({ ...DEFAULT_SETTINGS, ...stored })
+              )
             )
           )
         )
@@ -379,34 +397,48 @@ const envMap = (rows: LaunchEnv[] | undefined): Record<string, string> => {
   return out;
 };
 
-const resolveLaunch = (launch:
-  | {
-      command: string;
-      args: string;
-      configDir?: string;
-      env?: LaunchEnv[];
-    }
-  | undefined): ResolvedLaunch => ({
-  command: launch?.command.trim() || null,
-  args: tokenize(launch?.args ?? ""),
-  configDir: launch?.configDir?.trim() || null,
-  env: envMap(launch?.env),
-});
+/** The config dir rides in `env` under the backend's own variable, after the
+ *  user's rows so the dedicated field wins — every transport already carries
+ *  `env` to both its local and its daemon spawn. */
+const resolveLaunch = (
+  backend: AgentBackend,
+  launch: ProviderLaunch | undefined
+): ResolvedLaunch => {
+  const configDir = capabilitiesOf(backend).configDirOverride
+    ? launch?.configDir?.trim() || null
+    : null;
+  const env = envMap(launch?.env);
+  if (configDir) env[CONFIG_DIR_ENV[backend]] = configDir;
+  return {
+    command: launch?.command.trim() || null,
+    args: tokenize(launch?.args ?? ""),
+    configDir,
+    env,
+  };
+};
 
-/** Resolved launch override for one backend (or a named Claude profile). A
+/** The profiles one backend can pick between. */
+export const profilesFor = (
+  profiles: LaunchProfile[],
+  backend: AgentBackend
+): LaunchProfile[] =>
+  capabilitiesOf(backend).launchProfiles
+    ? profiles.filter((p) => p.backend === backend)
+    : [];
+
+/** Resolved launch override for one backend (or one of its named profiles). A
  *  fresh object per call — memoize at the call site if it feeds an effect. */
 export const launchFor = (
-  settings: Pick<Settings, "providerLaunch" | "claudeProfiles">,
+  settings: Pick<Settings, "providerLaunch" | "launchProfiles">,
   backend: AgentBackend,
   profileId?: string | null
 ): ResolvedLaunch => {
-  // A profile is one backend's launch line; handing it to another would spawn
-  // that CLI with arguments meant for this one.
-  if (profileId && capabilitiesOf(backend).launchProfiles) {
-    const profile = settings.claudeProfiles.find((p) => p.id === profileId);
-    if (profile) return resolveLaunch(profile);
-  }
-  return resolveLaunch(settings.providerLaunch[backend]);
+  // A profile is one backend's launch line; an id carried across a provider
+  // switch must not spawn this CLI with arguments meant for another.
+  const profile = profileId
+    ? profilesFor(settings.launchProfiles, backend).find((p) => p.id === profileId)
+    : undefined;
+  return resolveLaunch(backend, profile ?? settings.providerLaunch[backend]);
 };
 
 /** Push the chosen stacks onto `:root` so Tailwind `font-sans` / `font-mono`

@@ -403,6 +403,22 @@ mcp__emberyx__preview_snapshot",
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
+    /// The Haiku title itself, written nowhere. Providers that keep their own
+    /// thread store (ACP) persist it themselves.
+    pub fn generate_title(first_message: &str) -> Result<String> {
+        let prompt = format!(
+            "Generate a concise 3-6 word title for a coding conversation that \
+             opens with this user message. Reply with ONLY the title — no quotes, \
+             no trailing punctuation, no preamble.\n\nMessage:\n{first_message}"
+        );
+        let raw = Self::one_shot(&prompt, "claude-haiku-4-5-20251001")?;
+        let title = clean_title(&raw);
+        if title.is_empty() {
+            return Err("empty title".into());
+        }
+        Ok(title)
+    }
+
     /// Generate a short title for a fresh chat thread with a cheap headless
     /// haiku one-shot (user hooks/settings excluded to keep it fast, cheap, and
     /// unstyled), then append it to the transcript as an `ai-title` line so
@@ -410,24 +426,7 @@ mcp__emberyx__preview_snapshot",
     /// Runs off the main thread: a title is a whole `claude -p` process, and a
     /// sync command would freeze the UI for its duration.
     pub fn title_thread(cwd: String, session_id: String, first_message: String) -> Result<String> {
-        let prompt = format!(
-            "Generate a concise 3-6 word title for a coding conversation that \
-             opens with this user message. Reply with ONLY the title — no quotes, \
-             no trailing punctuation, no preamble.\n\nMessage:\n{first_message}"
-        );
-        let raw = Self::one_shot(&prompt, "claude-haiku-4-5-20251001")?;
-        let title: String = raw
-            .lines()
-            .find(|l| !l.trim().is_empty())
-            .unwrap_or("")
-            .trim()
-            .trim_matches('"')
-            .chars()
-            .take(60)
-            .collect();
-        if title.is_empty() {
-            return Err("empty title".into());
-        }
+        let title = Self::generate_title(&first_message)?;
 
         // Append the ai-title line so list_threads reads it from the tail.
         if let Some(base) = crate::threads::projects_dir() {
@@ -610,4 +609,35 @@ pub async fn title_thread(
     })
     .await
     .map_err(|e| crate::err!("title_thread join failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn generate_title(first_message: String) -> Result<String> {
+    tauri::async_runtime::spawn_blocking(move || AgentManager::generate_title(&first_message))
+        .await
+        .map_err(|e| crate::err!("generate_title join failed: {e}"))?
+}
+
+/// First non-blank line of the model's reply, unquoted and capped.
+fn clean_title(raw: &str) -> String {
+    raw.lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .trim_matches('"')
+        .chars()
+        .take(60)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clean_title;
+
+    #[test]
+    fn clean_title_takes_first_line_unquoted_and_capped() {
+        assert_eq!(clean_title("\n  \"Parser fixes\"  \nextra"), "Parser fixes");
+        assert_eq!(clean_title(&"x".repeat(80)).len(), 60);
+        assert_eq!(clean_title("  \n"), "");
+    }
 }

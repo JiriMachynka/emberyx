@@ -2,10 +2,12 @@ const KEY = "emberyx.sidebar.collapsed";
 const WORKSPACE_KEY = "emberyx.sidebar.workspaceCollapsed";
 const TAB_KEY = "emberyx.workspace.tabs";
 
-export type WorkspaceTab = "sessions" | "explorer" | "changes";
+export type WorkspaceTab = "sessions" | "explorer";
 
+// A stored "changes" tab (from before Changes moved into the Git view) is no
+// longer a tab, and falls back to Sessions here.
 const isWorkspaceTab = (value: string): value is WorkspaceTab =>
-  value === "sessions" || value === "explorer" || value === "changes";
+  value === "sessions" || value === "explorer";
 
 const flag = (key: string, fallback = false): boolean => {
   try {

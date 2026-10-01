@@ -53,7 +53,7 @@ function FileChip({
   return (
     <span
       className={cn(
-        "inline-flex max-w-full items-baseline gap-1 rounded bg-muted px-1.5 py-0.5 align-baseline font-mono text-[0.9em]",
+        "inline-flex max-w-full items-center gap-1 rounded bg-muted px-1.5 py-0.5 align-baseline font-mono text-[0.9em]",
         // A clickable file ref reads as one before the cursor lands: a hairline
         // ring the plain inline code beside it doesn't have, and an accent
         // hover — link semantics, not a button treatment.
@@ -62,7 +62,7 @@ function FileChip({
         className
       )}
     >
-      <FileTypeIcon path={path} className="translate-y-0.5 self-center" />
+      <FileTypeIcon path={path} />
       <span className="truncate">{label}</span>
     </span>
   );

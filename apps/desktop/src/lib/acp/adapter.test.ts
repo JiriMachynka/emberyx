@@ -3,9 +3,12 @@ import {
   applyUpdate,
   autoPermission,
   blockText,
+  configOptionsOf,
   emptyTurn,
   endTurn,
   grokTurnStop,
+  interjectMethod,
+  ownsToolCall,
   permissionOutcome,
   planEntriesOf,
   readPermission,
@@ -427,3 +430,82 @@ describe("autoPermission", () => {
 });
 
 
+
+describe("configOptionsOf", () => {
+  // As `opencode acp` 1.18.34 pushes it after a switch to a model with variants.
+  const update = {
+    sessionUpdate: "config_option_update",
+    configOptions: [
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select",
+        currentValue: "opencode-go/deepseek-v4-pro",
+        options: [{ value: "opencode-go/deepseek-v4-pro", name: "DeepSeek V4 Pro" }],
+      },
+      {
+        id: "effort",
+        name: "Effort",
+        category: "thought_level",
+        type: "select",
+        currentValue: "high",
+        options: [{ value: "high", name: "High" }, { value: "max", name: "Max" }, { value: "default", name: "Default" }],
+      },
+    ],
+  };
+
+  it("reads the option set off an update and a set_config_option reply alike", () => {
+    const fromUpdate = configOptionsOf(update);
+    expect(fromUpdate?.map((o) => o.id)).toEqual(["model", "effort"]);
+    expect(fromUpdate?.[1].options?.map((o) => o.value)).toEqual(["high", "max", "default"]);
+    expect(configOptionsOf({ configOptions: update.configOptions })).toEqual(fromUpdate);
+  });
+
+  it("flattens grouped select options", () => {
+    const grouped = configOptionsOf({
+      configOptions: [
+        {
+          id: "effort",
+          category: "thought_level",
+          currentValue: "low",
+          options: [{ group: "g", name: "G", options: [{ value: "low" }, { value: "high" }] }],
+        },
+      ],
+    });
+    expect(grouped?.[0].options?.map((o) => o.value)).toEqual(["low", "high"]);
+  });
+
+  // An empty reply (`{}`) names no option set; it must not read as "every
+  // option is gone".
+  it("is null when the frame carries no option set, and drops malformed entries", () => {
+    expect(configOptionsOf({})).toBeNull();
+    expect(configOptionsOf(null)).toBeNull();
+    expect(configOptionsOf({ configOptions: [{ name: "no id" }, 3] })).toEqual([]);
+  });
+});
+
+describe("interjectMethod", () => {
+  it("is Grok's vendor method, and nothing for OpenCode", () => {
+    expect(interjectMethod("grok")).toBe("_x.ai/interject");
+    expect(interjectMethod("opencode")).toBeNull();
+  });
+});
+
+describe("ownsToolCall", () => {
+  const message = {
+    id: "a1",
+    role: "assistant" as const,
+    text: "",
+    thinking: "",
+    tools: [{ id: "t1", name: "Read", input: {}, partial: "" }],
+    streaming: false,
+  };
+
+  it("claims updates for calls the message holds, and only tool updates", () => {
+    expect(ownsToolCall(message, { sessionUpdate: "tool_call_update", toolCallId: "t1" })).toBe(true);
+    expect(ownsToolCall(message, { sessionUpdate: "tool_call_update", toolCallId: "t2" })).toBe(false);
+    expect(ownsToolCall(message, { sessionUpdate: "agent_message_chunk", toolCallId: "t1" })).toBe(false);
+    expect(ownsToolCall(message, null)).toBe(false);
+  });
+});

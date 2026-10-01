@@ -2,6 +2,8 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 import { useCodexChat } from "@/hooks/useCodexChat";
+import { useAgentStore } from "@/lib/agentStore";
+import { ASK_REJECT, CONTINUE_PROMPT, startKeepGoing } from "@/lib/keepGoing";
 
 const channels: { onmessage?: (ev: unknown) => void }[] = [];
 const invoke = vi.fn();
@@ -313,6 +315,32 @@ describe("useCodexChat notifications", () => {
     expect(result.current.exitReason).toBeNull();
   });
 
+  it("parks the pane on the account notice when the plan is spent", async () => {
+    const spy = vi.spyOn(toast, "error");
+    try {
+      const { result, notify } = await mount();
+      notify("turn/started", { turn: { id: "u1" } });
+      notify("error", {
+        error: { message: "You've hit your usage limit", codexErrorInfo: "usageLimitExceeded" },
+        willRetry: false,
+      });
+      notify("turn/completed", { turn: { id: "u1", status: "failed" } });
+      await frame();
+      // A retry can't fix a spent plan: the pane shows the account notice
+      // (status error + the stored issue) instead of a generic toast.
+      expect(result.current.status).toBe("error");
+      expect(useAgentStore.getState().accountIssue).toMatchObject({
+        kind: "rate_limit",
+        backend: "codex",
+        message: "You've hit your usage limit",
+      });
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+      useAgentStore.getState().clearAccountIssue();
+    }
+  });
+
   it("announces one failure when an error and a failed completion both land", async () => {
     const spy = vi.spyOn(toast, "error");
     try {
@@ -330,6 +358,25 @@ describe("useCodexChat notifications", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe("useCodexChat agent phase", () => {
+  it("says what the agent is doing, even in a hidden pane, and clears on idle", async () => {
+    const { notify } = await mount({ visible: false });
+    notify("turn/started", { turn: { id: "u1" } });
+    notify("item/started", {
+      item: { type: "commandExecution", id: "c1", command: "ls", status: "inProgress" },
+    });
+    // No frame awaited: a hidden pane never paints, and the sidebar must
+    // still describe the run.
+    expect(useAgentStore.getState().phases["emberyx-1"]).toEqual({
+      tone: "working",
+      label: "Running ls",
+    });
+    notify("turn/completed", { turn: { id: "u1", status: "completed" } });
+    await frame();
+    expect(useAgentStore.getState().phases["emberyx-1"]).toBeUndefined();
   });
 });
 
@@ -683,4 +730,108 @@ describe("useCodexChat revertTurn", () => {
   });
 });
 
+describe("useCodexChat keep going", () => {
+  const flag = (over: Partial<ReturnType<typeof startKeepGoing>> = {}) =>
+    startKeepGoing(1_000_000, over);
+  const turnTexts = () =>
+    sentTo("codex_turn_start").map(
+      ([, args]) => (args as { params: { input: { text: string }[] } }).params.input[0]?.text
+    );
+  // A resumed thread is never auto-titled, so its title turn stays off the wire.
+  // Mutated in place, never copied: a test may swap the props it passes.
+  const keep = (extra: Record<string, unknown>) =>
+    mount(Object.assign(extra, { resume: "t1" }));
+  const reply = (
+    notify: (method: string, params: unknown) => void,
+    turn: string,
+    text: string
+  ) => {
+    notify("turn/started", { turn: { id: turn } });
+    notify("item/agentMessage/delta", { turnId: turn, itemId: `${turn}-m`, delta: text });
+    notify("turn/completed", { turn: { id: turn, status: "completed" } });
+  };
 
+  it("wraps the originating send once and keeps the transcript clean", async () => {
+    const onKeepGoingTurn = vi.fn();
+    const { result } = await keep({ keepGoing: flag(), onKeepGoingTurn });
+    act(() => result.current.send("fix the flaky test"));
+    await frame();
+    expect(result.current.messages[0].text).toBe("fix the flaky test");
+    expect(turnTexts()[0]).toContain("You are unattended");
+    expect(onKeepGoingTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ wrapped: true, turns: 0 })
+    );
+  });
+
+  it("sends one continue when a turn settles", async () => {
+    const onKeepGoingTurn = vi.fn();
+    const { result, notify } = await keep({
+      keepGoing: { ...flag(), wrapped: true },
+      onKeepGoingTurn,
+    });
+    act(() => result.current.send("go"));
+    reply(notify, "u1", "working on it");
+    await frame();
+    await waitFor(() => expect(turnTexts()).toEqual(["go", CONTINUE_PROMPT]));
+    expect(onKeepGoingTurn).toHaveBeenCalledWith(expect.objectContaining({ turns: 1 }));
+    // The idle gap reads as working, so LRU cannot unmount the pane.
+    expect(useAgentStore.getState().statuses["emberyx-1"]).toBe("working");
+  });
+
+  it("stops on a DONE cue and puts the sidebar back to idle", async () => {
+    const onKeepGoingStop = vi.fn();
+    const { result, notify } = await keep({
+      keepGoing: { ...flag(), wrapped: true },
+      onKeepGoingStop,
+    });
+    act(() => result.current.send("go"));
+    reply(notify, "u1", "shipped\nDONE");
+    await frame();
+    await act(async () => {});
+    expect(turnTexts()).toEqual(["go"]);
+    expect(onKeepGoingStop).toHaveBeenCalled();
+    expect(useAgentStore.getState().statuses["emberyx-1"]).toBe("idle");
+  });
+
+  it("declines a question instead of opening the picker", async () => {
+    const view = await keep({ keepGoing: { ...flag(), wrapped: true } });
+    view.emit({
+      type: "request",
+      data: {
+        id: 9,
+        method: "item/tool/requestUserInput",
+        params: {
+          questions: [
+            { id: "q1", header: "Deploy", question: "Which target?", options: [] },
+            { id: "q2", header: "Env", question: "Which env?", options: [] },
+          ],
+        },
+      },
+    });
+    expect(view.result.current.pendingAsk).toBeNull();
+    expect(sentTo("codex_respond")[0][1]).toEqual({
+      id: 7,
+      requestId: 9,
+      result: {
+        answers: { q1: { answers: [ASK_REJECT] }, q2: { answers: [ASK_REJECT] } },
+      },
+    });
+  });
+
+  it("clears the flag on stop", async () => {
+    const onKeepGoingStop = vi.fn();
+    // The prop follows the callback, as ChatPane's state does.
+    const opts: Record<string, unknown> = { keepGoing: { ...flag(), wrapped: true } };
+    opts.onKeepGoingStop = () => {
+      opts.keepGoing = null;
+      onKeepGoingStop();
+    };
+    const { result, rerender } = await keep(opts);
+    act(() => result.current.send("go"));
+    act(() => result.current.stop());
+    rerender();
+    await frame();
+    expect(onKeepGoingStop).toHaveBeenCalled();
+    expect(turnTexts()).toEqual(["go"]);
+  });
+});

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { getPanelWidth, setPanelWidth, PANEL_MIN_WIDTH } from "@/lib/panels";
 
 interface SidePanelProps {
@@ -194,12 +195,16 @@ export function SidePanel({
         {header}
         <div className="flex items-center gap-1">
           {actions}
-          <button
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
             onClick={onClose}
-            className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            title="Close"
+            className="text-muted-foreground"
           >
-            <X className="size-3.5" />
-          </button>
+            <X />
+          </Button>
         </div>
       </header>
       {children}

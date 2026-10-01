@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  arcPath,
+  connectorPath,
+  connectorTops,
+  elbowPath,
+  slidePath,
   dotColor,
   edgeColor,
   isHeadRef,
@@ -44,7 +47,7 @@ describe("layoutGraph", () => {
     // Merge fans out: dot on col 0, side branch opens on col 1.
     const merge = rows[0];
     expect(merge.dot).toBe(0);
-    expect(merge.edges).toEqual([{ from: 0, to: 1 }]);
+    expect(merge.edges).toEqual([{ from: 0, to: 1, kind: "parent" }]);
     expect(merge.cells[1].kind).toBe("line");
     expect(merge.cells[1].span).toBe("bottom");
 
@@ -57,7 +60,7 @@ describe("layoutGraph", () => {
     expect(rows[2].dot).toBe(1);
     expect(rows[3].dot).toBe(1);
     // The branch rejoins its base: S1 bends from col 1 into col 0 (M1).
-    expect(rows[3].edges).toEqual([{ from: 1, to: 0 }]);
+    expect(rows[3].edges).toEqual([{ from: 1, to: 0, kind: "parent" }]);
 
     // The shared base closes the lanes: both lines meet on col 0.
     expect(rows[4].dot).toBe(0);
@@ -81,7 +84,7 @@ describe("layoutGraph", () => {
     // column 0 with the kink that moved it.
     expect(rows[3].dot).toBe(0);
     expect(rows[3].columns).toBe(1);
-    expect(rows[3].edges).toEqual([{ from: 1, to: 0 }]);
+    expect(rows[3].edges).toEqual([{ from: 1, to: 0, kind: "slide" }]);
   });
 
   it("continues columns across an incremental page boundary", () => {
@@ -139,8 +142,8 @@ describe("layoutGraph", () => {
     // M3's tip was expected in lane 1 (F1 claimed it for its parent): pulling
     // home draws the bend, and lane 0's occupant shifts over with its own.
     expect(rows[2].edges).toEqual([
-      { from: 0, to: 1 },
-      { from: 1, to: 0 },
+      { from: 0, to: 1, kind: "slide" },
+      { from: 1, to: 0, kind: "pull" },
     ]);
     expect(state.lanes).toEqual([null]);
     expect(state.trunkNext).toBe(null);
@@ -173,7 +176,7 @@ describe("layoutGraph", () => {
     expect(rows[0].columns).toBe(2);
     // S's row still draws the closing bend (its lane has a top line).
     expect(rows[1].columns).toBe(2);
-    expect(rows[1].edges).toEqual([{ from: 1, to: 0 }]);
+    expect(rows[1].edges).toEqual([{ from: 1, to: 0, kind: "parent" }]);
     // After the bend, the empty slot is gone: A's row is one lane wide.
     expect(rows[2].columns).toBe(1);
     expect(state.lanes).toEqual([null]);
@@ -195,7 +198,7 @@ describe("layoutGraph", () => {
     expect(rows.filter((r) => r.columns > 1).map((r) => r.cells[1].color)).toEqual([
       1, 1, 1, 1,
     ]);
-    expect(rows[rows.length - 1].edges).toEqual([{ from: 1, to: 0 }]);
+    expect(rows[rows.length - 1].edges).toEqual([{ from: 1, to: 0, kind: "slide" }]);
   });
 
   it("hands a root commit a lane it did not expect", () => {
@@ -260,13 +263,51 @@ describe("compact renderer helpers", () => {
     expect(laneColor(1)).not.toBe(laneColor(0));
   });
 
-  it("draws a semicircular connector", () => {
-    const d = arcPath(9, 27, 11);
-    // Starts and ends at the two lane centres, one arc across.
-    expect(d).toMatch(/^M 9 11 A 9 9 0 0 0 27 11$/);
-    // Leftward arc sweeps the other way.
-    const back = arcPath(27, 9, 5);
-    expect(back).toBe("M 27 5 A 9 9 0 0 1 9 5");
+  it("draws an elbow that turns down into the lane it feeds", () => {
+    // Rightward: run across, then a clockwise corner landing on the target
+    // lane one radius below the row's centre.
+    expect(elbowPath(7, 35, 14, 8, "target")).toBe("M 7 14 H 27 A 8 8 0 0 1 35 22");
+    // Leftward corners sweep the other way.
+    expect(elbowPath(35, 7, 14, 8, "target")).toBe("M 35 14 H 15 A 8 8 0 0 0 7 22");
+  });
+
+  it("draws an elbow that bends out of a line arriving from above", () => {
+    // Starts at the row's top: the column it comes down may be another lane's.
+    expect(elbowPath(35, 7, 14, 8, "source")).toBe("M 35 0 V 6 A 8 8 0 0 1 27 14 H 7");
+    expect(elbowPath(7, 35, 14, 8, "source")).toBe("M 7 0 V 6 A 8 8 0 0 0 15 14 H 35");
+  });
+
+  it("draws a slide as an S-bend from the old column into the new", () => {
+    expect(slidePath(21, 7, 14, 10)).toBe("M 21 0 V 7 A 7 7 0 0 1 14 14 H 14 A 7 7 0 0 0 7 21");
+    expect(slidePath(7, 35, 14, 8)).toBe("M 7 0 V 6 A 8 8 0 0 0 15 14 H 27 A 8 8 0 0 1 35 22");
+  });
+
+  it("routes each connector kind to its shape", () => {
+    // B's lane slides into column 0 once A's drops: an S-bend, and the cell
+    // must not draw a top half at either end.
+    const { rows } = layoutGraph([
+      c("A0", ["A1"]),
+      c("B0", ["B1"]),
+      c("A1"),
+      c("B1"),
+    ]);
+    const slid = rows[3];
+    expect(slid.edges).toEqual([{ from: 1, to: 0, kind: "slide" }]);
+    expect(connectorPath(slid, slid.edges[0], 14, 14)).toMatch(/^M 21 0 V/);
+    expect([...connectorTops(slid)].sort()).toEqual([0, 1]);
+
+    // A merge drops into its lane, and leaves the cells' top halves alone.
+    const merge = layoutGraph(mergeWithHead).rows[0];
+    expect(connectorPath(merge, merge.edges[0], 14, 14)).toBe(
+      "M 7 14 H 11 A 10 10 0 0 1 21 24"
+    );
+    expect(connectorTops(merge).size).toBe(0);
+  });
+
+  it("keeps an elbow's corner inside a short run and a short row", () => {
+    // One 7px lane apart: the radius shrinks to the run, never overshooting.
+    expect(elbowPath(7, 14, 14, 8, "target")).toBe("M 7 14 H 7 A 7 7 0 0 1 14 21");
+    expect(elbowPath(7, 35, 5, 8, "target")).toBe("M 7 5 H 30 A 5 5 0 0 1 35 10");
   });
 
   // The 3-commit merge fixture: M3 merges S2 back in. The tip row's dot gets
@@ -284,9 +325,9 @@ describe("compact renderer helpers", () => {
     const { rows } = layoutGraph(mergeWithHead);
     const mode = rows[0];
     expect(mode.dot).toBe(0);
-    expect(mode.edges).toEqual([{ from: 0, to: 1 }]);
+    expect(mode.edges).toEqual([{ from: 0, to: 1, kind: "parent" }]);
     // The side-branch row joins with a leftward arc back to the trunk.
-    expect(rows[3].edges).toEqual([{ from: 1, to: 0 }]);
+    expect(rows[3].edges).toEqual([{ from: 1, to: 0, kind: "parent" }]);
   });
 
   it("identifies the tip for the HEAD ring", () => {
