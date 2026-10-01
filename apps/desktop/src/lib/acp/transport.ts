@@ -258,17 +258,6 @@ export const acpSetConfigOption = (
     params: { sessionId, configId, value },
   }).then(configOptionsOf);
 
-/** Add text to the running turn over a vendor method (see `interjectMethod`). */
-export const acpInterject = (
-  id: number,
-  method: string,
-  sessionId: string,
-  text: string
-): Promise<void> =>
-  invoke("acp_request", { id, method, params: { sessionId, text } }).then(
-    () => undefined
-  );
-
 /**
  * Read a provider's model catalog without a chat: spawn the agent, open a
  * session for its `session/new` reply, and kill it. ACP has no list-models

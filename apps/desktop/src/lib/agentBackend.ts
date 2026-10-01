@@ -218,9 +218,8 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     // `session/set_config_option`. Only models with variants offer it, so the
     // chip reads the levels off the live session and is absent without them.
     reasoningEffort: true,
-    // A second `session/prompt` sent mid-turn joins the running turn; both
-    // replies land when it ends, and only the last settles it.
-    steering: true,
+    // A mid-turn message queues, as on every backend.
+    steering: false,
     // `/compact` is a registered command that runs the session summarizer.
     compact: true,
     conversationRewind: false,
@@ -252,9 +251,8 @@ const CAPABILITIES: Record<AgentBackend, AgentCapabilities> = {
     // The `thought_level` config option (`reasoning_effort`), set over
     // `session/set_config_option`; levels come from the live session.
     reasoningEffort: true,
-    // `_x.ai/interject` puts the message into the running turn. A second
-    // `session/prompt` would wait as a turn of its own instead.
-    steering: true,
+    // A mid-turn message queues, as on every backend.
+    steering: false,
     // `/compact` is one of the commands Grok announces.
     compact: true,
     conversationRewind: false,

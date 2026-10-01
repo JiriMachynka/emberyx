@@ -67,15 +67,10 @@ const acpRequests = (method: string) =>
     ([name, args]) =>
       name === "acp_request" && (args as { method: string }).method === method
   );
-const interjects = () => acpRequests("_x.ai/interject");
 const prompted = () =>
   invoke.mock.calls
     .filter(([name]) => name === "acp_prompt")
     .map(([, args]) => (args as { text: string }).text);
-const timeline = () =>
-  invoke.mock.calls
-    .filter(([name]) => name === "thread_timeline_append")
-    .map(([, args]) => args as { kind: string; payload: string });
 
 /** Runtime-owned prompt queue, emulated so enqueue/drain is the real path. */
 let queueItems: { queueId: string; text: string; attachments: string | null }[] =
@@ -388,7 +383,7 @@ describe("useAcpChat thread durability", () => {
     expect(events[1].threadId).toBe("s1");
 
     // A second prompt records under the same thread, without re-adopting or
-    // re-titling it. End the first turn first — a mid-turn send steers it.
+    // re-titling it. End the first turn first — a mid-turn send would queue.
     await act(async () => {
       channels[0]?.onmessage?.({
         type: "turnEnded",
@@ -669,180 +664,49 @@ describe("useAcpChat thread durability", () => {
 });
 
 describe("useAcpChat queueing", () => {
-  // `_x.ai/interject` carries text only, so an image can't steer a Grok turn.
-  it("holds an image sent to a working Grok turn, then sends it when idle", async () => {
-    const view = await mount();
-    await act(async () => view.result.current.send("first"));
-    expect(
-      invoke.mock.calls.filter(([name]) => name === "acp_prompt")
-    ).toHaveLength(1);
-    expect(view.result.current.status).toBe("thinking");
-
-    await act(async () =>
-      view.result.current.send("second", [{ id: "i1", mediaType: "image/png", data: "AAAA" }])
-    );
-    expect(
-      invoke.mock.calls.filter(([name]) => name === "acp_prompt")
-    ).toHaveLength(1);
-    expect(interjects()).toHaveLength(0);
-    expect(view.result.current.queued).toBe(1);
-    expect(view.result.current.messages.map((m) => m.text)).toEqual(["first"]);
-
-    await act(async () => {
-      channels[0]?.onmessage?.({
-        type: "turnEnded",
-        data: { sessionId: "s1", result: { stopReason: "end_turn" } },
-      });
-    });
-    await waitFor(() =>
+  // Every transport queues a mid-turn message; none steers the running turn.
+  it.each(["grok", "opencode"])(
+    "holds a %s turn typed while the agent is working, then sends it when idle",
+    async (provider) => {
+      const view = await mount({ provider });
+      await act(async () => view.result.current.send("first"));
       expect(
         invoke.mock.calls.filter(([name]) => name === "acp_prompt")
-      ).toHaveLength(2)
-    );
-    expect(view.result.current.queued).toBe(0);
-    expect(view.result.current.messages.map((m) => m.text)).toEqual([
-      "first",
-      "second",
-    ]);
-  });
+      ).toHaveLength(1);
+      expect(view.result.current.status).toBe("thinking");
+
+      await act(async () => view.result.current.send("second"));
+      expect(
+        invoke.mock.calls.filter(([name]) => name === "acp_prompt")
+      ).toHaveLength(1);
+      expect(acpRequests("_x.ai/interject")).toHaveLength(0);
+      expect(view.result.current.queued).toBe(1);
+      expect(view.result.current.messages.map((m) => m.text)).toEqual(["first"]);
+
+      await act(async () => {
+        channels[0]?.onmessage?.({
+          type: "turnEnded",
+          data: { sessionId: "s1", result: { stopReason: "end_turn" } },
+        });
+      });
+      await waitFor(() =>
+        expect(
+          invoke.mock.calls.filter(([name]) => name === "acp_prompt")
+        ).toHaveLength(2)
+      );
+      expect(view.result.current.queued).toBe(0);
+      expect(view.result.current.messages.map((m) => m.text)).toEqual([
+        "first",
+        "second",
+      ]);
+    }
+  );
 });
 
 const emitTo = (ev: unknown) =>
   act(async () => {
     channels[0]?.onmessage?.(ev);
   });
-const chunkEv = (text: string) => ({
-  type: "notification",
-  data: {
-    method: "session/update",
-    params: { update: { sessionUpdate: "agent_message_chunk", content: { text } } },
-  },
-});
-const endedEv = {
-  type: "turnEnded",
-  data: { sessionId: "s1", result: { stopReason: "end_turn" } },
-};
-
-describe("useAcpChat steering", () => {
-  it("interjects a Grok mid-turn message into the running turn", async () => {
-    const view = await mount();
-    await act(async () => view.result.current.send("count to 40"));
-    await emitTo(chunkEv("1 2 3"));
-    await act(async () => view.result.current.send("stop and say BANANA"));
-    expect(interjects().map(([, args]) => args)).toEqual([
-      {
-        id: 3,
-        method: "_x.ai/interject",
-        params: { sessionId: "s1", text: "stop and say BANANA" },
-      },
-    ]);
-    // Steered, not queued and not a second turn.
-    expect(prompted()).toEqual(["count to 40"]);
-    expect(view.result.current.queued).toBe(0);
-    // The reply so far is cut off, so the steer reads where the agent saw it.
-    await waitFor(() =>
-      expect(view.result.current.messages.map((m) => [m.role, m.text])).toEqual([
-        ["user", "count to 40"],
-        ["assistant", "1 2 3"],
-        ["user", "stop and say BANANA"],
-      ])
-    );
-    expect(view.result.current.status).not.toBe("idle");
-
-    await emitTo(chunkEv("BANANA"));
-    await emitTo({
-      type: "notification",
-      data: { method: "_x.ai/session/prompt_complete", params: { stopReason: "end_turn" } },
-    });
-    await emitTo(endedEv);
-    await waitFor(() => expect(view.result.current.status).toBe("idle"));
-    expect(view.result.current.messages.map((m) => m.text)).toEqual([
-      "count to 40",
-      "1 2 3",
-      "stop and say BANANA",
-      "BANANA",
-    ]);
-    // The log reads back in the order the transcript shows.
-    expect(
-      timeline()
-        .filter((e) => e.kind === "userPrompt" || e.kind === "assistantResponse")
-        .map((e) => e.payload)
-    ).toEqual(["count to 40", "1 2 3", "stop and say BANANA", "BANANA"]);
-  });
-
-  it("joins an OpenCode turn with a second prompt and settles it once", async () => {
-    const view = await mount({ provider: "opencode" });
-    await act(async () => view.result.current.send("count to 30"));
-    await emitTo(chunkEv("1 2"));
-    await act(async () => view.result.current.send("reply BANANA"));
-    expect(prompted()).toEqual(["count to 30", "reply BANANA"]);
-    expect(interjects()).toHaveLength(0);
-    expect(view.result.current.queued).toBe(0);
-
-    await emitTo(chunkEv("BANANA"));
-    // Both prompts are answered together when the turn ends; the first reply
-    // must not settle the turn the second one is still part of.
-    await emitTo(endedEv);
-    expect(view.result.current.status).not.toBe("idle");
-    expect(timeline().filter((e) => e.kind === "completion")).toHaveLength(0);
-    await emitTo(endedEv);
-    await waitFor(() => expect(view.result.current.status).toBe("idle"));
-    expect(timeline().filter((e) => e.kind === "completion")).toHaveLength(1);
-    expect(view.result.current.messages.map((m) => m.text)).toEqual([
-      "count to 30",
-      "1 2",
-      "reply BANANA",
-      "BANANA",
-    ]);
-  });
-
-  it("lands a cut-off tool's result on the part it belongs to", async () => {
-    const view = await mount({ provider: "opencode" });
-    await act(async () => view.result.current.send("read it"));
-    const tool = (status: string, extra: object = {}) =>
-      emitTo({
-        type: "notification",
-        data: {
-          method: "session/update",
-          params: {
-            update: {
-              sessionUpdate: status === "pending" ? "tool_call" : "tool_call_update",
-              toolCallId: "t1",
-              title: "Read config",
-              status,
-              ...extra,
-            },
-          },
-        },
-      });
-    await tool("pending");
-    await act(async () => view.result.current.send("and then stop"));
-    await tool("completed", { content: [{ type: "content", content: { type: "text", text: "body" } }] });
-    await emitTo(endedEv);
-    await emitTo(endedEv);
-    await waitFor(() => expect(view.result.current.status).toBe("idle"));
-    const tools = view.result.current.messages.flatMap((m) => m.tools);
-    expect(tools).toHaveLength(1);
-    expect(tools[0].result).toBe("body");
-  });
-
-  it("sends a keep-going continue only after the last joined reply", async () => {
-    const view = await mount({
-      provider: "opencode",
-      keepGoing: { ...startKeepGoing(1_000_000), wrapped: true },
-    });
-    await act(async () => view.result.current.send("go"));
-    await emitTo(chunkEv("working"));
-    await act(async () => view.result.current.send("also run the tests"));
-    await emitTo(endedEv);
-    await act(async () => {});
-    expect(prompted()).toEqual(["go", "also run the tests"]);
-    await emitTo(endedEv);
-    await waitFor(() =>
-      expect(prompted()).toEqual(["go", "also run the tests", CONTINUE_PROMPT])
-    );
-  });
-});
 
 describe("useAcpChat compact", () => {
   // Same contract as Claude's: the CLI's own command, sent as a turn.

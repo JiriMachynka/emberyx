@@ -7,8 +7,6 @@ import {
   emptyTurn,
   endTurn,
   grokTurnStop,
-  interjectMethod,
-  ownsToolCall,
   permissionOutcome,
   planEntriesOf,
   readPermission,
@@ -485,27 +483,3 @@ describe("configOptionsOf", () => {
   });
 });
 
-describe("interjectMethod", () => {
-  it("is Grok's vendor method, and nothing for OpenCode", () => {
-    expect(interjectMethod("grok")).toBe("_x.ai/interject");
-    expect(interjectMethod("opencode")).toBeNull();
-  });
-});
-
-describe("ownsToolCall", () => {
-  const message = {
-    id: "a1",
-    role: "assistant" as const,
-    text: "",
-    thinking: "",
-    tools: [{ id: "t1", name: "Read", input: {}, partial: "" }],
-    streaming: false,
-  };
-
-  it("claims updates for calls the message holds, and only tool updates", () => {
-    expect(ownsToolCall(message, { sessionUpdate: "tool_call_update", toolCallId: "t1" })).toBe(true);
-    expect(ownsToolCall(message, { sessionUpdate: "tool_call_update", toolCallId: "t2" })).toBe(false);
-    expect(ownsToolCall(message, { sessionUpdate: "agent_message_chunk", toolCallId: "t1" })).toBe(false);
-    expect(ownsToolCall(message, null)).toBe(false);
-  });
-});

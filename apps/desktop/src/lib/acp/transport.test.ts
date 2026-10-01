@@ -16,7 +16,6 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import {
-  acpInterject,
   acpSetConfigOption,
   acpSetModel,
   currentModel,
@@ -248,14 +247,3 @@ describe("acpSetConfigOption", () => {
   });
 });
 
-describe("acpInterject", () => {
-  it("names the session and the text on the vendor method", async () => {
-    await acpInterject(7, "_x.ai/interject", "s1", "stop and say BANANA");
-    expect(calls).toEqual([
-      [
-        "acp_request",
-        { id: 7, method: "_x.ai/interject", params: { sessionId: "s1", text: "stop and say BANANA" } },
-      ],
-    ]);
-  });
-});

@@ -174,25 +174,6 @@ export const configOptionsOf = (value: Json): AcpConfigOption[] | null => {
   return list ? list.flatMap(decodeConfigOption) : null;
 };
 
-/**
- * Vendor method that adds text to the running turn, where the agent has one.
- * Grok queues an interjection into the turn it is running; a second
- * `session/prompt` would instead wait as a turn of its own. OpenCode has no such
- * method, but a prompt sent mid-turn joins the running one.
- */
-export const interjectMethod = (provider: string): string | null =>
-  provider === "grok" ? "_x.ai/interject" : null;
-
-/** Whether a tool-call update is about a call `message` already holds. */
-export const ownsToolCall = (message: ChatMessage, update: Json): boolean => {
-  if (!isRecord(update) || Array.isArray(update)) return false;
-  if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") {
-    return false;
-  }
-  const id = update.toolCallId;
-  return typeof id === "string" && message.tools.some((t) => t.id === id);
-};
-
 /** Live context fill from ACP `usage_update`. `size` is the window; `used` is
  *  how full it is. Cost is taken only in USD — any other currency would need
  *  a conversion we do not have. */

@@ -44,8 +44,6 @@ import {
   emptyTurn,
   endTurn,
   grokTurnStop,
-  interjectMethod,
-  ownsToolCall,
   permissionOutcome,
   readPermission,
   readUsageUpdate,
@@ -61,7 +59,6 @@ import {
 import {
   acpCancel,
   acpDetach,
-  acpInterject,
   acpKill,
   acpPrompt,
   acpRespond,
@@ -431,14 +428,6 @@ export function useAcpChat({
   const attemptedEffortRef = useRef("");
   /** A refused level, reported the way a refused model is. */
   const [effortError, setEffortError] = useState<string | null>(null);
-  /** Messages sent into the running turn, in order, each with the id of the
-   *  reply part it cut off. Recorded to the event log when the turn settles,
-   *  so the log reads in the order the transcript shows. */
-  const steersRef = useRef<{ replyId: string | null; prompt: string }[]>([]);
-  /** Replies still owed by prompts sent mid-turn. OpenCode answers every
-   *  prompt that joined a turn when the turn ends, all at once; only the last
-   *  one settles it. */
-  const steerRepliesRef = useRef(0);
   const announceIssue = useAccountIssue(emberyxSessionId, cwd);
 
   const setSessionStatus = useAgentStore((s) => s.setStatus);
@@ -679,17 +668,6 @@ export function useAcpChat({
         }
         if (reply.text.trim()) recordTimeline(id, "assistantResponse", reply.text);
       };
-      // Steered parts are recorded only now, so a tool that was still running
-      // when the user cut in is logged with the result it later got.
-      const steers = steersRef.current;
-      steersRef.current = [];
-      if (logId) {
-        for (const steer of steers) {
-          const part = committedRef.current.find((m) => m.id === steer.replyId);
-          if (part) recordReply(logId, part);
-          recordTimeline(logId, "userPrompt", steer.prompt);
-        }
-      }
       if (logId && ended.message) recordReply(logId, ended.message);
       if (logId) {
         recordTimeline(
@@ -794,22 +772,6 @@ export function useAcpChat({
       return;
     }
     if (method !== "session/update" || replayingRef.current) return;
-    // A tool that was running when the user steered belongs to the reply part
-    // the steer cut off; its update must land there, not open a second card.
-    for (const steer of steersRef.current) {
-      const part = committedRef.current.find((m) => m.id === steer.replyId);
-      if (!part || !ownsToolCall(part, update)) continue;
-      const patched = applyUpdate(
-        { message: part, status: "tool" },
-        update as AcpSessionUpdate["update"],
-        part.id,
-        autoApprovedRef.current
-      ).message;
-      committedRef.current = committedRef.current.map((m) =>
-        m.id === part.id && patched ? patched : m
-      );
-      return;
-    }
     turnRef.current = applyUpdate(
       turnRef.current,
       update as AcpSessionUpdate["update"],
@@ -850,13 +812,6 @@ export function useAcpChat({
       // StrictMode's double-mount kills the first process; its exit must not
       // flip the live session to "exited".
       if (disposed) return;
-      // A prompt that joined the running turn is answered with it; the turn
-      // settles on the last of those replies, once.
-      if ((ev.type === "turnEnded" || ev.type === "turnFailed") && steerRepliesRef.current > 0) {
-        steerRepliesRef.current -= 1;
-        return;
-      }
-      if (ev.type === "exit") steerRepliesRef.current = 0;
       if (ev.type === "turnEnded" || ev.type === "turnFailed" || ev.type === "exit") {
         setPromptOpen(false);
       }
@@ -1043,7 +998,6 @@ export function useAcpChat({
       setLiveThreadId(undefined);
       // The next process owes no reply for this one's prompt.
       setPromptOpen(false);
-      steerRepliesRef.current = 0;
       const id = processRef.current;
       processRef.current = null;
       sessionRef.current = null;
@@ -1248,63 +1202,15 @@ export function useAcpChat({
     [cwd, emberyxSessionId, publish, adoptThread, recordTimeline, resume, wake, promptTurn]
   );
 
-  /**
-   * Put a message into the running turn: Grok over its interject method,
-   * OpenCode as a second `session/prompt`, which joins the turn rather than
-   * waiting behind it. The reply streamed so far is cut off as its own part, so
-   * the transcript reads in the order the agent saw things. False when there is
-   * no live session to steer, or Grok was handed images it has no field for.
-   */
-  const steer = useCallback(
-    (text: string, images: ChatImage[] | undefined, wire: string): boolean => {
-      const id = processRef.current;
-      const sessionId = sessionRef.current;
-      const interject = interjectMethod(provider);
-      const hasImages = !!images && images.length > 0;
-      if (id === null || !sessionId || (interject && hasImages)) return false;
-      const live = turnRef.current;
-      const part = live.message ? endTurn(live, "end_turn").message : null;
-      committedRef.current = [
-        ...committedRef.current,
-        ...(part ? [part] : []),
-        {
-          id: messageId("u"),
-          role: "user",
-          text,
-          thinking: "",
-          tools: [],
-          streaming: false,
-          images: hasImages ? images : undefined,
-        },
-      ];
-      steersRef.current = [...steersRef.current, { replyId: part?.id ?? null, prompt: text }];
-      turnRef.current = { message: null, status: live.status };
-      publish();
-      const undelivered = (e: Error | string) =>
-        toast.error("Message not delivered", { description: String(e) });
-      if (interject) {
-        void acpInterject(id, interject, sessionId, wire).catch(undelivered);
-      } else {
-        steerRepliesRef.current += 1;
-        void acpPrompt(id, sessionId, wire, images).catch((e) => {
-          steerRepliesRef.current -= 1;
-          undelivered(e);
-        });
-      }
-      return true;
-    },
-    [provider, publish]
-  );
-
   const send = useCallback(
     (text: string, images?: ChatImage[]) => {
       const hasImages = !!images && images.length > 0;
       if (!text.trim() && !hasImages) return;
       const wire = wrapKeepGoing(text, usageRef.current);
       if (processRef.current !== null && BUSY_STATUS.has(turnRef.current.status)) {
-        // A mid-turn message steers the running turn rather than waiting for
-        // it to end. Only what can't be steered waits in the queue.
-        if (steer(text, images, wire)) return;
+        // Queue like every transport: a mid-turn message waits for the idle
+        // instead of cancelling the running turn, and joins the transcript on
+        // delivery.
         const attachments = hasImages ? JSON.stringify(images) : undefined;
         queueRef.current.push({ queueId: null, text: wire, raw: text, images });
         setQueued((n) => n + 1);
@@ -1313,7 +1219,7 @@ export function useAcpChat({
       }
       acceptTurn(text, images, wire);
     },
-    [acceptTurn, emberyxSessionId, promptQueue, steer, wrapKeepGoing]
+    [acceptTurn, emberyxSessionId, promptQueue, wrapKeepGoing]
   );
 
   // Same as Claude's: the CLI's own `/compact` command, sent as a turn. Both
@@ -1463,7 +1369,6 @@ export function useAcpChat({
     setModelError(null);
     setEffortError(null);
     attemptedEffortRef.current = "";
-    steersRef.current = [];
     appliedModelRef.current = "";
     committedRef.current = [];
     turnRef.current = emptyTurn();

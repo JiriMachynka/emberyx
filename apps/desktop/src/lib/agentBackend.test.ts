@@ -63,11 +63,11 @@ describe("capabilitiesOf", () => {
 
   // Each has a driver in useAcpChat: set_config_option, a mid-turn interject
   // or joining prompt, `/compact`, and the auth_required classifier.
-  it("gives the ACP agents effort, steering, compact and sign-in detection", () => {
+  it("gives the ACP agents effort, compact and sign-in detection, and queues mid-turn", () => {
     for (const backend of ["opencode", "grok"] as const) {
       const caps = capabilitiesOf(backend);
       expect(caps.reasoningEffort).toBe(true);
-      expect(caps.steering).toBe(true);
+      expect(caps.steering).toBe(false);
       expect(caps.compact).toBe(true);
       expect(caps.accountIssues).toBe(true);
     }
