@@ -121,6 +121,12 @@ export const ThreadRow = memo(function ThreadRow({
 
           <div className="pointer-events-none relative flex min-w-0 flex-col px-2.5 py-1.5">
             <div className="flex min-w-0 items-center gap-2">
+              <ProjectMark project={project} glyph={glyph} small />
+              <img
+                src={`/provider-icons/${backend}.svg`}
+                alt=""
+                className="size-3.5 shrink-0 object-contain"
+              />
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-sm font-medium",

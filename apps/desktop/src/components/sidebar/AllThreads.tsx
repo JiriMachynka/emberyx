@@ -28,6 +28,7 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import type { Project } from "@/types";
+import { MOCKUP_LABEL, MOCKUP_SESSION_ID } from "@/lib/mockupChat";
 import { ThreadRow } from "./ThreadRow";
 import type { SidebarProps, ThreadRowData } from "./types";
 
@@ -81,6 +82,13 @@ export function AllThreads(props: SidebarProps) {
     );
     return () => window.clearInterval(id);
   }, []);
+  // Dev only: the showcase session has no transcript on disk, so it gets a
+  // synthetic row in the project that owns it.
+  const mockOwner = import.meta.env.DEV
+    ? projects.find((p) =>
+        sessionsFor(p.id).some((s) => s.id === MOCKUP_SESSION_ID)
+      )?.id
+    : undefined;
   const scoped = useMemo(
     () => (scope ? projects.filter((p) => p.id === scope) : projects),
     [scope, projects]
@@ -103,7 +111,18 @@ export function AllThreads(props: SidebarProps) {
     const now = minuteTick * 60_000;
     const all: ThreadRowData[] = scoped
       .flatMap((project) =>
-        project.threads.map((thread) => {
+        (project.id === mockOwner
+          ? [
+              {
+                id: MOCKUP_SESSION_ID,
+                title: MOCKUP_LABEL,
+                modified: now / 1000,
+                provider: "claude",
+              },
+              ...project.threads,
+            ]
+          : project.threads
+        ).map((thread) => {
           const key = threadMetaKey(project.path, thread.id);
           const root = project.worktree?.repoRoot ?? project.path;
           const branch = project.worktree?.branch;
@@ -138,6 +157,7 @@ export function AllThreads(props: SidebarProps) {
     return { all, ...by };
   }, [
     scoped,
+    mockOwner,
     meta,
     merged,
     branches,
@@ -163,17 +183,24 @@ export function AllThreads(props: SidebarProps) {
   // fresh closure on every one of its renders.
   const resumeRef = useRef(onResumeThread);
   resumeRef.current = onResumeThread;
-  const resume = useCallback(
-    (data: ThreadRowData) =>
-      resumeRef.current(data.project.id, data.project.path, data.thread),
-    []
-  );
+  const selectRef = useRef(props.onSelectSession);
+  selectRef.current = props.onSelectSession;
+  const resume = useCallback((data: ThreadRowData) => {
+    if (import.meta.env.DEV && data.thread.id === MOCKUP_SESSION_ID) {
+      selectRef.current(data.project.id, MOCKUP_SESSION_ID);
+      return;
+    }
+    resumeRef.current(data.project.id, data.project.path, data.thread);
+  }, []);
 
   const row = (data: ThreadRowData) => {
     // A thread the pane opened itself is matched by the id it reported, not by
     // `resume` — a fresh chat was spawned without one.
     const session = sessionsFor(data.project.id).find(
-      (s) => s.resume === data.thread.id || s.threadId === data.thread.id
+      (s) =>
+        s.resume === data.thread.id ||
+        s.threadId === data.thread.id ||
+        s.id === data.thread.id
     );
     return (
       <ThreadRow
