@@ -2,6 +2,7 @@ import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { useRunningTimer } from "@/hooks/useRunningTimer";
 import { useAgentStore } from "@/lib/agentStore";
+import { formatElapsed } from "@/lib/status";
 
 afterEach(() => useAgentStore.setState({ statuses: {}, statusSince: {} }));
 
@@ -18,5 +19,12 @@ describe("useRunningTimer", () => {
     useAgentStore.setState({ statusSince: { s1: Date.now() - 5_000 } });
     expect(renderHook(() => useRunningTimer("s1", false)).result.current).toBeNull();
     expect(renderHook(() => useRunningTimer("s2", true)).result.current).toBeNull();
+  });
+
+  it("is the string both clocks paint", () => {
+    const start = Date.now() - 12_000;
+    useAgentStore.setState({ statusSince: { s1: start } });
+    const { result } = renderHook(() => useRunningTimer("s1", true));
+    expect(result.current).toBe(formatElapsed(start));
   });
 });

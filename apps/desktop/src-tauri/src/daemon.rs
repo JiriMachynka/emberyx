@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -33,6 +33,17 @@ const START_TIMEOUT: Duration = Duration::from_secs(5);
 /// but start high so a mix-up shows up as "no such agent" rather than silently
 /// addressing the wrong process.
 const HANDLE_BASE: u32 = 1_000_000;
+
+/// Set when this window started the daemon that is now running. Frame ids
+/// restart with the daemon, so a pane's replay cursor from a previous daemon
+/// must be discarded — it would hide the new incarnation's first frames.
+static FRESH_DAEMON: AtomicBool = AtomicBool::new(false);
+
+/// True once, then cleared: whether the running daemon was started by this
+/// window since the last check.
+pub fn consume_fresh_daemon() -> bool {
+    FRESH_DAEMON.swap(false, Ordering::SeqCst)
+}
 
 #[derive(Default, Clone)]
 pub struct Daemon {
@@ -203,6 +214,9 @@ impl Daemon {
         let deadline = Instant::now() + START_TIMEOUT;
         while Instant::now() < deadline {
             if Self::reachable() {
+                // A daemon we just started holds no frames from before: its
+                // frame ids start over, so any pane cursor is stale.
+                FRESH_DAEMON.store(true, Ordering::SeqCst);
                 return Ok(());
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -224,7 +238,10 @@ impl Daemon {
         let outcome: SpawnOutcome =
             serde_json::from_value(Self::request(&Request::AgentSpawn { spec })?)
                 .map_err(|e| e.to_string())?;
-        Self::attach(&agent_id, after_frame_id, sink)?;
+        // With no cursor the whole buffer replays, and `buffered` says how many
+        // frames that is — the boundary `attach` trims and marks.
+        let replay = if after_frame_id.is_none() { outcome.buffered } else { 0 };
+        Self::attach(&agent_id, after_frame_id, replay, sink)?;
         let handle = self.next_handle.fetch_add(1, Ordering::SeqCst);
         self.handles
             .lock()
@@ -235,7 +252,18 @@ impl Daemon {
 
     /// Open the streaming connection and forward frames into `sink` on its own
     /// thread. The connection lives as long as the sink accepts frames.
-    fn attach(agent_id: &str, after_frame_id: Option<u64>, sink: AgentSink) -> Result<()> {
+    ///
+    /// The first `replay` frames are the backlog. They are trimmed to the turn
+    /// still in flight (`trim_replay`) and followed by `Replayed`; the window
+    /// re-reads finished turns from the event store, which — unlike the
+    /// daemon's stdout buffer — has the user's prompts and everything from
+    /// before this process was spawned.
+    fn attach(
+        agent_id: &str,
+        after_frame_id: Option<u64>,
+        replay: u64,
+        sink: AgentSink,
+    ) -> Result<()> {
         let stream = Self::connect().ok_or("emberyxd is not running")?;
         let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
         let reader = BufReader::new(stream);
@@ -247,21 +275,65 @@ impl Daemon {
         writer.write_all(b"\n").map_err(|e| e.to_string())?;
         writer.flush().map_err(|e| e.to_string())?;
         std::thread::spawn(move || {
-            for line in reader.lines().map_while(std::io::Result::ok) {
-                let Ok(frame) = serde_json::from_str::<AgentFrame>(&line) else {
+            let mut lines = reader.lines().map_while(std::io::Result::ok);
+            // Every backlog frame counts toward `replay`, decodable or not.
+            let mut backlog = Vec::new();
+            for line in lines.by_ref().take(replay as usize) {
+                if let Some(frame) = decode_frame(&line) {
+                    backlog.push(frame);
+                }
+            }
+            // Returning false means the consumer is gone (pane unmounted): drop
+            // the connection. The agent keeps running — that is the point.
+            for (frame_id, event) in trim_replay(backlog) {
+                if !sink(AgentEvent::Framed {
+                    frame_id,
+                    event: Box::new(event),
+                }) {
+                    return;
+                }
+            }
+            if !sink(AgentEvent::Replayed) {
+                return;
+            }
+            for line in lines {
+                let Some((frame_id, event)) = decode_frame(&line) else {
                     continue;
                 };
-                let Ok(event) = serde_json::from_value::<AgentEvent>(frame.event) else {
-                    continue;
-                };
-                // The consumer is gone (pane unmounted): drop the connection.
-                // The agent keeps running — that is the point.
-                if !sink(event) {
+                if !sink(AgentEvent::Framed {
+                    frame_id,
+                    event: Box::new(event),
+                }) {
                     return;
                 }
             }
         });
         Ok(())
+    }
+
+    /// An agent's buffered frames, read over a connection of its own and
+    /// dropped again. The daemon never closes an attach stream, so the read
+    /// ends when the backlog runs dry — or at a deadline, for an agent
+    /// that is still producing live frames.
+    fn backlog(agent_id: &str) -> Option<Vec<(u64, AgentEvent)>> {
+        let stream = Self::connect()?;
+        stream.set_read_timeout(Some(Duration::from_millis(200))).ok()?;
+        let mut writer = stream.try_clone().ok()?;
+        let request = Request::AgentAttach {
+            agent_id: agent_id.to_string(),
+            after_frame_id: None,
+        };
+        serde_json::to_writer(&mut writer, &request).ok()?;
+        writer.write_all(b"\n").ok()?;
+        writer.flush().ok()?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let frames = BufReader::new(stream)
+            .lines()
+            .map_while(std::io::Result::ok)
+            .take_while(|_| Instant::now() < deadline)
+            .filter_map(|line| decode_frame(&line))
+            .collect();
+        Some(frames)
     }
 
     /// The daemon agent or proc behind a frontend handle's id, if this window
@@ -483,6 +555,119 @@ pub fn daemon_live_agents() -> Result<Vec<String>> {
     serde_json::from_value(value).map_err(|e| e.to_string().into())
 }
 
+fn decode_frame(line: &str) -> Option<(u64, AgentEvent)> {
+    let frame: AgentFrame = serde_json::from_str(line).ok()?;
+    let event = serde_json::from_value::<AgentEvent>(frame.event).ok()?;
+    Some((frame.frame_id, event))
+}
+
+/// The stream-json message type of one stdout line, when it is one this module
+/// acts on. Read from the parsed object: the CLI does not keep `type` first
+/// (`result` lines open with their stats), so a prefix check would miss them.
+fn line_kind(line: &str) -> &'static str {
+    #[derive(serde::Deserialize)]
+    struct Typed<'a> {
+        #[serde(rename = "type")]
+        kind: &'a str,
+    }
+    let Ok(typed) = serde_json::from_str::<Typed>(line) else {
+        return "";
+    };
+    ["result", "system", "control_response", "rate_limit_event"]
+        .into_iter()
+        .find(|kind| *kind == typed.kind)
+        .unwrap_or("")
+}
+
+fn lines_of(event: &AgentEvent) -> &[String] {
+    match event {
+        AgentEvent::Line(line) => std::slice::from_ref(line),
+        AgentEvent::Lines(lines) => lines,
+        _ => &[],
+    }
+}
+
+/// Cut a backlog down to what the window cannot get anywhere else.
+///
+/// The daemon buffers its agent's stdout, and that is not a transcript: it has
+/// no user prompts (Claude does not echo them) and nothing from before the
+/// process was spawned (`--resume` replays no history). The event store has all
+/// of that. So everything up to the last finished turn is dropped — except the
+/// session bookkeeping (`system`, plan windows) that never reaches the store —
+/// and what stays is the turn still running, which only the stream knows.
+fn trim_replay(frames: Vec<(u64, AgentEvent)>) -> Vec<(u64, AgentEvent)> {
+    let last_result = frames.iter().enumerate().rev().find_map(|(i, (_, event))| {
+        lines_of(event)
+            .iter()
+            .rposition(|line| line_kind(line) == "result")
+            .map(|j| (i, j))
+    });
+    let Some((cut_frame, cut_line)) = last_result else {
+        return frames;
+    };
+    let mut kept = Vec::new();
+    let mut tail = Vec::new();
+    for (i, (frame_id, event)) in frames.into_iter().enumerate() {
+        if i > cut_frame {
+            tail.push((frame_id, event));
+            continue;
+        }
+        let lines = lines_of(&event);
+        let (before, after) = if i == cut_frame {
+            lines.split_at(cut_line + 1)
+        } else {
+            (lines, &[][..])
+        };
+        let bookkeeping: Vec<String> = before
+            .iter()
+            .filter(|line| matches!(line_kind(line), "system" | "control_response" | "rate_limit_event"))
+            .cloned()
+            .collect();
+        if !bookkeeping.is_empty() {
+            kept.push((frame_id, AgentEvent::Lines(bookkeeping)));
+        }
+        if !after.is_empty() {
+            tail.push((frame_id, AgentEvent::Lines(after.to_vec())));
+        }
+    }
+    kept.extend(tail);
+    kept
+}
+
+/// Whether a turn is running right now, read from a backlog the way a pane
+/// would: anything after the last finished turn that isn't session bookkeeping.
+fn in_flight(frames: Vec<(u64, AgentEvent)>) -> bool {
+    trim_replay(frames).iter().any(|(_, event)| {
+        lines_of(event)
+            .iter()
+            .any(|line| line_kind(line).is_empty())
+    })
+}
+
+/// Agents that are mid-turn in the daemon right now. A window that restarts
+/// while its agents keep working has no pane mounted for them, so nothing in it
+/// knows they are busy until somebody opens each thread — this is the read that
+/// lets the sidebar say so.
+pub fn daemon_working_agents() -> Result<Vec<String>> {
+    let mut ids = daemon_live_agents()?;
+    ids.sort();
+    ids.dedup();
+    ids.retain(|id| !id.starts_with("shell:"));
+    let working = std::thread::scope(|scope| {
+        let probes: Vec<_> = ids
+            .iter()
+            .map(|id| scope.spawn(move || (id, Daemon::backlog(id).map(in_flight))))
+            .collect();
+        probes
+            .into_iter()
+            .filter_map(|probe| probe.join().ok())
+            .filter(|(_, working)| matches!(working, Some(true)))
+            .map(|(id, _)| id.clone())
+            .collect()
+    });
+    Ok(working)
+}
+
 /// Stop the daemon and every agent it owns. Explicit: closing the window does
 /// not do this, or the agents would not be persistent.
 pub fn daemon_stop() -> Result<()> {
@@ -501,6 +686,7 @@ pub mod cmd {
         [LIFECYCLE] daemon_start() -> Health;
         [LIFECYCLE] daemon_stop() -> ();
         daemon_live_agents() -> Vec<String>;
+        daemon_working_agents() -> Vec<String>;
     }
 }
 
@@ -516,6 +702,63 @@ mod tests {
         let log = Daemon::log_path();
         assert_eq!(log.parent(), socket.parent());
         assert_eq!(log.extension().and_then(|e| e.to_str()), Some("log"));
+    }
+
+    fn lines(frame_id: u64, lines: &[&str]) -> (u64, AgentEvent) {
+        (
+            frame_id,
+            AgentEvent::Lines(lines.iter().map(|l| l.to_string()).collect()),
+        )
+    }
+
+    const INIT: &str = r#"{"type":"system","subtype":"init"}"#;
+    const DELTA: &str = r#"{"type":"stream_event","event":{}}"#;
+    const ANSWER: &str = r#"{"type":"assistant","message":{"id":"m1"}}"#;
+    // The CLI sorts a result's keys, so `type` is not first.
+    const DONE: &str = r#"{"duration_ms":5,"subtype":"success","type":"result"}"#;
+
+    #[test]
+    fn a_replay_keeps_bookkeeping_and_the_turn_still_running() {
+        let trimmed = trim_replay(vec![
+            lines(1, &[INIT]),
+            lines(2, &[DELTA, ANSWER, DONE]),
+            lines(3, &[DELTA, ANSWER, DONE, DELTA]),
+            lines(4, &[ANSWER]),
+        ]);
+        let flat: Vec<&str> = trimmed
+            .iter()
+            .flat_map(|(_, event)| lines_of(event))
+            .map(String::as_str)
+            .collect();
+        // The init line survives; both finished turns are gone; what came after
+        // the last result is the turn in flight.
+        assert_eq!(flat, vec![INIT, DELTA, ANSWER]);
+    }
+
+    #[test]
+    fn a_replay_with_no_finished_turn_is_left_whole() {
+        let frames = vec![lines(1, &[INIT]), lines(2, &[DELTA, ANSWER])];
+        assert_eq!(trim_replay(frames.clone()), frames);
+    }
+
+    #[test]
+    fn an_agent_is_working_only_while_a_turn_is_unfinished() {
+        // Idle: everything it ever did ended in a result.
+        assert!(!in_flight(vec![lines(1, &[INIT]), lines(2, &[DELTA, ANSWER, DONE])]));
+        // A resumed agent that has said nothing yet.
+        assert!(!in_flight(vec![lines(1, &[INIT])]));
+        // Mid-turn, after an earlier finished one.
+        assert!(in_flight(vec![lines(1, &[DELTA, DONE]), lines(2, &[DELTA])]));
+        // Mid-first-turn: no result yet.
+        assert!(in_flight(vec![lines(1, &[INIT, DELTA])]));
+    }
+
+    #[test]
+    fn a_line_that_only_mentions_a_type_is_not_that_type() {
+        let quoted = r#"{"type":"assistant","message":{"content":[{"text":"{\"type\":\"result\"}"}]}}"#;
+        assert_eq!(line_kind(quoted), "");
+        assert_eq!(line_kind(DONE), "result");
+        assert_eq!(line_kind(r#"{"type":"results"}"#), "");
     }
 
     #[test]

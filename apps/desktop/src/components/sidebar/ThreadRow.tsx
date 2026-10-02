@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, Profiler, useEffect, useRef, useState } from "react";
 import {
   GitBranch,
   GitPullRequest,
@@ -16,10 +16,11 @@ import {
 import { cn } from "@/lib/utils";
 import { prefetchThreadPage } from "@/lib/threadPage";
 import { projectLabel } from "@/lib/worktree";
-import { formatElapsed, statusOf } from "@/lib/status";
-import { TICK_MS } from "@/hooks/useRunningTimer";
+import { statusOf } from "@/lib/status";
+import { useRunningTimer } from "@/hooks/useRunningTimer";
 import { StatusDot } from "@/components/StatusDot";
 import { useAgentStore } from "@/lib/agentStore";
+import { onRender } from "@/lib/perf";
 import {
   Popover,
   PopoverAnchor,
@@ -296,7 +297,7 @@ const DoneDot = memo(function DoneDot({ id, open }: { id: string; open: boolean 
 /** The run's clock while the agent is working, the thread's age otherwise. It
  *  subscribes to its own session and owns its ticker, so a running turn
  *  re-renders this chip and nothing else in the list. */
-const WorkingChip = memo(function WorkingChip({
+export const WorkingChip = memo(function WorkingChip({
   id,
   idle,
 }: {
@@ -304,26 +305,18 @@ const WorkingChip = memo(function WorkingChip({
   /** What to show when the agent isn't working — the thread's age. */
   idle: string;
 }) {
-  // Out of the React Compiler: the ticker re-renders so `formatElapsed` reads
-  // a fresh clock, and a clock read is not an input the compiler can see.
-  "use no memo";
   const status = useAgentStore((s) => statusOf(s.statuses, id));
-  const since = useAgentStore((s) => s.statusSince[id]);
-  const [, tick] = useState(0);
   const working = status === "working";
-
-  useEffect(() => {
-    if (!working) return;
-    const timer = window.setInterval(() => tick((n) => n + 1), TICK_MS);
-    return () => window.clearInterval(timer);
-  }, [working]);
-
-  if (!working) return <>{idle}</>;
-  // The line under the title says what it is doing; this is only how long.
+  // Same hook as WorkingFooter: shared start (`statusSince`) and tick rate.
+  const elapsed = useRunningTimer(id, working);
+  if (!elapsed) return <>{idle}</>;
+  // Nested so emberyxPerf.report() names a tick instead of folding it into Sidebar.
   return (
-    <span className="text-xs font-medium tabular-nums text-primary">
-      {formatElapsed(since)}
-    </span>
+    <Profiler id="WorkingChip" onRender={onRender}>
+      <span className="text-xs font-medium tabular-nums text-primary">
+        {elapsed}
+      </span>
+    </Profiler>
   );
 });
 

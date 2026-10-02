@@ -25,6 +25,7 @@ import {
 } from "@/lib/chatMessage";
 import { registerAgent, setAgentLifecycle } from "@/lib/agentRegistry";
 import { askQuestions, fetchPendingAsk } from "@/lib/approvals";
+import { isProvider } from "@/lib/providers";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
 import { settleTurn } from "@/lib/turnSettle";
 import {
@@ -69,7 +70,12 @@ import {
 import { useKeepGoing } from "@/hooks/useKeepGoing";
 
 /** Paging over the local event store, plus the sidebar's hover prefetch. */
-import { fetchThreadPage, loadThreadHistory, takePrefetchedPage } from "@/lib/threadPage";
+import {
+  fetchThreadPage,
+  firstPaintPage,
+  loadThreadHistory,
+  type MessagePage,
+} from "@/lib/threadPage";
 import { markPage } from "@/lib/perf";
 
 /** A stream-json line from the headless `claude` process (Rust AgentEvent). */
@@ -82,7 +88,11 @@ type AgentEvent =
    *  requests are still read off the raw stream. */
   | { type: "activities"; data: ActivityItem[] }
   | { type: "stderr"; data: string }
-  | { type: "exit"; data: number | null };
+  | { type: "exit"; data: number | null }
+  /** A frame the daemon owns, carrying its frame id around the real event. */
+  | { type: "framed"; data: { frameId: number; event: AgentEvent } }
+  /** The daemon's backlog is delivered; every event after this is live. */
+  | { type: "replayed" };
 
 export type {
   AskQuestion,
@@ -108,17 +118,15 @@ export {
   sameQuota,
 } from "@/lib/chatMessage";
 
-/** What `agent_spawn` returns. `truncated` means the daemon's replay is
- *  knowingly partial and the transcript's start is missing.
+/** What `agent_spawn` returns.
  *
  *  `reattached` says the daemon already held this agent and replayed its buffer.
- *  Claude branches on it only for the disk prefill: a reattach's replay is the
- *  transcript, a fresh daemon spawn replays nothing. Codex and ACP branch on the
- *  same field to skip their own thread-open round trip. */
+ *  Claude no longer reads the disk prefill off it — the replay is trimmed to the
+ *  turn in flight and the store always supplies the rest. Codex and ACP branch
+ *  on the same field to skip their own thread-open round trip. */
 interface AgentHandle {
   id: number;
   reattached: boolean;
-  truncated: boolean;
 }
 
 interface Options {
@@ -194,6 +202,35 @@ function agentRunFrom(id: string, session: string, input: Json) {
  * Drives one headless Claude Code process over stream-json and exposes a
  * rendered message model. Transcript parsing lives in `lib/chatMessage`.
  */
+
+const storePageMessages = (page: MessagePage) => {
+  const lines = page.rows
+    .map((row) => row.payloadJson)
+    .filter((line): line is string => typeof line === "string");
+  const transcript = lines.join("\n");
+  // Per-row provenance, indexed by row: position `i` of the parsed text is
+  // page row `i`, so a turn's author crosses without either side's row
+  // filtering reordering anything. Imported history renders Claude-shaped
+  // lines but is GPT/Grok work half the time — the row's provider is the
+  // truth, the line's shape is only a rendering vehicle.
+  const providers = page.rows.map((row) =>
+    isProvider(row.provider) ? row.provider : null
+  );
+  const parsed = attachTranscriptActivities(
+    parseTranscript(transcript, providers),
+    page.activities
+  );
+  const oldest = page.rows[0];
+  return {
+    parsed,
+    lines,
+    transcript,
+    oldest: oldest
+      ? { createdAt: oldest.createdAt, messageId: oldest.messageId }
+      : null,
+  };
+};
+
 export function useAgentChat({
   cwd,
   emberyxSessionId,
@@ -230,11 +267,17 @@ export function useAgentChat({
   );
   /** `cwd::resume` this pane has already hydrated, so the page is read once. */
   const hydratedRef = useRef<string | null>(null);
-  /** The daemon's replay is the whole transcript, so the disk prefill must stay
-   *  out. True until the daemon turns out not to hold this agent, or a
-   *  persistent spawn says it started one fresh: then there is no replay and
-   *  the store is the only history there is. */
-  const [replayOnly, setReplayOnly] = useState(persistent && !imported);
+  /** A reattached agent's backlog is still arriving. The disk prefill waits for
+   *  it: read first, the store's copy of the turn in flight and the replay of
+   *  it would both render. True until the daemon turns out not to hold this
+   *  agent, a spawn says it started one fresh, or the backlog's end marker
+   *  lands. */
+  const [awaitingReplay, setAwaitingReplay] = useState(persistent && !imported);
+  /** The daemon replayed into this pane (`reattached`), and a turn was still
+   *  running in it (`running`) — so the store's copy of that turn is the
+   *  duplicate. Decided at the end marker, from the status the backlog's frames
+   *  left, because their messages only reach the list on the next paint. */
+  const reattachedRef = useRef({ reattached: false, running: false });
   const held = useDaemonHolds(emberyxSessionId, persistent && !imported);
   const loadingOlderRef = useRef(false);
   const [status, setStatus] = useState<ChatStatus>("idle");
@@ -269,7 +312,7 @@ export function useAgentChat({
   const wake = useCallback(() => setAwake(true), []);
   useEffect(() => {
     if (held) setAwake(true);
-    else if (held === false) setReplayOnly(false);
+    else if (held === false) setAwaitingReplay(false);
   }, [held]);
   // A turn accepted before the process existed. Delivered by the effect below
   // the moment the spawn lands; further turns queue normally, since the status
@@ -333,6 +376,9 @@ export function useAgentChat({
    *  lifetime, so it is written where it happens. */
   const applyStatus = useCallback(
     (next: ChatStatus) => {
+      // A burst of replayed frames lands before the next render, so the ref a
+      // reader checks right after must already hold this status.
+      statusRef.current = next;
       setStatus(next);
       if (!enabledRef.current) return;
       // Keep-going threads stay "working" in the sidebar between continues so
@@ -655,6 +701,8 @@ export function useAgentChat({
         const ev = msg.event;
         const evType = typeof ev.type === "string" ? ev.type : "";
         if (evType === "message_start") {
+          const message = ev.message as JsonObject | undefined;
+          const model = message?.model as string | undefined;
           draftRef.current = {
             id: localId(),
             role: "assistant",
@@ -663,10 +711,12 @@ export function useAgentChat({
             tools: [],
             streaming: true,
             startedAt: Date.now(),
+            // This turn's model, from the line itself — so a stint that spanned
+            // a model change keeps each turn's own, and a carry-over stamps
+            // provider without restating a model the turn never ran under.
+            model: model ?? null,
           };
           blockToolRef.current = {};
-          const message = ev.message as JsonObject | undefined;
-          const model = message?.model as string | undefined;
           // A fresh usage object per assistant message would defeat the
           // composer's memo once a turn, for a model that almost never changes.
           if (model) setUsage((u) => (u.model === model ? u : { ...u, model }));
@@ -945,13 +995,14 @@ export function useAgentChat({
   // `parseTranscript` — the same parser the live stream feeds — rebuilds rich
   // messages (tools, thinking) without a second implementation.
   //
-  // Skipped when the daemon replays its own buffer: the two overlap — the CLI
-  // writes the same turns to disk as they stream — and rendering both would
-  // duplicate the conversation. A daemon that started the agent fresh has no
-  // buffer to replay, so the store fills in (`replayOnly`). Imported history is
-  // never replay-only: no daemon buffer can hold turns this app never ran.
+  // A reattached daemon agent hydrates too, once its backlog has landed
+  // (`awaitingReplay`). The daemon's buffer is stdout, not a transcript: no user
+  // prompts, nothing from before the process was spawned. So the backlog is
+  // trimmed to the turn still running (see `trim_replay` in daemon.rs) and the
+  // store supplies every finished turn. That one running turn exists in both —
+  // the store ends at its prompt here, the stream carries the rest.
   useEffect(() => {
-    if (!enabled || !resume || replayOnly) return;
+    if (!enabled || !resume || awaitingReplay) return;
     // Prepending is not idempotent, so a re-run for a target already hydrated
     // (a dependency identity change, StrictMode's second mount) must not
     // stack the same page on top of itself.
@@ -962,59 +1013,90 @@ export function useAgentChat({
     let completed = false;
     void (async () => {
       try {
-        // The sidebar starts this page on hover; when it did, the switch pays
-        // no round trip at all. `loadThreadHistory` then walks the rest of the
-        // thread, so the pane opens on the whole conversation rather than its
-        // newest page.
-        const page = await loadThreadHistory(
-          cwd,
-          resume,
-          takePrefetchedPage(cwd, resume)
-        );
+        // Paint the newest page first (hover cache, else one store read). The
+        // rest of a long thread used to drain in the same await, which is what
+        // left large opens at multiple seconds with nothing on screen.
+        const { reattached, running } = reattachedRef.current;
+        // The hover cache predates whatever the CLI wrote since, and a
+        // reattached agent has been writing the whole time the window was gone.
+        if (reattached) {
+          await invoke("transcripts_ingest", { cwd }).catch(() => null);
+          if (cancelled) return;
+        }
+        const head = await (reattached
+          ? fetchThreadPage(cwd, resume, { fresh: false })
+          : firstPaintPage(cwd, resume)
+        ).catch(() => null);
         if (cancelled) return;
-        const lines = page.rows
-          .map((row) => row.payloadJson)
-          .filter((line): line is string => typeof line === "string");
-        const transcript = lines.join("\n");
-        // Activities come in the same reply, so the turns paint once, already
-        // ordered — not painted and then re-rendered when a second trip lands.
-        const parsed = attachTranscriptActivities(parseTranscript(transcript), page.activities);
-        const oldest = page.rows[0];
-        oldestCursorRef.current = oldest
-          ? { createdAt: oldest.createdAt, messageId: oldest.messageId }
-          : null;
-        setHasMore(page.hasMore);
-        // Prepend, never discard. The page is this thread's history up to the
-        // resume point and the CLI never replays it on stdout, so anything
-        // already in `messages` is strictly newer — dropping the page because
-        // a live event won the race is how a resumed thread lost every turn
-        // before the one you just sent.
-        if (parsed.length) setMessages((prev) => [...parsed, ...prev]);
-        markPage();
-        const hu = parseTranscriptUsage(transcript);
-        setUsage((prev) => {
-          if (prev.model || prev.costUsd != null || prev.outputTokens != null) {
-            // A live turn already restated everything except this: the meter
-            // reads 0k until the *next* message_start otherwise.
-            return prev.contextTokens != null || hu.contextTokens == null
-              ? prev
-              : { ...prev, contextTokens: hu.contextTokens };
+        let seeded = storePageMessages(head ?? { rows: [], hasMore: false, activities: [] });
+        if (head && seeded.parsed.length) {
+          oldestCursorRef.current = seeded.oldest;
+          setHasMore(head.hasMore);
+          const settled = running
+            ? seeded.parsed.slice(
+                0,
+                seeded.parsed.map((m) => m.role).lastIndexOf("user") + 1
+              )
+            : seeded.parsed;
+          setMessages((prev) => [...settled, ...prev]);
+          markPage();
+          completed = true;
+          const hu = parseTranscriptUsage(seeded.transcript);
+          setUsage((prev) => {
+            if (prev.model || prev.costUsd != null || prev.outputTokens != null) {
+              return prev.contextTokens != null || hu.contextTokens == null
+                ? prev
+                : { ...prev, contextTokens: hu.contextTokens };
+            }
+            if (head.hasMore) return hu.model ? { model: hu.model } : prev;
+            sessionUsageRef.current = {
+              input: hu.inputTokens ?? 0,
+              output: hu.outputTokens ?? 0,
+            };
+            return hu;
+          });
+        }
+        // Older pages come on demand. Draining the rest here would replace the
+        // list under a stream that is still writing to it.
+        if (running) return;
+
+        if (head?.hasMore !== false) {
+          const page = await loadThreadHistory(cwd, resume);
+          if (cancelled) return;
+          const rest = storePageMessages(page);
+          const seededFirst = Boolean(head?.rows.length);
+          let appliedRest = !seededFirst;
+          if (rest.parsed.length) {
+            setMessages((prev) => {
+              if (!seededFirst) return [...rest.parsed, ...prev];
+              if (prev.length !== seeded.parsed.length) return prev;
+              appliedRest = true;
+              return rest.parsed;
+            });
           }
-          // A partial page is not the session total — only commit tokens when
-          // everything fit in this page, otherwise keep the model and wait for
-          // a live turn to restate usage.
-          if (page.hasMore) {
-            return hu.model ? { model: hu.model } : prev;
+          if (appliedRest) {
+            oldestCursorRef.current = rest.oldest;
+            setHasMore(page.hasMore);
+            seeded = rest;
           }
-          sessionUsageRef.current = {
-            input: hu.inputTokens ?? 0,
-            output: hu.outputTokens ?? 0,
-          };
-          return hu;
-        });
-        // The page is on screen: this target is hydrated. Set before the
-        // catch-up below so its early returns don't look like a failed read.
-        completed = true;
+          if (!completed) {
+            markPage();
+            completed = true;
+            const hu = parseTranscriptUsage(rest.transcript);
+            setUsage((prev) => {
+              if (prev.model || prev.costUsd != null || prev.outputTokens != null) {
+                return prev.contextTokens != null || hu.contextTokens == null
+                  ? prev
+                  : { ...prev, contextTokens: hu.contextTokens };
+              }
+              sessionUsageRef.current = {
+                input: hu.inputTokens ?? 0,
+                output: hu.outputTokens ?? 0,
+              };
+              return hu;
+            });
+          }
+        }
 
         // Now that the thread is on screen, catch the projections up. This is
         // the pass the read above skipped, and it matters for turns written
@@ -1030,22 +1112,15 @@ export function useAgentChat({
         if (cancelled || !summary?.filesChanged) return;
         const fresher = await loadThreadHistory(cwd, resume);
         if (cancelled) return;
-        const freshLines = fresher.rows
-          .map((row) => row.payloadJson)
-          .filter((line): line is string => typeof line === "string");
+        const fresh = storePageMessages(fresher);
         // Compare content, not count: a page that gained a turn while capped at
         // the page limit keeps the same length but is not the same history.
-        if (freshLines.join("\n") === lines.join("\n")) return;
-        const reparsed = attachTranscriptActivities(
-          parseTranscript(freshLines.join("\n")),
-          fresher.activities
+        if (fresh.lines.join("\n") === seeded.lines.join("\n")) return;
+        setMessages((prev) =>
+          prev.length === seeded.parsed.length ? fresh.parsed : prev
         );
-        setMessages((prev) => (prev.length === parsed.length ? reparsed : prev));
         setHasMore(fresher.hasMore);
-        const freshOldest = fresher.rows[0];
-        oldestCursorRef.current = freshOldest
-          ? { createdAt: freshOldest.createdAt, messageId: freshOldest.messageId }
-          : oldestCursorRef.current;
+        oldestCursorRef.current = fresh.oldest ?? oldestCursorRef.current;
       } catch (e) {
         // Let a later mount retry; a failed read must not look hydrated.
         if (!cancelled) hydratedRef.current = null;
@@ -1060,12 +1135,13 @@ export function useAgentChat({
       // set and skip the retry — leaving a resumed thread permanently blank.
       if (!completed) hydratedRef.current = null;
     };
-  }, [enabled, resume, cwd, replayOnly]);
+  }, [enabled, resume, cwd, awaitingReplay]);
 
   const loadOlder = useCallback(async () => {
-    if (!enabled || !resume || replayOnly) return false;
-    // The whole thread loads on open, so this only runs for a history the
-    // drain capped — and not at all once there is nothing left.
+    if (!enabled || !resume || awaitingReplay) return false;
+    // Older pages, once the first paint is on screen. A thread that fit in
+    // one page has nothing left; a drain that replaced the tail already
+    // moved the cursor to the oldest row.
     if (!hasMore) return false;
     // No cursor yet means hydration hasn't run (or the thread has no history).
     if (loadingOlderRef.current || !oldestCursorRef.current) return false;
@@ -1098,7 +1174,7 @@ export function useAgentChat({
       loadingOlderRef.current = false;
       setLoadingOlder(false);
     }
-  }, [enabled, resume, cwd, replayOnly, hasMore]);
+  }, [enabled, resume, cwd, awaitingReplay, hasMore]);
 
   // Spawn the process once per (cwd, resume) target, once the pane is awake.
   useEffect(() => {
@@ -1117,10 +1193,23 @@ export function useAgentChat({
       announced = true;
       announceIssue(issue);
     };
-    channel.onmessage = (ev) => {
+    channel.onmessage = (frame) => {
       // Ignore late events from a torn-down effect (StrictMode double-mount kills
       // the first agent; its Exit must not flip the live session to "exited").
       if (disposed) return;
+      const ev = frame.type === "framed" ? frame.data.event : frame;
+      if (ev.type === "replayed") {
+        reattachedRef.current = {
+          reattached: true,
+          running: BUSY_STATUS.has(statusRef.current),
+        };
+        setAwaitingReplay(false);
+        // Nothing in the trimmed backlog means no turn is running. A status
+        // seeded from the daemon's state would otherwise outlive a turn that
+        // ended while the window was away.
+        if (!BUSY_STATUS.has(statusRef.current)) applyStatus("idle");
+        return;
+      }
       // One malformed frame must not abort the rest of a batch: dropping the
       // remaining lines loses `message_stop`, which leaves the draft streaming
       // forever and hangs the pane mid-turn.
@@ -1209,12 +1298,7 @@ export function useAgentChat({
           void invoke(persistent ? "agent_detach" : "agent_kill", { id });
           return;
         }
-        if (persistent && !handle.reattached) setReplayOnly(false);
-        if (handle.truncated) {
-          setExitReason(
-            "The agent ran longer than the daemon keeps output for — the start of this transcript is missing."
-          );
-        }
+        if (persistent && !handle.reattached) setAwaitingReplay(false);
         idRef.current = id;
         void registerAgent(emberyxSessionId, cwd, "claude", id);
         // The queue is keyed by thread id; attach this session so the runtime

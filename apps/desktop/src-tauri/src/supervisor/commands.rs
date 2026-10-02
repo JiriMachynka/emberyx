@@ -30,26 +30,24 @@ pub fn agent_approvals_pending(
     supervisor.pending_approvals(thread_id.as_deref())
 }
 
-#[tauri::command]
 pub fn thread_timeline_read(
-    supervisor: tauri::State<'_, Supervisor>,
+    supervisor: &Supervisor,
     thread_id: String,
     after_seq: Option<u64>,
 ) -> Result<Vec<TimelineEvent>> {
     supervisor.read_timeline(&thread_id, after_seq)
 }
 
-#[tauri::command]
 pub fn thread_timeline_append(
-    app: tauri::AppHandle,
-    supervisor: tauri::State<'_, Supervisor>,
+    app: &tauri::AppHandle,
+    supervisor: &Supervisor,
     thread_id: String,
     kind: TimelineEventKind,
     attribution: Option<TurnAttribution>,
     payload: String,
 ) -> Result<TimelineEvent> {
     let event = supervisor.record_thread_event(&thread_id, kind, attribution, payload)?;
-    emit_timeline(&app, &event);
+    emit_timeline(app, &event);
     Ok(event)
 }
 
@@ -60,9 +58,8 @@ pub fn thread_timeline_append(
 /// the pane treats it as history with a fresh agent. Idempotent, and safe to
 /// race a concurrent append: the projector may create the row first, which is
 /// why `attach_thread_context` fills the path in on conflict.
-#[tauri::command]
 pub fn thread_adopt(
-    supervisor: tauri::State<'_, Supervisor>,
+    supervisor: &Supervisor,
     thread_id: String,
     project_path: String,
     source: String,
@@ -143,10 +140,9 @@ pub fn agent_attach_turn(
     Ok(record)
 }
 
-#[tauri::command]
 pub fn agent_complete_turn(
-    app: tauri::AppHandle,
-    supervisor: tauri::State<'_, Supervisor>,
+    app: &tauri::AppHandle,
+    supervisor: &Supervisor,
     agent_id: String,
     thread_id: String,
     turn_id: String,
@@ -172,9 +168,9 @@ pub fn agent_complete_turn(
             })
             .to_string(),
         )?;
-        emit(&app, &event);
+        emit(app, &event);
         if let Some(mirrored) = mirrored {
-            emit_timeline(&app, &mirrored);
+            emit_timeline(app, &mirrored);
         }
         if let Some(delegation_id) = &record.delegation_id {
             let delegation = if status == "failed" || status == "error" {
@@ -187,10 +183,74 @@ pub fn agent_complete_turn(
                 "delegation-completed".into(),
                 serde_json::to_string(&delegation).unwrap_or_default(),
             )?;
-            emit(&app, &event);
+            emit(app, &event);
         }
     }
     Ok(record)
+}
+
+/// Commands whose bodies touch SQLite run off the main thread — a plain `fn`
+/// command would freeze the window for the whole write, and these sit on hot
+/// paths: every Codex turn end, every ACP spawn, every timeline read. The sync
+/// forms above stay for direct callers and tests.
+pub mod cmd {
+    use super::*;
+
+    #[tauri::command]
+    pub async fn thread_timeline_read(
+        supervisor: tauri::State<'_, Supervisor>,
+        thread_id: String,
+        after_seq: Option<u64>,
+    ) -> Result<Vec<TimelineEvent>> {
+        let supervisor = supervisor.inner().clone();
+        crate::error::blocking(move || super::thread_timeline_read(&supervisor, thread_id, after_seq)).await
+    }
+
+    #[tauri::command]
+    pub async fn thread_timeline_append(
+        app: tauri::AppHandle,
+        supervisor: tauri::State<'_, Supervisor>,
+        thread_id: String,
+        kind: TimelineEventKind,
+        attribution: Option<TurnAttribution>,
+        payload: String,
+    ) -> Result<TimelineEvent> {
+        let supervisor = supervisor.inner().clone();
+        crate::error::blocking(move || {
+            super::thread_timeline_append(&app, &supervisor, thread_id, kind, attribution, payload)
+        })
+        .await
+    }
+
+    #[tauri::command]
+    pub async fn thread_adopt(
+        supervisor: tauri::State<'_, Supervisor>,
+        thread_id: String,
+        project_path: String,
+        source: String,
+    ) -> Result<()> {
+        let supervisor = supervisor.inner().clone();
+        crate::error::blocking(move || {
+            super::thread_adopt(&supervisor, thread_id, project_path, source)
+        })
+        .await
+    }
+
+    #[tauri::command]
+    pub async fn agent_complete_turn(
+        app: tauri::AppHandle,
+        supervisor: tauri::State<'_, Supervisor>,
+        agent_id: String,
+        thread_id: String,
+        turn_id: String,
+        status: String,
+    ) -> Result<Option<AgentRecord>> {
+        let supervisor = supervisor.inner().clone();
+        crate::error::blocking(move || {
+            super::agent_complete_turn(&app, &supervisor, agent_id, thread_id, turn_id, status)
+        })
+        .await
+    }
 }
 
 #[tauri::command]
@@ -315,10 +375,17 @@ pub fn agent_prompt(
     message: String,
 ) -> Result<AgentRecord> {
     dispatch_prompt(&supervisor, &claude, &codex, &agent_id, &message)?;
-    let (event, mirrored) = supervisor.append_with_timeline(&agent_id, "prompt".into(), message)?;
-    emit(&app, &event);
-    if let Some(mirrored) = mirrored {
-        emit_timeline(&app, &mirrored);
+    // The prompt is already in the agent's stdin, so a failed durable record
+    // must not read as a failed send — the user would retry and send it twice
+    // (the same contract `agent_queue_run_next`'s test pins for queue ops).
+    match supervisor.append_with_timeline(&agent_id, "prompt".into(), message) {
+        Ok((event, mirrored)) => {
+            emit(&app, &event);
+            if let Some(mirrored) = mirrored {
+                emit_timeline(&app, &mirrored);
+            }
+        }
+        Err(e) => eprintln!("[emberyx] prompt record failed for {agent_id}: {e}"),
     }
     supervisor.transition(&agent_id, Lifecycle::Working)
 }

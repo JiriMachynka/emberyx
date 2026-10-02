@@ -143,8 +143,13 @@ export function useThreadTimeline(threadId: string): ThreadTimeline {
         // its events under the new thread and, worse, leave the cursor on its
         // sequence — every later event then reads as a gap and backfills.
         if (cancelled()) return;
-        lastSeqRef.current = lastSeqOf(all);
-        setEvents(all);
+        // Merge, not replace: a live event applied while the read was in
+        // flight arrives ahead of it, and a replace would drop it — an
+        // already-seen sequence becomes a permanent hole. The timeline is
+        // append-only, so merging cannot resurrect anything.
+        setEvents((prev) => mergeTimeline(prev, all));
+        const top = lastSeqOf(all);
+        if (top > lastSeqRef.current) lastSeqRef.current = top;
       } catch (e) {
         // Leaving `loading` true here would show an empty timeline with no
         // error and no way to tell the two apart.

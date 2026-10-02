@@ -68,11 +68,15 @@ export function stampTurns(
   const out = messages.map((message) => {
     if (message.provider) return message;
     changed = true;
+    // The turn's own model outranks the stint's: a stint that spanned a model
+    // change keeps each turn's own, and a message whose line named one (live
+    // drafts, replayed rows) is not restated with the switch-time value.
+    const effective = message.model ?? named;
     const cached = stamped.get(message);
-    if (cached && cached.provider === provider && cached.model === named)
+    if (cached && cached.provider === provider && cached.model === effective)
       return cached.message;
-    const next = { ...message, provider, model: named };
-    stamped.set(message, { provider, model: named, message: next });
+    const next = { ...message, provider, model: effective };
+    stamped.set(message, { provider, model: effective, message: next });
     return next;
   });
   return changed ? out : messages;
@@ -91,8 +95,13 @@ export function carryOver(
   markId: string,
   at: number
 ): CarriedThread {
+  const stamped = stampTurns(live, from, model);
+  // Switching back to a provider whose hook kept its state hands us the same
+  // turns we carried away before — identical ids. Dropping them here keeps one
+  // copy, in the position the thread already has it.
+  const known = new Set(carried.messages.map((m) => m.id));
   return {
-    messages: [...carried.messages, ...stampTurns(live, from, model)],
+    messages: [...carried.messages, ...stamped.filter((m) => !known.has(m.id))],
     switches: [...carried.switches, { id: markId, from, to, at }],
   };
 }
@@ -113,7 +122,14 @@ export function mergeThread(
   // transcript's row memos compare on. Consumers that need attribution here
   // fall back to the live provider themselves (see handoff.ts).
   if (carried.messages.length === 0) return live;
-  return [...carried.messages, ...stampTurns(live, provider, model)];
+  const stampedLive = stampTurns(live, provider, model);
+  // Carried is the thread's chronological history; the live transport
+  // re-serves its own stint's turns (retained hook state, a daemon replay or
+  // the server's thread replay). Ids are unique, so a live entry the carried
+  // thread already holds is dropped rather than rendered twice — dropping from
+  // the carried side instead would reorder a returned stint to the end.
+  const carriedIds = new Set(carried.messages.map((m) => m.id));
+  return [...carried.messages, ...stampedLive.filter((m) => !carriedIds.has(m.id))];
 }
 
 /**
@@ -135,10 +151,17 @@ export function switchMarks(
     const previous = merged[i - 1].provider;
     const current = merged[i].provider;
     if (!previous || !current || previous === current) continue;
+    // The divider renders above a turn, so the anchor rolls forward to the
+    // turn that first follows the change. A transition that lands mid-turn —
+    // imported history whose user prompts carry the stint's stamp — anchors
+    // at the next turn instead of a message no slot looks up.
+    let j = merged[i].role === "user" ? i : i + 1;
+    while (j < merged.length && merged[j].role !== "user") j += 1;
+    if (j >= merged.length) continue;
     const mark = carried.switches.find(
       (m) => m.from === previous && m.to === current
     );
-    if (mark) marks.set(merged[i].id, mark);
+    if (mark) marks.set(merged[j].id, mark);
   }
   return marks;
 }

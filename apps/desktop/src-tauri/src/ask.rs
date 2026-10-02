@@ -49,10 +49,28 @@ struct AskOption {
 }
 
 /// Managed state: where the MCP server listens, plus the questions in flight.
+/// `Clone` (via a lock-then-copy, since `std::sync::Mutex` is not) so the
+/// offloaded command can hold a copy across the await — `tauri::State` cannot
+/// move into a `'static` blocking closure.
 pub struct AskServer {
     pub port: u16,
     pub token: String,
     pending: Mutex<HashMap<String, Sender<String>>>,
+}
+
+impl Clone for AskServer {
+    fn clone(&self) -> Self {
+        AskServer {
+            port: self.port,
+            token: self.token.clone(),
+            pending: Mutex::new(
+                self.pending
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            ),
+        }
+    }
 }
 
 /// Appended to ACP `session/new` `_meta.rules` so Grok (and any other agent
@@ -639,15 +657,18 @@ fn ask_user(app: &AppHandle, url: &str, params: &Value) -> std::result::Result<V
     }
 }
 
-/// Hand the user's choice back to the blocked tool call.
-#[tauri::command]
-pub fn answer_ask(state: tauri::State<'_, AskServer>, id: String, answer: String) -> Result<()> {
-    let sender = state
+/// Hand the user's choice back to the blocked tool call. Sync form for
+/// direct callers and tests; the registered command is the offloaded twin
+/// below, because the durable approval record is SQLite and every permission
+/// click lands here.
+fn answer_ask_now(server: &AskServer, id: String, answer: String) -> Result<()> {
+    let supervisor = crate::supervisor::Supervisor::active();
+    let sender = server
         .pending
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(&id);
-    if let Some(supervisor) = crate::supervisor::Supervisor::active() {
+    if let Some(supervisor) = &supervisor {
         supervisor.close_approval(&id, Some(&answer));
     }
     match sender {
@@ -657,6 +678,21 @@ pub fn answer_ask(state: tauri::State<'_, AskServer>, id: String, answer: String
         }
         // Already answered, or timed out while the pane was closed.
         None => Ok(()),
+    }
+}
+
+pub mod cmd {
+    use super::*;
+
+    /// Offloaded: the SQLite write must not run on the main thread.
+    #[tauri::command]
+    pub async fn answer_ask(
+        state: tauri::State<'_, AskServer>,
+        id: String,
+        answer: String,
+    ) -> Result<()> {
+        let server = state.inner().clone();
+        crate::error::blocking(move || super::answer_ask_now(&server, id, answer)).await
     }
 }
 

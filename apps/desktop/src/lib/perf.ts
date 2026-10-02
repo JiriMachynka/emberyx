@@ -4,7 +4,9 @@
  * produce are in.
  *
  * Three things, reported by `emberyxPerf.report()` in the devtools console:
- * - React commit cost per `<Profiler>` id (Sidebar, ChatPane, Composer).
+ * - React commit cost per `<Profiler>` id (Sidebar, ChatPane, Composer,
+ *   WorkingFooter, WorkingChip). The clock ids are nested so a 4 Hz tick is
+ *   named instead of folded into ChatPane/Sidebar.
  * - Thread switches: click → page arrived → transcript painted, then how much
  *   of the next second the main thread was blocked (markdown, highlighting).
  * - Frames over 50ms anywhere, the jank you'd feel while typing or scrolling.

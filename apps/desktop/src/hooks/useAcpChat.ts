@@ -79,7 +79,12 @@ import { useAgentPhase } from "@/hooks/useAgentPhase";
 import { useAccountIssue } from "@/hooks/useAccountIssue";
 import { contextForModel } from "@/lib/modelContext";
 import { attachCheckpoint, createCheckpoint } from "@/lib/checkpoints";
-import { loadThreadHistory, type ProjectedMessageRow } from "@/lib/threadPage";
+import {
+  firstPaintPage,
+  loadThreadHistory,
+  type ProjectedMessageRow,
+} from "@/lib/threadPage";
+import { markPage } from "@/lib/perf";
 import { threadTitleFrom } from "@/lib/threadTitle";
 import { deniedVendor, splitModelLabel } from "@/lib/modelCatalog";
 import { markProviderUnavailable } from "@/lib/modelFavorites";
@@ -1048,19 +1053,35 @@ export function useAcpChat({
     seededRef.current = target;
     let cancelled = false;
     let landed = false;
-    void loadThreadHistory(cwd, resume)
-      .then((page) => {
+    void (async () => {
+      try {
+        const head = await firstPaintPage(cwd, resume).catch(() => null);
         if (cancelled) return;
+        const first = head?.rows ? messagesFromPage(head.rows) : [];
+        if (first.length) {
+          committedRef.current = [...first, ...committedRef.current];
+          publish();
+          markPage();
+          landed = true;
+        }
+        if (head && !head.hasMore) return;
+        const page = await loadThreadHistory(cwd, resume);
+        if (cancelled || !page?.rows) return;
+        const full = messagesFromPage(page.rows);
+        if (!full.length) return;
+        if (first.length && committedRef.current.length === first.length) {
+          committedRef.current = full;
+        } else if (!first.length) {
+          committedRef.current = [...full, ...committedRef.current];
+        }
+        if (!landed) markPage();
         landed = true;
-        const seeded = messagesFromPage(page.rows);
-        if (!seeded.length) return;
-        committedRef.current = [...seeded, ...committedRef.current];
         publish();
-      })
-      .catch((e) => {
+      } catch (e) {
         if (!cancelled) seededRef.current = null;
         console.error("[emberyx] thread_history failed", e);
-      });
+      }
+    })();
     return () => {
       cancelled = true;
       // A read torn down before it landed (StrictMode's phantom unmount) must

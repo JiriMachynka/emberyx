@@ -196,18 +196,51 @@ impl Store {
     ) -> Result<u64> {
         self.with_writer(|conn| {
             conn.execute_batch("BEGIN")?;
-            let mut inserted = 0u64;
-            for event in events {
-                match insert_event(conn, event, "INSERT OR IGNORE") {
-                    Ok(n) => inserted += n as u64,
-                    Err(e) => {
+            let inserted = import_events_on(conn, events);
+            match inserted {
+                Ok(n) => {
+                    if let Err(e) = conn.execute_batch("COMMIT") {
                         let _ = conn.execute_batch("ROLLBACK");
                         return Err(e.into());
                     }
+                    Ok(n)
+                }
+                Err(e) => {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    Err(e)
                 }
             }
-            conn.execute_batch("COMMIT")?;
-            Ok(inserted)
+        })
+    }
+
+    /// Ingest's commit point: events and the resume cursor land in ONE
+    /// transaction, so a crash can never leave the events stored while the
+    /// cursor still sits at the old offset — the next pass would re-read the
+    /// same lines and re-emit them under fresh stream versions, rendering the
+    /// turns twice with no gap any client could detect.
+    pub fn import_events_with_cursor<'a>(
+        &self,
+        events: impl Iterator<Item = &'a TimelineEvent>,
+        path: &Path,
+        cursor: IngestCursor,
+    ) -> Result<u64> {
+        self.with_writer(|conn| {
+            conn.execute_batch("BEGIN")?;
+            let inserted = import_events_on(conn, events);
+            let saved = save_ingest_cursor_on(conn, path, cursor);
+            match (inserted, saved) {
+                (Ok(n), Ok(())) => {
+                    if let Err(e) = conn.execute_batch("COMMIT") {
+                        let _ = conn.execute_batch("ROLLBACK");
+                        return Err(e.into());
+                    }
+                    Ok(n)
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    let _ = conn.execute_batch("ROLLBACK");
+                    Err(e)
+                }
+            }
         })
     }
 
@@ -312,6 +345,49 @@ pub fn append_events_on(conn: &mut Connection, events: &[TimelineEvent]) -> Resu
     }
     conn.execute_batch("COMMIT")?;
     Ok(inserted)
+}
+
+/// The conn-level half of `import_events` — no transaction of its own, so
+/// `import_events_with_cursor` can wrap events and cursor in one.
+pub fn import_events_on<'a>(
+    conn: &Connection,
+    events: impl Iterator<Item = &'a TimelineEvent>,
+) -> Result<u64> {
+    let mut inserted = 0u64;
+    for event in events {
+        match insert_event(conn, event, "INSERT OR IGNORE") {
+            Ok(n) => inserted += n as u64,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(inserted)
+}
+
+/// The conn-level half of `save_ingest_cursor`. Same CAS semantics: a pass
+/// that read an older cursor must never rewind a newer one.
+pub fn save_ingest_cursor_on(conn: &Connection, path: &Path, cursor: IngestCursor) -> Result<()> {
+    conn.execute(
+        "INSERT INTO ingest_cursor
+           (path, size, mtime, byte_offset, stream_version, ingest_version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(path) DO UPDATE SET
+           size = excluded.size,
+           mtime = excluded.mtime,
+           byte_offset = excluded.byte_offset,
+           stream_version = excluded.stream_version,
+           ingest_version = excluded.ingest_version
+         WHERE excluded.byte_offset >= ingest_cursor.byte_offset
+           AND excluded.stream_version >= ingest_cursor.stream_version",
+        params![
+            path.to_string_lossy(),
+            cursor.size as i64,
+            cursor.mtime as i64,
+            cursor.byte_offset as i64,
+            cursor.stream_version as i64,
+            cursor.ingest_version,
+        ],
+    )?;
+    Ok(())
 }
 
 /// Append one supervisor state snapshot. Older snapshots are pruned so a
@@ -563,30 +639,7 @@ impl Store {
     /// legitimate rewind (a transcript that shrank) drops the row first via
     /// `clear_ingest_cursor`.
     pub fn save_ingest_cursor(&self, path: &Path, cursor: IngestCursor) -> Result<()> {
-        self.with_writer(|conn| {
-            conn.execute(
-                "INSERT INTO ingest_cursor
-                   (path, size, mtime, byte_offset, stream_version, ingest_version)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT(path) DO UPDATE SET
-                   size = excluded.size,
-                   mtime = excluded.mtime,
-                   byte_offset = excluded.byte_offset,
-                   stream_version = excluded.stream_version,
-                   ingest_version = excluded.ingest_version
-                 WHERE excluded.byte_offset >= ingest_cursor.byte_offset
-                   AND excluded.stream_version >= ingest_cursor.stream_version",
-                params![
-                    path.to_string_lossy(),
-                    cursor.size as i64,
-                    cursor.mtime as i64,
-                    cursor.byte_offset as i64,
-                    cursor.stream_version as i64,
-                    cursor.ingest_version,
-                ],
-            )?;
-            Ok(())
-        })
+        self.with_writer(|conn| save_ingest_cursor_on(conn, path, cursor))
     }
 
     /// Forget a file's resume position so the next pass rebuilds it from byte
@@ -1044,22 +1097,18 @@ fn decode_event_row(
     let attribution = row.get::<_, Option<String>>(5)?;
     let payload = row.get::<_, String>(6)?;
     let raw_line = row.get::<_, Option<String>>(7)?;
-    let kind: TimelineEventKind = serde_json::from_str(&kind_raw).map_err(|_| {
-        rusqlite::Error::FromSqlConversionFailure(
-            3,
-            rusqlite::types::Type::Text,
-            format!("unknown timeline kind {kind_raw:?}").into(),
-        )
-    })?;
+    // Anything this build doesn't recognise — a newer build's kind, or plain
+    // garbage — degrades to `Unknown`. A row that fails decode here wedges
+    // every projection read for every thread; attribution below degrades the
+    // same way.
+    let kind: TimelineEventKind =
+        serde_json::from_str(&kind_raw).unwrap_or(TimelineEventKind::Unknown);
     let attribution = match attribution {
         None => None,
-        Some(json) => serde_json::from_str(&json).map_err(|_| {
-            rusqlite::Error::FromSqlConversionFailure(
-                5,
-                rusqlite::types::Type::Text,
-                "corrupt timeline attribution".into(),
-            )
-        })?,
+        // Corrupt JSON degrades to "unattributed" — a row that fails decode
+        // here wedges every projection read for every thread, and attribution
+        // is a display fact, not a structural one.
+        Some(json) => serde_json::from_str(&json).ok(),
     };
     Ok(TimelineEvent {
         seq: version as u64,
@@ -1263,6 +1312,71 @@ mod tests {
         let timeline = store.read_timeline("t1", None).unwrap();
         assert_eq!(timeline[0].payload, "kept");
         let _ = std::fs::remove_dir_all(test_dir("events_unique"));
+    }
+
+    /// A kind this build never wrote (a newer build ran, then this one) must
+    /// degrade to `Unknown`, not fail the read — one poison row used to fail
+    /// every projection read for every thread.
+    #[test]
+    fn an_unknown_kind_reads_back_as_unknown_instead_of_failing_the_read() {
+        let path = test_dir("events_unknown_kind").join("emberyx.db");
+        let store = Store::open(&path).unwrap();
+        store
+            .with_writer(|conn| {
+                conn.execute(
+                    "INSERT INTO events (thread_id, stream_version, kind, timestamp, attribution_json, payload_json)
+                     VALUES ('t1', 1, '\"BrandNewKind\"', 1, '{\"corrupt\":', 'x')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let timeline = store.read_timeline("t1", None).unwrap();
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].kind, TimelineEventKind::Unknown);
+        // Corrupt attribution degrades to unattributed the same way.
+        assert_eq!(timeline[0].attribution, None);
+        let _ = std::fs::remove_dir_all(test_dir("events_unknown_kind"));
+    }
+
+    /// Events and cursor commit together: a cursor whose CAS rejects (an older
+    /// pass's rewind) still inserts the events, and never rewinds the cursor.
+    #[test]
+    fn import_events_with_cursor_lands_both_or_neither() {
+        let path = test_dir("events_import_cursor").join("emberyx.db");
+        let store = Store::open(&path).unwrap();
+        let file = Path::new("/tmp/transcript.jsonl");
+        store
+            .save_ingest_cursor(
+                file,
+                IngestCursor {
+                    size: 100,
+                    mtime: 0,
+                    byte_offset: 100,
+                    stream_version: 5,
+                    ingest_version: 1,
+                },
+            )
+            .unwrap();
+        let inserted = store
+            .import_events_with_cursor(
+                [event("t1", 6, "new")].iter(),
+                file,
+                IngestCursor {
+                    size: 100,
+                    mtime: 0,
+                    byte_offset: 50,
+                    stream_version: 3,
+                    ingest_version: 1,
+                },
+            )
+            .unwrap();
+        assert_eq!(inserted, 1);
+        // The CAS rejected the rewind: cursor stays at 100/5.
+        let timeline = store.read_timeline("t1", Some(5)).unwrap();
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].payload, "new");
+        let _ = std::fs::remove_dir_all(test_dir("events_import_cursor"));
     }
 
     #[test]

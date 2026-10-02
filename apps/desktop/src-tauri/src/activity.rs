@@ -383,6 +383,10 @@ pub struct MessageActivities {
 /// later line than the call it completes.
 pub fn transcript_activities(lines: &[impl AsRef<str>]) -> Vec<MessageActivities> {
     let mut out: Vec<MessageActivities> = Vec::new();
+    // Indexes over `out`, so a large thread's replay stays linear: a bucket
+    // lookup and a result→call match were linear scans per line before.
+    let mut bucket_of_message: HashMap<String, usize> = HashMap::new();
+    let mut bucket_of_tool: HashMap<String, usize> = HashMap::new();
     for (index, line) in lines.iter().enumerate() {
         match line_outcome(line.as_ref(), &format!("line-{index}")) {
             LineOutcome::Nothing => {}
@@ -390,24 +394,38 @@ pub fn transcript_activities(lines: &[impl AsRef<str>]) -> Vec<MessageActivities
                 if items.is_empty() {
                     continue;
                 }
-                let bucket = match out.iter().position(|m| m.message_id == message_id) {
-                    Some(at) => &mut out[at],
+                let at = match bucket_of_message.get(&message_id) {
+                    Some(&at) => at,
                     None => {
                         out.push(MessageActivities {
                             message_id,
                             activities: Vec::new(),
                         });
-                        out.last_mut().expect("just pushed")
+                        let at = out.len() - 1;
+                        bucket_of_message.insert(out[at].message_id.clone(), at);
+                        at
                     }
                 };
                 for item in items {
-                    merge_into(&mut bucket.activities, item);
+                    // First registration owns the id, matching the frontend
+                    // parser's "first call with an id owns it".
+                    if !item.id.is_empty() {
+                        bucket_of_tool.entry(item.id.clone()).or_insert(at);
+                    }
+                    merge_into(&mut out[at].activities, item);
                 }
             }
             LineOutcome::Results(results) => {
                 for (id, output, failed) in results {
-                    // The call is in an earlier message, so every bucket is a
-                    // candidate; the first id match owns it.
+                    // The call is in an earlier message; its bucket was
+                    // recorded when the call arrived.
+                    if let Some(&at) = bucket_of_tool.get(&id) {
+                        if attach_result(&mut out[at].activities, &id, output.clone(), failed) {
+                            continue;
+                        }
+                    }
+                    // No recorded owner (a row the map never saw) — fall back
+                    // to a scan so behaviour never regresses.
                     for bucket in out.iter_mut() {
                         if attach_result(&mut bucket.activities, &id, output.clone(), failed) {
                             break;

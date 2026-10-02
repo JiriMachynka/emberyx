@@ -181,6 +181,12 @@ pub enum TimelineEventKind {
     PlanProposed,
     Error,
     Completion,
+    /// A kind a newer build wrote and this build has never heard of. `other`
+    /// catches it at deserialize time, so one unknown row degrades to itself
+    /// instead of failing every projection read for every thread. Must stay
+    /// the last variant — serde requires it.
+    #[serde(other)]
+    Unknown,
 }
 
 #[cfg(test)]

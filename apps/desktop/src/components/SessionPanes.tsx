@@ -1,4 +1,5 @@
-import { Profiler, useCallback, useMemo, useRef } from "react";
+import { Profiler, useCallback, useEffect, useMemo, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { onRender } from "@/lib/perf";
 import { ChatPane } from "@/components/ChatPane";
 import { PaneErrorBoundary } from "@/components/PaneErrorBoundary";
@@ -63,6 +64,26 @@ export function SessionPanes({
     []
   );
   const chats = useMemo(() => sessions.filter((s) => s.kind !== "dev"), [sessions]);
+  // A window that restarts while its agents keep working in the daemon has no
+  // pane mounted for them, and a pane is the only thing that reports a status —
+  // so they would read idle in the sidebar until someone opened each thread.
+  // Seeding "working" is what mounts the pane (`paneShouldMount`); the pane's
+  // own replay then takes over, and settles back to idle if the turn is over.
+  useEffect(() => {
+    let cancelled = false;
+    void invoke<string[]>("daemon_working_agents")
+      .then((ids) => {
+        if (cancelled) return;
+        const { statuses, setStatus } = useAgentStore.getState();
+        for (const id of ids) {
+          if (statusOf(statuses, id) === "idle") setStatus(id, "working");
+        }
+      })
+      .catch(() => null);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   // Only these sessions' statuses decide what stays mounted. Subscribing to the
   // whole map re-rendered every pane container on any session's transition, and
   // `setStatus` allocates a new map each time — so subscribe to the joined

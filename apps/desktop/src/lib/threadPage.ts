@@ -149,5 +149,19 @@ export const takePrefetchedPage = (
   return Date.now() - entry.at < PREFETCH_TTL_MS ? entry.page : undefined;
 };
 
+/**
+ * The page the pane should paint first: a warm hover cache, else one store
+ * page. The rest of a long thread drains after this is on screen — waiting on
+ * `thread_history` for that is what left large opens at multiple seconds.
+ */
+export const firstPaintPage = (
+  cwd: string,
+  threadId: string
+): Promise<MessagePage> => {
+  const warm = takePrefetchedPage(cwd, threadId);
+  if (warm) return warm;
+  return fetchThreadPage(cwd, threadId, { fresh: false });
+};
+
 /** Drop everything — for tests, and for a store that was rebuilt underneath us. */
 export const clearPrefetchedPages = (): void => cache.clear();

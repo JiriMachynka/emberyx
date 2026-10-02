@@ -1,6 +1,6 @@
 import type { SubagentActivity } from "@/lib/agentStore";
 import type { ActivityItem, Json, JsonObject, SessionStatus } from "@/types";
-import type { Provider } from "@/lib/providers";
+import { isProvider, type Provider } from "@/lib/providers";
 import { describeTool } from "@/lib/toolDisplay";
 import type { MessageActivities } from "@/lib/threadPage";
 
@@ -191,8 +191,17 @@ export const isRecord = (v: Json | undefined): v is JsonObject =>
  * Parse a Claude Code transcript (`.jsonl`) into the chat message model, so a
  * resumed thread shows its prior turns. Headless `--resume` loads context but
  * never replays past messages on stdout, so we read them from disk instead.
+ *
+ * `providers` is the page's per-row provenance (`events.attribution` — the
+ * truth for a thread whose rows are not what they render as, e.g. imported
+ * history replayed through a Claude-shaped stream). Indexed by row: position
+ * `i` of the parsed text is page row `i`, so a turn's author crosses without
+ * either side's row-filtering reordering anything.
  */
-export function parseTranscript(text: string): ChatMessage[] {
+export function parseTranscript(
+  text: string,
+  providers?: readonly (Provider | null)[]
+): ChatMessage[] {
   const out: ChatMessage[] = [];
   // Results arrive lines after their call; indexed so matching one isn't a
   // scan of every message parsed so far. First call with an id owns it.
@@ -249,6 +258,11 @@ export function parseTranscript(text: string): ChatMessage[] {
       // must match `transcript_activities` exactly.
       const sourceId = typeof msg.id === "string" ? msg.id : `line-${index}`;
       const m = newMessage("assistant", { sourceId });
+      // Who actually produced this turn, from the event log's attribution.
+      // Unstamped turns stay unstamped: nothing infers a provider from the
+      // line's (borrowed) shape.
+      const rowProvider = providers?.[index];
+      if (isProvider(rowProvider)) m.provider = rowProvider;
       for (const b of msg.content) {
         if (!isRecord(b)) continue;
         if (b.type === "text") {

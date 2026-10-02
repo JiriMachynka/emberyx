@@ -211,7 +211,7 @@ describe("useAgentChat lifecycle", () => {
     const view = renderHook(() =>
       useAgentChat({ ...options, resume: "sess-9" })
     );
-    await waitFor(() => expect(sentTo("thread_history")).toHaveLength(1));
+    await waitFor(() => expect(sentTo("thread_messages_page")).toHaveLength(1));
     expect(sentTo("agent_spawn")).toHaveLength(0);
     act(() => view.result.current.wake());
     await waitFor(() => expect(view.result.current.ready).toBe(true));
@@ -225,7 +225,7 @@ describe("useAgentChat lifecycle", () => {
     const view = renderHook(() =>
       useAgentChat({ ...options, resume: "sess-9" })
     );
-    await waitFor(() => expect(sentTo("thread_history")).toHaveLength(1));
+    await waitFor(() => expect(sentTo("thread_messages_page")).toHaveLength(1));
     expect(view.result.current.ready).toBe(false);
     expect(view.result.current.asleep).toBe(true);
     act(() => view.result.current.wake());
@@ -707,13 +707,106 @@ describe("useAgentChat persistent agents", () => {
     });
   });
 
-  // The daemon's replay and the on-disk transcript carry the same turns; taking
-  // both would render the conversation twice.
-  it("does not prefill from the event store when the daemon replays", async () => {
+  const assistantRow = (id: string, text: string, createdAt: number) => ({
+    messageId: id,
+    createdAt,
+    payloadJson:
+      JSON.stringify({
+        type: "assistant",
+        message: { id, content: [{ type: "text", text }] },
+      }) + "\n",
+  });
+  const framed = (event: Record<string, unknown>) => ({
+    type: "framed",
+    data: { frameId: 1, event: { type: "line", data: JSON.stringify(event) } },
+  });
+
+  // The daemon's buffer is stdout: no user prompts, nothing from before the
+  // process was spawned. A reattached pane waits for the backlog's end marker,
+  // then reads the finished turns from the store.
+  it("hydrates a reattached agent from the store once its backlog has landed", async () => {
     daemonLive = ["emberyx-1"];
     spawnReply = { reattached: true };
-    await mount({ persistent: true, resume: "old-thread" });
-    expect(sentTo("thread_history")).toEqual([]);
+    messagePages = [
+      {
+        rows: [userRow("m1", "question", 1000), assistantRow("a1", "answer", 2000)],
+        hasMore: false,
+      },
+    ];
+    const { result } = renderHook(() =>
+      useAgentChat({ ...options, persistent: true, resume: "old-thread" })
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    // Not before the marker: the store's copy of a running turn would race the stream's.
+    expect(sentTo("thread_messages_page")).toEqual([]);
+    act(() => channels[channels.length - 1].onmessage!({ type: "replayed" }));
+    await waitFor(() =>
+      expect(result.current.messages.map((m) => m.text)).toEqual(["question", "answer"])
+    );
+  });
+
+  it("keeps the stream's copy of a turn that is still running", async () => {
+    daemonLive = ["emberyx-1"];
+    spawnReply = { reattached: true };
+    // The store already holds the running turn's prompt and its first reply.
+    messagePages = [
+      {
+        rows: [
+          userRow("m1", "first", 1000),
+          assistantRow("a1", "done", 2000),
+          userRow("m2", "second", 3000),
+          assistantRow("a2", "half", 4000),
+        ],
+        hasMore: false,
+      },
+    ];
+    const { result } = renderHook(() =>
+      useAgentChat({ ...options, persistent: true, resume: "old-thread" })
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    const channel = channels[channels.length - 1];
+    act(() => {
+      channel.onmessage!(
+        framed({
+          type: "stream_event",
+          event: { type: "message_start", message: { id: "a2" } },
+        })
+      );
+      channel.onmessage!(
+        framed({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "half and more" },
+          },
+        })
+      );
+      channel.onmessage!({ type: "replayed" });
+    });
+    await waitFor(() =>
+      expect(result.current.messages.map((m) => m.text)).toEqual([
+        "first",
+        "done",
+        "second",
+        "half and more",
+      ])
+    );
+  });
+
+  // A status seeded from the daemon's state must not outlive a finished turn.
+  it("settles to idle when the backlog holds no running turn", async () => {
+    daemonLive = ["emberyx-1"];
+    spawnReply = { reattached: true };
+    useAgentStore.getState().setStatus("emberyx-1", "working");
+    const { result } = renderHook(() =>
+      useAgentChat({ ...options, persistent: true, resume: "old-thread" })
+    );
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    act(() => channels[channels.length - 1].onmessage!({ type: "replayed" }));
+    await waitFor(() =>
+      expect(useAgentStore.getState().statuses["emberyx-1"]).toBe("idle")
+    );
   });
 
   // Spawning on open to find out left an agent outliving the app for every
@@ -738,7 +831,6 @@ describe("useAgentChat persistent agents", () => {
     );
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(sentTo("agent_spawn")).toHaveLength(1);
-    expect(sentTo("thread_history")).toEqual([]);
   });
 
   // A daemon agent spawned fresh for an older thread holds no buffer, so the
@@ -753,8 +845,8 @@ describe("useAgentChat persistent agents", () => {
 
   it("still prefills from the event store when the agent is window-scoped", async () => {
     await mount({ resume: "old-thread" });
-    await waitFor(() => expect(sentTo("thread_history")).toHaveLength(1));
-    expect(sentTo("thread_history")[0][1]).toMatchObject({
+    await waitFor(() => expect(sentTo("thread_messages_page")).toHaveLength(1));
+    expect(sentTo("thread_messages_page")[0][1]).toMatchObject({
       cwd: "/repo",
       threadId: "old-thread",
       fresh: false,
@@ -782,7 +874,39 @@ describe("useAgentChat persistent agents", () => {
     );
     // Everything is in hand, so there is nothing left to page.
     expect(result.current.hasMore).toBe(false);
-    expect(sentTo("thread_history")).toHaveLength(1);
+    expect(sentTo("thread_messages_page")).toHaveLength(1);
+    expect(sentTo("thread_history")).toHaveLength(0);
+  });
+
+  it("paints the newest page before the rest of the thread drains", async () => {
+    let releaseHistory!: (page: FakePage) => void;
+    const history = new Promise<FakePage>((resolve) => {
+      releaseHistory = resolve;
+    });
+    const tail = {
+      rows: [userRow("m5", "new", 5000)],
+      hasMore: true,
+    };
+    const whole = {
+      rows: [userRow("m2", "old", 2000), userRow("m5", "new", 5000)],
+      hasMore: false,
+    };
+    const base = invoke.getMockImplementation()!;
+    invoke.mockImplementation((command: string, args: Record<string, unknown>) => {
+      if (command === "thread_messages_page")
+        return Promise.resolve({ activities: [], ...tail });
+      if (command === "thread_history")
+        return history.then((page) => ({ activities: [], ...page }));
+      return base(command, args);
+    });
+    const { result } = await mount({ resume: "old-thread" });
+    await waitFor(() =>
+      expect(result.current.messages.map((m) => m.text)).toEqual(["new"])
+    );
+    releaseHistory(whole);
+    await waitFor(() =>
+      expect(result.current.messages.map((m) => m.text)).toEqual(["old", "new"])
+    );
   });
 
   it("hydrates a resumed thread under StrictMode's double-mount", async () => {
@@ -860,20 +984,10 @@ describe("useAgentChat persistent agents", () => {
     await act(async () => {
       expect(await result.current.loadOlder()).toBe(false);
     });
-    // The drain's one read; the no-op paged nothing.
-    expect(sentTo("thread_history")).toHaveLength(1);
-    expect(sentTo("thread_messages_page")).toEqual([]);
+    // One page held the whole thread, so the drain never ran.
+    expect(sentTo("thread_messages_page")).toHaveLength(1);
+    expect(sentTo("thread_history")).toHaveLength(0);
     expect(result.current.messages.map((m) => m.text)).toEqual(["old", "new"]);
-  });
-
-  // A partial transcript has to say so; silently starting mid-conversation is
-  // the failure mode this flag exists to prevent.
-  it("says so when the replay is missing the start", async () => {
-    spawnReply = { truncated: true };
-    const { result } = await mount({ persistent: true });
-    await waitFor(() =>
-      expect(result.current.exitReason).toContain("start of this transcript is missing")
-    );
   });
 });
 

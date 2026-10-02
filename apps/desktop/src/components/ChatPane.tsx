@@ -613,9 +613,21 @@ export const ChatPane = memo(function ChatPane({
         kind: "turn";
         turn: (typeof turns)[number];
         mark: ProviderSwitchMark | null;
+        /** A switch no message follows yet: the divider renders below this
+         *  turn, where the new stint will begin. */
+        pendingMark: ProviderSwitchMark | null;
       };
   // Every divider in one pass, rather than a scan of the thread per turn.
   const marks = useMemo(() => switchMarks(carried, thread), [carried, thread]);
+  // A switch the transcript has no message after yet — the newest hand-over,
+  // whose stint has not produced a turn — has nowhere to anchor. It renders as
+  // its own end slot until the stint's first turn arrives and anchors it.
+  const pendingSwitch = useMemo<ProviderSwitchMark | null>(() => {
+    const last = carried.switches[carried.switches.length - 1];
+    if (!last) return null;
+    for (const mark of marks.values()) if (mark.id === last.id) return null;
+    return last;
+  }, [carried.switches, marks]);
   const slots = useMemo<Slot[]>(() => {
     const list: Slot[] = [];
     if (showLoadOlder(hasMore)) list.push({ key: "load", kind: "load" });
@@ -625,10 +637,18 @@ export const ChatPane = memo(function ChatPane({
         kind: "turn",
         turn,
         mark: marks.get(turn.key) ?? null,
+        pendingMark: null,
       });
     }
+    if (pendingSwitch && turns.length > 0 && list[list.length - 1]?.kind === "turn") {
+      list[list.length - 1] = {
+        ...list[list.length - 1],
+        kind: "turn",
+        pendingMark: pendingSwitch,
+      } as (typeof list)[number];
+    }
     return list;
-  }, [turns, hasMore, marks]);
+  }, [turns, hasMore, marks, pendingSwitch]);
 
   // Read by the prepend settle loop below, which runs off rAF and so cannot
   // close over the render's `slots`.
@@ -867,6 +887,9 @@ export const ChatPane = memo(function ChatPane({
                           chat={chat}
                           onPreview={openPreview}
                         />
+                        {slot.pendingMark && (
+                          <ProviderSwitchDivider mark={slot.pendingMark} />
+                        )}
                       </Fragment>
                     )}
                   </div>

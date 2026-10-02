@@ -35,6 +35,7 @@ import {
   type CodexSubagentEvent,
 } from "@/lib/codex/adapter";
 import { decodeThreadStart, isRecord } from "@/lib/codex/decode";
+import { markPage } from "@/lib/perf";
 import {
   codexDetach,
   codexKill,
@@ -668,6 +669,7 @@ export function useCodexChat({
         if (threadId && stateRef.current.messages.length === 0) {
           const body = isRecord(opened) ? opened.thread : undefined;
           stateRef.current = replayThread(stateRef.current, body);
+          markPage();
         }
         publish();
         setReady(true);

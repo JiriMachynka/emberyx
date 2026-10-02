@@ -226,6 +226,11 @@ export interface AcpTurn {
   /** The assistant message being built, or null before the first chunk. */
   message: ChatMessage | null;
   status: ChatStatus;
+  /** The turn was already folded into the transcript by `commitTurn`. Grok
+   *  settles a turn twice (its `prompt_complete` notification and the
+   *  `session/prompt` reply); without this the second settle re-records the
+   *  completion row and re-runs the checkpoint settle. */
+  settled?: boolean;
 }
 
 export const emptyTurn = (): AcpTurn => ({
@@ -361,6 +366,7 @@ export function applyUpdate(
 export function endTurn(turn: AcpTurn, reason: AcpStopReason | string): AcpTurn {
   return {
     ...turn,
+    settled: true,
     message: turn.message
       ? {
           // Nothing follows to end the last reasoning run, so the turn does.

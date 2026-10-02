@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(
 const {
   clearPrefetchedPages,
   fetchThreadPage,
+  firstPaintPage,
   loadThreadHistory,
   prefetchThreadPage,
   takePrefetchedPage,
@@ -42,6 +43,24 @@ describe("fetchThreadPage", () => {
     expect(invoke).toHaveBeenLastCalledWith(
       "thread_messages_page",
       expect.objectContaining({ fresh: false })
+    );
+  });
+});
+
+describe("firstPaintPage", () => {
+  it("serves a warm hover cache without another round trip", async () => {
+    prefetchThreadPage("/repo", "t1");
+    invoke.mockClear();
+    const painted = await firstPaintPage("/repo", "t1");
+    expect(painted.rows).toHaveLength(1);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("reads one store page when nothing was prefetched", async () => {
+    await firstPaintPage("/repo", "t1");
+    expect(invoke).toHaveBeenCalledWith(
+      "thread_messages_page",
+      expect.objectContaining({ cwd: "/repo", threadId: "t1", fresh: false })
     );
   });
 });

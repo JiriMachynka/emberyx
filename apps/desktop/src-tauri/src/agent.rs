@@ -30,6 +30,19 @@ pub enum AgentEvent {
     Stderr(String),
     /// Process exited (exit code if known).
     Exit(Option<i32>),
+    /// A daemon-owned frame, wrapped so the daemon's frame id reaches the
+    /// window: the pane tracks the last id it rendered and resumes from it on
+    /// the next spawn, so a replay never re-renders frames it already has.
+    /// Only `daemon.rs` produces this — the in-process transports never wrap.
+    #[serde(rename_all = "camelCase")]
+    Framed {
+        frame_id: u64,
+        event: Box<AgentEvent>,
+    },
+    /// The daemon's backlog has been delivered; everything after this is live.
+    /// A pane that reattached waits for it before reading the disk transcript,
+    /// so the two never race into rendering the in-flight turn twice.
+    Replayed,
 }
 
 /// Where an agent's output goes. The Tauri app hands it a per-spawn IPC
@@ -507,7 +520,12 @@ pub async fn agent_spawn(
                 config_dir,
                 env: env.unwrap_or_default(),
             };
-            let (id, outcome) = daemon.spawn(spec, after_frame_id, channel_sink(on_event))?;
+        // A daemon this window just started buffers nothing from before: its
+        // frame ids start over, so the pane's replay cursor is stale and would
+        // hide the new incarnation's first frames.
+        let after_frame_id =
+            if crate::daemon::consume_fresh_daemon() { None } else { after_frame_id };
+        let (id, outcome) = daemon.spawn(spec, after_frame_id, channel_sink(on_event))?;
             return Ok(AgentHandle {
                 id,
                 reattached: outcome.reattached,

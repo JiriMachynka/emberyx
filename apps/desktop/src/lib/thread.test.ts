@@ -79,12 +79,27 @@ describe("mergeThread", () => {
     expect(merged.map((m) => m.id)).toEqual(["a", "b"]);
     expect(merged.map((m) => m.provider)).toEqual(["claude", "codex"]);
   });
+
+  // Switching back to a provider whose hook kept its state re-serves the same
+  // turns — carried must not stack stamped clones of them on top.
+  it("switching back re-serves the carried turns instead of duplicating them", () => {
+    const toCodex = carryOver(EMPTY_THREAD, [message("a")], "claude", "codex", null, "s1", 1);
+    const backToClaude = carryOver(toCodex, [message("a"), message("c")], "codex", "claude", null, "s2", 2);
+    // "a" is still served by the returning hook — it must not be carried twice.
+    expect(backToClaude.messages.map((m) => m.id)).toEqual(["a", "c"]);
+    expect(backToClaude.switches).toHaveLength(2);
+    const merged = mergeThread(backToClaude, [message("a"), message("c")], "claude", null);
+    expect(merged.map((m) => m.id)).toEqual(["a", "c"]);
+    // Carried wins: "c" is the codex stint, stamped at carry-over time.
+    expect(merged.map((m) => m.provider)).toEqual(["claude", "codex"]);
+  });
 });
 
 describe("switchMarks", () => {
   it("marks the first turn produced by the new provider", () => {
     const carried = carryOver(EMPTY_THREAD, [message("a")], "claude", "codex", null, "s1", 1);
-    const merged = mergeThread(carried, [message("b")], "codex", null);
+    // A stint starts with a user prompt — the anchor is that turn.
+    const merged = mergeThread(carried, [message("b", { role: "user" })], "codex", null);
     expect(switchMarks(carried, merged).get("b")?.id).toBe("s1");
   });
 

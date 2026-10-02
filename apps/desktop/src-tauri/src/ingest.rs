@@ -356,14 +356,18 @@ fn process_file(
     // A thread that also holds events no transcript can reproduce keeps its old
     // reading: rebuilding it would drop them. Stamp it current instead, so the
     // check is paid once rather than on every pass.
-    let rebuild_for_parser = stale_parser && !store.has_native_events(&thread_id)?;
+    let native = store.has_native_events(&thread_id)?;
+    let rebuild_for_parser = stale_parser && !native;
     if stale_parser && !rebuild_for_parser {
         if let Some(cursor) = stored.as_mut() {
             cursor.ingest_version = INGEST_VERSION;
             store.save_ingest_cursor(path, cursor.clone())?;
         }
     }
-    if rebuild_for_parser || stored.as_ref().is_some_and(|c| c.byte_offset > size) {
+    // The same guard covers the shrink path: a rebuild from byte 0 would drop
+    // the native events along with the rest, so a shrunken transcript with
+    // native events keeps its stored reading too.
+    if rebuild_for_parser || (stored.as_ref().is_some_and(|c| c.byte_offset > size) && !native) {
         // Shrank since last seen, or read by an older parser: the changes a
         // stored offset cannot follow. Forget the thread's history and rebuild
         // from byte 0. The cursor row goes too — `save_ingest_cursor` only ever
@@ -457,12 +461,6 @@ fn process_file(
         }
     }
 
-    let emitted: u64 = if events.is_empty() {
-        0
-    } else {
-        store.import_events(events.iter())?
-    };
-
     // Last version handed out overall for this thread, whether this pass
     // emitted anything or not.
     let stream_version = if events.is_empty() {
@@ -472,16 +470,34 @@ fn process_file(
     };
     versions.insert(thread_id, stream_version);
 
-    store.save_ingest_cursor(
-        path,
-        IngestCursor {
-            size,
-            mtime,
-            byte_offset: consumed_end,
-            stream_version,
-            ingest_version: INGEST_VERSION,
-        },
-    )?;
+    // One transaction: events and the resume cursor commit together, so a
+    // crash can't store the batch while leaving the cursor behind — that gap
+    // is what would re-read and re-emit these same lines as duplicates.
+    let emitted: u64 = if events.is_empty() {
+        store.save_ingest_cursor(
+            path,
+            IngestCursor {
+                size,
+                mtime,
+                byte_offset: consumed_end,
+                stream_version,
+                ingest_version: INGEST_VERSION,
+            },
+        )?;
+        0
+    } else {
+        store.import_events_with_cursor(
+            events.iter(),
+            path,
+            IngestCursor {
+                size,
+                mtime,
+                byte_offset: consumed_end,
+                stream_version,
+                ingest_version: INGEST_VERSION,
+            },
+        )?
+    };
 
     Ok(FileOutcome {
         changed: true,

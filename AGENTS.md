@@ -421,14 +421,23 @@ Each switch appends a `providerSwitch` timeline event to this thread.
    calling `ask_user` at an address nothing answered.
 
    Two things to know before touching it:
-   - **Persistent mode skips the on-disk transcript prefill on a reattach.** The
-     daemon replay and the CLI's own transcript carry the same turns; rendering
-     both would duplicate the conversation. A daemon that started the agent
-     fresh (`reattached: false`) has nothing to replay, so an *older* thread
-     still prefills from the store. Codex and ACP
-     follow the same rule their own way: on a reattach the hook resets its
-     state and the replayed frames rebuild the transcript, so no thread
-     open/resume round trip runs — the process still holds the thread.
+   - **A Claude reattach replays only the turn in flight; the store supplies
+     the rest.** The daemon buffers stdout, which is not a transcript: Claude
+     never echoes user prompts, and `--resume` replays no history, so a replay
+     of the whole buffer showed assistant output with no prompts (or nothing,
+     for a resumed thread). `daemon.rs` `attach` therefore trims the backlog to
+     what follows the last `result` line (`trim_replay`, keeping `system` /
+     `rate_limit_event` bookkeeping) and sends `AgentEvent::Replayed` after it.
+     The pane (`awaitingReplay`) hydrates from the store only once that marker
+     lands — and, if a turn was running, keeps the store only up to that turn's
+     prompt, since the stream owns the rest. `result` lines open with their
+     stats, not `type`, so kinds are read from parsed JSON, never a prefix.
+     `daemon_working_agents` reads the same backlogs to say which agents are
+     mid-turn; `SessionPanes` seeds those as `working` at launch, which is what
+     mounts their panes after a restart (a pane is the only thing that reports
+     status). Codex and ACP follow a different rule: on a reattach the hook
+     resets its state and the replayed frames rebuild the transcript, so no
+     thread open/resume round trip runs — the process still holds the thread.
    - **Codex, ACP and PTY are persistent too, over a byte shuttle.** The daemon
      owns *processes and bytes*, never meaning: `daemon_protocol.rs` speaks
      generic `Proc*` ops (`ProcSpawn/Write/Resize/Kill/Attach`, base64 frames,
